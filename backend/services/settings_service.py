@@ -1,9 +1,8 @@
 """Settings service — manages application-wide configuration in database."""
 
-import base64
 import logging
 import secrets
-from typing import Optional, Any
+from typing import Optional
 
 from services.database_service import text
 
@@ -21,47 +20,23 @@ class SettingsService:
                 settings reads and writes.
         """
         self.db = database_service
-        self._enc_key = None
-
-    def _get_enc_key(self):
-        """Lazily load encryption key from .key file."""
-        if self._enc_key is None:
-            from services.encryption_key_service import get_encryption_key
-            self._enc_key = get_encryption_key()
-        return self._enc_key
-
-    def _encrypt(self, value: str) -> str:
-        """Encrypt a value using Fernet (symmetric, HMAC-authenticated).
-
-        Requires the ``cryptography`` package (mandatory dependency).
-        """
-        import hashlib
-        from cryptography.fernet import Fernet
-        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_bytes)
-        f = Fernet(fernet_key)
-        return f.encrypt(value.encode('utf-8')).decode('utf-8')
-
-    def _decrypt(self, value: str) -> str:
-        """Decrypt a value encrypted by _encrypt.
-
-        Handles legacy base64-only values (pre-Fernet) gracefully:
-        if Fernet decryption fails, falls back to base64 decode so
-        existing settings are not lost on upgrade.
-        """
-        import hashlib
-        from cryptography.fernet import Fernet
-        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_bytes)
-        f = Fernet(fernet_key)
-        try:
-            return f.decrypt(value.encode('utf-8')).decode('utf-8')
-        except Exception:
-            # Legacy fallback: value was stored as plain base64 before Fernet
-            return base64.b64decode(value).decode('utf-8')
 
     def get(self, key: str) -> Optional[str]:
-        """Get a setting value by key."""
+        """Get a setting value by key.
+
+        Sensitive settings are decrypted via the VaultService (AES-256-GCM).
+        The vault must be unlocked before sensitive settings can be read.
+
+        Args:
+            key: The settings key to look up.
+
+        Returns:
+            The plaintext setting value, or ``None`` if the key does not exist.
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the setting is
+                sensitive and the vault has not been unlocked yet.
+        """
         with self.db.get_session() as session:
             result = session.execute(
                 text("SELECT value, encrypted_value, is_sensitive "
@@ -74,11 +49,34 @@ class SettingsService:
 
             is_sensitive = row[2]
             if is_sensitive and row[1] is not None:
-                return self._decrypt(row[1])
+                import base64
+                from services.vault_service import get_vault_service
+                return get_vault_service().decrypt_str(base64.b64decode(row[1]))
             return row[0]
 
     def set(self, key: str, value: str, value_type: str = 'string', description: str = None) -> str:
-        """Create or update a setting."""
+        """Create or update a setting.
+
+        Sensitive settings are encrypted via the VaultService (AES-256-GCM)
+        and stored as base64-encoded blobs in ``encrypted_value``.  Non-sensitive
+        settings are stored as plain text in ``value``.
+
+        The vault must be unlocked before a sensitive setting can be written.
+
+        Args:
+            key:         The settings key to create or update.
+            value:       The plaintext value to store.
+            value_type:  SQLite type hint stored alongside the row (default
+                         ``'string'``).  Used only on INSERT.
+            description: Optional human-readable description stored on INSERT.
+
+        Returns:
+            The original *value* string (unchanged).
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the setting is
+                sensitive and the vault has not been unlocked yet.
+        """
         with self.db.get_session() as session:
             # Check if exists and get its sensitivity flag
             result = session.execute(
@@ -91,8 +89,12 @@ class SettingsService:
             if existing:
                 # Update
                 if row_is_sensitive:
-                    # Encrypt sensitive value in Python
-                    encrypted = self._encrypt(value)
+                    # Encrypt sensitive value via VaultService
+                    import base64
+                    from services.vault_service import get_vault_service
+                    encrypted = base64.b64encode(
+                        get_vault_service().encrypt_str(value)
+                    ).decode()
                     session.execute(
                         text("UPDATE settings SET encrypted_value = :enc_value, "
                              "value = NULL, updated_at = datetime('now') WHERE key = :key"),

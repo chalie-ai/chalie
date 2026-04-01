@@ -2,8 +2,8 @@
 Uncertainty Service — epistemic confidence tracking across memory systems.
 
 Detects contradictions and ambiguities between memories, tracks their state,
-and drives reliability tagging on the source tables (user_traits, episodes,
-semantic_concepts). This is the single authority for epistemic confidence.
+and drives reliability tagging on the source tables (knowledge, episodes).
+This is the single authority for epistemic confidence.
 """
 
 import logging
@@ -33,9 +33,9 @@ _RELIABILITY_RANK = {
 
 # Table targeted by each memory type for reliability writes.
 _RELIABILITY_TABLE = {
-    'trait':   'user_traits',
+    'trait':   'knowledge',
     'episode': 'episodes',
-    'concept': 'semantic_concepts',
+    'concept': 'knowledge',
 }
 
 
@@ -43,8 +43,8 @@ class UncertaintyService:
     """
     Manages epistemic uncertainty records and reliability tagging.
 
-    Constructor follows the UserTraitService pattern: takes a database_service
-    instance, uses self.db.connection() context manager throughout.
+    Takes a database_service instance, uses self.db.connection() context manager
+    throughout.
     """
 
     def __init__(self, database_service):
@@ -341,15 +341,12 @@ class UncertaintyService:
 
     def _get_memory_confidence(self, memory_type: str, memory_id: str) -> Optional[float]:
         """Fetch the current confidence value of a memory record."""
-        _conf_col = {
-            'trait':   ('user_traits', 'confidence'),
-            'episode': ('episodes', 'activation_score'),
-            'concept': ('semantic_concepts', 'confidence'),
-        }
-        info = _conf_col.get(memory_type)
-        if not info:
+        if memory_type == 'episode':
+            table, col = 'episodes', 'activation_score'
+        elif memory_type in ('trait', 'concept'):
+            table, col = 'knowledge', 'confidence'
+        else:
             return None
-        table, col = info
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()

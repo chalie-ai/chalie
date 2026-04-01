@@ -32,7 +32,7 @@ class SchemaService:
         self.embedding_dimensions = embedding_dimensions
         self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
 
-    def database_exists(self, db_name: str = None) -> bool:
+    def database_exists(self, _db_name: str = None) -> bool:
         """Check whether the SQLite database file exists on disk.
 
         Args:
@@ -45,7 +45,7 @@ class SchemaService:
         """
         return os.path.exists(self.db_service.db_path)
 
-    def create_database(self, db_name: str = None):
+    def create_database(self, _db_name: str = None):
         """Create the database by running the consolidated schema.
 
         Delegates entirely to ``initialize_schema()``. SQLite creates the file
@@ -86,9 +86,6 @@ class SchemaService:
         """Create sqlite-vec companion virtual tables for vector columns."""
         vec_tables = [
             ("episodes_vec", self.embedding_dimensions),
-            ("semantic_concepts_vec", self.embedding_dimensions),
-            ("topics_vec", self.embedding_dimensions),
-            ("user_traits_vec", self.embedding_dimensions),
             ("tool_capability_profiles_vec", self.embedding_dimensions),
             ("documents_vec", self.embedding_dimensions),
             ("document_chunks_vec", self.embedding_dimensions),
@@ -96,6 +93,7 @@ class SchemaService:
             ("persistent_tasks_vec", self.embedding_dimensions),
             ("lists_vec", self.embedding_dimensions),
             ("goals_vec", self.embedding_dimensions),
+            ("knowledge_vec", self.embedding_dimensions),
         ]
 
         for table_name, dims in vec_tables:

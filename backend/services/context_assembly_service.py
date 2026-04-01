@@ -7,7 +7,21 @@ context payload.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
+
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        MEMORY_RECALL,
+        CONTEXT_ASSEMBLY,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception as e:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+    logging.debug(f"Telemetry service import unavailable: {e}")
 
 RELIABILITY_WEIGHT = {
     'reliable':    1.0,
@@ -26,7 +40,6 @@ class ContextAssemblyService:
         'working_memory': 1.0,
         'moments': 0.95,
         'episodes': 0.7,
-        'procedural': 0.65,
         'concepts': 0.6
     }
 
@@ -52,6 +65,7 @@ class ContextAssemblyService:
         thread_id: str = None,
         recent_visible_context: list = None,
         message_embedding=None,
+        context: 'TopicContext' = None,
     ) -> Dict[str, str]:
         """
         Assemble context from all memory types.
@@ -75,13 +89,16 @@ class ContextAssemblyService:
         """
         sections = {}
 
-        # Use thread_id for working memory if available
-        wm_identifier = thread_id if thread_id else topic
-        sections['working_memory'] = self._get_working_memory(wm_identifier, topic)
-        sections['moments'] = self._get_moments(prompt)
-        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding)
-        sections['procedural'] = self._get_procedural_hints(topic)
-        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding)
+        # Use TopicContext when available, fall back to loose params
+        if context is not None:
+            wm_identifier = context.wm_identifier
+        else:
+            wm_identifier = thread_id if thread_id else topic
+
+        sections['working_memory'] = self._get_working_memory(wm_identifier, topic, context=context)
+        sections['moments'] = self._get_moments(prompt, context=context)
+        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding, context=context)
+        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding, context=context)
 
         # Inject recent visible context from previous session (visual continuity bridge)
         if recent_visible_context:
@@ -101,7 +118,10 @@ class ContextAssemblyService:
                 sections['self_awareness'] = service.format_for_prompt()
             else:
                 sections['self_awareness'] = ""
-        except Exception:
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Self-awareness retrieval failed: {e}")
+            if context is not None:
+                context.record_failure('self_awareness', e)
             sections['self_awareness'] = ""
 
         # Estimate total tokens
@@ -112,9 +132,41 @@ class ContextAssemblyService:
         if total_tokens > self.max_context_tokens:
             sections = self._apply_budget(sections)
 
+        # Emit CONTEXT_ASSEMBLY telemetry event for observability.
+        # Item counts are estimated from the formatted section text so that
+        # no changes to sub-method return types are required.
+        if _TELEMETRY_AVAILABLE:
+            try:
+                episodes_text = sections.get("episodes", "")
+                concepts_text = sections.get("concepts", "")
+                # Count numbered episode items ("1. ", "2. ", etc.)
+                episode_count = sum(
+                    1
+                    for line in episodes_text.splitlines()
+                    if line.strip() and line.strip()[0].isdigit() and ". " in line
+                )
+                # Count concept bullet entries ("- **name**")
+                concept_count = concepts_text.count("- **")
+                get_telemetry_collector().record(
+                    CONTEXT_ASSEMBLY,
+                    {
+                        "episode_count": episode_count,
+                        "concept_count": concept_count,
+                        "trait_count": 0,
+                        "total_tokens_est": sections.get("total_tokens_est", 0),
+                        "has_working_memory": bool(sections.get("working_memory")),
+                        "has_moments": bool(sections.get("moments")),
+                    },
+                )
+            except Exception as _tel_err:
+                logging.debug(
+                    "[CONTEXT] CONTEXT_ASSEMBLY telemetry emit failed (non-fatal): %s",
+                    _tel_err,
+                )
+
         return sections
 
-    def _get_working_memory(self, identifier: str, topic: str = None) -> str:
+    def _get_working_memory(self, identifier: str, topic: str = None, context: 'TopicContext' = None) -> str:
         """Retrieve working memory from compaction + transcript.
 
         Uses stored compaction (summarized older turns) plus recent transcript
@@ -182,9 +234,11 @@ class ContextAssemblyService:
 
         except Exception as e:
             logging.debug(f"[CONTEXT] Transcript-based working memory failed, using legacy: {e}")
-            return self._get_working_memory_legacy(identifier)
+            if context is not None:
+                context.record_failure('working_memory', e)
+            return self._get_working_memory_legacy(identifier, context=context)
 
-    def _get_working_memory_legacy(self, identifier: str) -> str:
+    def _get_working_memory_legacy(self, identifier: str, context: 'TopicContext' = None) -> str:
         """Legacy working memory from MemoryStore FIFO buffer.
 
         Args:
@@ -200,9 +254,11 @@ class ContextAssemblyService:
             return wm.get_formatted_context(identifier)
         except Exception as e:
             logging.debug(f"[CONTEXT] Working memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('working_memory_legacy', e)
             return ""
 
-    def _get_moments(self, prompt: str) -> str:
+    def _get_moments(self, prompt: str, context: 'TopicContext' = None) -> str:
         """Retrieve relevant pinned moments via semantic search.
 
         Args:
@@ -238,16 +294,19 @@ class ContextAssemblyService:
                             date_str = pinned_at.strftime("%d %b %Y")
                         else:
                             date_str = str(pinned_at)[:10]
-                    except Exception:
+                    except Exception as e:
+                        logging.debug(f"[CONTEXT] Moment date formatting failed: {e}")
                         date_str = ""
                 lines.append(f"- {summary} (pinned {date_str})")
 
             return "\n".join(lines)
         except Exception as e:
             logging.debug(f"[CONTEXT] Moments unavailable: {e}")
+            if context is not None:
+                context.record_failure('moments', e)
             return ""
 
-    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
+    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant episodic memories via semantic search.
 
         Downweights unreliable or contradicted episodes before returning results.
@@ -262,13 +321,13 @@ class ContextAssemblyService:
             Formatted episodic memory string, or empty string when nothing relevant is found.
         """
         try:
-            from services.episodic_retrieval_service import EpisodicRetrievalService
+            from services.episodic_service import EpisodicService
             from services.database_service import get_shared_db_service
             from services.config_service import ConfigService
 
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
             db_service = get_shared_db_service()
-            retrieval = EpisodicRetrievalService(db_service, episodic_config)
+            retrieval = EpisodicService(db_service, episodic_config)
 
             # Extract semantic concepts from act_history for boost
             semantic_concepts = self._extract_semantic_from_history(act_history)
@@ -283,6 +342,22 @@ class ContextAssemblyService:
 
             if not episodes:
                 return ""
+
+            # Emit MEMORY_RECALL telemetry event for observability
+            if _TELEMETRY_AVAILABLE:
+                try:
+                    get_telemetry_collector().record(
+                        MEMORY_RECALL,
+                        {
+                            "episode_count": len(episodes),
+                            "query_topic": topic,
+                        },
+                    )
+                except Exception as _tel_err:
+                    logging.debug(
+                        "[CONTEXT] MEMORY_RECALL telemetry emit failed (non-fatal): %s",
+                        _tel_err,
+                    )
 
             # Downweight unreliable episodes so they rank lower in caller scoring
             for ep in episodes:
@@ -300,12 +375,14 @@ class ContextAssemblyService:
             return "\n".join(lines)
         except Exception as e:
             logging.debug(f"[CONTEXT] Episodic memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('episodes', e)
             return ""
 
-    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
+    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant semantic concepts for context injection.
 
-        Downweights unreliable or contradicted concepts before applying the strength filter.
+        Downweights unreliable or contradicted concepts before applying the confidence filter.
 
         Args:
             prompt: Current user prompt used as the semantic query.
@@ -317,83 +394,38 @@ class ContextAssemblyService:
             Formatted concepts string with header, or empty string when nothing qualifies.
         """
         try:
-            from services.semantic_retrieval_service import SemanticRetrievalService
-            retrieval = SemanticRetrievalService()
-            concepts = retrieval.retrieve_concepts(query=prompt, limit=5, query_embedding=message_embedding)
+            from services.knowledge_service import KnowledgeService
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            ks = KnowledgeService(db)
+            concepts = ks.recall(prompt, kinds=['concept', 'trait'], limit=5)
 
             if not concepts:
                 return ""
 
-            # Downweight unreliable concepts before the strength filter
+            # Downweight unreliable concepts before the confidence filter
             for c in concepts:
-                if isinstance(c, dict) and 'strength' in c:
+                if isinstance(c, dict) and 'confidence' in c:
                     reliability = c.get('reliability', 'reliable')
                     r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
-                    c['strength'] = c['strength'] * r_weight
+                    c['confidence'] = c['confidence'] * r_weight
 
             lines = ["## Relevant Concepts"]
             for c in concepts:
-                name = c.get('concept_name', 'unknown')
-                definition = c.get('definition', '')
-                ctype = c.get('concept_type', '')
-                strength = c.get('strength', 0)
-                # Only surface concepts with meaningful definitions and non-trivial strength
-                if definition and strength > 0.2:
-                    lines.append(f"- **{name}** ({ctype}): {definition}")
+                name = c.get('key', 'unknown')
+                definition = c.get('value', '')
+                kind = c.get('kind', '')
+                confidence = c.get('confidence', 0)
+                # Only surface concepts with meaningful definitions and non-trivial confidence
+                if definition and confidence > 0.2:
+                    lines.append(f"- **{name}** ({kind}): {definition}")
 
             return "\n".join(lines) if len(lines) > 1 else ""
         except Exception as e:
             logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
-            return ""
-
-    def _get_procedural_hints(self, topic: str = None) -> str:
-        """
-        Retrieve learned action reliability from procedural memory.
-
-        Only surfaces skills with sufficient experience (>=8 attempts) to avoid
-        biasing the model with noisy early data. Uses softened language for
-        borderline performance ("less consistent results so far") to avoid
-        discouraging exploration of potentially useful skills.
-        """
-        try:
-            from services.procedural_memory_service import ProceduralMemoryService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            service = ProceduralMemoryService(db_service)
-
-            ranked = service.get_ranked_skills(topic=topic)
-            if not ranked:
-                return ""
-
-            lines = ["## Learned Action Reliability"]
-            shown = 0
-            for skill in ranked:
-                if shown >= 3:
-                    break
-
-                name = skill.get('name', '')
-                sr = skill.get('success_rate', 0)
-                attempts = skill.get('attempts', 0)
-
-                # Require sufficient experience before surfacing
-                if attempts < 8:
-                    continue
-
-                if sr > 0.85:
-                    label = "reliable"
-                elif sr >= 0.70:
-                    label = "moderate"
-                else:
-                    label = "less consistent results so far"
-
-                lines.append(f"- {name}: {label} ({int(sr * 100)}% over {attempts} uses)")
-                shown += 1
-
-            return "\n".join(lines) if len(lines) > 1 else ""
-
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Procedural memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('concepts', e)
             return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
@@ -440,7 +472,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'moments', 'episodes', 'procedural', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'episodes', 'concepts', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))

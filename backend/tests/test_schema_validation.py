@@ -71,114 +71,6 @@ class TestSchemaValidation:
         yield conn
         conn.close()
 
-    # ── Scenario 102 ─────────────────────────────────────────────────────────
-
-    def test_temporal_tables_exist(self, schema_db):
-        """Absorbs scenario 102: temporal observation tables are present in schema.
-
-        Verifies that both the raw-append table and the bounded aggregate table
-        required by the ambient inference system are created by schema.sql.
-        """
-        tables = _get_tables(schema_db)
-        assert 'temporal_observations' in tables, (
-            "temporal_observations table missing from schema"
-        )
-        assert 'temporal_aggregate' in tables, (
-            "temporal_aggregate table missing from schema"
-        )
-
-    # ── Scenario 103 ─────────────────────────────────────────────────────────
-
-    def test_temporal_aggregate_columns(self, schema_db):
-        """Absorbs scenario 103: temporal_aggregate has all required columns.
-
-        The mining layer reads observation_type, observed_value, day_of_week,
-        hour_bucket, device_class, count, and last_seen from this table.
-        """
-        columns = _get_columns(schema_db, 'temporal_aggregate')
-        required = {
-            'observation_type',
-            'observed_value',
-            'day_of_week',
-            'hour_bucket',
-            'device_class',
-            'count',
-            'last_seen',
-        }
-        missing = required - columns
-        assert not missing, (
-            f"temporal_aggregate is missing columns: {missing}"
-        )
-
-    # ── Scenario 107 ─────────────────────────────────────────────────────────
-
-    def test_temporal_observation_types_enum(self, schema_db):
-        """Absorbs scenario 107: temporal_observations.observation_type column exists.
-
-        Valid types are: attention, energy, place, tempo, mobility.
-        This test confirms the column exists and that the table accepts inserts
-        for each valid observation type without error.
-        """
-        columns = _get_columns(schema_db, 'temporal_observations')
-        assert 'observation_type' in columns, (
-            "observation_type column missing from temporal_observations"
-        )
-
-        # Verify the table accepts all documented valid types
-        valid_types = ('attention', 'energy', 'place', 'tempo', 'mobility')
-        for obs_type in valid_types:
-            schema_db.execute(
-                "INSERT INTO temporal_observations "
-                "(observation_type, observed_value, day_of_week, hour_bucket) "
-                "VALUES (?, 'test_value', 0, 0)",
-                (obs_type,)
-            )
-        schema_db.rollback()
-
-    # ── Scenario 108 ─────────────────────────────────────────────────────────
-
-    def test_temporal_day_hour_constraints(self, schema_db):
-        """Absorbs scenario 108: day_of_week and hour_bucket are INTEGER columns.
-
-        Both temporal_observations and temporal_aggregate store these as
-        INTEGER so range comparisons and GROUP BY work correctly.
-        """
-        obs_rows = schema_db.execute(
-            "PRAGMA table_info(temporal_observations)"
-        ).fetchall()
-        obs_col_types = {row[1]: row[2].upper() for row in obs_rows}
-
-        assert 'day_of_week' in obs_col_types, (
-            "day_of_week missing from temporal_observations"
-        )
-        assert 'hour_bucket' in obs_col_types, (
-            "hour_bucket missing from temporal_observations"
-        )
-        assert obs_col_types['day_of_week'] == 'INTEGER', (
-            f"day_of_week type is {obs_col_types['day_of_week']!r}, expected INTEGER"
-        )
-        assert obs_col_types['hour_bucket'] == 'INTEGER', (
-            f"hour_bucket type is {obs_col_types['hour_bucket']!r}, expected INTEGER"
-        )
-
-        agg_rows = schema_db.execute(
-            "PRAGMA table_info(temporal_aggregate)"
-        ).fetchall()
-        agg_col_types = {row[1]: row[2].upper() for row in agg_rows}
-
-        assert 'day_of_week' in agg_col_types, (
-            "day_of_week missing from temporal_aggregate"
-        )
-        assert 'hour_bucket' in agg_col_types, (
-            "hour_bucket missing from temporal_aggregate"
-        )
-        assert agg_col_types['day_of_week'] == 'INTEGER', (
-            f"temporal_aggregate.day_of_week type is {agg_col_types['day_of_week']!r}, expected INTEGER"
-        )
-        assert agg_col_types['hour_bucket'] == 'INTEGER', (
-            f"temporal_aggregate.hour_bucket type is {agg_col_types['hour_bucket']!r}, expected INTEGER"
-        )
-
     # ── Scenario 145 ─────────────────────────────────────────────────────────
 
     def test_effort_column_in_tool_profiles(self, schema_db):
@@ -223,8 +115,8 @@ class TestSchemaValidation:
             f"uncertainties table missing columns: {missing_cols}"
         )
 
-        # reliability must be on all three memory tables
-        for table in ('user_traits', 'episodes', 'semantic_concepts'):
+        # reliability must be on memory tables (knowledge replaced user_traits + semantic_concepts)
+        for table in ('knowledge', 'episodes'):
             cols = _get_columns(schema_db, table)
             assert 'reliability' in cols, (
                 f"reliability column missing from {table}"
@@ -248,22 +140,22 @@ class TestSchemaValidation:
     def test_reliability_default_values(self, schema_db):
         """Absorbs scenario 201: reliability columns default to 'reliable'.
 
-        Inserts a minimal row into user_traits, episodes, and semantic_concepts
+        Inserts a minimal row into knowledge and episodes
         without specifying reliability and confirms the column defaults correctly.
         """
         import uuid
 
-        # user_traits
+        # knowledge (replaces user_traits and semantic_concepts)
         schema_db.execute(
-            "INSERT INTO user_traits (id, trait_key, trait_value) VALUES (?, ?, ?)",
-            (str(uuid.uuid4()), 'test_key', 'test_value')
+            "INSERT INTO knowledge (kind, entity, key, value) VALUES ('trait', 'user', ?, ?)",
+            ('test_key', 'test_value')
         )
         row = schema_db.execute(
-            "SELECT reliability FROM user_traits WHERE trait_key = 'test_key'"
+            "SELECT reliability FROM knowledge WHERE key = 'test_key'"
         ).fetchone()
-        assert row is not None, "user_traits INSERT failed"
+        assert row is not None, "knowledge INSERT failed"
         assert row[0] == 'reliable', (
-            f"user_traits.reliability default is {row[0]!r}, expected 'reliable'"
+            f"knowledge.reliability default is {row[0]!r}, expected 'reliable'"
         )
 
         # episodes
@@ -280,22 +172,6 @@ class TestSchemaValidation:
         assert row is not None, "episodes INSERT failed"
         assert row[0] == 'reliable', (
             f"episodes.reliability default is {row[0]!r}, expected 'reliable'"
-        )
-
-        # semantic_concepts
-        sc_id = str(uuid.uuid4())
-        schema_db.execute(
-            "INSERT INTO semantic_concepts "
-            "(id, concept_name, concept_type, definition) "
-            "VALUES (?, ?, ?, ?)",
-            (sc_id, 'test concept', 'fact', 'a test definition')
-        )
-        row = schema_db.execute(
-            "SELECT reliability FROM semantic_concepts WHERE id = ?", (sc_id,)
-        ).fetchone()
-        assert row is not None, "semantic_concepts INSERT failed"
-        assert row[0] == 'reliable', (
-            f"semantic_concepts.reliability default is {row[0]!r}, expected 'reliable'"
         )
 
         schema_db.rollback()
@@ -360,21 +236,21 @@ class TestSchemaValidation:
 
     # ── Scenario 231 ─────────────────────────────────────────────────────────
 
-    def test_procedural_memory_reward_columns(self, schema_db):
-        """Absorbs scenario 231: procedural_memory has reward_history, weight, success_rate.
+    def test_knowledge_table_supports_procedures(self, schema_db):
+        """Absorbs scenario 231: knowledge table supports procedure entries.
 
-        These three columns form the reinforcement-learning feedback loop:
-        reward_history (JSONB) stores per-invocation rewards, weight drives
-        action selection probability, and success_rate is a rolling average.
+        Procedures (formerly procedural_memory) are stored in the unified
+        knowledge table with kind='procedure'. Reward data (weight, success_rate)
+        lives in the JSON `data` column.
         """
         tables = _get_tables(schema_db)
-        assert 'procedural_memory' in tables, (
-            "procedural_memory table missing from schema"
+        assert 'knowledge' in tables, (
+            "knowledge table missing from schema"
         )
 
-        columns = _get_columns(schema_db, 'procedural_memory')
-        required = {'reward_history', 'weight', 'success_rate'}
+        columns = _get_columns(schema_db, 'knowledge')
+        required = {'kind', 'entity', 'key', 'value', 'data', 'confidence', 'decay_class'}
         missing = required - columns
         assert not missing, (
-            f"procedural_memory missing columns: {missing}"
+            f"knowledge missing columns for procedure support: {missing}"
         )

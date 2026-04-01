@@ -2,8 +2,8 @@
 Unit tests for UncertaintyService — epistemic confidence tracking.
 
 Uses a real SQLite database (tmp file) with the full schema loaded so that
-actual SQL runs against the uncertainties, user_traits, episodes, and
-semantic_concepts tables. No mocks of the DB layer.
+actual SQL runs against the uncertainties, knowledge, and episodes tables.
+No mocks of the DB layer.
 """
 
 import sqlite3
@@ -58,14 +58,18 @@ def svc(db_service):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _insert_trait(db_service, trait_id=None, reliability='reliable'):
-    """Insert a minimal user_trait row for testing."""
+    """Insert a minimal knowledge row (kind=trait) for testing."""
     tid = trait_id or str(uuid.uuid4())
+    # knowledge table uses INTEGER PRIMARY KEY AUTOINCREMENT, but we need a
+    # stable string ID for uncertainty references — store in key and return it.
     with db_service.connection() as conn:
         conn.execute("""
-            INSERT INTO user_traits (id, trait_key, trait_value, reliability)
-            VALUES (?, ?, ?, ?)
-        """, (tid, f'key_{tid[:8]}', 'value', reliability))
-    return tid
+            INSERT INTO knowledge (kind, entity, key, value, reliability)
+            VALUES ('trait', 'user', ?, 'value', ?)
+        """, (f'key_{tid[:8]}', reliability))
+        # Get the integer id as string to match uncertainty references
+        row = conn.execute("SELECT last_insert_rowid()").fetchone()
+        return str(row[0])
 
 
 def _insert_episode(db_service, episode_id=None, reliability='reliable'):
@@ -82,15 +86,15 @@ def _insert_episode(db_service, episode_id=None, reliability='reliable'):
 
 
 def _insert_concept(db_service, concept_id=None, reliability='reliable'):
-    """Insert a minimal semantic_concept row for testing."""
+    """Insert a minimal knowledge row (kind=concept) for testing."""
     cid = concept_id or str(uuid.uuid4())
     with db_service.connection() as conn:
         conn.execute("""
-            INSERT INTO semantic_concepts
-                (id, concept_name, concept_type, definition, reliability)
-            VALUES (?, ?, 'entity', 'test definition', ?)
-        """, (cid, f'concept_{cid[:8]}', reliability))
-    return cid
+            INSERT INTO knowledge (kind, entity, key, value, reliability)
+            VALUES ('concept', 'user', ?, 'test definition', ?)
+        """, (f'concept_{cid[:8]}', reliability))
+        row = conn.execute("SELECT last_insert_rowid()").fetchone()
+        return str(row[0])
 
 
 def _fetch_uncertainty(db_service, uncertainty_id):
@@ -102,9 +106,11 @@ def _fetch_uncertainty(db_service, uncertainty_id):
 
 
 def _get_reliability(db_service, table, record_id):
+    # Map memory-type names to actual table names (matches _RELIABILITY_TABLE)
+    actual_table = {'user_traits': 'knowledge', 'semantic_concepts': 'knowledge'}.get(table, table)
     with db_service.connection() as conn:
         row = conn.execute(
-            f"SELECT reliability FROM {table} WHERE id = ?", (record_id,)
+            f"SELECT reliability FROM {actual_table} WHERE id = ?", (record_id,)
         ).fetchone()
     return row['reliability'] if row else None
 

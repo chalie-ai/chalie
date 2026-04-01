@@ -11,7 +11,6 @@ cause the corresponding subprocess to be stopped.
 """
 
 import logging
-import os
 import shutil
 import subprocess
 import threading

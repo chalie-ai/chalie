@@ -47,7 +47,7 @@ class TestGatherEvidenceContext:
         ]
         db, cursor = _make_db_mock(evidence_rows=evidence_rows)
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db):
+        with patch('services.database_service.get_shared_db_service', return_value=db):
             from services.goal_strategy_service import _gather_evidence_context
             result = _gather_evidence_context('goal-id-123')
 
@@ -62,14 +62,14 @@ class TestGatherEvidenceContext:
     def test_no_evidence_returns_placeholder(self, mock_store):
         db, cursor = _make_db_mock(evidence_rows=[])
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db):
+        with patch('services.database_service.get_shared_db_service', return_value=db):
             from services.goal_strategy_service import _gather_evidence_context
             result = _gather_evidence_context('goal-id-456')
 
         assert 'No evidence' in result
 
     def test_db_failure_returns_unavailable(self, mock_store):
-        with patch('services.database_service.get_lightweight_db_service', side_effect=RuntimeError("DB down")):
+        with patch('services.database_service.get_shared_db_service', side_effect=RuntimeError("DB down")):
             from services.goal_strategy_service import _gather_evidence_context
             result = _gather_evidence_context('goal-id-789')
 
@@ -99,7 +99,7 @@ class TestGetUserContext:
             'version': 1,
         }
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
              patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
@@ -119,7 +119,7 @@ class TestGetUserContext:
         auto_mock = MagicMock()
         auto_mock.get_current_narrative.return_value = {'narrative': narrative}
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
              patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
@@ -132,7 +132,7 @@ class TestGetUserContext:
         auto_mock = MagicMock()
         auto_mock.get_current_narrative.return_value = None
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
              patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
@@ -140,7 +140,7 @@ class TestGetUserContext:
         assert result == ""
 
     def test_autobiography_failure_returns_empty(self, mock_store):
-        with patch('services.database_service.get_lightweight_db_service', side_effect=RuntimeError("DB down")):
+        with patch('services.database_service.get_shared_db_service', side_effect=RuntimeError("DB down")):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
 
@@ -158,7 +158,7 @@ class TestStoreStrategy:
     def test_updates_goals_row(self, mock_store):
         db, cursor = _make_db_mock()
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
              patch('services.time_utils.utc_now') as mock_now:
             mock_now.return_value.isoformat.return_value = '2026-03-22T12:00:00+00:00'
 
@@ -345,56 +345,36 @@ class TestActionableTransitionInRecalculate:
         return db, cursor
 
     def test_actionable_transition_spawns_thread(self):
-        """When status goes from strengthening → actionable, a thread must be spawned."""
+        """When status goes from strengthening → actionable, strategy generation is submitted."""
         db, cursor = self._make_ecology_db(old_status='strengthening', gtype='stated')
 
-        spawned_threads = []
-
-        original_thread_init = threading.Thread.__init__
-
-        def mock_thread_init(self, *args, **kwargs):
-            spawned_threads.append(kwargs.get('name', ''))
-            # Don't actually start — just record
-            original_thread_init(self, target=lambda: None, daemon=True)
-
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
-             patch.object(threading.Thread, '__init__', mock_thread_init), \
-             patch.object(threading.Thread, 'start'):
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
+             patch('services.goal_ecology_service._strategy_pool') as mock_pool:
 
             from services.goal_ecology_service import GoalEcologyService
             svc = GoalEcologyService(db_service=db)
             svc.recalculate_salience('goal-xyz')
 
-        assert any('goal-strategy' in t for t in spawned_threads), (
-            "Expected a 'goal-strategy-*' thread to be spawned on actionable transition"
+        assert mock_pool.submit.called, (
+            "Expected _strategy_pool.submit() to be called on actionable transition"
         )
 
     def test_non_actionable_transition_no_thread(self):
-        """When status stays at strengthening, no strategy thread should spawn."""
+        """When status stays at strengthening, no strategy generation is submitted."""
         db, cursor = self._make_ecology_db(old_status='candidate', gtype='developmental')
         # developmental type needs high salience + confidence to become actionable
         # With evidence_count=5 and developmental type, confidence = 0.27, not >= 0.6
         # so status will stay candidate/strengthening
 
-        spawned_threads = []
-
-        original_thread_init = threading.Thread.__init__
-
-        def mock_thread_init(self, *args, **kwargs):
-            if 'goal-strategy' in kwargs.get('name', ''):
-                spawned_threads.append(kwargs.get('name'))
-            original_thread_init(self, target=lambda: None, daemon=True)
-
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
-             patch.object(threading.Thread, '__init__', mock_thread_init), \
-             patch.object(threading.Thread, 'start'):
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
+             patch('services.goal_ecology_service._strategy_pool') as mock_pool:
 
             from services.goal_ecology_service import GoalEcologyService
             svc = GoalEcologyService(db_service=db)
             svc.recalculate_salience('goal-xyz')
 
-        assert len(spawned_threads) == 0, (
-            "Should NOT spawn a strategy thread when goal does not become actionable"
+        assert not mock_pool.submit.called, (
+            "Should NOT submit strategy generation when goal does not become actionable"
         )
 
     def test_already_actionable_no_duplicate_thread(self):
@@ -410,7 +390,7 @@ class TestActionableTransitionInRecalculate:
                 spawned_threads.append(kwargs.get('name'))
             original_thread_init(self, target=lambda: None, daemon=True)
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=db), \
+        with patch('services.database_service.get_shared_db_service', return_value=db), \
              patch.object(threading.Thread, '__init__', mock_thread_init), \
              patch.object(threading.Thread, 'start'):
 
@@ -434,7 +414,7 @@ class TestRejectedStrategyHistory:
     def test_gather_rejected_strategies_empty(self, mock_store):
         """No rejected strategies returns empty string."""
         from services.goal_strategy_service import _gather_rejected_strategies
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+        with patch('services.database_service.get_shared_db_service') as MockDb:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = ('[]',)
@@ -454,7 +434,7 @@ class TestRejectedStrategyHistory:
             {'response': 'engaged', 'timestamp': '2026-03-20'},
         ])
         from services.goal_strategy_service import _gather_rejected_strategies
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+        with patch('services.database_service.get_shared_db_service') as MockDb:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = (feedback,)

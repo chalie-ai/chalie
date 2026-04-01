@@ -16,9 +16,6 @@ and past experiences. Your job is to synthesize a brief, natural internal though
 ## Who You're Thinking About
 {{user_context}}
 
-## Current Rhythm
-{{temporal_rhythm}}
-
 {{constraint_context}}
 
 ## Rules

@@ -21,7 +21,6 @@ overriding its identity voice.
 
 import json
 import logging
-import random
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -109,7 +108,6 @@ _MAX_DIRECTIVES = 4
 _MAX_MICRO_PREFS = 2
 
 # MemoryStore TTLs (seconds)
-_FORK_COOLDOWN_TTL = 300
 _FORK_PENDING_TTL = 600
 _BASELINE_TTL = 86400 * 30  # 30 days
 
@@ -199,13 +197,11 @@ class AdaptiveLayerService:
             cognitive_dims = ['verbosity', 'directness', 'formality', 'certainty']
 
             # challenge_tolerance supersedes the certainty slot when explicitly stored
-            challenge_handled = False
             if challenge_tol is not None:
                 tier = self._challenge_tier(challenge_tol)
                 challenge_directive = CHALLENGE_STYLE_TIERS.get(tier, "")
                 if challenge_directive:
                     directives.append(challenge_directive)
-                    challenge_handled = True
 
             # Rank remaining cognitive dims by salience
             scored: List[tuple] = []
@@ -345,9 +341,12 @@ class AdaptiveLayerService:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT trait_key, confidence
-                    FROM user_traits
-                    WHERE category = 'micro_preference'
+                    SELECT key, confidence
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND json_extract(data, '$.category') = 'micro_preference'
                       AND confidence > 0.4
                     ORDER BY confidence DESC
                     LIMIT 3
@@ -380,10 +379,13 @@ class AdaptiveLayerService:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT trait_value
-                    FROM user_traits
-                    WHERE trait_key = 'challenge_tolerance'
-                      AND category = 'micro_preference'
+                    SELECT value
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND key = 'challenge_tolerance'
+                      AND json_extract(data, '$.category') = 'micro_preference'
                     ORDER BY updated_at DESC
                     LIMIT 1
                 """)

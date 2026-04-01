@@ -121,22 +121,17 @@ class ActDispatcherService:
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
+            # Try tool registry — handles tools discovered via find_tools
+            tool_result = self._try_tool_registry(topic, action_type, action)
+            if tool_result:
+                return tool_result
+
             # Try wrapper intent routing before falling through to error
             wrapper_result = self._try_wrapper_intent(action_type, action)
             if wrapper_result:
                 return wrapper_result
 
             logging.error(f"[ACT DISPATCH] No handler for '{action_type}'. Registered: {list(self.handlers.keys())}")
-            # Log capability gap when no handler exists for requested action
-            try:
-                from services.self_model_service import SelfModelService
-                SelfModelService().log_capability_gap(
-                    request_summary=action.get('params', {}).get('query', action_type)[:200],
-                    detection_source="act_loop",
-                    confidence=0.6,
-                )
-            except Exception:
-                pass
             return {
                 'action_type': action_type,
                 'status': 'error',
@@ -189,6 +184,17 @@ class ActDispatcherService:
             except Exception:
                 pass  # Gate unavailable — proceed with execution
 
+        # Determine effective timeout: tool metadata can override the default.
+        # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
+        effective_timeout = self.timeout
+        try:
+            from services.tool_library_service import TOOL_METADATA
+            tool_timeout = TOOL_METADATA.get(action_type, {}).get('timeout')
+            if tool_timeout and tool_timeout > effective_timeout:
+                effective_timeout = float(tool_timeout)
+        except Exception:
+            pass
+
         # Execute with timeout
         try:
             result_container = {'result': None, 'error': None}
@@ -203,7 +209,7 @@ class ActDispatcherService:
             thread = Thread(target=target)
             thread.daemon = True
             thread.start()
-            thread.join(timeout=self.timeout)
+            thread.join(timeout=effective_timeout)
 
             execution_time = time.time() - start_time
             elapsed_ms = int(execution_time * 1000)
@@ -214,7 +220,7 @@ class ActDispatcherService:
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
-                    'result': f"Action exceeded {self.timeout}s timeout",
+                    'result': f"Action exceeded {effective_timeout}s timeout",
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',
@@ -325,6 +331,39 @@ class ActDispatcherService:
             )
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
+
+    def _try_tool_registry(self, topic: str, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
+        """Route action to ToolRegistryService if it's a registered tool.
+
+        Handles tools discovered via find_tools that aren't innate skills.
+        Returns None if the tool isn't in the registry.
+        """
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            if action_type not in registry.tools:
+                return None
+
+            params = action.get('params', {})
+            start_time = time.time()
+
+            logging.info(f"[ACT DISPATCH] Routing '{action_type}' to tool registry")
+            result_text = registry.invoke(action_type, topic, params)
+            elapsed = time.time() - start_time
+
+            # Determine success from result text
+            is_error = 'Error:' in result_text or 'Unknown tool' in result_text
+            return {
+                'action_type': action_type,
+                'status': 'error' if is_error else 'success',
+                'result': result_text,
+                'execution_time': elapsed,
+                'confidence': 0.0 if is_error else 0.8,
+                'notes': f'Executed via tool registry ({elapsed:.2f}s)',
+            }
+        except Exception as e:
+            logging.error(f"[ACT DISPATCH] Tool registry dispatch failed for '{action_type}': {e}")
+            return None
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

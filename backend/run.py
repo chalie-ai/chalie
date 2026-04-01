@@ -18,6 +18,8 @@ import os
 import sys
 import logging
 
+from utils.logger import Logger
+
 # Force numpy to fully initialize before any background thread imports it.
 # Python's import system isn't fully thread-safe for nested imports — concurrent
 # first-imports of numpy from multiple threads cause a circular import in
@@ -25,9 +27,9 @@ import logging
 # which poisons sys.modules and makes every subsequent embedding call fail with
 # "maximum recursion depth exceeded".
 try:
-    import numpy  # noqa: F401
-    import torch  # noqa: F401
-    import transformers  # noqa: F401
+    import numpy  # noqa: F401 — thread-safety warm-up
+    import torch  # noqa: F401 — thread-safety warm-up
+    import transformers  # noqa: F401 — thread-safety warm-up
     # These heavy imports must complete in the main thread before any background
     # thread tries to import them. Python's import system isn't fully thread-safe
     # for complex nested imports — concurrent first-imports from multiple threads
@@ -41,7 +43,7 @@ _backend_dir = os.path.dirname(os.path.abspath(__file__))
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
-logging.basicConfig(level=logging.INFO)
+Logger.start()
 logger = logging.getLogger(__name__)
 
 
@@ -133,11 +135,12 @@ def main():
     logger.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
 
-    # Ensure encryption key — must run AFTER database init so the key can be
-    # stored in the DB itself (co-located with encrypted data, never lost).
-    # Migrates from legacy .key file on first run after upgrade.
-    from services.encryption_key_service import get_encryption_key
-    get_encryption_key(database_service)
+    # Encryption key initialisation and capability reconnection are deferred to
+    # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
+    # requires an interactive password to unseal, so neither step can run at
+    # boot time in vault mode.
+    logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
+    logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
 
     # Initialize API key
     try:
@@ -147,6 +150,22 @@ def main():
         logger.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:
         logger.warning(f"Settings initialization failed: {e}")
+
+    # Start the write-queue singleton so its daemon drain thread is running before
+    # any service worker tries to submit writes.  The singleton is created here
+    # (rather than lazily on first use) so the background thread is alive for the
+    # full lifetime of the process.
+    from services.write_queue_service import get_write_queue as _get_write_queue
+    _get_write_queue()
+    logger.info("[Startup] WriteQueueService started")
+
+    # Initialise the telemetry collector singleton before any service worker
+    # starts emitting events.  Services call get_telemetry_collector().record()
+    # directly (thread-safe), so the singleton must exist first to ensure the
+    # ring buffer and per-type counters are ready from boot.
+    from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
+    _get_telemetry_collector()
+    logger.info("[Startup] TelemetryCollector initialized")
 
     # Import consumer's WorkerManager and all services
     from consumer import WorkerManager
@@ -160,9 +179,9 @@ def main():
     from services.episodic_memory_observer import episodic_memory_observer_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
-    from services.curiosity_pursuit_service import curiosity_pursuit_worker
     from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
+    from services.world_awareness_service import world_awareness_worker
 
     # Initialize worker manager
     manager = WorkerManager()
@@ -176,9 +195,9 @@ def main():
     manager.register_service("episodic-memory-observer", episodic_memory_observer_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("curiosity-pursuit-service", curiosity_pursuit_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
+    manager.register_service("world-awareness-service", world_awareness_worker)
 
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
@@ -201,6 +220,9 @@ def main():
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
+    # Capability sync — bootstrap connected capabilities into scheduler system handlers
+    _bootstrap_capability_sync()
+
     # Optional services (fail gracefully)
     _try_register(manager, "growth-pattern-service",
                   "services.growth_pattern_service", "growth_pattern_worker")
@@ -210,8 +232,6 @@ def main():
                   "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
-    _try_register(manager, "temporal-pattern-service",
-                  "services.temporal_pattern_service", "temporal_pattern_worker")
     # Register cron-triggered tools
     registry = None
     try:
@@ -240,6 +260,68 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
+    # Bootstrap user trait sentence — load from DB or synthesize if traits exist
+    try:
+        def _bootstrap_trait_sentence():
+            try:
+                from services.database_service import get_shared_db_service
+                from services.knowledge_service import KnowledgeService
+                db = get_shared_db_service()
+                ks = KnowledgeService(db)
+
+                # Already exists — nothing to do
+                existing = ks.get('system', 'user_summary')
+                if existing and existing.get('value'):
+                    logger.info("[Startup] User trait sentence exists")
+                    return
+
+                # No sentence yet — check if traits exist and synthesize
+                traits = db.execute_query(
+                    "SELECT key, value, confidence, decay_class FROM knowledge "
+                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
+                    "ORDER BY decay_class DESC, confidence DESC"
+                )
+                if not traits:
+                    return
+
+                trait_lines = []
+                for row in traits:
+                    key = row['key'] if isinstance(row, dict) else row[0]
+                    value = row['value'] if isinstance(row, dict) else row[1]
+                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
+                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
+                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+
+                import os
+                prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'trait-synthesis.md')
+                with open(prompt_path, 'r') as f:
+                    template = f.read()
+                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
+
+                from services.provider_cache_service import ProviderCacheService
+                provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
+                if not provider_config:
+                    return
+
+                from services.llm_service import create_llm_service
+                llm = create_llm_service(provider_config)
+                resp = llm.send_message(prompt_text, "Output only the sentence. No preamble, no explanation.")
+                sentence = resp.text.strip() if resp and resp.text else None
+                if not sentence:
+                    return
+
+                ks.store(
+                    kind='fact', entity='system', key='user_summary',
+                    value=sentence, decay_class='permanent',
+                    confidence=1.0, source='trait_synthesis',
+                )
+                logger.info("[Startup] User trait sentence synthesized from %d traits", len(traits))
+            except Exception as e:
+                logger.warning(f"[Startup] Trait sentence bootstrap failed: {e}")
+        threading.Thread(target=_bootstrap_trait_sentence, daemon=True, name="trait-sentence-bootstrap").start()
+    except Exception as e:
+        logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
+
     # Warm search router embedding cache (background thread)
     try:
         def _warm_search_cache():
@@ -264,6 +346,51 @@ def main():
 
     # Start everything
     manager.run()
+
+
+def _bootstrap_capability_sync():
+    """Bootstrap connected capabilities into the scheduler's system handler registry.
+
+    For each capability, call connect() — it checks credentials internally and
+    registers its sync handler + ensures recurring scheduled_items exist.
+    """
+    try:
+        from capabilities import load_capabilities
+        all_caps = load_capabilities()
+        for cap_id, cap in all_caps.items():
+            try:
+                if not cap.is_connected():
+                    cap.connect()
+                if cap.is_connected():
+                    logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
+                    # Re-register dynamic tools so find_tools can discover them after restart
+                    from services.tool_library_service import register_tool
+                    for tool_def in cap.get_tools():
+                        tool_name = tool_def["name"]
+                        handler = tool_def.get("handler")
+                        if handler is None:
+                            continue
+                        metadata = {k: v for k, v in tool_def.items() if k != "handler"}
+                        try:
+                            register_tool(tool_name, handler, metadata)
+                            logger.info("[bootstrap] Registered tool '%s' for capability '%s'", tool_name, cap_id)
+                        except Exception as reg_exc:
+                            logger.warning("[bootstrap] Failed to register tool '%s': %s", tool_name, reg_exc)
+            except Exception as exc:
+                logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
+        # If ToolRegistryService was already initialised before this bootstrap ran,
+        # its in-memory tools dict is stale. Reload so find_tools can discover
+        # the freshly registered capability tools.
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            reg = ToolRegistryService()
+            if reg._initialized:
+                reg._load_tools()
+                logger.info("[bootstrap] Tool registry reloaded after capability tool registration")
+        except Exception as reg_exc:
+            logger.warning("[bootstrap] Tool registry reload failed: %s", reg_exc)
+    except Exception as exc:
+        logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 
 
 def _try_register(manager, name, module_path, func_name):

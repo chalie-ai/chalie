@@ -150,7 +150,7 @@ class TestIsReturningFromSilence:
 
     def test_thread_backed_reads_store(self):
         """When thread_id is set, reads last_activity from MemoryStore thread hash."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         svc = SessionService()
         svc._thread_id = "test-thread"

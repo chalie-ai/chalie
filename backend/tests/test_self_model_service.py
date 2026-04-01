@@ -1,7 +1,7 @@
 """
 Tests for SelfModelService — foundational interoception.
 
-Uses real MemoryStore (via mock_store fixture) and mock DB (via mock_db_rows).
+Uses real MemoryStore (via mock_store fixture) and real DB (via db fixture).
 SelfModelService aggregates signals from many sources — we test the aggregation
 logic, noteworthy detection, caching/TTL, memory richness, and prompt formatting.
 """
@@ -20,17 +20,20 @@ def _make_service(db=None):
 
 
 def _populate_healthy_state(store):
-    """Set up MemoryStore to reflect a healthy system."""
+    """Set up MemoryStore to reflect a healthy system.
+
+    Seeds working-memory and FOK signals under the ``"general"`` topic key,
+    which is the hardcoded default used by ``SelfModelService._gather_epistemic``
+    now that the dynamic ``recent_topic`` look-up has been removed.
+    """
     store.setex("self_model:thread_health", 60, json.dumps({
         "alive": ["rest-api-worker", "decay-engine", "episodic-memory"],
         "dead": [],
         "total": 3,
     }))
-    store.set("recent_topic", "cooking")
-    store.expire("recent_topic", 1800)
     for i in range(3):
-        store.lpush("working_memory:cooking", json.dumps({"role": "user", "text": f"msg {i}"}))
-    store.set("fok:cooking", "3")
+        store.lpush("working_memory:general", json.dumps({"role": "user", "text": f"msg {i}"}))
+    store.set("fok:general", "3")
 
 
 def _mock_providers_assigned():
@@ -60,12 +63,15 @@ class TestGetSnapshot:
         }
 
     def test_snapshot_populates_epistemic_from_store(self, mock_store):
-        """Working memory entries and FOK in MemoryStore drive epistemic signals."""
-        mock_store.set("recent_topic", "python")
-        mock_store.expire("recent_topic", 1800)
+        """Working memory entries and FOK in MemoryStore drive epistemic signals.
+
+        Data is seeded under the ``"general"`` topic key because
+        ``_gather_epistemic`` no longer reads ``recent_topic`` from the store —
+        it uses ``"general"`` as a hardcoded default.
+        """
         for i in range(4):
-            mock_store.lpush("working_memory:python", f"turn-{i}")
-        mock_store.set("fok:python", "5")
+            mock_store.lpush("working_memory:general", f"turn-{i}")
+        mock_store.set("fok:general", "5")
 
         svc = _make_service()
         ep = svc.get_snapshot()["epistemic"]
@@ -106,17 +112,40 @@ class TestGetSnapshot:
         snap2 = svc.get_snapshot()
         assert snap2["refreshed_at"] != ts1
 
-    def test_memory_pressure_from_db(self, mock_store, mock_db_rows):
+    def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
-        db, cursor = mock_db_rows
-        cursor.fetchone.side_effect = [
-            (42,),   # episodes count
-            (15,),   # concepts count
-            (8,),    # traits count
-            (0.65,), # avg activation
-        ]
+        import json
 
-        svc = _make_service(db=db)
+        # Seed episodes (42 total, all with activation_score = 0.65)
+        for i in range(42):
+            db.execute(
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
+                " gist, salience, freshness, topic, activation_score)"
+                " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
+                " ?, ?, ?, 'test', ?)",
+                (f"ep-{i}", f"gist {i}", 5, 1, 0.65),
+            )
+
+        # Seed 15 concepts in knowledge table
+        for i in range(15):
+            db.execute(
+                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
+                " VALUES (?, ?, ?, 'concept', 0.8, 'standard')",
+                ("system", f"concept_{i}", f"value_{i}"),
+            )
+
+        # Seed 8 user traits/preferences in knowledge table
+        for i in range(8):
+            kind = 'trait' if i < 5 else 'preference'
+            db.execute(
+                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
+                " VALUES (?, ?, ?, ?, 0.8, 'permanent')",
+                ("user", f"trait_{i}", f"value_{i}", kind),
+            )
+
+        db.commit()
+
+        svc = _make_service()
         pressure = svc._get_memory_pressure()
 
         assert pressure["episode_count"] == 42
@@ -315,12 +344,11 @@ class TestMemoryRichness:
         snap_cold = svc._refresh()
         richness_cold = svc.get_memory_richness()
 
-        # Add working memory to raise context_warmth
-        mock_store.set("recent_topic", "music")
-        mock_store.expire("recent_topic", 1800)
+        # Add working memory to raise context_warmth — seed under "general"
+        # because _gather_epistemic uses "general" as its hardcoded topic key.
         for i in range(4):
-            mock_store.lpush("working_memory:music", f"turn-{i}")
-        mock_store.set("fok:music", "5")
+            mock_store.lpush("working_memory:general", f"turn-{i}")
+        mock_store.set("fok:general", "5")
         mock_store.delete(CACHE_KEY)
 
         richness_warm = svc.get_memory_richness()
@@ -333,9 +361,9 @@ class TestCapabilityCategories:
 
     def test_tools_categorized_by_keywords(self, mock_store):
         mock_registry = MagicMock()
-        mock_registry.get_tool_names.return_value = ["web_search", "news_reader"]
+        mock_registry.get_tool_names.return_value = ["weather", "news_reader"]
         mock_registry.get_tool_full_description.side_effect = lambda name: {
-            "web_search": {
+            "weather": {
                 "documentation": "Search the web for information and find answers",
                 "description": "Web search tool",
             },
@@ -350,7 +378,7 @@ class TestCapabilityCategories:
             cats = svc._refresh()["capability"]["capability_categories"]
 
         assert "search" in cats
-        assert "web_search" in cats["search"]
+        assert "weather" in cats["search"]
         assert "news" in cats
         assert "news_reader" in cats["news"]
 
@@ -360,6 +388,5 @@ class TestCapabilityCategories:
         cap = svc.get_snapshot()["capability"]
 
         assert len(cap["innate_skills"]) > 0
-        assert "recall" in cap["innate_skills"]
-        assert "memorize" in cap["innate_skills"]
+        assert "memory" in cap["innate_skills"]
         assert cap["innate_skills"] == sorted(cap["innate_skills"])

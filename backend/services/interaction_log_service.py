@@ -2,7 +2,7 @@
 Interaction Log Service - Immutable audit trail of all raw events.
 
 Append-only SQLite-backed log of user inputs, classifications, and system responses.
-Follows EpisodicStorageService pattern (DatabaseService injection, get_connection/release_connection).
+Follows EpisodicService pattern (DatabaseService injection, get_connection/release_connection).
 """
 
 import json
@@ -19,7 +19,7 @@ from services.database_service import DatabaseService
 _ACTIVITY_EVENT_TYPES = (
     'proactive_sent',
     'act_loop_telemetry', 'cron_tool_executed',
-    'plan_proposed', 'curiosity_thread_seeded',
+    'plan_proposed',
     'place_transition',
 )
 
@@ -40,7 +40,6 @@ def _summarize_event(event_type: str, payload: dict) -> str:
         'act_loop_telemetry': lambda: f"Ran {p.get('actions_total', 0)} actions ({p.get('termination_reason', 'completed')})",
         'cron_tool_executed': lambda: f"Ran {p.get('tool_name', 'tool')} in background",
         'plan_proposed': lambda: f"Proposed background task: {p.get('topic', 'unknown')}",
-        'curiosity_thread_seeded': lambda: "Started exploring a new curiosity thread",
         'place_transition': lambda: "Noticed a location change",
     }
     fn = summaries.get(event_type, lambda: event_type.replace('_', ' ').title())
@@ -321,6 +320,7 @@ class InteractionLogService:
                         "SELECT id, message, item_type, topic, last_fired_at "
                         "FROM scheduled_items "
                         "WHERE status = 'fired' AND last_fired_at > ? "
+                        "AND hidden = 0 "
                         "ORDER BY last_fired_at DESC LIMIT ?",
                         (since_str, sql_cap)
                     )

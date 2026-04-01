@@ -22,6 +22,7 @@ from services.world_state_service import (
     EXTERNAL_SIGNAL_DECAY_HOURS,
     SALIENCE_THRESHOLD,
 )
+from services.memory_store import MemoryStore
 
 
 # ---------------------------------------------------------------------------
@@ -29,31 +30,23 @@ from services.world_state_service import (
 # ---------------------------------------------------------------------------
 
 def _make_service(store_data=None):
-    """Create a WorldStateService with a mock MemoryStore."""
-    store = MagicMock()
-    stored_list = []
+    """Create a WorldStateService backed by a real MemoryStore.
 
-    def rpush(key, value):
-        if key == EXTERNAL_SIGNALS_KEY:
-            stored_list.append(value)
+    Args:
+        store_data: Optional list of raw JSON strings to pre-populate the
+            ``EXTERNAL_SIGNALS_KEY`` list before returning the service.
 
-    def ltrim(key, start, end):
-        nonlocal stored_list
-        if key == EXTERNAL_SIGNALS_KEY and len(stored_list) > MAX_EXTERNAL_SIGNALS:
-            stored_list = stored_list[-MAX_EXTERNAL_SIGNALS:]
-
-    def lrange(key, start, end):
-        if key == EXTERNAL_SIGNALS_KEY:
-            return list(stored_list)
-        return []
-
-    store.rpush.side_effect = rpush
-    store.ltrim.side_effect = ltrim
-    store.lrange.side_effect = lrange
+    Returns:
+        A ``(WorldStateService, MemoryStore)`` tuple.  The store is injected
+        directly onto ``svc._store`` so no real Redis connection is needed.
+    """
+    store = MemoryStore()
+    if store_data:
+        for entry in store_data:
+            store.rpush(EXTERNAL_SIGNALS_KEY, entry)
 
     svc = WorldStateService()
     svc._store = store
-    svc._stored_list = stored_list
     return svc, store
 
 
@@ -70,9 +63,9 @@ class TestNotifyExternalSignal:
             source="stock-exchange",
             content="AAPL at $185.50",
         )
-        store.rpush.assert_called_once()
-        assert store.rpush.call_args[0][0] == EXTERNAL_SIGNALS_KEY
-        payload = json.loads(store.rpush.call_args[0][1])
+        # Verify the signal was written to the correct key via store state.
+        assert store.llen(EXTERNAL_SIGNALS_KEY) == 1
+        payload = json.loads(store.lrange(EXTERNAL_SIGNALS_KEY, 0, -1)[-1])
         assert payload["signal_type"] == "stock_price"
         assert payload["source"] == "stock-exchange"
         assert payload["content"] == "AAPL at $185.50"
@@ -80,13 +73,19 @@ class TestNotifyExternalSignal:
         assert "timestamp" in payload
 
     def test_trims_list_after_write(self):
+        """The list is capped at MAX_EXTERNAL_SIGNALS after each write."""
         svc, store = _make_service()
+        # Pre-populate to capacity so the next write triggers an actual trim.
+        for i in range(MAX_EXTERNAL_SIGNALS):
+            store.rpush(
+                EXTERNAL_SIGNALS_KEY,
+                json.dumps({"signal_type": "pre", "source": "s", "content": f"c{i}"}),
+            )
         svc.notify_external_signal(
             signal_type="test", source="src", content="data",
         )
-        store.ltrim.assert_called_once_with(
-            EXTERNAL_SIGNALS_KEY, -MAX_EXTERNAL_SIGNALS, -1
-        )
+        # After adding one entry beyond capacity the list stays at the cap.
+        assert store.llen(EXTERNAL_SIGNALS_KEY) == MAX_EXTERNAL_SIGNALS
 
     def test_preserves_all_fields(self):
         svc, store = _make_service()
@@ -98,7 +97,7 @@ class TestNotifyExternalSignal:
             activation_energy=0.7,
             metadata={"city": "London"},
         )
-        payload = json.loads(store.rpush.call_args[0][1])
+        payload = json.loads(store.lrange(EXTERNAL_SIGNALS_KEY, 0, -1)[-1])
         assert payload["topic"] == "weather"
         assert payload["activation_energy"] == 0.7
         assert payload["metadata"] == {"city": "London"}
@@ -108,17 +107,22 @@ class TestNotifyExternalSignal:
         svc.notify_external_signal(
             signal_type="test", source="src", content="data",
         )
-        payload = json.loads(store.rpush.call_args[0][1])
+        payload = json.loads(store.lrange(EXTERNAL_SIGNALS_KEY, 0, -1)[-1])
         assert payload["topic"] is None
         assert payload["activation_energy"] == 0.5
         assert payload["metadata"] is None
 
     def test_fail_open_on_store_error(self):
-        svc, store = _make_service()
-        store.rpush.side_effect = Exception("connection lost")
+        """notify_external_signal swallows store errors without raising."""
+        svc, _ = _make_service()
+        # Swap the store for a broken one (Category C: error-path test).
+        broken_store = MagicMock()
+        broken_store.rpush.side_effect = Exception("connection lost")
+        svc._store = broken_store
         svc.notify_external_signal(
             signal_type="test", source="src", content="data",
         )
+        # Reaching here without exception confirms fail-open behaviour.
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +230,9 @@ class TestGetExternalSignals:
         assert len(items) == 2  # One per source, not 51
 
     def test_old_signal_decays_below_threshold(self):
-        svc, _ = _make_service()
-        svc._stored_list.append(json.dumps({
+        svc, store = _make_service()
+        # Inject a 24-hour-old signal directly into the store.
+        store.rpush(EXTERNAL_SIGNALS_KEY, json.dumps({
             "signal_type": "price", "source": "exchange",
             "content": "Old data", "activation_energy": 0.3,
             "timestamp": time.time() - (24 * 3600),
@@ -253,13 +258,18 @@ class TestGetExternalSignals:
         assert saliences == sorted(saliences, reverse=True)
 
     def test_fail_open_on_store_error(self):
-        svc, store = _make_service()
-        store.lrange.side_effect = Exception("connection lost")
+        """_get_external_signals returns [] when the store raises (Category C)."""
+        svc, _ = _make_service()
+        # Swap in a broken store to simulate a connection failure.
+        broken_store = MagicMock()
+        broken_store.lrange.side_effect = Exception("connection lost")
+        svc._store = broken_store
         assert svc._get_external_signals() == []
 
     def test_malformed_json_skipped(self):
-        svc, _ = _make_service()
-        svc._stored_list.append("not valid json {{{")
+        svc, store = _make_service()
+        # Inject malformed JSON directly into the store list.
+        store.rpush(EXTERNAL_SIGNALS_KEY, "not valid json {{{")
         svc.notify_external_signal(
             signal_type="valid", source="src", content="Fine",
         )
@@ -268,8 +278,9 @@ class TestGetExternalSignals:
         assert "Fine" in items[0]["label"]
 
     def test_temporal_decay_math(self):
-        svc, _ = _make_service()
-        svc._stored_list.append(json.dumps({
+        svc, store = _make_service()
+        # Inject a signal aged exactly EXTERNAL_SIGNAL_DECAY_HOURS into the store.
+        store.rpush(EXTERNAL_SIGNALS_KEY, json.dumps({
             "signal_type": "test", "source": "src",
             "content": "Half-life test", "activation_energy": 1.0,
             "timestamp": time.time() - (EXTERNAL_SIGNAL_DECAY_HOURS * 3600),
@@ -280,8 +291,9 @@ class TestGetExternalSignals:
 
     def test_stale_signals_excluded_from_source(self):
         """Stale signals below threshold don't appear — only fresh ones do."""
-        svc, _ = _make_service()
-        svc._stored_list.append(json.dumps({
+        svc, store = _make_service()
+        # Inject a 48-hour-old stale signal directly into the store.
+        store.rpush(EXTERNAL_SIGNALS_KEY, json.dumps({
             "signal_type": "price", "source": "exchange",
             "content": "Ancient data", "activation_energy": 0.2,
             "timestamp": time.time() - (48 * 3600),

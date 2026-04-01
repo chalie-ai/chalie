@@ -159,7 +159,6 @@ class TestModeRouter:
             'session_exchange_count', 'memory_confidence', 'prompt_token_count', 'has_question_mark',
             'interrogative_words', 'greeting_pattern', 'explicit_feedback',
             'information_density', 'implicit_reference',
-            'intent_type', 'intent_confidence', 'intent_complexity',
             'self_constraint',
         }
         assert expected_keys == set(signals.keys())
@@ -182,31 +181,23 @@ class TestComputeNlpSignals:
         ss.topic_exchange_count = 0
 
         text = "What is the weather today?"
-        intent = {'complexity': 'simple', 'intent_type': 'question', 'confidence': 0.9}
 
         full_signals = collect_routing_signals(
             text=text, topic="test", context_warmth=0.5,
             working_memory=wm,
             world_state_service=ws, classification_result={'confidence': 0.5, 'is_new_topic': False},
-            session_service=ss, intent=intent,
+            session_service=ss,
         )
-        nlp_only = compute_nlp_signals(text, intent)
+        nlp_only = compute_nlp_signals(text)
 
         # All NLP keys must match
         nlp_keys = {
             'prompt_token_count', 'has_question_mark', 'interrogative_words',
             'greeting_pattern', 'explicit_feedback', 'information_density',
-            'implicit_reference', 'intent_complexity', 'intent_type', 'intent_confidence',
+            'implicit_reference',
         }
         for key in nlp_keys:
             assert nlp_only[key] == full_signals[key], f"Mismatch on {key}: {nlp_only[key]} != {full_signals[key]}"
-
-    def test_nlp_signals_default_intent(self):
-        """Without intent arg, intent fields have safe defaults."""
-        result = compute_nlp_signals("hello world")
-        assert result['intent_complexity'] == 'simple'
-        assert result['intent_type'] is None
-        assert result['intent_confidence'] == 0.0
 
     def test_nlp_signals_question_detection(self):
         """Question marks and interrogative words are detected."""

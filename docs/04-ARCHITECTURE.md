@@ -82,24 +82,20 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, procedural, concepts) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
+- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, knowledge) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
 - **`transcript_service.py`** — Persistent, topic-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
 - **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `topic_compactions`
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
-- **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
-- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
-- **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
+- **`knowledge_service.py`** — Unified knowledge store (traits, concepts, procedures, relationships) with RRF hybrid search (exact + FTS5 + vector KNN), decay management, and prompt injection
+- **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as behavioral traits in knowledge table with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
-- **`semantic_storage_service.py`** — SQLite CRUD for semantic concepts
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 - **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, sqlite-vec semantic search, and salience boosting; moments stored as documents with `source_type='moment'`
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs
 
 #### Autonomous Behavior
 - **`reasoning_loop_service.py`** — Signal-driven continuous reasoning; dispatches signal types through handlers; falls back to salient/insight discovery on idle; attention-gated
-- **`autonomous_actions/`** — Decision routing by priority: CommunicateAction (10), PlanAction (7), SeedThreadAction (6), AmbientToolAction (6), ReflectAction (5), ReconcileAction (4), NothingAction (-1)
-- **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
-- **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
+- **`autonomous_actions/`** — Decision routing by priority: CommunicateAction (10), PlanAction (7), AmbientToolAction (6), ReflectAction (5), ReconcileAction (4), NothingAction (-1)
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Ambient Awareness
@@ -133,7 +129,6 @@ frontend/
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
 - **`identity_state_service.py`** — Tracks identity state changes and evolution
-- **`user_trait_service.py`** — User trait management with category-specific decay
 
 #### Infrastructure
 - **`database_service.py`** — SQLite connection management (WAL mode) and migrations
@@ -154,7 +149,6 @@ frontend/
 #### Documents & File Management
 - **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic via sqlite-vec + FTS5 + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
 - **`document_processing_service.py`** — Full extraction pipeline: text extraction (pdfplumber, python-docx, python-pptx, trafilatura), regex-based metadata extraction (dates, companies, monetary values, reference numbers, document type heuristic), adaptive chunk sizing by document type, SimHash fingerprinting, language detection (langdetect)
-- **`camera_ocr_service.py`** — Vision LLM-based text extraction from camera-captured images; multi-provider (Anthropic, OpenAI, Gemini, Ollama); 10MB image limit
 - **`document_card_service.py`** — Inline HTML card emission for document search results (source attribution with type badges, confidence indicators), upload confirmations, document previews, and lifecycle events; cyan `#00F0FF` accent
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
@@ -201,6 +195,7 @@ Built-in cognitive skills for the ACT loop:
 - **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
 - **Document Worker** — PromptQueue worker for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
+- **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in ``vault_config``; unlocked post-login; migrates legacy Fernet data on first unlock
 
 ## Data Flow Pipeline
 
@@ -401,7 +396,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 
 - **No Telemetry**: Zero external calls except to configured LLM/voice providers
 - **Local First**: All data stored locally unless external providers configured
-- **Encryption**: API keys and provider credentials encrypted in SQLite
+- **Encryption**: AES-256-GCM envelope encryption via VaultService (password-derived KEK wraps a random DEK)
 - **CORS**: Defaults to localhost, restrict before production
 
 ## Interface Layer

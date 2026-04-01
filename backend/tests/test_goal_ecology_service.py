@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS goals (
     last_acted_at TEXT,
     outcome_feedback TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    derived_from TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS goal_evidence (
@@ -55,8 +56,12 @@ CREATE TABLE IF NOT EXISTS goal_evidence (
 
 
 def _make_db():
-    """Create an in-memory SQLite db with goal schema, return db_service mock."""
-    conn = sqlite3.connect(":memory:")
+    """Create an in-memory SQLite db with goal schema, return db_service mock.
+
+    ``check_same_thread=False`` is required so the write-queue background
+    thread can share this in-memory connection with the test thread.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(GOAL_SCHEMA)
     conn.commit()
@@ -677,7 +682,6 @@ class TestMuteUnmute:
 
     def test_is_muted_helper_detects_mute_marker(self):
         """_is_muted() should detect a mute marker in outcome_feedback."""
-        import json
         feedback = json.dumps([{'muted': True, 'timestamp': '2026-03-22T10:00:00+00:00'}])
         assert GoalEcologyService._is_muted(feedback) is True
 
@@ -980,7 +984,6 @@ class TestGoalHierarchy:
 
     def test_is_muted_helper_detects_unmute_marker(self):
         """_is_muted() should return False after an unmute entry follows a mute entry."""
-        import json
         feedback = json.dumps([
             {'muted': True, 'timestamp': '2026-03-22T10:00:00+00:00'},
             {'muted': False, 'timestamp': '2026-03-22T11:00:00+00:00'},
@@ -1227,8 +1230,8 @@ class TestGoalContextInjection:
                 {'type': 'emergent', 'description': 'Research AI regulation', 'salience': 0.7, 'confidence': 0.55, 'strategy': 'Monitor EU AI Act'},
             ]
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert '## Active Goals' in result
@@ -1244,8 +1247,8 @@ class TestGoalContextInjection:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = []
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert result == ''
@@ -1255,8 +1258,8 @@ class TestGoalContextInjection:
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
             MockEcology.side_effect = Exception("DB down")
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert result == ''
@@ -1269,8 +1272,8 @@ class TestGoalContextInjection:
                 {'type': 'stated', 'description': 'A' * 200, 'salience': 0.5, 'confidence': 0.5, 'strategy': None},
             ]
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         # Description should be truncated to 100 chars
@@ -1515,9 +1518,7 @@ class TestFindMatchingGoals:
 class TestMotiveAlignment:
 
     @patch('services.goal_ecology_service.GoalEcologyService._store_goal_embedding')
-    @patch('services.goal_autobiography_bridge.compute_goal_alignment',
-           return_value={'parent_motives': [], 'identity_links': []})
-    def test_motive_alignment_increases_salience(self, mock_bridge, mock_embed):
+    def test_motive_alignment_increases_salience(self, mock_embed):
         """Goals with core motive alignment should have higher salience."""
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
@@ -1671,39 +1672,6 @@ class TestStrategyEvolution:
         feedback = goal['outcome_feedback']
         assert len(feedback) >= 1
         assert 'strategy_hash' in feedback[0]
-
-
-@pytest.mark.unit
-class TestTimescaleInference:
-    """Test _infer_timescale_from_signals helper."""
-
-    def test_default_is_medium_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [{'content': 'test'}, {'content': 'test2'}, {'content': 'test3'}]
-        assert _infer_timescale_from_signals(signals) == 'medium_term'
-
-    def test_deep_focus_routine_signals_long_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [
-            {'content': 'a', 'ambient_context': 'deep_focus:routine'},
-            {'content': 'b', 'ambient_context': 'deep_focus:routine'},
-            {'content': 'c', 'ambient_context': 'deep_focus'},
-        ]
-        assert _infer_timescale_from_signals(signals) == 'long_term'
-
-    def test_empty_signals_medium_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        assert _infer_timescale_from_signals([]) == 'medium_term'
-
-    def test_minority_deep_focus_stays_medium(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [
-            {'content': 'a', 'ambient_context': 'deep_focus'},
-            {'content': 'b'},
-            {'content': 'c'},
-            {'content': 'd'},
-        ]
-        assert _infer_timescale_from_signals(signals) == 'medium_term'
 
 
 class TestCrossGoalInference:

@@ -15,7 +15,6 @@ wake resumes from the last checkpoint.
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from services.time_utils import utc_now
 
@@ -259,11 +258,16 @@ def _execute_task_act_loop(task: dict) -> dict:
     assembled_context = None
     try:
         from services.context_assembly_service import ContextAssemblyService
+        from services.topic_context import TopicContext
+        _task_ctx = TopicContext(topic=f"persistent_task_{task['id']}")
         cas = ContextAssemblyService({})
         assembled_context = cas.assemble(
             prompt=task['goal'],
             topic=f"persistent_task_{task['id']}",
+            context=_task_ctx,
         )
+        if _task_ctx.failed_sections:
+            logger.warning(f"{LOG_PREFIX} Context assembly had failures: {_task_ctx.failed_sections}")
     except Exception as e:
         logger.debug(f"{LOG_PREFIX} Context assembly failed (non-fatal): {e}")
 

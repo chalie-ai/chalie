@@ -12,7 +12,6 @@ Runs at most once per RECONCILE_COOLDOWN_MINUTES to cap DB load.
 
 import logging
 import time
-from typing import Optional, Dict
 
 from services.memory_client import MemoryClientService
 from .base import AutonomousAction, ActionResult, ThoughtContext

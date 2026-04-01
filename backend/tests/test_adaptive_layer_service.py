@@ -30,6 +30,8 @@ import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
+from services.memory_store import MemoryStore
+
 # Stub out StyleMetricsService so generate_directives() can import it
 # without needing external dependencies. The method returns a dummy style dict.
 _mock_sms_module = MagicMock()
@@ -327,11 +329,10 @@ class TestForkDirective:
         # Set all three FORK_TRIGGERS dims to extreme values
         style = _make_style(verbosity=2, directness=2)
 
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
+        # Fresh empty store — exists() returns False for any key (no cooldown set)
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""
@@ -341,27 +342,25 @@ class TestForkDirective:
         svc = _service()
         style = _make_style(verbosity=5.5)  # dead center, most ambiguous
 
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-        mock_store.set = MagicMock()
+        # Fresh empty store — no cooldown active; fork should set pending key
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result != ""
-        # Should have set the pending key
-        mock_store.set.assert_called_once()
+        # Assert on store state instead of mock call: pending key should be written
+        assert store.get("adaptive_fork_pending:thread-123") is not None
 
     def test_cooldown_blocks_fork(self):
         svc = _service()
         style = _make_style(verbosity=5.5)
 
-        mock_store = MagicMock()
-        mock_store.exists.return_value = True  # cooldown active
+        # Pre-populate cooldown key so exists() returns True — fork must be suppressed
+        store = MemoryStore()
+        store.set("adaptive_fork_cooldown:thread-123", "1")
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""
@@ -377,24 +376,28 @@ class TestMicroPreferences:
         for key, label in PREF_LABELS.items():
             assert isinstance(label, str) and len(label) > 0
 
-    def test_get_micro_preferences_maps_correctly(self):
+    def test_get_micro_preferences_maps_correctly(self, db):
         svc = _service()
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [
-            ('prefers_bullet_format', 0.85),
-            ('prefers_concise', 0.70),
-            ('unknown_pref_key', 0.90),  # not in PREF_LABELS → excluded
-        ]
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
+        # Seed knowledge table with micro-preference rows
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'prefers_bullet_format', 'true', 'preference', 0.85, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'prefers_concise', 'true', 'preference', 0.70, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'unknown_pref_key', 'true', 'preference', 0.90, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.commit()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_micro_preferences()
+        result = svc._get_micro_preferences()
 
         assert PREF_LABELS['prefers_bullet_format'] in result
         assert PREF_LABELS['prefers_concise'] in result
@@ -427,7 +430,8 @@ class TestGenerateDirectivesIntegration:
             result = svc.generate_directives()
         assert result.startswith("## Adaptive Response Style")
 
-    def test_priority_note_always_appended(self):
+    def test_directives_contain_bullet_items(self):
+        """Non-empty output always contains at least one bullet directive."""
         svc = _service()
         style = _make_style(pacing=2)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
@@ -435,7 +439,8 @@ class TestGenerateDirectivesIntegration:
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
              patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
-        assert "identity voice" in result
+        assert result != ""
+        assert "\n- " in result
 
     def test_high_load_directive_takes_first_slot(self):
         svc = _service()

@@ -16,8 +16,12 @@ class TestMemoryAPI:
     """Test memory API endpoints."""
 
     @pytest.fixture
-    def client(self):
-        """Create Flask test client with memory blueprint."""
+    def client(self, db):
+        """Create Flask test client with memory blueprint.
+
+        Requires the ``db`` fixture so that get_shared_db_service() returns
+        the test database (patched at module level by conftest).
+        """
         app = Flask(__name__)
         app.register_blueprint(memory_bp)
         app.config['TESTING'] = True
@@ -44,11 +48,9 @@ class TestMemoryAPI:
 
     def test_search_returns_results(self, client):
         """GET /memory/search with q returns results array."""
-        with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
-             patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
-             patch('services.semantic_retrieval_service.SemanticRetrievalService') as mock_sr_cls, \
+        with patch('services.episodic_service.EpisodicService') as mock_er_cls, \
+             patch('services.knowledge_service.KnowledgeService') as mock_ks_cls, \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
-            mock_db_fn.return_value = MagicMock()
 
             mock_er = MagicMock()
             mock_er.retrieve_episodes.return_value = [
@@ -56,11 +58,11 @@ class TestMemoryAPI:
             ]
             mock_er_cls.return_value = mock_er
 
-            mock_sr = MagicMock()
-            mock_sr.retrieve_concepts.return_value = [
-                {"name": "coffee", "definition": "a beverage", "score": 0.8, "strength": 5},
+            mock_ks = MagicMock()
+            mock_ks.recall.return_value = [
+                {"key": "coffee", "value": "a beverage", "confidence": 0.8, "kind": "concept", "rrf_score": 0.8},
             ]
-            mock_sr_cls.return_value = mock_sr
+            mock_ks_cls.return_value = mock_ks
 
             response = client.get('/memory/search?q=coffee')
 

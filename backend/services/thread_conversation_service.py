@@ -9,11 +9,10 @@ consulted only when MemoryStore returns empty (restart, TTL expiry).
 import json
 import uuid
 import logging
-import time
-from typing import Optional, List
+from typing import Optional
 
 from services.memory_client import MemoryClientService
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +185,7 @@ class ThreadConversationService:
         Args:
             thread_id: Thread identifier
             topic: Current topic name
-            prompt_data: Dict with message, classification_time, etc.
+            prompt_data: Dict with message, embedding_time, etc.
 
         Returns:
             exchange_id: UUID for this exchange
@@ -201,7 +200,7 @@ class ThreadConversationService:
                 "id": exchange_id,
                 "message": prompt_data.get("message", ""),
                 "time": timestamp,
-                "classification_time": prompt_data.get("classification_time", 0),
+                "embedding_time": prompt_data.get("embedding_time", 0),
             },
             "response": None,
             "steps": [],
@@ -433,11 +432,11 @@ class ThreadConversationService:
             db = get_shared_db_service()
             with db.connection() as conn:
                 cursor = conn.cursor()
-                # Prefer active thread (survives restart in SQLite)
+                # Prefer active thread with most recent activity
                 cursor.execute("""
                     SELECT thread_id FROM threads
                     WHERE state = 'active'
-                    ORDER BY created_at DESC
+                    ORDER BY COALESCE(last_activity, created_at) DESC
                     LIMIT 1
                 """)
                 row = cursor.fetchone()

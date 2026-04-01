@@ -2,8 +2,8 @@
 Unit tests for AmbientWrapper.
 
 All HTTP calls are mocked via unittest.mock.patch on urllib.request.urlopen.
-Tests use in-memory SQLite and an isolated MemoryStore so they carry no
-external dependencies.
+Tests use the shared ``db`` fixture (real SQLite, fully-migrated) and an
+isolated MemoryStore so they carry no external dependencies.
 """
 
 import json
@@ -56,27 +56,28 @@ def _make_memory_store():
     return MemoryStore()
 
 
-def _make_db():
-    """Return an in-memory SQLite connection with the place_fingerprints table."""
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute(
+def _seed_fingerprint(db, geohash, fingerprint_hash="hash1",
+                      device_class="desktop", hour_bucket=9,
+                      place_label="home"):
+    """Insert a place fingerprint row into the test database.
+
+    Args:
+        db: sqlite3.Connection from the ``db`` fixture.
+        geohash: Geohash string to store in ``location_hash``.
+        fingerprint_hash: Unique hash for the fingerprint row.
+        device_class: Device class label.
+        hour_bucket: Hour bucket integer.
+        place_label: Place label string.
+    """
+    db.execute(
         """
-        CREATE TABLE IF NOT EXISTS place_fingerprints (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fingerprint_hash TEXT UNIQUE NOT NULL,
-            device_class TEXT NOT NULL,
-            hour_bucket INTEGER NOT NULL,
-            location_hash TEXT,
-            connection_type TEXT,
-            place_label TEXT NOT NULL,
-            count INTEGER DEFAULT 1,
-            last_seen_at TEXT DEFAULT (datetime('now'))
-        )
-        """
+        INSERT INTO place_fingerprints
+            (fingerprint_hash, device_class, hour_bucket, location_hash, place_label)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (fingerprint_hash, device_class, hour_bucket, geohash, place_label),
     )
-    conn.commit()
-    return conn
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -88,14 +89,14 @@ class TestGeohashDecode:
     """Tests for the pure-Python geohash decoder."""
 
     def test_known_geohash_u09t(self):
-        """'u09t' decodes to near Paris (~48.8°N, 2.3°E)."""
+        """'u09t' decodes to near Paris (~48.8N, 2.3E)."""
         from wrappers.ambient_wrapper import geohash_decode
         lat, lon = geohash_decode("u09t")
         assert 48.0 <= lat <= 50.0
         assert 1.0 <= lon <= 4.0
 
     def test_known_geohash_9q8y(self):
-        """'9q8y' decodes to near San Francisco (~37.7°N, -122.5°W)."""
+        """'9q8y' decodes to near San Francisco (~37.7N, -122.5W)."""
         from wrappers.ambient_wrapper import geohash_decode
         lat, lon = geohash_decode("9q8y")
         assert 37.0 <= lat <= 38.5
@@ -127,7 +128,7 @@ class TestGeohashDecode:
         from wrappers.ambient_wrapper import geohash_decode
         # 'r' encodes the Australia / south-east Asia region
         lat, lon = geohash_decode("r")
-        # The 'r' cell covers roughly lat [-90, 0] lon [90, 180] — lat is negative
+        # The 'r' cell covers roughly lat [-90, 0] lon [90, 180] -- lat is negative
         assert lat < 0
 
 
@@ -139,13 +140,14 @@ class TestGeohashDecode:
 class TestAmbientWrapper:
     """Unit tests for AmbientWrapper poll methods and signal emission."""
 
-    def _make_wrapper(self, store=None, db_conn=None):
+    def _make_wrapper(self, store=None):
         """Construct a wrapper instance with injected fakes.
+
+        The wrapper's ``_get_location()`` calls ``get_shared_db_service()``
+        internally, which the ``db`` fixture has already patched.
 
         Args:
             store: MemoryStore-like object.  If None, a real MemoryStore is used.
-            db_conn: sqlite3.Connection for place_fingerprints.  If None, an
-                in-memory DB without fingerprints is used.
 
         Returns:
             Configured :class:`AmbientWrapper` instance (not started).
@@ -168,78 +170,34 @@ class TestAmbientWrapper:
             "severe_weather_bypass_focus": True,
         }
         wrapper._store = store or _make_memory_store()
-        wrapper._db_conn = db_conn  # stashed for use in helpers below
         return wrapper
 
-    def _inject_fingerprint(self, wrapper, geohash: str):
-        """Insert a place fingerprint row into the wrapper's test DB.
+    # -- No fingerprints -- location-dependent polls skip gracefully --------
 
-        Args:
-            wrapper: Wrapper instance created by :meth:`_make_wrapper`.
-            geohash: Geohash string to store in ``location_hash``.
-        """
-        wrapper._db_conn.execute(
-            """
-            INSERT INTO place_fingerprints
-                (fingerprint_hash, device_class, hour_bucket, location_hash, place_label)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("hash1", "desktop", 9, geohash, "home"),
-        )
-        wrapper._db_conn.commit()
-
-    # ── No fingerprints — location-dependent polls skip gracefully ────────────
-
-    def test_get_location_returns_none_when_no_fingerprints(self):
+    def test_get_location_returns_none_when_no_fingerprints(self, db):
         """_get_location() returns None when place_fingerprints is empty."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc:
-            mock_db_svc.return_value.connection.return_value.__enter__ = lambda s: db
-            mock_db_svc.return_value.connection.return_value.__exit__ = MagicMock(
-                return_value=False
-            )
-            # Use the real connection context manager behaviour
-            from contextlib import contextmanager
-
-            @contextmanager
-            def _fake_conn():
-                yield db
-
-            mock_db_svc.return_value.connection = _fake_conn
-            result = wrapper._get_location()
-
+        wrapper = self._make_wrapper()
+        result = wrapper._get_location()
         assert result is None
 
-    def test_weather_poll_skips_gracefully_without_location(self):
+    def test_weather_poll_skips_gracefully_without_location(self, db):
         """Weather poll stamps last_poll_weather but emits no signal when there is
         no location fingerprint."""
         wrapper = self._make_wrapper()
         emitted = []
 
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
+        with patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            from contextlib import contextmanager
-
-            @contextmanager
-            def _fake_conn():
-                yield _make_db()  # empty DB — no rows
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         assert len(emitted) == 0, "No signal should be emitted without a location"
 
-    # ── Weather signal emission ───────────────────────────────────────────────
+    # -- Weather signal emission --------------------------------------------
 
-    def test_weather_emits_routine_signal(self):
+    def test_weather_emits_routine_signal(self, db):
         """A routine (unchanged) weather code emits activation_energy 0.2."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         weather_response = {
             "current": {"temperature_2m": 18.5, "weather_code": 1, "wind_speed_10m": 12},
@@ -253,18 +211,9 @@ class TestAmbientWrapper:
         emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         assert len(emitted) == 1
@@ -274,11 +223,10 @@ class TestAmbientWrapper:
         assert sig.wrapper_id == "__ambient__"
         assert sig.metadata["weather_code"] == 1
 
-    def test_weather_emits_significant_change_signal(self):
+    def test_weather_emits_significant_change_signal(self, db):
         """A weather code change emits activation_energy 0.6."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         # Pretend last code was clear sky (1), now it's overcast (3)
         wrapper._store.set("ambient_wrapper:last_weather", "1")
@@ -295,18 +243,9 @@ class TestAmbientWrapper:
         emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         assert len(emitted) == 1
@@ -314,11 +253,10 @@ class TestAmbientWrapper:
         assert sig.signal_type == "weather_update"
         assert sig.activation_energy == pytest.approx(0.6)
 
-    def test_weather_emits_severe_weather_signal(self):
-        """A severe WMO code (e.g. 95 — thunderstorm) emits activation_energy 0.9."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+    def test_weather_emits_severe_weather_signal(self, db):
+        """A severe WMO code (e.g. 95 -- thunderstorm) emits activation_energy 0.9."""
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         weather_response = {
             "current": {
@@ -336,18 +274,9 @@ class TestAmbientWrapper:
         emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         assert len(emitted) == 1
@@ -355,36 +284,27 @@ class TestAmbientWrapper:
         assert sig.signal_type == "severe_weather"
         assert sig.activation_energy == pytest.approx(0.9)
 
-    def test_weather_poll_survives_http_error(self):
+    def test_weather_poll_survives_http_error(self, db):
         """A network error during weather fetch should not raise from _poll_weather."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
-
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         import urllib.error
 
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen",
+        with patch("urllib.request.urlopen",
                    side_effect=urllib.error.URLError("timeout")):
-
-            mock_db_svc.return_value.connection = _fake_conn
             # Should NOT raise
             wrapper._poll_weather()
 
-    # ── Holiday signal emission ───────────────────────────────────────────────
+    # -- Holiday signal emission --------------------------------------------
 
     def test_holiday_emits_signal_when_approaching(self):
         """A holiday within 3 days emits a holiday_approaching signal."""
-        from datetime import date, timedelta
+        from datetime import timedelta
+        from services.time_utils import utc_now
         wrapper = self._make_wrapper()
 
-        today = date.today()
+        today = utc_now().date()
         tomorrow = today + timedelta(days=1)
 
         holidays_response = [
@@ -414,10 +334,11 @@ class TestAmbientWrapper:
 
     def test_holiday_no_signal_when_far_away(self):
         """A holiday more than 3 days away should not trigger a signal."""
-        from datetime import date, timedelta
+        from datetime import timedelta
+        from services.time_utils import utc_now
         wrapper = self._make_wrapper()
 
-        far_date = date.today() + timedelta(days=10)
+        far_date = utc_now().date() + timedelta(days=10)
         holidays_response = [
             {
                 "date": far_date.isoformat(),
@@ -463,13 +384,12 @@ class TestAmbientWrapper:
             # Should NOT raise
             wrapper._poll_holidays()
 
-    # ── Daylight signal emission ──────────────────────────────────────────────
+    # -- Daylight signal emission -------------------------------------------
 
-    def test_daylight_emits_signal(self):
+    def test_daylight_emits_signal(self, db):
         """Daylight poll emits a daylight_change signal with energy 0.1."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         daylight_response = {
             "results": {
@@ -483,18 +403,9 @@ class TestAmbientWrapper:
         emitted = []
         mock_resp = _make_http_response(daylight_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_daylight()
 
         assert len(emitted) == 1
@@ -504,54 +415,35 @@ class TestAmbientWrapper:
         assert sig.wrapper_id == "__ambient__"
         assert "sunrise" in sig.content.lower() or "Sunrise" in sig.content
 
-    def test_daylight_skips_without_location(self):
+    def test_daylight_skips_without_location(self, db):
         """Daylight poll emits no signal when location is unavailable."""
         wrapper = self._make_wrapper()
         emitted = []
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield _make_db()
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
+        with patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_daylight()
 
         assert len(emitted) == 0
 
-    def test_daylight_survives_http_error(self):
+    def test_daylight_survives_http_error(self, db):
         """A network error during daylight fetch should not raise."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         import urllib.error
-        from contextlib import contextmanager
 
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen",
+        with patch("urllib.request.urlopen",
                    side_effect=urllib.error.URLError("timeout")):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_daylight()
 
-    # ── Weather change detection ──────────────────────────────────────────────
+    # -- Weather change detection -------------------------------------------
 
-    def test_last_weather_code_stored_after_emission(self):
+    def test_last_weather_code_stored_after_emission(self, db):
         """After a successful weather poll, the WMO code is stored in MemoryStore."""
-        db = _make_db()
         store = _make_memory_store()
-        wrapper = self._make_wrapper(store=store, db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper(store=store)
 
         weather_response = {
             "current": {"temperature_2m": 10.0, "weather_code": 45, "wind_speed_10m": 5},
@@ -564,27 +456,17 @@ class TestAmbientWrapper:
 
         mock_resp = _make_http_response(weather_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal", return_value=True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         stored = store.get("ambient_wrapper:last_weather")
         assert stored == "45"
 
-    def test_no_last_code_means_first_poll_is_routine(self):
+    def test_no_last_code_means_first_poll_is_routine(self, db):
         """Without a previous code, the first poll uses routine energy (0.2)."""
-        db = _make_db()
-        wrapper = self._make_wrapper(db_conn=db)
-        self._inject_fingerprint(wrapper, "u09t")
+        _seed_fingerprint(db, "u09t")
+        wrapper = self._make_wrapper()
 
         # Ensure no previous code is stored
         assert wrapper._get_last_weather_code() is None
@@ -601,18 +483,9 @@ class TestAmbientWrapper:
         emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_conn():
-            yield db
-
-        with patch("wrappers.ambient_wrapper.get_shared_db_service") as mock_db_svc, \
-             patch("urllib.request.urlopen", return_value=mock_resp), \
+        with patch("urllib.request.urlopen", return_value=mock_resp), \
              patch("wrappers.ambient_wrapper.emit_reasoning_signal",
                    side_effect=lambda s: emitted.append(s) or True):
-
-            mock_db_svc.return_value.connection = _fake_conn
             wrapper._poll_weather()
 
         assert len(emitted) == 1

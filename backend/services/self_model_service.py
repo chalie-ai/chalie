@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List
 
 from services.memory_client import MemoryClientService
 
@@ -51,7 +51,6 @@ SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
 SEVERITY_HIGH_RECALL_FAILURE = 0.3
 SEVERITY_LOW_ACTIVATION = 0.2
-SEVERITY_CAPABILITY_GAP = 0.2
 
 
 def _utc_now() -> datetime:
@@ -80,8 +79,8 @@ class SelfModelService:
         if raw:
             try:
                 return json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug(f"{LOG_PREFIX} Cache parse failed, refreshing: {e}", exc_info=True)
         return self._refresh()
 
     def has_noteworthy_state(self) -> bool:
@@ -155,7 +154,6 @@ class SelfModelService:
 
         for item in noteworthy:
             signal = item["signal"]
-            severity = item["severity"]
             lines.append(f"- {signal}")
 
             # Map signals to behavioral directives
@@ -169,11 +167,6 @@ class SelfModelService:
                 directives.add(
                     "Background processing may be slower than usual. "
                     "If a task requires multiple steps, set expectations about timing."
-                )
-            if "capability_gap" in signal:
-                directives.add(
-                    "If the user asks for something you lack a tool for, explain the "
-                    "limitation and suggest alternatives rather than simply refusing."
                 )
             if "thread" in signal.lower():
                 directives.add(
@@ -213,8 +206,18 @@ class SelfModelService:
     # ── Epistemic layer ─────────────────────────────────────────
 
     def _gather_epistemic(self) -> dict:
-        """Memory warmth, recall reliability, topic depth signals."""
-        topic = self._get_active_topic()
+        """Memory warmth, recall reliability, and topic depth signals.
+
+        Uses the ``"general"`` topic key for working-memory and FOK look-ups.
+        The ``recent_topic`` MemoryStore key is no longer written by any
+        production code path (removed with the topic-classifier), so the old
+        dynamic look-up always resolved to ``"general"`` anyway — this makes
+        that default explicit and eliminates the dead ``topic_age`` field.
+
+        Returns:
+            dict: Mapping of epistemic signal names to their current values.
+        """
+        topic = "general"
 
         wm_depth = self._get_working_memory_depth(topic)
 
@@ -231,23 +234,15 @@ class SelfModelService:
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
-            "topic_age": self._get_topic_age(),
             "focus_active": self._get_focus_active(topic),
             "skill_reliability": self._get_skill_reliability(),
         }
 
-    def _get_active_topic(self) -> str:
-        """Get the current active topic from MemoryStore."""
-        try:
-            topic = self._store.get("recent_topic")
-            return topic if topic else "general"
-        except Exception:
-            return "general"
-
     def _get_working_memory_depth(self, topic: str) -> int:
         try:
             return self._store.llen(f"working_memory:{topic}")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get working memory depth: {e}", exc_info=True)
             return 0
 
     def _get_fok_signal(self, topic: str) -> int:
@@ -255,17 +250,22 @@ class SelfModelService:
         try:
             value = self._store.get(f"fok:{topic}")
             return int(value) if value else 0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get FOK signal: {e}", exc_info=True)
             return 0
 
     def _get_recall_failure_rate(self, topic: str) -> float:
         """Per-topic recall failure rate from procedural memory."""
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
             db = self._get_db()
-            service = ProceduralMemoryService(db)
-            action_stats = service.get_action_stats("recall")
-            context_stats = (action_stats or {}).get("context_stats") or {}
+            entry = KnowledgeService(db).get('chalie', 'recall')
+            import json as _json
+            data = entry.get('data', {}) if entry else {}
+            if isinstance(data, str):
+                try: data = _json.loads(data)
+                except Exception: data = {}
+            context_stats = data.get("context_stats") or {}
             if topic in context_stats:
                 topic_stats = context_stats[topic]
                 total = topic_stats.get("total", 0)
@@ -273,56 +273,39 @@ class SelfModelService:
                 if total > 0:
                     return round(failures / total, 3)
             return 0.0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
             return 0.0
 
-    def _get_topic_age(self) -> str:
-        """How long the current topic has been active."""
-        try:
-            ttl = self._store.ttl("recent_topic")
-            if ttl and ttl > 0:
-                age_seconds = 1800 - ttl  # recent_topic has 30min TTL
-                if age_seconds < 60:
-                    return f"{age_seconds}s"
-                elif age_seconds < 3600:
-                    return f"{age_seconds // 60}min"
-                else:
-                    return f"{age_seconds // 3600}h {(age_seconds % 3600) // 60}min"
-            return "unknown"
-        except Exception:
-            return "unknown"
-
     def _get_focus_active(self, topic: str) -> bool:
-        try:
-            from services.focus_session_service import FocusSessionService
-            return FocusSessionService().get_focus(topic) is not None
-        except Exception:
-            return False
+        return False
 
     def _get_skill_reliability(self) -> dict:
         """Condensed skill reliability: only skills with >= 5 attempts."""
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
+            import json as _json
             db = self._get_db()
-            service = ProceduralMemoryService(db)
-            all_weights = service.get_all_policy_weights()
+            procedures = KnowledgeService(db).get_ranked_procedures(limit=50)
 
             result = {}
-            for action_name in all_weights:
-                stats = service.get_action_stats(action_name)
-                if not stats:
-                    continue
-                attempts = stats.get("total_attempts", 0)
+            for proc in procedures:
+                data = proc.get('data', {})
+                if isinstance(data, str):
+                    try: data = _json.loads(data)
+                    except Exception: data = {}
+                attempts = data.get("total_attempts", 0)
                 if attempts < 5:
                     continue
-                successes = stats.get("total_successes", 0)
+                successes = data.get("total_successes", 0)
                 reliability = (successes + 1) / (attempts + 2)  # Laplace smoothing
-                result[action_name] = {
+                result[proc.get('key', '')] = {
                     "reliability": round(reliability, 3),
                     "attempts": attempts,
                 }
             return result
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get skill reliability: {e}", exc_info=True)
             return {}
 
     # ── Operational layer ───────────────────────────────────────
@@ -348,8 +331,8 @@ class SelfModelService:
                     "total": data.get("total", 0),
                     "dead_threads": data.get("dead", []),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get thread health: {e}", exc_info=True)
         return {"alive": 0, "total": 0, "dead_threads": []}
 
     def _get_provider_status(self) -> dict:
@@ -372,7 +355,8 @@ class SelfModelService:
                 "active_count": active_count,
                 "unassigned_jobs": sorted(unassigned),
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get provider status: {e}", exc_info=True)
             return {"active_count": 0, "unassigned_jobs": []}
 
     def _get_queue_depth(self) -> dict:
@@ -380,12 +364,14 @@ class SelfModelService:
         try:
             from services.background_llm_queue import QUEUE_KEY
             bg_llm = self._store.llen(QUEUE_KEY)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get bg_llm queue depth: {e}", exc_info=True)
             bg_llm = 0
 
         try:
             prompt_queue = self._store.llen("prompt-queue")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get prompt queue depth: {e}", exc_info=True)
             prompt_queue = 0
 
         return {"bg_llm": bg_llm, "prompt_queue": prompt_queue}
@@ -400,10 +386,17 @@ class SelfModelService:
                 cursor.execute("SELECT COUNT(*) FROM episodes")
                 episode_count = cursor.fetchone()[0]
 
-                cursor.execute("SELECT COUNT(*) FROM semantic_concepts")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM knowledge "
+                    "WHERE kind = 'concept' AND deleted_at IS NULL"
+                )
                 concept_count = cursor.fetchone()[0]
 
-                cursor.execute("SELECT COUNT(*) FROM user_traits")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM knowledge "
+                    "WHERE kind IN ('trait', 'preference') "
+                    "AND entity = 'user' AND deleted_at IS NULL"
+                )
                 trait_count = cursor.fetchone()[0]
 
                 cursor.execute(
@@ -421,7 +414,8 @@ class SelfModelService:
                 "trait_count": trait_count,
                 "avg_activation": avg_activation,
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get memory pressure: {e}", exc_info=True)
             return {"episode_count": 0, "concept_count": 0, "trait_count": 0, "avg_activation": 1.0}
 
     def _is_bg_llm_stale(self) -> bool:
@@ -437,7 +431,8 @@ class SelfModelService:
                 return elapsed > HEARTBEAT_STALE_THRESHOLD
             # No heartbeat yet — might be early startup
             return False
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to check bg LLM heartbeat staleness: {e}", exc_info=True)
             return False
 
     # ── Capability layer ────────────────────────────────────────
@@ -467,22 +462,19 @@ class SelfModelService:
                             capability_categories[category] = []
                         if name not in capability_categories[category]:
                             capability_categories[category].append(name)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to load tool inventory: {e}", exc_info=True)
 
         # Innate skills from authoritative registry
         innate_skills = []
         try:
             from services.innate_skills.registry import ALL_SKILL_NAMES
             innate_skills = sorted(ALL_SKILL_NAMES)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to load innate skills: {e}", exc_info=True)
 
         # Provider features
         provider_features = self._get_provider_features()
-
-        # Frequent capability gaps (Phase 3)
-        frequent_gaps = self.get_frequent_gaps(min_occurrences=2, limit=3)
 
         return {
             "tool_count": len(tool_names),
@@ -490,7 +482,6 @@ class SelfModelService:
             "innate_skills": innate_skills,
             "capability_categories": capability_categories,
             "provider_features": provider_features,
-            "frequent_gaps": frequent_gaps,
         }
 
     def _get_provider_features(self) -> dict:
@@ -514,8 +505,8 @@ class SelfModelService:
                     features["vision"] = True  # all cloud providers support vision
                 elif platform == "ollama":
                     features["local_inference"] = True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get provider features: {e}", exc_info=True)
         return features
 
     # ── Noteworthy assessment ───────────────────────────────────
@@ -551,8 +542,8 @@ class SelfModelService:
                             'signal': f"Goal evidence inactive: {goal_count} goals, 0 evidence",
                             'severity': 0.6,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Goal evidence check failed: {e}", exc_info=True)
 
                 # 3. Goal duplication: any goal title appearing 3+ times
                 try:
@@ -566,8 +557,8 @@ class SelfModelService:
                             'signal': f"Duplicate goals: '{dup[0][:50]}' x{dup[1]}",
                             'severity': 0.5,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
 
                 # 4. Stuck tasks: in_progress with iterations >= max
                 try:
@@ -581,8 +572,8 @@ class SelfModelService:
                             'signal': f"{stuck} task(s) stuck: iterations exhausted but still in_progress",
                             'severity': 0.7,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Stuck tasks check failed: {e}", exc_info=True)
 
                 # 5. Proactive rejection rate: >95% in last 24h
                 try:
@@ -603,8 +594,8 @@ class SelfModelService:
                                 'signal': f"Proactive {rate:.0f}% rejection rate ({rejected}/{candidates} in 24h)",
                                 'severity': 0.4,
                             })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Proactive rejection rate check failed: {e}", exc_info=True)
 
                 # 6. Orphaned episodes: topic_id not in topics
                 try:
@@ -618,8 +609,8 @@ class SelfModelService:
                             'signal': f"{orphans} orphaned episodes (topic_id not in topics)",
                             'severity': 0.3,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Orphaned episodes check failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")
@@ -685,131 +676,7 @@ class SelfModelService:
                 "severity": SEVERITY_LOW_ACTIVATION,
             })
 
-        # Recurring capability gaps (severity: 0.2)
-        cap = snapshot.get("capability", {})
-        gaps = cap.get("frequent_gaps", [])
-        if gaps:
-            top = gaps[0]
-            notes.append({
-                "signal": f"Recurring capability_gap: {top['request_summary'][:60]} ({top['occurrences']}x)",
-                "severity": SEVERITY_CAPABILITY_GAP,
-            })
-
         return notes
-
-    # ── Capability gap learning ─────────────────────────────────
-
-    def log_capability_gap(
-        self,
-        request_summary: str,
-        detection_source: str,
-        detected_category: Optional[str] = None,
-        confidence: float = 0.5,
-    ) -> None:
-        """
-        Log a capability gap. Deduplicates by exact match on request_summary.
-
-        Args:
-            request_summary: What the user asked for (truncated to 200 chars)
-            detection_source: 'act_loop', 'triage', 'user_correction'
-            detected_category: Optional category from CATEGORY_KEYWORDS
-            confidence: 0.0-1.0 confidence that this is a real gap
-        """
-        try:
-            db = self._get_db()
-            summary = request_summary[:200].strip()
-            if not summary:
-                return
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-
-                # Check for existing unresolved gap
-                cursor.execute(
-                    "SELECT id, occurrences FROM capability_gaps "
-                    "WHERE resolved_at IS NULL AND request_summary = ? LIMIT 1",
-                    (summary,)
-                )
-                existing = cursor.fetchone()
-
-                if existing:
-                    cursor.execute(
-                        "UPDATE capability_gaps SET occurrences = occurrences + 1, "
-                        "last_seen_at = datetime('now') WHERE id = ?",
-                        (existing[0],)
-                    )
-                else:
-                    cursor.execute(
-                        "INSERT INTO capability_gaps "
-                        "(request_summary, detected_category, detection_source, confidence) "
-                        "VALUES (?, ?, ?, ?)",
-                        (summary, detected_category, detection_source, confidence)
-                    )
-                conn.commit()
-                cursor.close()
-
-            logger.debug(f"{LOG_PREFIX} Logged capability gap: {summary[:50]}")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to log capability gap: {e}")
-
-    def get_frequent_gaps(self, min_occurrences: int = 3, limit: int = 5) -> list:
-        """Get most frequently requested capabilities Chalie lacks."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, request_summary, detected_category, occurrences, first_seen_at "
-                    "FROM capability_gaps "
-                    "WHERE resolved_at IS NULL AND occurrences >= ? "
-                    "ORDER BY occurrences DESC LIMIT ?",
-                    (min_occurrences, limit)
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-                return [
-                    {
-                        "id": r[0],
-                        "request_summary": r[1],
-                        "category": r[2],
-                        "occurrences": r[3],
-                        "first_seen": r[4],
-                    }
-                    for r in rows
-                ]
-        except Exception:
-            return []
-
-    def link_gap_to_curiosity(self, gap_id: int, thread_id: str) -> None:
-        """Link a capability gap to a seeded curiosity thread."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE capability_gaps SET seeded_curiosity_thread_id = ? WHERE id = ?",
-                    (thread_id, gap_id)
-                )
-                conn.commit()
-                cursor.close()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to link gap to curiosity: {e}")
-
-    def resolve_gap(self, gap_id: int, resolved_by: str) -> None:
-        """Mark a capability gap as resolved (e.g., when a new tool fills it)."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE capability_gaps SET resolved_at = datetime('now'), "
-                    "resolved_by = ? WHERE id = ?",
-                    (resolved_by, gap_id)
-                )
-                conn.commit()
-                cursor.close()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to resolve gap: {e}")
 
 
 # ── Background worker ───────────────────────────────────────────

@@ -15,7 +15,7 @@ so that existing ``from services.cognitive_drift_engine import ...``
 statements continue to work.
 """
 
-from services.reasoning_loop_service import (  # noqa: F401
+from services.reasoning_loop_service import (
     ReasoningSignal,
     emit_reasoning_signal,
     ReasoningLoopService as CognitiveDriftEngine,

@@ -1,16 +1,9 @@
-"""Tests for P1-a: Goal Evidence Pipeline Dead + Deduplication Broken."""
-import json
+"""Tests for goal deduplication and candidate graduation."""
 import sqlite3
 import pytest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 from services.goal_ecology_service import GoalEcologyService
-from services.goal_signal_service import (
-    extract_and_route_signals, route_cognitive_signal,
-    _try_graduate_candidate, CANDIDATE_MATCH_THRESHOLD,
-    CANDIDATE_GRADUATION_EVIDENCE, GOAL_MATCH_THRESHOLD,
-)
-from services.time_utils import utc_now
 
 pytestmark = pytest.mark.unit
 
@@ -37,7 +30,8 @@ CREATE TABLE IF NOT EXISTS goals (
     last_acted_at TEXT,
     outcome_feedback TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    derived_from TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS goal_evidence (
@@ -53,8 +47,12 @@ CREATE TABLE IF NOT EXISTS goal_evidence (
 
 
 def _make_db():
-    """Create an in-memory SQLite db with goal schema, return db_service mock."""
-    conn = sqlite3.connect(":memory:")
+    """Create an in-memory SQLite db with goal schema, return db_service mock.
+
+    ``check_same_thread=False`` allows the write-queue background thread to
+    share this in-memory connection with the test thread.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(GOAL_SCHEMA)
     conn.commit()
@@ -71,7 +69,6 @@ def _make_db():
     svc = MagicMock()
     svc.connection = _connection
     return svc, conn
-
 
 
 class TestGoalDeduplication:
@@ -122,31 +119,6 @@ class TestGoalDeduplication:
         cursor.close()
 
 
-class TestCandidateGoalMatching:
-    def test_signals_match_candidate_goals_with_lower_threshold(self):
-        mock_eco = MagicMock()
-        mock_eco.find_matching_goals.return_value = [{
-            "id": "cg1", "description": "Emerging interest in cooking",
-            "type": "emergent", "status": "candidate",
-            "salience": 0.1, "confidence": 0.1, "similarity": 0.58,
-        }]
-        mock_eco.get_goal.return_value = {"id": "cg1", "status": "candidate", "evidence_count": 1}
-        with patch("services.goal_ecology_service.GoalEcologyService", return_value=mock_eco):
-            extract_and_route_signals("cooking", "I want to learn more about cooking techniques", {"intent_type": "statement"})
-        mock_eco.find_matching_goals.assert_called_once_with("I want to learn more about cooking techniques", threshold=CANDIDATE_MATCH_THRESHOLD)
-        mock_eco.add_evidence.assert_called_once()
-
-    def test_non_candidate_goals_still_need_strict_threshold(self):
-        mock_eco = MagicMock()
-        mock_eco.find_matching_goals.return_value = [{
-            "id": "ag1", "description": "Learn to cook", "type": "emergent",
-            "status": "active", "salience": 0.5, "confidence": 0.6, "similarity": 0.58,
-        }]
-        with patch("services.goal_ecology_service.GoalEcologyService", return_value=mock_eco):
-            extract_and_route_signals("cooking", "Something about cooking and recipes and techniques", {"intent_type": "statement"})
-        mock_eco.add_evidence.assert_not_called()
-
-
 class TestCandidateGoalGraduation:
     def test_candidate_graduates_with_3_evidence(self):
         db, conn = _make_db()
@@ -155,7 +127,6 @@ class TestCandidateGoalGraduation:
         assert g["status"] == "candidate"
         for i in range(3):
             eco.add_evidence(goal_id=g["id"], signal_type="topic_recurrence", content="Evidence %d" % i, strength=0.7)
-        _try_graduate_candidate(eco, g["id"])
         updated = eco.get_goal(g["id"])
         assert updated["status"] == "active"
         assert updated["confidence"] >= 0.5
@@ -166,7 +137,6 @@ class TestCandidateGoalGraduation:
         g = eco.create_goal(description="Cooking interest", type="emergent")
         for i in range(2):
             eco.add_evidence(goal_id=g["id"], signal_type="topic_recurrence", content="Evidence %d" % i, strength=0.7)
-        _try_graduate_candidate(eco, g["id"])
         updated = eco.get_goal(g["id"])
         assert updated["status"] == "candidate"
 
@@ -177,18 +147,5 @@ class TestCandidateGoalGraduation:
         assert g["status"] == "actionable"
         for i in range(3):
             eco.add_evidence(goal_id=g["id"], signal_type="topic_recurrence", content="Evidence %d" % i, strength=0.7)
-        _try_graduate_candidate(eco, g["id"])
         updated = eco.get_goal(g["id"])
         assert updated["status"] == "actionable"
-
-    def test_cognitive_signal_routes_to_candidate_goals(self):
-        mock_eco = MagicMock()
-        mock_eco.find_matching_goals.return_value = [{
-            "id": "c1", "description": "Interest in data patterns", "type": "emergent",
-            "status": "candidate", "salience": 0.1, "confidence": 0.1, "similarity": 0.60,
-        }]
-        mock_eco.get_goal.return_value = {"id": "c1", "status": "candidate", "evidence_count": 1}
-        with patch("services.goal_ecology_service.GoalEcologyService", return_value=mock_eco):
-            route_cognitive_signal({"signal_type": "new_knowledge", "payload": {"content": "Discovered patterns in user data analysis"}, "source_id": "semantic_consolidation"})
-        mock_eco.add_evidence.assert_called_once()
-        mock_eco.find_matching_goals.assert_called_once_with("Discovered patterns in user data analysis", threshold=CANDIDATE_MATCH_THRESHOLD)

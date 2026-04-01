@@ -71,8 +71,17 @@ async function apiFetch(path, options = {}) {
 // ==========================================
 // Phase Management
 // ==========================================
+
+/**
+ * Show the named onboarding phase panel and hide all others.
+ *
+ * The `completionPhase` is no longer part of the flow — successful provider
+ * setup redirects directly to `/`. Only the three active phases are toggled.
+ *
+ * @param {string} phaseId - One of 'accountPhase' | 'loginPhase' | 'setupPhase'.
+ */
 function showPhase(phaseId) {
-    const phases = ['accountPhase', 'loginPhase', 'setupPhase', 'completionPhase'];
+    const phases = ['accountPhase', 'loginPhase', 'setupPhase', 'capabilitiesPhase'];
     phases.forEach(phase => {
         const el = document.getElementById(phase);
         if (el) {
@@ -273,6 +282,15 @@ async function testProviderConnection() {
 // ==========================================
 // Event Listeners
 // ==========================================
+
+/**
+ * Attach all interactive event listeners for the onboarding flow.
+ *
+ * Covers: account creation form, login form, provider connection test, and
+ * the provider setup form. The former completion-phase buttons
+ * (gotoChalieBtn / gotoDashboardBtn) have been removed; successful provider
+ * setup now redirects directly to `/` inside {@link submitSetupForm}.
+ */
 function setupEventListeners() {
     // Account form submit
     document.getElementById('accountForm').addEventListener('submit', async (e) => {
@@ -295,15 +313,6 @@ function setupEventListeners() {
     document.getElementById('setupForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         await submitSetupForm();
-    });
-
-    // Completion buttons
-    document.getElementById('gotoChalieBtn').addEventListener('click', () => {
-        window.location.href = '/';
-    });
-
-    document.getElementById('gotoDashboardBtn').addEventListener('click', () => {
-        window.location.href = '/brain/';
     });
 }
 
@@ -404,6 +413,14 @@ async function submitLoginForm() {
     }
 }
 
+/**
+ * Submit the provider setup form to the backend.
+ *
+ * On success, redirects immediately to `/` — no completion screen is shown.
+ * On error, re-enables the submit button so the user can correct and retry.
+ *
+ * @returns {Promise<void>}
+ */
 async function submitSetupForm() {
     const btn = document.getElementById('setupSubmitBtn');
     btn.disabled = true;
@@ -412,10 +429,12 @@ async function submitSetupForm() {
     const platform = currentPlatform;
     const config = PLATFORM_CONFIG[platform];
 
+    const modelVal = document.getElementById('setupModel').value.trim();
     const body = {
         name: document.getElementById('setupName').value.trim(),
         platform: platform,
-        model: document.getElementById('setupModel').value.trim(),
+        model: modelVal,
+        models: [modelVal],
     };
 
     if (config.hasHost) {
@@ -433,11 +452,10 @@ async function submitSetupForm() {
         });
 
         if (res.ok) {
-            // Show completion screen
-            document.getElementById('setupPhase').style.display = 'none';
-            document.getElementById('completionPhase').style.display = '';
-
+            // Provider saved — proceed to capability connection screen.
             showToast('Provider configured successfully!', 'success');
+            showPhase('capabilitiesPhase');
+            setupCapabilityListeners();
         } else {
             const err = await res.json();
             showToast(err.error || 'Failed to save provider', 'error');
@@ -448,6 +466,127 @@ async function submitSetupForm() {
         showToast('Network error', 'error');
         btn.disabled = false;
         btn.textContent = 'Save Provider';
+    }
+}
+
+// ==========================================
+// Capability Connection (Phase 4)
+// ==========================================
+let _capListenersAttached = false;
+
+function setupCapabilityListeners() {
+    if (_capListenersAttached) return;
+    _capListenersAttached = true;
+
+    const emailInput = document.getElementById('capEmail');
+    emailInput.addEventListener('blur', () => autodiscoverProvider(emailInput.value.trim()));
+
+    document.getElementById('capForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await connectCapabilities();
+    });
+
+    document.getElementById('capSkipBtn').addEventListener('click', () => {
+        window.location.href = '/';
+    });
+}
+
+const EMAIL_PROVIDERS = {
+    'gmail.com': { name: 'Google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
+    'googlemail.com': { name: 'Google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
+    'icloud.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'me.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'mac.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'outlook.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'hotmail.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'live.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'yahoo.com': { name: 'Yahoo', note: 'Generate an App Password at login.yahoo.com > Account Security' },
+    'yahoo.co.uk': { name: 'Yahoo', note: 'Generate an App Password at login.yahoo.com > Account Security' },
+};
+
+function autodiscoverProvider(email) {
+    const infoEl = document.getElementById('capProviderInfo');
+    if (!email || !email.includes('@')) {
+        infoEl.style.display = 'none';
+        return;
+    }
+    const domain = email.split('@')[1].trim().toLowerCase();
+    const provider = EMAIL_PROVIDERS[domain];
+    if (provider) {
+        let html = `<strong>${provider.name}</strong> detected.`;
+        if (provider.note) html += ` <span class="provider-note">${provider.note}</span>`;
+        infoEl.innerHTML = html;
+        infoEl.style.display = '';
+    } else {
+        infoEl.innerHTML = 'Provider not recognised. Supported: Google, Apple, Outlook, Yahoo.';
+        infoEl.style.display = '';
+    }
+}
+
+async function connectCapabilities() {
+    const email = document.getElementById('capEmail').value.trim();
+    const password = document.getElementById('capPassword').value.trim();
+    const btn = document.getElementById('capConnectBtn');
+    const progressEl = document.getElementById('capProgress');
+    const errorEl = document.getElementById('capError');
+    const stepImap = document.getElementById('capStepImap');
+    const stepCaldav = document.getElementById('capStepCaldav');
+
+    if (!email || !password) {
+        showToast('Email and app password required', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+    errorEl.style.display = 'none';
+    progressEl.style.display = '';
+    stepImap.className = 'cap-step active';
+    stepImap.textContent = 'Connecting...';
+    stepCaldav.className = 'cap-step';
+    stepCaldav.textContent = '';
+
+    try {
+        const res = await apiFetch('/api/capabilities/mail/setup', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            stepImap.className = 'cap-step done';
+            stepImap.textContent = 'Connected ✓';
+            // Show per-protocol status if available
+            const statusRes = await apiFetch('/api/capabilities/mail/status');
+            if (statusRes.ok) {
+                const status = await statusRes.json();
+                const protos = status.health_details?.protocols || {};
+                const parts = [];
+                if (protos.imap) parts.push('Email');
+                if (protos.caldav) parts.push('Calendar');
+                if (protos.carddav) parts.push('Contacts');
+                if (parts.length) {
+                    stepCaldav.className = 'cap-step done';
+                    stepCaldav.textContent = parts.join(', ') + ' active';
+                }
+            }
+            showToast('Connected! Redirecting...', 'success');
+            setTimeout(() => { window.location.href = '/'; }, 1500);
+        } else {
+            const err = await res.json();
+            stepImap.className = 'cap-step failed';
+            stepImap.textContent = err.error || 'Connection failed';
+            errorEl.textContent = 'Could not connect. Check your app password and try again, or skip for now.';
+            errorEl.style.display = '';
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+        }
+    } catch {
+        stepImap.className = 'cap-step failed';
+        stepImap.textContent = 'Network error';
+        errorEl.textContent = 'Network error — please try again.';
+        errorEl.style.display = '';
+        btn.disabled = false;
+        btn.textContent = 'Retry';
     }
 }
 

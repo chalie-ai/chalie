@@ -31,8 +31,7 @@ def _auto_execute_gate():
 @pytest.fixture
 def service(_auto_execute_gate):
     """Create an ActDispatcherService with innate-skill registration mocked out."""
-    with patch('services.innate_skills.register_innate_skills'), \
-         patch('services.self_model_service.SelfModelService.log_capability_gap'):
+    with patch('services.innate_skills.register_innate_skills'):
         svc = ActDispatcherService(timeout=2.0)
         yield svc
 
@@ -111,8 +110,7 @@ class TestTimeout:
 
     def test_slow_handler_returns_timeout(self, _auto_execute_gate):
         """A handler that exceeds the timeout produces status=timeout."""
-        with patch('services.innate_skills.register_innate_skills'), \
-             patch('services.self_model_service.SelfModelService.log_capability_gap'):
+        with patch('services.innate_skills.register_innate_skills'):
             svc = ActDispatcherService(timeout=0.1)
 
         def slow_handler(topic, action):
@@ -203,8 +201,7 @@ class TestExecutionGate:
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
                    return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'), \
-             patch('services.self_model_service.SelfModelService.log_capability_gap'):
+             patch('services.innate_skills.register_innate_skills'):
             svc = ActDispatcherService(timeout=2.0)
             svc.handlers['document'] = lambda topic, action: 'deleted'
 
@@ -232,8 +229,7 @@ class TestExecutionGate:
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
                    return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'), \
-             patch('services.self_model_service.SelfModelService.log_capability_gap'):
+             patch('services.innate_skills.register_innate_skills'):
             svc = ActDispatcherService(timeout=2.0)
             svc.handlers['recall'] = lambda topic, action: 'memory result'
 

@@ -20,6 +20,8 @@ import signal
 import threading
 from typing import Dict, List, Tuple
 
+from utils.logger import Logger
+
 def _read_version():
     """Read version from the VERSION file — single source of truth."""
     try:
@@ -163,8 +165,8 @@ class WorkerManager:
         ``KeyboardInterrupt`` is received, after which it ensures
         :meth:`shutdown_all` is invoked in the ``finally`` block.
         """
-        signal.signal(signal.SIGINT, lambda sig, frame: self.shutdown_all())
-        signal.signal(signal.SIGTERM, lambda sig, frame: self.shutdown_all())
+        signal.signal(signal.SIGINT, lambda _sig, _frame: self.shutdown_all())
+        signal.signal(signal.SIGTERM, lambda _sig, _frame: self.shutdown_all())
 
         logging.info("[Manager] Starting Worker Manager (single-process, threaded)")
         self.spawn_all_services()
@@ -190,11 +192,11 @@ class WorkerManager:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
 
     # Deferred imports
-    from services import PromptQueue, DatabaseService, SchemaService
-    from workers import digest_worker, episodic_memory_worker, semantic_consolidation_worker, rest_api_worker
+    from services import SchemaService
+    from workers import rest_api_worker
     from services.config_service import ConfigService
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
@@ -203,13 +205,8 @@ if __name__ == "__main__":
     from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
-    from services.curiosity_pursuit_service import curiosity_pursuit_worker
     from workers.persistent_task_worker import persistent_task_worker
-    from workers.document_worker import process_document_job, document_purge_worker
-
-    # Ensure encryption key
-    from services.encryption_key_service import get_encryption_key
-    get_encryption_key()
+    from workers.document_worker import document_purge_worker
 
     # Preload embedding model singleton
     try:
@@ -221,8 +218,7 @@ if __name__ == "__main__":
         logging.warning(f"[System] Embedding model preload failed: {e}")
 
     # Initialize SQLite database
-    from services.database_service import get_shared_db_service, get_db_path
-    from services.config_service import ConfigService
+    from services.database_service import get_shared_db_service
 
     episodic_config = ConfigService.resolve_agent_config("episodic-memory")
     embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
@@ -268,7 +264,6 @@ if __name__ == "__main__":
     manager.register_service("thread-expiry-service", thread_expiry_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("curiosity-pursuit-service", curiosity_pursuit_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
@@ -286,13 +281,6 @@ if __name__ == "__main__":
         manager.register_service("profile-enrichment-service", profile_enrichment_worker)
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
-
-    # Temporal pattern service
-    try:
-        from services.temporal_pattern_service import temporal_pattern_worker
-        manager.register_service("temporal-pattern-service", temporal_pattern_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
     # Register cron-triggered tools
     try:

@@ -16,7 +16,7 @@ import time
 import uuid
 import logging
 import math
-from datetime import datetime
+from services.time_utils import utc_now
 from typing import Optional, Dict, Any, List, Tuple
 
 from services.memory_client import MemoryClientService
@@ -372,10 +372,10 @@ class CommunicateAction(AutonomousAction):
             ctx = ClientContextService().get()
             tz = ctx.get("timezone")
             if tz:
-                return datetime.now(ZoneInfo(tz)).hour
+                return utc_now().astimezone(ZoneInfo(tz)).hour
         except Exception:
             pass
-        return datetime.now().hour
+        return utc_now().hour
 
     # ── Gate 3: Engagement ────────────────────────────────────────
 
@@ -634,7 +634,6 @@ class CommunicateAction(AutonomousAction):
             second_raw, second_score = raw_members[-2]
             self.store.zrem(deferred_key, second_raw)
             try:
-                second = json.loads(second_raw)
                 candidates_key = _key('candidates')
                 self.store.zadd(candidates_key, {second_raw: second_score})
                 self.store.expire(candidates_key, 1800)

@@ -15,7 +15,6 @@ Fairness: max 3 cycles per task per hour, max 5 active tasks per user.
 """
 
 import json
-import time
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
@@ -31,9 +30,6 @@ VALID_TRANSITIONS = {
     'in_progress': {'completed', 'paused', 'cancelled', 'expired', 'stalled'},
     'paused': {'in_progress', 'cancelled', 'expired'},
 }
-
-# States eligible for auto-expiry
-EXPIRABLE_STATES = {'accepted', 'in_progress', 'paused'}
 
 # Limits
 MAX_ACTIVE_TASKS = 5

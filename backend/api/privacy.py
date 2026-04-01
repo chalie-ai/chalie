@@ -46,18 +46,18 @@ def data_summary():
         from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
-        store = MemoryClientService.create_connection()
+        MemoryClientService.create_connection()
 
         result = {}
 
         # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
-                "episodes", "semantic_concepts", "user_traits", "threads",
+                "episodes", "knowledge", "threads",
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
-                "curiosity_threads", "documents", "document_chunks",
+                "documents", "document_chunks",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -91,13 +91,13 @@ def export_data():
     """Export all user data as a streaming JSON download."""
 
     user_data_tables = [
-        "episodes", "semantic_concepts", "semantic_relationships",
-        "user_traits", "threads", "autobiography",
+        "episodes", "knowledge",
+        "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
-        "place_fingerprints", "curiosity_threads",
+        "place_fingerprints",
         "interaction_log", "cortex_iterations",
-        "procedural_memory", "topics", "user_tool_preferences",
+        "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
     ]
 
@@ -255,8 +255,6 @@ def delete_all():
             "reasoning:priority",
             "reasoning:signals",
             "reasoning:last_processed",
-            "goal_inference:signal_topics",
-            "goal_inference:last_run",
             "world_model:items",
             "drift:*",
             "experience_assimilation_state",
@@ -264,12 +262,8 @@ def delete_all():
             "tool_reflection:pending",
             "semantic_consolidation:*",
             "reflex:*",
-            "two_signal_boundary:*",
             "adaptive_fork_*",
             "adaptive_growth_*",
-
-            # Topic & routing
-            "recent_topic:*", "recent_topic",
 
             # Output & notifications
             "notifications:recent",
@@ -288,7 +282,6 @@ def delete_all():
 
             # Misc
             "fok:*",
-            "curiosity:*",
             "bg_llm:*",
         ]:
             keys = store.keys(pattern)
@@ -307,9 +300,7 @@ def delete_all():
             for table in [
                 # User-personal data (critical)
                 "episodes",
-                "semantic_concepts",
-                "semantic_relationships",
-                "user_traits",
+                "knowledge",
                 "threads",
                 "autobiography",
                 "scheduled_items",
@@ -329,12 +320,9 @@ def delete_all():
                 # Behavioral/derived data
                 "interaction_log",
                 "cortex_iterations",
-                "message_cycles",
-                "procedural_memory",
                 "topics",
                 "tool_performance_metrics",
                 "user_tool_preferences",
-                "curiosity_threads",
             ]:
                 try:
                     cursor.execute(f"DELETE FROM {table}")

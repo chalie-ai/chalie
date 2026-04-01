@@ -17,7 +17,6 @@ Design principles:
 import json
 import logging
 import threading
-import time
 from typing import Optional
 
 from services.time_utils import utc_now
@@ -195,20 +194,7 @@ class SituationModelService:
         }
         if not thread_id:
             return defaults
-        try:
-            from services.focus_session_service import FocusSessionService
-            focus = FocusSessionService().get_focus(thread_id)
-            if not focus:
-                return defaults
-            return {
-                "active": True,
-                "topic": focus.get("topic") or focus.get("description"),
-                "distraction": 0.0,
-                "updated_at": utc_now().isoformat(),
-            }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Focus signal failed: {e}")
-            return defaults
+        return defaults
 
     def _collect_topic(self, thread_id: Optional[str]) -> dict:
         """Read current topic from the threads table via DatabaseService."""
@@ -345,8 +331,6 @@ class SituationModelService:
             "updated_at": utc_now().isoformat(),
         }
         try:
-            from services.world_state_service import WorldStateService
-            svc = WorldStateService()
             # Use cached model items to avoid heavy DB queries on every message
             store = self._get_store()
             raw = store.get("world_model:items")

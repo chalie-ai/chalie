@@ -21,6 +21,8 @@ import logging
 import threading
 from collections import deque
 
+from utils.logger import set_correlation_id
+
 from services.blocks_render_service import BlocksRenderService
 _blocks_svc = BlocksRenderService()
 
@@ -59,8 +61,8 @@ def _send_json(ws, data: dict):
     """Send a JSON message, swallowing errors on closed connections."""
     try:
         ws.send(json.dumps(data))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[WS] Send failed (connection likely closed): {e}")
 
 
 def register_websocket(sock):
@@ -96,9 +98,15 @@ def register_websocket(sock):
             # connection, causing the browser to see "Invalid frame header".
             try:
                 ws.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[WS] Close after auth failure failed: {e}")
             return
+
+        # Bind a connection-scoped correlation ID so all log lines emitted
+        # during this WebSocket session carry the same traceable identifier.
+        request_id = str(uuid.uuid4())
+        set_correlation_id(request_id)
+        logger.debug("[WS] Connection established", extra={"connection_id": request_id})
 
         # Subscribe to output:events for drift/card/task push
         from services.memory_client import MemoryClientService
@@ -117,8 +125,8 @@ def register_websocket(sock):
                 data['seq'] = seq
                 _buffer_event(data)
                 _send_json(ws, data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[WS] Failed to drain buffered notification: {e}")
 
 
         # Background thread: push drift/output events to the WebSocket
@@ -142,7 +150,8 @@ def register_websocket(sock):
                     else:
                         # Keepalive ping
                         _send_json(ws, {"type": "ping"})
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[WS] Drift sender error: {e}")
                     if not ws_open.is_set():
                         break
                     time.sleep(1)
@@ -150,8 +159,8 @@ def register_websocket(sock):
             try:
                 pubsub.unsubscribe('output:events')
                 pubsub.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[WS] Drift sender pubsub cleanup failed: {e}")
 
         drift_thread = threading.Thread(
             target=_drift_sender, daemon=True, name="ws-drift"
@@ -327,8 +336,8 @@ def _handle_chat(ws, store, msg, active_request=None):
             bg_error['message'] = str(e)
             try:
                 store.publish(sse_channel, json.dumps({"error": str(e)}))
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"[WS] Failed to publish error to SSE channel: {e2}")
         finally:
             bg_done.set()
 

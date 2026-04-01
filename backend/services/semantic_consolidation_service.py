@@ -13,13 +13,8 @@ Responsibility: Episode analysis and concept extraction (SRP).
 
 import logging
 import json
-import struct
-from typing import Dict, List, Optional
-from services.semantic_storage_service import SemanticStorageService
+from typing import Optional
 from services.config_service import ConfigService
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class SemanticConsolidationService:
@@ -28,7 +23,7 @@ class SemanticConsolidationService:
     def __init__(
         self,
         ollama_service,
-        storage_service: SemanticStorageService,
+        storage_service,
         config_service: ConfigService
     ):
         """
@@ -36,13 +31,16 @@ class SemanticConsolidationService:
 
         Args:
             ollama_service: LLM service for inference
-            storage_service: SemanticStorageService for persistence
+            storage_service: KnowledgeService (or legacy SemanticService) for persistence
             config_service: ConfigService for semantic memory config
         """
         self.ollama = ollama_service
         self.storage = storage_service
         self.config = config_service.get_agent_config("semantic-memory")
         self.prompt_template = self._load_prompt_template()
+
+        # Lazy-loaded KnowledgeService (resolved on first use)
+        self._knowledge_svc = None
 
     def _load_prompt_template(self) -> str:
         """Load semantic extraction prompt template."""
@@ -153,29 +151,49 @@ class SemanticConsolidationService:
 
         return "\n\n".join(parts)
 
+    def _get_knowledge_svc(self):
+        """Lazy-load KnowledgeService (one per consolidation service instance)."""
+        if self._knowledge_svc is None:
+            try:
+                from services.knowledge_service import KnowledgeService
+                # Resolve db_service from the storage object
+                db = getattr(self.storage, 'db', None) or getattr(self.storage, 'db_service', None)
+                self._knowledge_svc = KnowledgeService(db)
+            except Exception as e:
+                logging.error(f"[CONSOLIDATION] Failed to init KnowledgeService: {e}")
+                return None
+        return self._knowledge_svc
+
     def consolidate_concept(self, concept: dict, episode_id: str) -> str:
         """
-        Consolidate a concept (match existing or create new).
+        Consolidate a concept (match existing or create new) via KnowledgeService.
 
         Args:
             concept: Extracted concept dict (name, type, definition, abstraction_level, domain)
             episode_id: Source episode UUID
 
         Returns:
-            UUID of concept (existing or new)
+            ID/key of concept (existing or new)
         """
         try:
+            ks = self._get_knowledge_svc()
+            if ks is None:
+                raise RuntimeError("KnowledgeService unavailable")
+
+            concept_name = concept['name']
+            concept_type = concept['type']
+            definition = concept['definition']
+
             # Generate embedding for concept
             from services.embedding_service import get_embedding_service
             emb_service = get_embedding_service()
-            concept_text = f"{concept['name']} ({concept['type']}): {concept['definition']}"
+            concept_text = f"{concept_name} ({concept_type}): {definition}"
             embedding = emb_service.generate_embedding(concept_text)
 
-            # Search for similar existing concepts
+            # Search for similar existing concepts via KnowledgeService
             existing_concept = self._find_similar_concept(
-                concept_name=concept['name'],
-                embedding=embedding,
-                concept_type=concept['type']
+                concept_name=concept_name,
+                concept_type=concept_type,
             )
 
             if existing_concept:
@@ -183,18 +201,23 @@ class SemanticConsolidationService:
                 try:
                     from services.contradiction_classifier_service import ContradictionClassifierService
                     from services.uncertainty_service import UncertaintyService
-                    db_svc = self.storage.db_service
+                    db_svc = getattr(self.storage, 'db', None) or getattr(self.storage, 'db_service', None)
                     classifier = ContradictionClassifierService(db_service=db_svc)
+                    # Adapt existing_concept dict to what contradiction classifier expects
+                    compat_existing = {
+                        'id': existing_concept.get('id'),
+                        'concept_name': existing_concept.get('key', concept_name),
+                        'definition': existing_concept.get('value', ''),
+                    }
                     conflict = classifier.check_concept_conflict(
-                        concept_name=concept['name'],
-                        concept_definition=concept['definition'],
-                        existing=existing_concept,
+                        concept_name=concept_name,
+                        concept_definition=definition,
+                        existing=compat_existing,
                     )
                     if conflict:
                         unc_svc = UncertaintyService(db_svc)
-                        # Skip if this concept already has an open contradiction record
                         existing_uncs = unc_svc.get_uncertainties_for_memory(
-                            'concept', existing_concept['id']
+                            'concept', existing_concept.get('id')
                         )
                         already_tracked = any(
                             u.get('uncertainty_type') == 'contradiction'
@@ -204,7 +227,7 @@ class SemanticConsolidationService:
                         if not already_tracked:
                             unc_svc.create_uncertainty(
                                 memory_a_type='concept',
-                                memory_a_id=existing_concept['id'],
+                                memory_a_id=existing_concept.get('id'),
                                 memory_b_type=None,
                                 memory_b_id=None,
                                 uncertainty_type='contradiction',
@@ -215,7 +238,7 @@ class SemanticConsolidationService:
                             )
                             logging.info(
                                 f"[CONSOLIDATION] Contradiction detected on concept "
-                                f"'{existing_concept['concept_name']}': {conflict.get('reasoning', '')[:80]}"
+                                f"'{concept_name}': {conflict.get('reasoning', '')[:80]}"
                             )
 
                             try:
@@ -223,8 +246,7 @@ class SemanticConsolidationService:
                                 emit_reasoning_signal(ReasoningSignal(
                                     signal_type='memory_pressure',
                                     source='semantic_consolidation',
-                                    concept_id=int(existing_concept['id']) if existing_concept.get('id') else None,
-                                    concept_name=existing_concept['concept_name'],
+                                    concept_name=concept_name,
                                     topic=concept.get('domain') or 'general',
                                     content=f"Contradiction detected: {conflict.get('reasoning', '')[:150]}",
                                     activation_energy=0.7,
@@ -235,143 +257,95 @@ class SemanticConsolidationService:
                 except Exception as ue:
                     logging.debug(f"[CONSOLIDATION] Contradiction check skipped: {ue}")
 
-                # Strengthen existing concept
-                self.storage.strengthen_concept(existing_concept['id'], episode_id)
-                logging.info(f"Strengthened existing concept: {existing_concept['concept_name']}")
-                return existing_concept['id']
+                # Strengthen existing concept via KnowledgeService
+                ks.strengthen(entity='chalie', key=concept_name, episode_id=episode_id)
+                logging.info(f"Strengthened existing concept: {concept_name}")
+                return existing_concept.get('id', concept_name)
             else:
-                # Create new concept
-                concept_data = {
-                    'concept_name': concept['name'],
-                    'concept_type': concept['type'],
-                    'definition': concept['definition'],
-                    'embedding': embedding,
-                    'abstraction_level': concept.get('abstraction_level', 3),
+                # Create new concept via KnowledgeService
+                # KnowledgeService.store() handles embedding, signals, and UPSERT
+                data = {
                     'domain': concept.get('domain'),
-                    'confidence': 0.5,
-                    'source_episodes': [episode_id]
+                    'concept_type': concept_type,
+                    'abstraction_level': concept.get('abstraction_level', 3),
+                    'source_episodes': [episode_id],
+                    'examples': concept.get('examples'),
+                    'context_constraints': concept.get('context_constraints'),
                 }
 
-                concept_id = self.storage.store_concept(concept_data)
-                logging.info(f"Created new concept: {concept['name']}")
+                result = ks.store(
+                    kind='concept',
+                    entity='chalie',
+                    key=concept_name,
+                    value=definition,
+                    data=data,
+                    decay_class='standard',
+                    confidence=0.5,
+                    source='consolidation',
+                    embedding=embedding,
+                )
 
-                try:
-                    from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                    emit_reasoning_signal(ReasoningSignal(
-                        signal_type='new_knowledge',
-                        source='semantic_consolidation',
-                        concept_id=int(concept_id) if concept_id else None,
-                        concept_name=concept_data['concept_name'],
-                        topic=concept_data.get('domain') or 'general',
-                        content=concept_data['definition'],
-                        activation_energy=0.6,
-                    ))
-                except Exception:
-                    pass
-
-                return concept_id
+                if result:
+                    concept_id = result.get('id', concept_name)
+                    logging.info(f"Created new concept: {concept_name}")
+                    # KnowledgeService.store() already emits new_knowledge signal
+                    return concept_id
+                else:
+                    logging.warning(f"[CONSOLIDATION] KnowledgeService.store returned None for '{concept_name}'")
+                    return concept_name
 
         except Exception as e:
             logging.error(f"Failed to consolidate concept '{concept.get('name', 'unknown')}': {e}")
             raise
 
-    def _find_similar_concept(self, concept_name: str, embedding: list, concept_type: str) -> Optional[dict]:
+    def _find_similar_concept(self, concept_name: str, concept_type: str = None) -> Optional[dict]:
         """
-        Find similar concept using hybrid search (name match + vector similarity).
-
-        Uses sqlite-vec virtual table for vector similarity search, combined with
-        exact name matching for hybrid retrieval.
+        Find similar concept via KnowledgeService (exact key match + RRF recall).
 
         Args:
             concept_name: Name of concept
-            embedding: Embedding vector
-            concept_type: Type of concept
+            concept_type: Type of concept (used for post-filtering)
 
         Returns:
-            Existing concept dict or None
+            Existing knowledge row dict or None
         """
         try:
-            with self.storage.db_service.connection() as conn:
-                cursor = conn.cursor()
+            ks = self._get_knowledge_svc()
+            if ks is None:
+                return None
 
-                similarity_threshold = self.config['similarity_threshold']
-                packed = _pack_embedding(embedding)
+            # Step 1: Exact key match (highest priority)
+            exact = ks.get(entity='chalie', key=concept_name)
+            if exact and exact.get('kind') == 'concept':
+                data = exact.get('data') or {}
+                if concept_type and data.get('concept_type') and data['concept_type'] != concept_type:
+                    pass  # type mismatch, fall through to semantic search
+                else:
+                    return exact
 
-                # Step 1: Check for exact name match (highest priority)
-                cursor.execute("""
-                    SELECT
-                        id, concept_name, concept_type, definition,
-                        abstraction_level, domain, strength, confidence
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
-                      AND concept_type = ?
-                      AND LOWER(concept_name) = LOWER(?)
-                    LIMIT 1
-                """, (concept_type, concept_name))
+            # Step 2: Semantic recall via RRF (embedding + FTS + exact)
+            results = ks.recall(
+                query=concept_name,
+                kinds=['concept'],
+                entity='chalie',
+                limit=5,
+            )
 
-                row = cursor.fetchone()
-                if row:
-                    cursor.close()
-                    return {
-                        'id': str(row[0]),
-                        'concept_name': row[1],
-                        'concept_type': row[2],
-                        'definition': row[3],
-                        'embedding': None,
-                        'abstraction_level': row[4],
-                        'domain': row[5],
-                        'strength': row[6],
-                        'confidence': row[7]
-                    }
+            if not results:
+                return None
 
-                # Step 2: Vector similarity search via sqlite-vec virtual table
-                # sqlite-vec distance is L2 (Euclidean); we retrieve top-K and
-                # compute cosine similarity in Python to honour the threshold.
-                cursor.execute("""
-                    SELECT
-                        sc.id, sc.concept_name, sc.concept_type, sc.definition,
-                        sc.abstraction_level, sc.domain, sc.strength, sc.confidence,
-                        v.distance
-                    FROM semantic_concepts_vec v
-                    JOIN semantic_concepts sc ON sc.rowid = v.rowid
-                    WHERE v.embedding MATCH ?
-                      AND k = 5
-                      AND sc.deleted_at IS NULL
-                      AND sc.concept_type = ?
-                """, (packed, concept_type))
+            # Pick best match
+            for r in results:
+                # RRF score is not directly comparable to cosine sim, but higher is better.
+                # Use a heuristic: RRF > 0.01 is roughly equivalent to strong match.
+                rrf = r.get('rrf_score', 0)
+                if rrf > 0.005:
+                    data = r.get('data') or {}
+                    if concept_type and data.get('concept_type') and data['concept_type'] != concept_type:
+                        continue
+                    return r
 
-                rows = cursor.fetchall()
-                cursor.close()
-
-                if not rows:
-                    return None
-
-                # Pick best match above threshold.
-                # sqlite-vec returns L2 distance; convert to a 0-1 similarity
-                # approximation: sim ~ 1 / (1 + distance).
-                best = None
-                best_sim = 0.0
-                for r in rows:
-                    distance = r[8] if r[8] is not None else float('inf')
-                    sim = 1.0 / (1.0 + distance)
-                    if sim > similarity_threshold and sim > best_sim:
-                        best_sim = sim
-                        best = r
-
-                if best is None:
-                    return None
-
-                return {
-                    'id': str(best[0]),
-                    'concept_name': best[1],
-                    'concept_type': best[2],
-                    'definition': best[3],
-                    'embedding': None,
-                    'abstraction_level': best[4],
-                    'domain': best[5],
-                    'strength': best[6],
-                    'confidence': best[7]
-                }
+            return None
 
         except Exception as e:
             logging.error(f"Failed to find similar concept: {e}")
@@ -384,38 +358,58 @@ class SemanticConsolidationService:
         concept_name_to_id: dict
     ) -> Optional[str]:
         """
-        Consolidate a relationship (match existing or create new).
+        Consolidate a relationship via KnowledgeService.
 
         Args:
             relationship: Extracted relationship dict (source, target, type, strength)
             episode_id: Source episode UUID
-            concept_name_to_id: Mapping from concept names to UUIDs
+            concept_name_to_id: Mapping from concept names to IDs/keys
 
         Returns:
-            UUID of relationship (existing or new), or None if concepts not found
+            Key of relationship, or None if concepts not found
         """
         try:
-            # Resolve concept IDs from names
-            source_id = concept_name_to_id.get(relationship['source'])
-            target_id = concept_name_to_id.get(relationship['target'])
-
-            if not source_id or not target_id:
-                logging.warning(f"Cannot create relationship: concept not found (source={relationship['source']}, target={relationship['target']})")
+            ks = self._get_knowledge_svc()
+            if ks is None:
+                logging.warning("[CONSOLIDATION] KnowledgeService unavailable for relationship storage")
                 return None
 
-            # Store relationship (storage service handles duplicates)
-            relationship_data = {
-                'source_concept_id': source_id,
-                'target_concept_id': target_id,
-                'relationship_type': relationship['type'],
-                'strength': relationship.get('strength', 0.5),
-                'confidence': 0.5,
-                'source_episodes': [episode_id],
-                'bidirectional': relationship.get('bidirectional', False)
-            }
+            source_name = relationship['source']
+            target_name = relationship['target']
 
-            relationship_id = self.storage.store_relationship(relationship_data)
-            return relationship_id
+            # Verify both concepts exist (either as IDs or concept names)
+            source_id = concept_name_to_id.get(source_name)
+            target_id = concept_name_to_id.get(target_name)
+
+            if not source_id or not target_id:
+                logging.warning(
+                    f"Cannot create relationship: concept not found "
+                    f"(source={source_name}, target={target_name})"
+                )
+                return None
+
+            rel_type = relationship['type']
+            rel_key = f"{source_name}:{rel_type}:{target_name}"
+
+            result = ks.store(
+                kind='relationship',
+                entity='chalie',
+                key=rel_key,
+                value=rel_type,
+                data={
+                    'source_key': source_name,
+                    'target_key': target_name,
+                    'relationship_type': rel_type,
+                    'bidirectional': relationship.get('bidirectional', False),
+                    'strength': relationship.get('strength', 0.5),
+                    'source_episodes': [episode_id],
+                },
+                source='consolidation',
+            )
+
+            if result:
+                return result.get('id', rel_key)
+            return None
 
         except Exception as e:
             logging.error(f"Failed to consolidate relationship: {e}")

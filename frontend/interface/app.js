@@ -21,6 +21,7 @@ import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
 import { AppsPanel } from './apps_panel.js';
+import { ActivityPanel } from './activity_panel.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 class ChalieApp {
@@ -74,7 +75,6 @@ class ChalieApp {
     // Image attach module
     this._imageAttach = new ImageAttach({ getHost: () => this._backendHost });
     this._imageAttach.init();
-    this._imageAttach.checkVisionCapability();
 
     // Voice I/O + Voice Mode
     this._voice = new VoiceIO(() => this._backendHost);
@@ -100,6 +100,10 @@ class ChalieApp {
     this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
     this._docUpload.init();
 
+    // Activity log panel module
+    this._activityPanel = new ActivityPanel();
+    this._activityPanel.init();
+
     // Apps panel module
     this._appsPanel = new AppsPanel({ getHost: () => this._backendHost });
 
@@ -121,6 +125,29 @@ class ChalieApp {
 
     // Moments (recall search)
     this._initMoments();
+
+    // Developer helper: append ?debug_thought=1 to the URL to inject a mock
+    // thought card after 2 seconds, enabling visual testing without a backend.
+    // The event is fed directly into the event router's internal handler so it
+    // exercises the full thought → renderer pipeline.
+    if (new URLSearchParams(window.location.search).has('debug_thought')) {
+      setTimeout(() => {
+        this._eventRouter._handleEvent({
+          type: 'thought',
+          topic: 'curiosity',
+          mode: 'proactive',
+          confidence: 0.82,
+          blocks: [
+            {
+              type: 'thought',
+              id: 'mock-thought-1',
+              content: 'You might enjoy reading about octopus cognition — it connects to things we discussed about distributed intelligence.',
+              context: 'Based on your recent conversation about AI architectures',
+            },
+          ],
+        });
+      }, 2000);
+    }
 
     // Input (textarea, send button)
     this._initInput();
@@ -222,6 +249,19 @@ class ChalieApp {
   // Start
   // ---------------------------------------------------------------------------
 
+  /**
+   * Start the application after the backend is ready.
+   *
+   * Sequence:
+   *  1. Poll until the backend signals ready (or timeout / skip).
+   *  2. Dismiss the loading overlay.
+   *  3. Initialise voice I/O.
+   *  4. Show the first-visit welcome message exactly once (localStorage guard).
+   *  5. Load conversation history and bind the chat module.
+   *  6. Boot remaining modules (task strip, apps panel, WebSocket event router).
+   *
+   * @returns {Promise<void>}
+   */
   async _start() {
     try {
       await this._pollUntilReady();
@@ -234,6 +274,16 @@ class ChalieApp {
         document.body.classList.add('voice-available');
         document.getElementById('voiceModeBtn')?.classList.remove('hidden');
         if (lsGet('chalie_voice_mode')) this._voiceMode.enterMode();
+      }
+
+      // First-visit welcome message — shown exactly once via a localStorage flag.
+      // Rendered before history so it appears at the top of the conversation spine.
+      if (!lsGet('chalie_welcomed')) {
+        lsSet('chalie_welcomed', '1');
+        this.renderer.appendChalieForm(
+          [{ type: 'text', content: "Hello. I'm Chalie." }],
+          { mode: 'UNIFIED', confidence: 1 },
+        );
       }
 
       // Load conversation history
@@ -428,6 +478,26 @@ class ChalieApp {
           this.presence.setState('resting');
         },
       });
+    });
+
+    // Proactive thought-card action (expand / dismiss)
+    // Dispatched by blocks.js _renderThought() when the user clicks a card button.
+    document.addEventListener('chalie:thought-action', (e) => {
+      const { action, blockId } = e.detail;
+      console.log('[chalie:thought-action]', { action, blockId });
+
+      if (action === 'expand') {
+        if (this._chat.isSending) return;
+        // Pre-fill the textarea so sendMessage() picks up the text, then send.
+        const textarea = document.getElementById('messageInput');
+        if (textarea) {
+          textarea.value = 'Tell me more about that';
+          // Sync the send-button enabled state with the new value.
+          textarea.dispatchEvent(new Event('input'));
+        }
+        this._chat.sendMessage();
+      }
+      // 'dismiss' — fade-out animation is handled in blocks.js; nothing else needed here.
     });
 
     // Pin moment event (from remember button on Chalie messages)

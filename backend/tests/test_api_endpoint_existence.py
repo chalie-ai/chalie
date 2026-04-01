@@ -1,13 +1,13 @@
 """
 API endpoint existence tests.
 
-Absorbs nightly scenarios 070, 074, 075, 100, 105 — those scenarios validated
+Absorbs nightly scenarios 070, 074, 075 — those scenarios validated
 endpoint availability against a live running server.  Route-registration tests
 catch the same regressions on every commit without requiring a running instance.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.mark.unit
@@ -18,25 +18,27 @@ class TestAPIEndpointExistence:
       070 — /system/status endpoint exists and returns 200 with a status field
       074 — /system/observability/tasks endpoint exists and accepts GET
       075 — /system/observability/autobiography endpoint exists and accepts GET
-      100 — /system/observability/temporal endpoint exists and accepts GET
-      105 — /system/observability/temporal returns expected temporal field structure
     """
 
     @pytest.fixture
-    def registered_routes(self):
-        """Build the Flask app and return a mapping of route → allowed methods.
+    def registered_routes(self, db):
+        """Build the Flask app and return a mapping of route -> allowed methods.
 
-        No real DB or MemoryStore connections are made — both are stubbed out
-        so that blueprint registration (the only thing under test here) runs
-        without infrastructure dependencies.
+        The ``db`` fixture patches ``get_shared_db_service`` at the module level,
+        so blueprint registration runs without infrastructure dependencies.  A
+        real ``MemoryStore`` is used so that any store access during app
+        initialisation behaves correctly without artificial stubs.
+
+        Returns:
+            dict[str, frozenset[str]]: mapping of URL rule string to the set of
+            HTTP methods registered for that route.
         """
         from api import create_app
+        from services.memory_store import MemoryStore
 
-        mock_db = MagicMock()
-        mock_store = MagicMock()
+        store = MemoryStore()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
              patch('api._init_dashboard_gateway'):
             app = create_app()
             return {rule.rule: rule.methods for rule in app.url_map.iter_rules()}
@@ -56,15 +58,7 @@ class TestAPIEndpointExistence:
 
     def test_system_status_response_structure(self, authed_client):
         """Absorbs scenario 070 (response-structure half): endpoint returns JSON with a 'status' key."""
-        client, mock_db, mock_store = authed_client
-
-        # The endpoint may call DB and MemoryStore; return safe defaults.
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchone.return_value = None
-        mock_db._test_session_result.fetchall.return_value = []
-        mock_store.llen.return_value = 0
-        mock_store.get.return_value = None
+        client, _db, _store = authed_client
 
         response = client.get('/system/status')
 
@@ -93,10 +87,7 @@ class TestAPIEndpointExistence:
 
     def test_observability_tasks_endpoint_reachable(self, authed_client):
         """Absorbs scenario 074 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchall.return_value = []
+        client, _db, _mock_store = authed_client
 
         response = client.get('/system/observability/tasks')
 
@@ -119,92 +110,10 @@ class TestAPIEndpointExistence:
 
     def test_observability_autobiography_endpoint_reachable(self, authed_client):
         """Absorbs scenario 075 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_session_result.fetchone.return_value = None
+        client, _db, _mock_store = authed_client
 
         response = client.get('/system/observability/autobiography')
 
         assert response.status_code != 404, (
             "/system/observability/autobiography returned 404 — blueprint not registered"
-        )
-
-    # ------------------------------------------------------------------
-    # scenario 100 — /system/observability/temporal
-    # ------------------------------------------------------------------
-
-    def test_observability_temporal_route_registered(self, registered_routes):
-        """Absorbs scenario 100: /system/observability/temporal must be a registered GET route."""
-        assert '/system/observability/temporal' in registered_routes, (
-            "/system/observability/temporal is not registered in Flask's URL map"
-        )
-        assert 'GET' in registered_routes['/system/observability/temporal'], (
-            "/system/observability/temporal does not accept GET requests"
-        )
-
-    def test_observability_temporal_endpoint_reachable(self, authed_client):
-        """Absorbs scenario 100 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchall.return_value = []
-
-        response = client.get('/system/observability/temporal')
-
-        assert response.status_code != 404, (
-            "/system/observability/temporal returned 404 — blueprint not registered"
-        )
-
-    # ------------------------------------------------------------------
-    # scenario 105 — /system/observability/temporal field structure
-    # ------------------------------------------------------------------
-
-    def test_temporal_field_types(self, authed_client):
-        """Absorbs scenario 105: temporal endpoint returns expected field structure.
-
-        The nightly test validated that the response contains temporal metric
-        fields (e.g. observations_count or equivalent).  Here we verify the
-        shape without needing a running server — if the endpoint responds 200,
-        the JSON must contain at least one recognisable temporal metric key.
-        """
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_session_result.fetchall.return_value = []
-        mock_db._test_session_result.fetchone.return_value = None
-        # TemporalPatternService.get_observation_stats() uses db.fetch_all()
-        mock_db.fetch_all.return_value = []
-        mock_store.get.return_value = None
-
-        response = client.get('/system/observability/temporal')
-
-        assert response.status_code == 200, (
-            f"/system/observability/temporal returned {response.status_code}, expected 200"
-        )
-
-        data = response.get_json()
-        assert data is not None, (
-            "/system/observability/temporal did not return JSON"
-        )
-
-        # Accepted temporal metric keys — at least one must be present.
-        temporal_keys = {
-            'observation_count',
-            'observations_count',
-            'place_observations',
-            'temporal_observations',
-            'total_observations',
-            'circadian_data',
-            'temporal_metrics',
-            'place_fingerprints',
-            'observations',
-            'patterns_discovered',
-            'predictions_available',
-        }
-        present = temporal_keys & set(data.keys())
-        assert present, (
-            f"/system/observability/temporal JSON has no recognised temporal metric key; "
-            f"got keys: {list(data.keys())}"
         )

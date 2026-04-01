@@ -21,6 +21,7 @@ let assignments = {};
 let editPlatform = 'ollama';
 let editingProviderId = null;
 let deletingProviderId = null;
+let editModels = [];  // multi-model tag input state
 
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
@@ -83,17 +84,32 @@ async function apiFetch(path, options = {}, isMultipart = false) {
 // ==========================================
 // Toast
 // ==========================================
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', options = {}) {
+    const { action, onAction, duration = 3000 } = options;
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
+
+    if (action && typeof onAction === 'function') {
+        const btn = document.createElement('button');
+        btn.className = 'toast-action';
+        btn.textContent = action;
+        btn.addEventListener('click', () => {
+            onAction();
+            toast.remove();
+        });
+        toast.appendChild(btn);
+    }
+
     container.appendChild(toast);
-    setTimeout(() => {
+
+    const dismiss = () => {
         toast.style.opacity = '0';
         toast.style.transition = 'opacity 0.3s';
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    };
+    setTimeout(dismiss, duration);
 }
 
 // ==========================================
@@ -182,7 +198,7 @@ function selectPlatform(platform, context) {
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
     // Update model input
-    const modelInput = document.getElementById('editModel');
+    const modelInput = document.getElementById('editModelInput');
     modelInput.placeholder = config.modelPlaceholder;
 
     // Update datalist for curated platforms
@@ -299,6 +315,8 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadLists();
     } else if (tabName === 'documents') {
         loadDocuments();
+    } else if (tabName === 'capabilities') {
+        loadCapabilities();
     }
 });
 
@@ -311,13 +329,16 @@ function renderProviders() {
         el.innerHTML = '<div class="empty-state"><h3>No providers</h3><p>Add your first LLM provider to get started.</p></div>';
         return;
     }
-    el.innerHTML = providers.map(p => `
+    el.innerHTML = providers.map(p => {
+        const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
+        const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        return `
         <div class="provider-card" data-id="${p.id}">
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${p.platform}">${p.platform}</span>
-                    ${escapeHtml(p.model)}
+                    ${modelsDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
             </div>
@@ -326,7 +347,8 @@ function renderProviders() {
                 <button class="btn btn-danger" data-delete-id="${p.id}" data-delete-name="${escapeHtml(p.name)}">Delete</button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     // Wire delete/edit buttons via data attributes — never interpolate user data into JS strings.
     el.querySelectorAll('[data-edit-id]').forEach(btn => {
@@ -349,18 +371,22 @@ function openEditModal(id) {
 
     // Reset form
     document.getElementById('providerForm').reset();
+    editModels = [];
 
     if (id) {
         const p = providers.find(x => x.id === id);
         if (p) {
             editPlatform = p.platform;
             document.getElementById('editName').value = p.name;
-            document.getElementById('editModel').value = p.model;
+            // Populate models from array or fall back to single model
+            editModels = (p.models && p.models.length > 0) ? [...p.models] : (p.model ? [p.model] : []);
             if (p.host) document.getElementById('editHost').value = p.host;
         }
     } else {
         editPlatform = 'ollama';
     }
+
+    renderModelTags();
 
     // Clear any previous test result
     const testResult = document.getElementById('testResult');
@@ -369,6 +395,38 @@ function openEditModal(id) {
 
     selectPlatform(editPlatform, 'edit');
     modal.classList.remove('hidden');
+}
+
+function renderModelTags() {
+    const container = document.getElementById('editModelTags');
+    container.innerHTML = editModels.map((m, i) => `
+        <span class="model-tag" data-index="${i}">
+            ${escapeHtml(m)}
+            <button type="button" class="model-tag__remove" data-index="${i}">&times;</button>
+        </span>
+    `).join('');
+
+    // Wire remove buttons
+    container.querySelectorAll('.model-tag__remove').forEach(btn => {
+        btn.addEventListener('click', () => {
+            editModels.splice(Number(btn.dataset.index), 1);
+            renderModelTags();
+        });
+    });
+}
+
+function addModelFromInput() {
+    const input = document.getElementById('editModelInput');
+    const val = input.value.trim();
+    if (!val) return;
+    if (editModels.includes(val)) {
+        showToast('Model already added', 'info');
+        return;
+    }
+    editModels.push(val);
+    input.value = '';
+    renderModelTags();
+    input.focus();
 }
 
 document.getElementById('closeProviderModal').addEventListener('click', () => {
@@ -387,6 +445,15 @@ document.getElementById('editPlatformTabs').addEventListener('click', (e) => {
         const testResult = document.getElementById('testResult');
         testResult.className = 'test-result hidden';
         testResult.innerHTML = '';
+    }
+});
+
+// Model tag input — add button and enter key
+document.getElementById('addModelBtn').addEventListener('click', addModelFromInput);
+document.getElementById('editModelInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        addModelFromInput();
     }
 });
 
@@ -418,9 +485,11 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
+    // Test with first model (or whatever is in the input)
+    const testModel = document.getElementById('editModelInput').value.trim() || (editModels.length > 0 ? editModels[0] : '');
     const body = {
         platform,
-        model: document.getElementById('editModel').value.trim(),
+        model: testModel,
     };
 
     if (id) body.provider_id = id;
@@ -464,7 +533,7 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const body = {
         name: document.getElementById('editName').value.trim(),
         platform: platform,
-        model: document.getElementById('editModel').value.trim(),
+        models: editModels,
     };
 
     if (config.hasHost) {
@@ -547,7 +616,7 @@ async function loadAssignments() {
             const data = await res.json();
             assignments = {};
             (data.assignments || []).forEach(a => {
-                assignments[a.job_name] = a.provider_id;
+                assignments[a.job_name] = { provider_id: a.provider_id, model: a.model || null };
             });
         }
     } catch (e) {
@@ -555,8 +624,40 @@ async function loadAssignments() {
     }
 }
 
-const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification' };
+const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification', vision: 'Vision' };
 const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
+
+// ── Group derivation ──
+
+const GROUP_META = {
+    vision:     { name: 'Vision',     desc: 'Jobs requiring visual understanding (OCR, image analysis)', icon: '\u25CE' },
+    reasoning:  { name: 'Reasoning',  desc: 'High reasoning or creativity \u2014 needs your best model', icon: '\u25C6' },
+    analytical: { name: 'Analytical', desc: 'Structured output and classification tasks', icon: '\u25A3' },
+    utility:    { name: 'Utility',    desc: 'Lightweight tasks \u2014 fast/cheap models work well', icon: '\u25AA' },
+};
+
+function computeJobGroup(caps) {
+    if (caps.vision && caps.vision !== 'none') return 'vision';
+    if (caps.reasoning === 'high' || caps.creativity === 'high') return 'reasoning';
+    if (caps.structured === 'high' || caps.classification === 'high') return 'analytical';
+    return 'utility';
+}
+
+function groupJobs(jobList) {
+    const groups = { vision: [], reasoning: [], analytical: [], utility: [] };
+    for (const job of jobList) {
+        const g = computeJobGroup(job.caps || {});
+        groups[g].push(job);
+    }
+    return groups;
+}
+
+function getProviderModels(providerId) {
+    if (!providerId) return [];
+    const p = providers.find(x => x.id === providerId);
+    if (!p) return [];
+    return (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
+}
 
 function renderCognition() {
     const el = document.getElementById('cognitionList');
@@ -565,71 +666,276 @@ function renderCognition() {
         return;
     }
     if (jobs.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions…</h3></div>';
+        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions\u2026</h3></div>';
         return;
     }
 
-    const cardsHtml = jobs.map(job => {
-        const currentAssignment = assignments[job.id];
-        const options = providers.map(p =>
-            `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+    const groups = groupJobs(jobs);
+    const groupOrder = ['reasoning', 'analytical', 'vision', 'utility'];
+
+    const cardsHtml = groupOrder.filter(g => groups[g].length > 0).map(groupName => {
+        const meta = GROUP_META[groupName];
+        const groupJobs = groups[groupName];
+
+        // Determine current group-level assignment (only if all jobs share the same provider+model)
+        let groupProviderId = null;
+        let groupModel = null;
+        let isUniform = true;
+        let assignedCount = groupJobs.filter(j => assignments[j.id] && assignments[j.id].provider_id).length;
+
+        const firstAssign = assignments[groupJobs[0].id];
+        if (firstAssign && firstAssign.provider_id) {
+            groupProviderId = firstAssign.provider_id;
+            groupModel = firstAssign.model || null;
+            for (let i = 1; i < groupJobs.length; i++) {
+                const a = assignments[groupJobs[i].id];
+                if (!a || a.provider_id !== groupProviderId || a.model !== groupModel) {
+                    isUniform = false;
+                    groupProviderId = null;
+                    groupModel = null;
+                    break;
+                }
+            }
+        } else {
+            isUniform = false;
+        }
+
+        // Provider dropdown options
+        const providerOptions = providers.map(p =>
+            `<option value="${p.id}" ${isUniform && p.id === groupProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
         ).join('');
 
-        const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
-            `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
+        // Model dropdown options (based on selected provider)
+        // When no model override, default to provider's first model (the provider default)
+        const selectedProviderModels = isUniform && groupProviderId ? getProviderModels(groupProviderId) : [];
+        const effectiveGroupModel = groupModel || (selectedProviderModels.length > 0 ? selectedProviderModels[0] : null);
+        const modelOptions = selectedProviderModels.map(m =>
+            `<option value="${escapeHtml(m)}" ${m === effectiveGroupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
         ).join('');
 
-        return `
-            <div class="job-card">
-                <div class="job-card__top">
-                    <div class="job-info">
-                        <div class="job-name">${escapeHtml(job.name)}</div>
-                        <div class="job-desc">${escapeHtml(job.desc)}</div>
+        let statusText;
+        if (isUniform) {
+            statusText = `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`;
+        } else if (assignedCount === 0) {
+            statusText = `<span class="group-status group-status--unset">Not assigned</span>`;
+        } else if (assignedCount === groupJobs.length) {
+            statusText = `<span class="group-status group-status--mixed">${assignedCount} jobs assigned (mixed)</span>`;
+        } else {
+            statusText = `<span class="group-status group-status--mixed">${assignedCount} of ${groupJobs.length} assigned</span>`;
+        }
+
+        // Advanced individual job overrides
+        const jobRowsHtml = groupJobs.map(job => {
+            const a = assignments[job.id] || {};
+            const jobProviderId = a.provider_id || null;
+            const jobModel = a.model || null;
+
+            const jobProviderOpts = providers.map(p =>
+                `<option value="${p.id}" ${p.id === jobProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+            ).join('');
+
+            const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
+            const effectiveJobModel = jobModel || (jobModels.length > 0 ? jobModels[0] : null);
+            const jobModelDefault = jobProviderId ? '-- default --' : '-- model --';
+            const jobModelOpts = jobModels.map(m =>
+                `<option value="${escapeHtml(m)}" ${m === effectiveJobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
+            ).join('');
+
+            const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
+                `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
+            ).join('');
+
+            return `
+                <div class="job-override-row" data-job-id="${escapeHtml(job.id)}">
+                    <div class="job-override-info">
+                        <span class="job-override-name">${escapeHtml(job.name)}</span>
+                        <span class="job-override-caps">${capsHtml}</span>
                     </div>
-                    <div class="job-assign">
-                        <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
-                            <option value="">-- Select provider --</option>
-                            ${options}
+                    <div class="job-override-selects">
+                        <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
+                            <option value="">-- inherit --</option>
+                            ${jobProviderOpts}
                         </select>
-                        <span class="save-indicator" id="save-${job.id}">Saved ✓</span>
+                        <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
+                            <option value="">${jobModelDefault}</option>
+                            ${jobModelOpts}
+                        </select>
+                        <button class="btn-stats" data-stats-job="${escapeHtml(job.id)}" data-stats-name="${escapeHtml(job.name)}" title="Token usage stats">\u229E</button>
+                        <span class="save-indicator" id="save-${escapeHtml(job.id)}">Saved \u2713</span>
                     </div>
                 </div>
-                <div class="job-card__meta">
-                    <div class="job-caps">${capsHtml}</div>
-                    <button class="btn-stats" onclick="openJobStats('${job.id}', '${escapeHtml(job.name)}')" title="Token usage stats">⊡</button>
+            `;
+        }).join('');
+
+        return `
+            <div class="group-card" data-group="${groupName}">
+                <div class="group-card__header">
+                    <div class="group-card__title">
+                        <span class="group-card__icon">${meta.icon}</span>
+                        <span class="group-card__name">${escapeHtml(meta.name)}</span>
+                        <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="group-card__desc">${escapeHtml(meta.desc)}</div>
+                </div>
+                <div class="group-card__assign">
+                    <div class="group-card__selects">
+                        <select class="provider-select group-provider-select" data-group="${groupName}">
+                            <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
+                            ${providerOptions}
+                        </select>
+                        <select class="provider-select group-model-select" data-group="${groupName}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
+                            <option value="">-- Select model --</option>
+                            ${modelOptions}
+                        </select>
+                    </div>
+                    ${statusText}
+                </div>
+                <div class="group-card__advanced">
+                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
+                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
+                        ${jobRowsHtml}
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
 
-    const legendHtml = `
-        <div class="cap-legend">
-            <span class="cap-legend__title">Capability requirements:</span>
-            <span class="job-cap cap--high">High</span>
-            <span class="job-cap cap--medium">Medium</span>
-            <span class="job-cap cap--low">Low</span>
-            <span class="job-cap cap--none">None</span>
-        </div>
-    `;
-
-    el.innerHTML = cardsHtml + legendHtml;
+    el.innerHTML = cardsHtml;
+    wireGroupCardEvents(el);
 }
 
-async function assignJob(jobName, selectEl) {
-    const providerId = parseInt(selectEl.value);
+function wireGroupCardEvents(el) {
+    // Group provider select → update model dropdown and assign group
+    el.querySelectorAll('.group-provider-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const groupName = sel.dataset.group;
+            const providerId = parseInt(sel.value) || null;
+            const modelSel = el.querySelector(`.group-model-select[data-group="${groupName}"]`);
+
+            // Repopulate model dropdown
+            const models = providerId ? getProviderModels(providerId) : [];
+            modelSel.innerHTML = '<option value="">-- Select model --</option>' +
+                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+            modelSel.disabled = models.length === 0;
+
+            // Auto-select first model if only one
+            if (models.length === 1) {
+                modelSel.value = models[0];
+                assignGroup(groupName, providerId, models[0]);
+            } else if (models.length === 0 && providerId) {
+                assignGroup(groupName, providerId, null);
+            }
+        });
+    });
+
+    // Group model select → assign group
+    el.querySelectorAll('.group-model-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const groupName = sel.dataset.group;
+            const providerSel = el.querySelector(`.group-provider-select[data-group="${groupName}"]`);
+            const providerId = parseInt(providerSel.value) || null;
+            const model = sel.value || null;
+            if (providerId) assignGroup(groupName, providerId, model);
+        });
+    });
+
+    // Advanced toggle
+    el.querySelectorAll('.group-advanced-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const body = el.querySelector(`.group-advanced-body[data-group="${btn.dataset.group}"]`);
+            const isOpen = body.style.display !== 'none';
+            body.style.display = isOpen ? 'none' : 'block';
+            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Per-job assignments \u25BE';
+        });
+    });
+
+    // Individual job provider select → update that job's model dropdown
+    el.querySelectorAll('.job-provider-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const jobId = sel.dataset.job;
+            const providerId = parseInt(sel.value) || null;
+            const row = sel.closest('.job-override-row');
+            const modelSel = row.querySelector('.job-model-select');
+
+            const models = providerId ? getProviderModels(providerId) : [];
+            modelSel.innerHTML = `<option value="">${providerId ? '-- default --' : '-- model --'}</option>` +
+                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+            modelSel.disabled = models.length === 0;
+
+            if (models.length === 1) {
+                modelSel.value = models[0];
+                assignJob(jobId, providerId, models[0]);
+            } else if (providerId) {
+                assignJob(jobId, providerId, null);
+            }
+        });
+    });
+
+    // Individual job model select → assign job
+    el.querySelectorAll('.job-model-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const jobId = sel.dataset.job;
+            const row = sel.closest('.job-override-row');
+            const providerSel = row.querySelector('.job-provider-select');
+            const providerId = parseInt(providerSel.value) || null;
+            const model = sel.value || null;
+            if (providerId) assignJob(jobId, providerId, model);
+        });
+    });
+
+    // Stats buttons
+    el.querySelectorAll('[data-stats-job]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            openJobStats(btn.dataset.statsJob, btn.dataset.statsName);
+        });
+    });
+}
+
+async function assignGroup(groupName, providerId, model) {
     if (!providerId) return;
 
     try {
-        const res = await apiFetch(`/providers/jobs/${jobName}`, {
+        const res = await apiFetch(`/providers/jobs/groups/${groupName}`, {
             method: 'PUT',
-            body: JSON.stringify({ provider_id: providerId }),
+            body: JSON.stringify({ provider_id: providerId, model: model }),
         });
 
         if (res.ok) {
-            assignments[jobName] = providerId;
+            // Update local assignments for all jobs in this group
+            const groups = groupJobs(jobs);
+            const groupJobList = groups[groupName] || [];
+            for (const job of groupJobList) {
+                assignments[job.id] = { provider_id: providerId, model: model };
+            }
+            showToast(`${GROUP_META[groupName].name} group assigned`, 'success');
+            renderCognition();
+        } else {
+            showToast('Failed to save group assignment', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function assignJob(jobName, providerId, model) {
+    if (!providerId) return;
+
+    try {
+        const body = { provider_id: providerId };
+        if (model) body.model = model;
+
+        const res = await apiFetch(`/providers/jobs/${jobName}`, {
+            method: 'PUT',
+            body: JSON.stringify(body),
+        });
+
+        if (res.ok) {
+            assignments[jobName] = { provider_id: providerId, model: model };
             const indicator = document.getElementById(`save-${jobName}`);
-            indicator.classList.add('visible');
-            setTimeout(() => indicator.classList.remove('visible'), 2000);
+            if (indicator) {
+                indicator.classList.add('visible');
+                setTimeout(() => indicator.classList.remove('visible'), 2000);
+            }
         } else {
             showToast('Failed to save assignment', 'error');
         }
@@ -1905,9 +2211,8 @@ async function loadTasksObs() {
         obsSetTimestamp(data.generated_at);
 
         const tasks = data.persistent_tasks || [];
-        const threads = data.curiosity_threads || [];
 
-        let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'} and exploring ${threads.length} curiosity thread${threads.length === 1 ? '' : 's'}.</p>`;
+        let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'}.</p>`;
 
         // Persistent tasks
         if (tasks.length > 0) {
@@ -1933,27 +2238,6 @@ async function loadTasksObs() {
         } else {
             html += '<div class="obs-section-title">Background Tasks</div>';
             html += '<div class="obs-empty">No active background tasks.</div>';
-        }
-
-        // Curiosity threads
-        if (threads.length > 0) {
-            html += '<div class="obs-section-title">Curiosity Threads</div>';
-            for (const t of threads) {
-                const typeClass = t.thread_type === 'learning' ? '--learning' : '--behavioral';
-                const engagement = t.engagement_score !== undefined ? obsPct(t.engagement_score) + '% engagement' : '';
-                const explorations = t.exploration_count !== undefined ? t.exploration_count + ' explorations' : '';
-                const meta = [engagement, explorations].filter(Boolean).join(' · ');
-                html += `<div class="obs-task-card">
-                    <div class="obs-task-card__header">
-                        <span class="obs-task-card__title">${escapeHtml(t.title || 'Untitled thread')}</span>
-                        <span class="obs-task-card__badge ${typeClass}">${escapeHtml(t.thread_type || 'learning')}</span>
-                    </div>
-                    <div class="obs-task-card__meta">${escapeHtml(meta)}</div>
-                </div>`;
-            }
-        } else {
-            html += '<div class="obs-section-title">Curiosity Threads</div>';
-            html += '<div class="obs-empty">No active curiosity threads.</div>';
         }
 
         el.innerHTML = html;
@@ -2239,19 +2523,18 @@ function renderDocumentRow(doc) {
 
     let actions = '';
     if (isDeleted) {
-        actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
-                   <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
+        actions = `<button class="tool-card__btn doc-row__restore" title="Restore"><i data-lucide="undo-2"></i></button>
+                   <button class="tool-card__btn doc-row__purge" title="Permanently delete"><i data-lucide="trash-2"></i></button>`;
     } else {
-        actions = `<button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>
-                   <button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
-                   <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
+        actions = `<button class="tool-card__btn doc-row__preview" title="Preview"><i data-lucide="eye"></i></button>
+                   <button class="tool-card__btn doc-row__delete" title="Delete"><i data-lucide="x"></i></button>`;
     }
 
     const imageThumbnail = doc.mime_type?.startsWith('image/')
         ? `<div class="doc-row__image-preview"><img src="${API_BASE}/documents/${doc.id}/preview" alt="${escapeHtml(doc.original_name)}" class="doc-row__image-thumb" loading="lazy"></div>`
         : '';
 
-    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}" data-doc-id="${doc.id}">
         ${imageThumbnail}
         <div class="doc-row__info">
             <div class="doc-row__name">
@@ -2322,7 +2605,7 @@ function renderDocuments() {
 
         el.innerHTML = sortedKeys.map(key => `
             <div class="doc-group">
-                <div class="doc-group__header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <div class="doc-group__header">
                     <span class="doc-group__chevron">▾</span>
                     <span class="doc-group__name">${escapeHtml(key)}</span>
                     <span class="doc-group__count">${groups[key].length}</span>
@@ -2332,11 +2615,11 @@ function renderDocuments() {
                 </div>
             </div>
         `).join('');
-        return;
+    } else {
+        // Flat view (default)
+        el.innerHTML = docs.map(renderDocumentRow).join('');
     }
 
-    // Flat view (default)
-    el.innerHTML = docs.map(renderDocumentRow).join('');
     if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
 }
 
@@ -2349,17 +2632,18 @@ function getDocIcon(mime) {
     return '<i data-lucide="file-text"></i>';
 }
 
-async function previewDocument(id) {
-    const overlay = document.getElementById('docPreviewOverlay');
-    const title = document.getElementById('docPreviewTitle');
-    const meta = document.getElementById('docPreviewMeta');
-    const body = document.getElementById('docPreviewBody');
-    const downloadLink = document.getElementById('docDownloadLink');
-    const previewLink = document.getElementById('docPreviewOpenBtn');
-    const deleteBtn = document.getElementById('docPreviewDeleteBtn');
+async function openMetaEditor(id) {
+    const overlay = document.getElementById('docMetaOverlay');
+    const titleEl = document.getElementById('docMetaTitle');
+    const pillsEl = document.getElementById('docMetaPills');
+    const bodyEl  = document.getElementById('docMetaBody');
+    const footerEl = document.getElementById('docMetaFooter');
 
-    overlay.style.display = 'flex';
-    body.innerHTML = '<div class="loading">Loading content...</div>';
+    titleEl.textContent = 'Loading...';
+    pillsEl.innerHTML   = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading...</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
 
     try {
         const res = await apiFetch(`/documents/${id}`);
@@ -2367,54 +2651,159 @@ async function previewDocument(id) {
         const data = await res.json();
         const doc = data.item;
 
-        title.textContent = doc.original_name;
+        titleEl.textContent = doc.original_name;
 
         const em = doc.extracted_metadata || {};
-        let metaHtml = '';
-        if (em.document_type?.value) metaHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
-        if (doc.language) metaHtml += `<span class="doc-meta-pill">${doc.language}</span> `;
-        if (doc.page_count) metaHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
-        metaHtml += `<span class="doc-meta-pill">${doc.chunk_count} chunks</span>`;
-        if (doc.doc_project) metaHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
-        if (doc.doc_date) metaHtml += ` <span class="doc-meta-pill">${doc.doc_date}</span>`;
-        metaHtml += `<div class="doc-classify-fields">
-            <label>Category <input type="text" class="doc-classify-input" id="docClassCategory" value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt..."></label>
-            <label>Project <input type="text" class="doc-classify-input" id="docClassProject" value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation..."></label>
-            <label>Date <input type="date" class="doc-classify-input" id="docClassDate" value="${doc.doc_date || ''}"></label>
-            <button class="tool-card__btn" onclick="saveDocClassification('${id}')">Save</button>
-        </div>`;
-        meta.innerHTML = metaHtml;
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        if (doc.doc_project) pillsHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
+        if (doc.doc_date)    pillsHtml += ` <span class="doc-meta-pill">${escapeHtml(doc.doc_date)}</span>`;
+        pillsEl.innerHTML = pillsHtml;
 
-        // Render chunks
-        const chunks = doc.chunks || [];
-        if (chunks.length === 0) {
-            body.innerHTML = '<div class="obs-empty">No content extracted.</div>';
-        } else {
-            body.innerHTML = chunks.map(c => {
-                const pageLabel = c.page_number ? `<span class="doc-chunk-page">Page ${c.page_number}</span>` : '';
-                const sectionLabel = c.section_title ? `<span class="doc-chunk-section">${escapeHtml(c.section_title)}</span>` : '';
-                return `<div class="doc-chunk">
-                    <div class="doc-chunk__header">${pageLabel}${sectionLabel}</div>
-                    <div class="doc-chunk__content">${escapeHtml(c.content)}</div>
-                </div>`;
-            }).join('');
-        }
+        bodyEl.innerHTML = `
+            <div class="doc-meta-overlay-fields">
+                <label>Category
+                    <input type="text" class="doc-classify-input" id="docClassCategory"
+                           value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt...">
+                </label>
+                <label>Project
+                    <input type="text" class="doc-classify-input" id="docClassProject"
+                           value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation...">
+                </label>
+                <label>Date
+                    <input type="date" class="doc-classify-input" id="docClassDate"
+                           value="${doc.doc_date || ''}">
+                </label>
+            </div>`;
 
-        downloadLink.href = `${API_BASE}/documents/${id}/download`;
-        previewLink.href = `${API_BASE}/documents/${id}/preview`;
-        deleteBtn.onclick = async () => {
-            await deleteDocument(id);
-            overlay.style.display = 'none';
-        };
+        footerEl.innerHTML = `<button class="tool-card__btn doc-meta-save-btn" data-doc-id="${id}">Save</button>`;
     } catch (e) {
-        body.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+        console.error('[DocMeta]', e);
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+    }
+}
+
+async function openPreview(id) {
+    const overlay   = document.getElementById('docPreviewOverlay');
+    const titleEl   = document.getElementById('docPreviewTitle');
+    const metaEl    = document.getElementById('docPreviewMeta');
+    const bodyEl    = document.getElementById('docPreviewBody');
+    const footerEl  = document.getElementById('docPreviewFooter');
+
+    titleEl.textContent = 'Loading...';
+    metaEl.innerHTML    = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading content...</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
+
+    try {
+        const res = await apiFetch(`/documents/${id}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        const doc = data.item;
+
+        titleEl.textContent = doc.original_name;
+
+        const em = doc.extracted_metadata || {};
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        metaEl.innerHTML = pillsHtml;
+
+        footerEl.innerHTML = `<a class="btn btn-secondary" href="${API_BASE}/documents/${id}/download" download>
+            <i data-lucide="download"></i> Download
+        </a>`;
+        if (typeof lucide !== 'undefined') lucide.createIcons({ node: footerEl });
+
+        const mime = doc.mime_type || '';
+        const previewUrl = `${API_BASE}/documents/${id}/preview`;
+
+        if (mime.startsWith('image/')) {
+            bodyEl.innerHTML = `<div class="doc-preview-image"><img src="${previewUrl}" alt="${escapeHtml(doc.original_name)}" style="max-width:100%;border-radius:6px;"></div>`;
+
+        } else if (mime.includes('pdf')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="PDF Preview"></iframe>`;
+
+        } else if (mime.includes('presentationml') || mime.includes('pptx')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Presentation Preview"></iframe>`;
+
+        } else if (mime.includes('wordprocessingml') || mime.includes('docx')) {
+            bodyEl.innerHTML = '<div class="loading">Rendering document...</div>';
+            try {
+                const dlRes = await apiFetch(`/documents/${id}/download`);
+                const arrayBuffer = await dlRes.arrayBuffer();
+                const result = await mammoth.convertToHtml({ arrayBuffer });
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="font-family:sans-serif;line-height:1.6;padding:8px;">${result.value}</div>`;
+            } catch (e) {
+                console.error('[DocPreview/DOCX]', e);
+                bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Document Preview"></iframe>`;
+            }
+
+        } else if (mime.includes('html')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const html = await txtRes.text();
+                const iframe = document.createElement('iframe');
+                iframe.sandbox = 'allow-same-origin';
+                iframe.style.cssText = 'width:100%;height:70vh;border:none;border-radius:6px;';
+                iframe.title = 'HTML Preview';
+                iframe.srcdoc = html;
+                bodyEl.innerHTML = '';
+                bodyEl.appendChild(iframe);
+            } catch (err) {
+                console.error('[DocPreview] HTML render failed:', err);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load HTML preview.</div>';
+            }
+
+        } else if (mime.includes('markdown') || doc.original_name?.endsWith('.md')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                const html = (typeof marked !== 'undefined') ? marked.parse(text) : `<pre>${escapeHtml(text)}</pre>`;
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="line-height:1.6;padding:8px;">${html}</div>`;
+            } catch (e) {
+                console.error('[DocPreview/Markdown]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load Markdown preview.</div>';
+            }
+
+        } else if (mime.includes('json')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                let formatted = text;
+                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch (_parseErr) { /* keep raw */ }
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(formatted)}</pre>`;
+            } catch (e) {
+                console.error('[DocPreview/JSON]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load JSON preview.</div>';
+            }
+
+        } else {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(text)}</pre>`;
+            } catch (e) {
+                console.error('[DocPreview/Text]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load preview.</div>';
+            }
+        }
+    } catch (e) {
+        console.error('[DocPreview]', e);
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
 }
 
 async function saveDocClassification(id) {
-    const category = document.getElementById('docClassCategory')?.value?.trim() || null;
-    const project = document.getElementById('docClassProject')?.value?.trim() || null;
-    const date = document.getElementById('docClassDate')?.value || null;
+    const overlay = document.getElementById('docMetaOverlay');
+    const category = overlay.querySelector('#docClassCategory')?.value?.trim() || null;
+    const project = overlay.querySelector('#docClassProject')?.value?.trim() || null;
+    const date = overlay.querySelector('#docClassDate')?.value || null;
     try {
         const res = await apiFetch(`/documents/${id}/classify`, {
             method: 'PUT',
@@ -2427,20 +2816,26 @@ async function saveDocClassification(id) {
         } else {
             showToast('Failed to save classification', 'error');
         }
-    } catch { showToast('Failed to save classification', 'error'); }
+    } catch (e) {
+        console.error('[saveDocClassification]', e);
+        showToast('Failed to save classification', 'error');
+    }
 }
 
 async function deleteDocument(id) {
-    if (!confirm('Delete this document? It can be restored within 30 days.')) return;
     try {
         const res = await apiFetch(`/documents/${id}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Document deleted', 'success');
             loadDocuments();
+            showToast('Document deleted', 'success', {
+                action: 'Undo',
+                onAction: () => restoreDocument(id),
+                duration: 6000,
+            });
         } else {
             showToast('Failed to delete document', 'error');
         }
-    } catch { showToast('Failed to delete document', 'error'); }
+    } catch (e) { console.error('[deleteDocument]', e); showToast('Failed to delete document', 'error'); }
 }
 
 async function restoreDocument(id) {
@@ -2452,7 +2847,7 @@ async function restoreDocument(id) {
         } else {
             showToast('Failed to restore document', 'error');
         }
-    } catch { showToast('Failed to restore document', 'error'); }
+    } catch (e) { console.error('[restoreDocument]', e); showToast('Failed to restore document', 'error'); }
 }
 
 async function purgeDocument(id) {
@@ -2465,7 +2860,7 @@ async function purgeDocument(id) {
         } else {
             showToast('Failed to purge document', 'error');
         }
-    } catch { showToast('Failed to purge document', 'error'); }
+    } catch (e) { console.error('[purgeDocument]', e); showToast('Failed to purge document', 'error'); }
 }
 
 // Document filter tabs
@@ -2495,7 +2890,7 @@ document.getElementById('docSearchInput')?.addEventListener('input', () => rende
 document.getElementById('docUploadBtn')?.addEventListener('click', () => {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
+    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml,.jpg,.jpeg,.png,.webp,.gif';
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files[0];
         if (!file) return;
@@ -2521,10 +2916,62 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
 
 // Document preview modal close
 document.getElementById('docPreviewClose')?.addEventListener('click', () => {
-    document.getElementById('docPreviewOverlay').style.display = 'none';
+    document.getElementById('docPreviewOverlay').classList.add('hidden');
 });
 document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
-    if (e.target.id === 'docPreviewOverlay') e.target.style.display = 'none';
+    if (e.target.id === 'docPreviewOverlay') e.target.classList.add('hidden');
+});
+
+// Document metadata editor modal
+document.getElementById('docMetaClose')?.addEventListener('click', () => {
+    document.getElementById('docMetaOverlay').classList.add('hidden');
+});
+document.getElementById('docMetaOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'docMetaOverlay') {
+        e.target.classList.add('hidden');
+        return;
+    }
+    const saveBtn = e.target.closest('.doc-meta-save-btn');
+    if (saveBtn) {
+        const docId = saveBtn.dataset.docId;
+        if (docId) saveDocClassification(docId);
+    }
+});
+
+// Document list — delegated event handler
+document.getElementById('docList')?.addEventListener('click', (e) => {
+    const groupHeader = e.target.closest('.doc-group__header');
+    if (groupHeader) {
+        groupHeader.parentElement.classList.toggle('collapsed');
+        return;
+    }
+
+    const row = e.target.closest('.doc-row[data-doc-id]');
+    if (!row) return;
+    const id = row.dataset.docId;
+
+    if (e.target.closest('.doc-row__preview')) { openPreview(id);      return; }
+    if (e.target.closest('.doc-row__delete'))  { deleteDocument(id);   return; }
+    if (e.target.closest('.doc-row__restore')) { restoreDocument(id);  return; }
+    if (e.target.closest('.doc-row__purge'))   { purgeDocument(id);    return; }
+    if (e.target.closest('.doc-row__actions')) return;
+    if (e.target.closest('.doc-row__info'))    { openMetaEditor(id);   return; }
+});
+
+// Global Escape key handler — closes topmost visible modal
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const previewOverlay    = document.getElementById('docPreviewOverlay');
+    const metaOverlay       = document.getElementById('docMetaOverlay');
+    const watchFolderModal  = document.getElementById('watchFolderModal');
+
+    if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
+        previewOverlay.classList.add('hidden');
+    } else if (metaOverlay && !metaOverlay.classList.contains('hidden')) {
+        metaOverlay.classList.add('hidden');
+    } else if (watchFolderModal && !watchFolderModal.classList.contains('hidden')) {
+        watchFolderModal.classList.add('hidden');
+    }
 });
 
 // ==========================================
@@ -2539,10 +2986,10 @@ async function loadWatchedFolders() {
         const folders = data.items || [];
         const panel = document.getElementById('watchedFoldersPanel');
         if (folders.length > 0) {
-            panel.style.display = '';
+            panel.classList.remove('hidden');
             renderWatchedFolders(folders);
         } else {
-            panel.style.display = 'none';
+            panel.classList.add('hidden');
         }
     } catch (e) { console.error('[WatchedFolders] load error:', e); }
 }
@@ -2567,16 +3014,30 @@ function renderWatchedFolders(folders) {
             </div>
             <div class="watched-folder-actions">
                 <label class="toggle-switch" title="${disabled ? 'Enable' : 'Disable'}">
-                    <input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleWatchFolder('${f.id}', this.checked)">
+                    <input type="checkbox" class="wf-toggle" data-folder-id="${f.id}" ${disabled ? '' : 'checked'}>
                     <span class="slider"></span>
                 </label>
-                <button class="btn-icon scan-btn" title="Scan now" onclick="triggerFolderScan('${f.id}')">⟳</button>
-                <button class="btn-icon" title="Edit" onclick="openWatchFolderModal('${f.id}')">✎</button>
-                <button class="btn-icon delete-btn" title="Delete" onclick="deleteWatchFolder('${f.id}')">✕</button>
+                <button class="btn-icon scan-btn wf-scan" data-folder-id="${f.id}" title="Scan now">⟳</button>
+                <button class="btn-icon wf-edit" data-folder-id="${f.id}" title="Edit">✎</button>
+                <button class="btn-icon delete-btn wf-delete" data-folder-id="${f.id}" title="Delete">✕</button>
             </div>
         </div>`;
     }).join('');
 }
+
+// Watched folder event delegation
+document.getElementById('watchedFoldersList')?.addEventListener('change', (e) => {
+    const toggle = e.target.closest('.wf-toggle');
+    if (toggle) toggleWatchFolder(toggle.dataset.folderId, toggle.checked);
+});
+document.getElementById('watchedFoldersList')?.addEventListener('click', (e) => {
+    const scan = e.target.closest('.wf-scan');
+    const edit = e.target.closest('.wf-edit');
+    const del  = e.target.closest('.wf-delete');
+    if (scan) { triggerFolderScan(scan.dataset.folderId); return; }
+    if (edit) { openWatchFolderModal(edit.dataset.folderId); return; }
+    if (del)  { deleteWatchFolder(del.dataset.folderId); return; }
+});
 
 // Toggle watched folders panel
 document.getElementById('watchedFoldersToggle')?.addEventListener('click', () => {
@@ -2671,13 +3132,20 @@ async function browseDirectory(path) {
             listEl.innerHTML = '<div class="dir-browser-empty">No subdirectories</div>';
         } else {
             listEl.innerHTML = data.directories.map(d =>
-                `<div class="dir-browser-item" onclick="browseDirectory('${escapeHtml(data.current)}/${escapeHtml(d)}')">${escapeHtml(d)}</div>`
+                `<div class="dir-browser-item" data-dir-path="${escapeHtml(data.current)}/${escapeHtml(d)}">${escapeHtml(d)}</div>`
             ).join('');
         }
     } catch (e) {
         listEl.innerHTML = '<div class="dir-browser-empty">Failed to browse directory</div>';
     }
 }
+
+// Directory browser — delegated click handler
+document.getElementById('dirBrowserList')?.addEventListener('click', (e) => {
+    const item = e.target.closest('.dir-browser-item');
+    if (!item) return;
+    browseDirectory(item.dataset.dirPath);
+});
 
 // Watch Folder form submit
 document.getElementById('watchFolderForm')?.addEventListener('submit', async (e) => {
@@ -2768,6 +3236,191 @@ async function deleteWatchFolder(id) {
             showToast('Failed to remove folder watch', 'error');
         }
     } catch { showToast('Failed to remove folder watch', 'error'); }
+}
+
+// ==========================================
+// Capabilities Tab
+// ==========================================
+
+const _SELF_HOSTED_PROVIDERS = new Set(['nextcloud', 'synology', 'radicale']);
+const _APP_PASSWORD_HINTS = {
+    google: 'Google Account \u2192 Security \u2192 App Passwords (requires 2FA)',
+    apple: 'Apple ID \u2192 Sign-In and Security \u2192 App-Specific Passwords',
+    yahoo: 'Yahoo Account \u2192 Account Security \u2192 App Passwords',
+    outlook: 'Microsoft Account \u2192 Security \u2192 App Passwords (requires 2FA)',
+};
+
+let capabilitiesData = [];
+
+async function loadCapabilities() {
+    const el = document.getElementById('capabilitiesList');
+    el.innerHTML = '<div class="loading">Loading capabilities...</div>';
+    try {
+        const res = await apiFetch('/api/capabilities');
+        if (res.status === 401) { window.location.replace('/login/?next=/brain/'); return; }
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        capabilitiesData = data.capabilities || [];
+        renderCapabilities();
+    } catch (e) {
+        el.innerHTML = '<div class="empty-state"><p>Failed to load capabilities.</p></div>';
+    }
+}
+
+function renderCapabilities() {
+    const el = document.getElementById('capabilitiesList');
+    if (!capabilitiesData.length) {
+        el.innerHTML = '<div class="empty-state"><h3>No capabilities found</h3><p>No capability plugins are installed.</p></div>';
+        return;
+    }
+    el.innerHTML = capabilitiesData.map(cap => {
+        const connected = cap.connected;
+        const statusClass = connected ? 'cap-status-connected' : 'cap-status-disconnected';
+        const statusLabel = connected ? 'Connected' : 'Not connected';
+        const syncInfo = cap.last_sync_at ? `Last sync: ${timeAgo(cap.last_sync_at)}` : 'Never synced';
+        const providerList = (cap.providers || []).map(p => escapeHtml(p)).join(', ');
+
+        return `
+        <div class="cap-card" data-id="${escapeHtml(cap.id)}">
+            <div class="cap-info">
+                <div class="cap-name-row">
+                    <span class="cap-status-dot ${statusClass}"></span>
+                    <span class="cap-name">${escapeHtml(cap.name)}</span>
+                    <span class="cap-version">${escapeHtml(cap.version)}</span>
+                </div>
+                <div class="cap-meta">
+                    <span class="cap-status-label">${statusLabel}</span>
+                    ${connected ? ` &middot; <span class="cap-sync">${syncInfo}</span>` : ''}
+                    ${providerList ? ` &middot; ${providerList}` : ''}
+                </div>
+            </div>
+            <div class="cap-actions">
+                ${connected
+                    ? `<button class="btn btn-danger btn-sm" data-cap-disconnect="${escapeHtml(cap.id)}">Disconnect</button>`
+                    : `<button class="btn btn-primary btn-sm" data-cap-connect="${escapeHtml(cap.id)}">Connect</button>`
+                }
+            </div>
+        </div>`;
+    }).join('');
+
+    el.querySelectorAll('[data-cap-connect]').forEach(btn => {
+        btn.addEventListener('click', () => openCapSetup(btn.dataset.capConnect));
+    });
+    el.querySelectorAll('[data-cap-disconnect]').forEach(btn => {
+        btn.addEventListener('click', () => disconnectCapability(btn.dataset.capDisconnect));
+    });
+}
+
+function openCapSetup(capId) {
+    document.getElementById('capSetupId').value = capId;
+    document.getElementById('capSetupForm').reset();
+    document.getElementById('capSetupId').value = capId; // reset clears hidden too
+    document.getElementById('capServerUrlGroup').classList.add('hidden');
+    document.getElementById('capPasswordHint').textContent = '';
+
+    const cap = capabilitiesData.find(c => c.id === capId);
+    document.getElementById('capSetupTitle').textContent = `Connect ${cap ? cap.name : capId}`;
+
+    // Populate provider options from capability's providers list
+    const select = document.getElementById('capProvider');
+    select.innerHTML = '<option value="">Select provider...</option>';
+    if (cap && cap.providers) {
+        for (const p of cap.providers) {
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+            select.appendChild(opt);
+        }
+    }
+
+    document.getElementById('capSetupOverlay').classList.remove('hidden');
+    select.focus();
+}
+
+// Show/hide server URL based on provider selection
+document.getElementById('capProvider').addEventListener('change', (e) => {
+    const provider = e.target.value;
+    const serverGroup = document.getElementById('capServerUrlGroup');
+    const hint = document.getElementById('capPasswordHint');
+
+    if (_SELF_HOSTED_PROVIDERS.has(provider)) {
+        serverGroup.classList.remove('hidden');
+    } else {
+        serverGroup.classList.add('hidden');
+        document.getElementById('capServerUrl').value = '';
+    }
+
+    hint.textContent = _APP_PASSWORD_HINTS[provider] || '';
+});
+
+// Close modal
+document.getElementById('capSetupClose').addEventListener('click', () => {
+    document.getElementById('capSetupOverlay').classList.add('hidden');
+});
+document.getElementById('capSetupCancel').addEventListener('click', () => {
+    document.getElementById('capSetupOverlay').classList.add('hidden');
+});
+
+// Submit setup form
+document.getElementById('capSetupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const capId = document.getElementById('capSetupId').value;
+    const provider = document.getElementById('capProvider').value;
+    const username = document.getElementById('capUsername').value.trim();
+    const password = document.getElementById('capPassword').value;
+    const serverUrl = document.getElementById('capServerUrl').value.trim();
+
+    if (!provider) { showToast('Select a provider', 'error'); return; }
+    if (!username) { showToast('Username is required', 'error'); return; }
+    if (!password) { showToast('App password is required', 'error'); return; }
+    if (_SELF_HOSTED_PROVIDERS.has(provider) && !serverUrl) {
+        showToast('Server URL is required for self-hosted providers', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('capSetupSubmit');
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+
+    const body = { provider, username, password };
+    if (serverUrl) body.server_url = serverUrl;
+
+    try {
+        const res = await apiFetch(`/api/capabilities/${capId}/setup`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+        });
+        if (res.status === 401) { window.location.replace('/login/?next=/brain/'); return; }
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('capSetupOverlay').classList.add('hidden');
+            showToast('Connected successfully', 'success');
+            await loadCapabilities();
+        } else {
+            showToast(data.error || 'Connection failed', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+    }
+});
+
+async function disconnectCapability(capId) {
+    if (!confirm(`Disconnect this capability? Stored credentials will be removed.`)) return;
+    try {
+        const res = await apiFetch(`/api/capabilities/${capId}/disconnect`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Disconnected', 'success');
+            await loadCapabilities();
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Failed to disconnect', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    }
 }
 
 // ==========================================

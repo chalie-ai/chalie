@@ -11,28 +11,22 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from utils.logger import Logger
 from services.database_service import get_shared_db_service
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+Logger.start()
 logger = logging.getLogger(__name__)
 
 # Tables that hold user/cognitive data (not schema or config)
 DATA_TABLES = [
     'episodes',
     'cortex_iterations',
-    'semantic_concepts',
-    'semantic_relationships',
+    'knowledge',
     'interaction_log',
-    'user_traits',
-    'procedural_memory',
     'topics',
     'threads',
     'scheduled_items',
     'autobiography',
-    'curiosity_threads',
     'lists',
     'list_items',
     'list_events',

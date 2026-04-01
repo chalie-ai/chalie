@@ -1,8 +1,11 @@
-"""Unit tests for GoalProactiveService — trigger engine for actionable goals."""
+"""Unit tests for GoalProactiveService -- trigger engine for actionable goals."""
 
+import json
+import uuid
 import pytest
 from unittest.mock import MagicMock, patch
 
+from services.memory_store import MemoryStore
 from services.goal_proactive_service import (
     check_and_execute,
     _calculate_social_cost,
@@ -71,9 +74,6 @@ class TestConfidenceGating:
             'strategy': 'do something',
         }
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-
         with patch('services.goal_proactive_service._calculate_social_cost', return_value=0.0), \
              patch('services.goal_proactive_service._execute_proactive') as mock_exec, \
              patch('services.goal_proactive_service._mark_acted'):
@@ -94,13 +94,13 @@ class TestSocialCostBlocking:
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = True
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
+        # Empty store — no ignored count, no message timestamps
+        store = MemoryStore()
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             cost = _calculate_social_cost()
 
         assert cost >= 0.3
@@ -110,13 +110,13 @@ class TestSocialCostBlocking:
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = False
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
+        # Empty store — no ignored count, no message timestamps
+        store = MemoryStore()
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             cost = _calculate_social_cost()
 
         assert cost < MAX_SOCIAL_COST
@@ -126,13 +126,14 @@ class TestSocialCostBlocking:
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = False
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = '3'
+        # Pre-populate the key _calculate_social_cost reads for ignored count
+        store = MemoryStore()
+        store.set('goal:recent_ignored_count', '3')
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             cost = _calculate_social_cost()
 
         assert cost >= 0.3
@@ -142,13 +143,14 @@ class TestSocialCostBlocking:
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = True
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = '2'
+        # Pre-populate the key _calculate_social_cost reads for ignored count
+        store = MemoryStore()
+        store.set('goal:recent_ignored_count', '2')
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             cost = _calculate_social_cost()
 
         assert cost >= MAX_SOCIAL_COST
@@ -174,13 +176,14 @@ class TestSocialCostBlocking:
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = True
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = '10'
+        # Pre-populate an extreme ignored count to drive cost above 1.0 before cap
+        store = MemoryStore()
+        store.set('goal:recent_ignored_count', '10')
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             cost = _calculate_social_cost()
 
         assert cost <= 1.0
@@ -237,10 +240,10 @@ class TestProactiveExecution:
             'strategy': 'research recipes',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             result = _execute_proactive(goal, 'ask')
 
         assert result['style'] == 'ask'
@@ -255,10 +258,10 @@ class TestProactiveExecution:
             'strategy': 'find tutorials',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             result = _execute_proactive(goal, 'suggest')
 
         assert result['style'] == 'suggest'
@@ -275,14 +278,16 @@ class TestProactiveExecution:
             'strategy': 'watch tutorials',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'ask')
 
-        import json
-        pushed_payload = json.loads(mock_store.rpush.call_args[0][1])
+        # Verify state: exactly one item was pushed to the prompt-queue
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
+        pushed_payload = json.loads(items[0])
         prompt = pushed_payload['prompt']
 
         assert 'Learn woodworking' in prompt
@@ -301,14 +306,16 @@ class TestProactiveExecution:
             'strategy': 'run three times a week',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'suggest')
 
-        import json
-        pushed_payload = json.loads(mock_store.rpush.call_args[0][1])
+        # Verify state: inspect the item pushed to the prompt-queue
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
+        pushed_payload = json.loads(items[0])
         prompt = pushed_payload['prompt']
 
         assert 'Get fit before summer' in prompt
@@ -326,14 +333,16 @@ class TestProactiveExecution:
             'strategy': 'log workouts daily',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'suggest')
 
-        import json
-        pushed_payload = json.loads(mock_store.rpush.call_args[0][1])
+        # Verify state: inspect the metadata of the pushed payload
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
+        pushed_payload = json.loads(items[0])
         metadata = pushed_payload['metadata']
 
         assert metadata['type'] == 'proactive_drift'
@@ -351,14 +360,16 @@ class TestProactiveExecution:
             'strategy': 'consistent bedtime',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'ask')
 
-        import json
-        pushed_payload = json.loads(mock_store.rpush.call_args[0][1])
+        # Verify state: inspect the prompt text for forbidden template strings
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
+        pushed_payload = json.loads(items[0])
         prompt = pushed_payload['prompt']
 
         assert "I've noticed a pattern in our conversations" not in prompt
@@ -373,20 +384,28 @@ class TestProactiveExecution:
             'strategy': 'dedicate 30 min before bed',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'suggest')
 
-        import json
-        pushed_payload = json.loads(mock_store.rpush.call_args[0][1])
+        # Verify state: inspect the prompt text for forbidden template strings
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
+        pushed_payload = json.loads(items[0])
         prompt = pushed_payload['prompt']
 
         assert "Based on what you've been working on, I think this could be useful:" not in prompt
 
-    def test_act_style_creates_persistent_task(self):
+    def test_act_style_creates_persistent_task(self, db):
         """Act-style should create a persistent task, not just push a message."""
+        # Seed master_account so the account_id resolution works
+        db.execute(
+            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
+        )
+        db.commit()
+
         goal = {
             'id': 'test-goal-id',
             'description': 'Research ML papers',
@@ -398,17 +417,7 @@ class TestProactiveExecution:
         mock_task_service.create_task.return_value = {'id': 42}
         mock_task_service.transition.return_value = (True, 'ok')
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (1,)
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
+        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
             result = _execute_proactive(goal, 'act')
 
         assert result['action'] == 'persistent_task_created'
@@ -417,8 +426,13 @@ class TestProactiveExecution:
         mock_task_service.create_task.assert_called_once()
         mock_task_service.transition.assert_called_once_with(42, 'accepted')
 
-    def test_act_style_includes_strategy_in_task_goal(self):
+    def test_act_style_includes_strategy_in_task_goal(self, db):
         """When strategy exists, the task goal should include it."""
+        db.execute(
+            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
+        )
+        db.commit()
+
         goal = {
             'id': 'test-id',
             'description': 'Monitor tech news',
@@ -430,17 +444,7 @@ class TestProactiveExecution:
         mock_task_service.create_task.return_value = {'id': 99}
         mock_task_service.transition.return_value = (True, 'ok')
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (1,)
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
+        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
             result = _execute_via_persistent_task(goal)
 
         # Verify the task goal includes both description and strategy
@@ -449,8 +453,13 @@ class TestProactiveExecution:
         assert 'Monitor tech news' in task_goal
         assert 'search for Python and AI updates weekly' in task_goal
 
-    def test_act_style_deduplicates_tasks(self):
+    def test_act_style_deduplicates_tasks(self, db):
         """If a task already exists for this goal, don't create another."""
+        db.execute(
+            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
+        )
+        db.commit()
+
         goal = {
             'id': 'test-id',
             'description': 'Already tracked goal',
@@ -460,17 +469,7 @@ class TestProactiveExecution:
         mock_task_service = MagicMock()
         mock_task_service.find_duplicate.return_value = {'id': 77, 'goal': 'Already tracked goal'}
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (1,)
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
+        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
             result = _execute_via_persistent_task(goal)
 
         assert result['action'] == 'task_exists'
@@ -485,12 +484,13 @@ class TestProactiveExecution:
             'strategy': 'should fallback',
         }
 
-        mock_store = MagicMock()
+        # Real store receives the fallback proactive-push payload
+        store = MemoryStore()
 
         with patch('services.database_service.get_shared_db_service',
                    side_effect=Exception("DB unavailable")), \
              patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             result = _execute_via_persistent_task(goal)
 
         # Should fall back to proactive push with 'suggest' style
@@ -498,38 +498,39 @@ class TestProactiveExecution:
         assert result['style'] == 'suggest'
 
     def test_ask_pushes_to_prompt_queue(self):
-        """Ask-style should push a message to the prompt-queue."""
+        """Ask-style should push exactly one message to the prompt-queue."""
         goal = {
             'id': 'test-id',
             'description': 'Test goal',
             'strategy': 'test strategy',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'ask')
 
-        mock_store.rpush.assert_called_once()
-        args = mock_store.rpush.call_args
-        assert args[0][0] == 'prompt-queue'
+        # Verify state: one item enqueued in the prompt-queue
+        items = store.lrange('prompt-queue', 0, -1)
+        assert len(items) == 1
 
     def test_suggest_pushes_to_prompt_queue(self):
-        """Suggest-style should push a message to the prompt-queue."""
+        """Suggest-style should push exactly one message to the prompt-queue."""
         goal = {
             'id': 'test-id',
             'description': 'Test goal',
             'strategy': 'test strategy',
         }
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+                   return_value=store):
             _execute_via_proactive_push(goal, 'suggest')
 
-        mock_store.rpush.assert_called_once()
+        # Verify state: one item enqueued in the prompt-queue
+        assert len(store.lrange('prompt-queue', 0, -1)) == 1
 
 
 class TestCheckAndExecuteIntegration:
@@ -629,7 +630,6 @@ class TestQuietHoursAndConversationPace:
 
     def test_social_cost_quiet_hours_penalty(self, mock_store):
         """Quiet hours should add 0.4 to social cost."""
-        import json
         from services.time_utils import utc_now
         # Set current hour as quiet
         current_hour = utc_now().hour
@@ -644,7 +644,6 @@ class TestQuietHoursAndConversationPace:
 
     def test_social_cost_non_quiet_hours_no_penalty(self, mock_store):
         """Non-quiet hours should not add penalty."""
-        import json
         from services.time_utils import utc_now
         current_hour = utc_now().hour
         # Set a different hour as quiet
@@ -669,43 +668,54 @@ class TestQuietHoursAndConversationPace:
 
         assert cost >= 0.25  # Rapid conversation penalty
 
-    def test_learn_quiet_hours_insufficient_data(self, mock_store):
+    def test_learn_quiet_hours_insufficient_data(self, db, mock_store):
         """Less than 50 interactions should return None."""
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
-            mock_conn = MagicMock()
-            mock_cursor = MagicMock()
-            mock_cursor.fetchall.return_value = [(10, 5), (14, 3)]  # Only 8 total
-            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-            mock_conn.__exit__ = MagicMock(return_value=False)
-            mock_conn.cursor.return_value = mock_cursor
-            MockDb.return_value.connection.return_value = mock_conn
+        # Seed interaction_log with only 8 rows
+        for i in range(5):
+            db.execute(
+                "INSERT INTO interaction_log (id, event_type, payload, created_at) "
+                "VALUES (?, 'message', '{}', '2026-03-20 10:00:00')",
+                (str(uuid.uuid4()),),
+            )
+        for i in range(3):
+            db.execute(
+                "INSERT INTO interaction_log (id, event_type, payload, created_at) "
+                "VALUES (?, 'message', '{}', '2026-03-20 14:00:00')",
+                (str(uuid.uuid4()),),
+            )
+        db.commit()
 
-            result = _learn_quiet_hours()
-
+        result = _learn_quiet_hours()
         assert result is None
 
-    def test_learn_quiet_hours_with_sufficient_data(self, mock_store):
+    def test_learn_quiet_hours_with_sufficient_data(self, db, mock_store):
         """Hours with < 5% of interactions should be marked quiet."""
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
-            mock_conn = MagicMock()
-            mock_cursor = MagicMock()
-            # Simulate: hours 9-17 have lots of interactions, others are sparse
-            rows = []
-            for h in range(9, 18):
-                rows.append((h, 100))  # 900 total for active hours
-            rows.append((3, 2))   # < 5% of ~902
-            rows.append((22, 1))  # < 5% of ~903
+        # Seed interaction_log: hours 9-17 have lots of interactions, others sparse
+        for h in range(9, 18):
+            for i in range(100):
+                db.execute(
+                    "INSERT INTO interaction_log (id, event_type, payload, created_at) "
+                    "VALUES (?, 'message', '{}', ?)",
+                    (str(uuid.uuid4()), f'2026-03-20 {h:02d}:00:00'),
+                )
+        # Sparse hours
+        for i in range(2):
+            db.execute(
+                "INSERT INTO interaction_log (id, event_type, payload, created_at) "
+                "VALUES (?, 'message', '{}', '2026-03-20 03:00:00')",
+                (str(uuid.uuid4()),),
+            )
+        db.execute(
+            "INSERT INTO interaction_log (id, event_type, payload, created_at) "
+            "VALUES (?, 'message', '{}', '2026-03-20 22:00:00')",
+            (str(uuid.uuid4()),),
+        )
+        db.commit()
 
-            mock_cursor.fetchall.return_value = rows
-            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-            mock_conn.__exit__ = MagicMock(return_value=False)
-            mock_conn.cursor.return_value = mock_cursor
-            MockDb.return_value.connection.return_value = mock_conn
-
-            result = _learn_quiet_hours()
+        result = _learn_quiet_hours()
 
         assert result is not None
-        assert 3 in result  # Hour 3 has very few interactions
+        assert 3 in result   # Hour 3 has very few interactions
         assert 22 in result  # Hour 22 has very few interactions
         assert 10 not in result  # Hour 10 has lots of interactions
         # Hours with zero interactions should also be quiet

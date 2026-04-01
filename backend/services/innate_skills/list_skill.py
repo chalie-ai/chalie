@@ -164,11 +164,15 @@ def _handle_create(service, params: dict, topic: str) -> str:
         return f"[LIST] {e}"
 
 
-def _handle_add(service, params: dict, topic: str) -> str:
+def _normalize_items(params: dict) -> list:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
-    items = [i for i in items if i and i.strip()]
+    return [i for i in items if i and i.strip()]
+
+
+def _handle_add(service, params: dict, topic: str) -> str:
+    items = _normalize_items(params)
 
     if not items:
         return "[LIST] 'items' is required to add to a list."
@@ -198,10 +202,7 @@ def _handle_add(service, params: dict, topic: str) -> str:
 
 
 def _handle_remove(service, params: dict, topic: str) -> str:
-    items = params.get('items', [])
-    if isinstance(items, str):
-        items = [items]
-    items = [i for i in items if i and i.strip()]
+    items = _normalize_items(params)
 
     if not items:
         return "[LIST] 'items' is required to remove from a list."
@@ -215,10 +216,7 @@ def _handle_remove(service, params: dict, topic: str) -> str:
 
 
 def _handle_check(service, params: dict, topic: str) -> str:
-    items = params.get('items', [])
-    if isinstance(items, str):
-        items = [items]
-    items = [i for i in items if i and i.strip()]
+    items = _normalize_items(params)
 
     if not items:
         return "[LIST] 'items' is required to check off."
@@ -232,10 +230,7 @@ def _handle_check(service, params: dict, topic: str) -> str:
 
 
 def _handle_uncheck(service, params: dict, topic: str) -> str:
-    items = params.get('items', [])
-    if isinstance(items, str):
-        items = [items]
-    items = [i for i in items if i and i.strip()]
+    items = _normalize_items(params)
 
     if not items:
         return "[LIST] 'items' is required to uncheck."
@@ -329,13 +324,12 @@ def _handle_history(service, params: dict) -> str:
 
     since = None
     if since_str:
-        try:
-            from datetime import datetime, timezone
-            since = datetime.fromisoformat(since_str)
-            if not since.tzinfo:
-                since = since.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return f"[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
+        from datetime import datetime, timezone
+        from services.time_utils import parse_utc
+        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+        since = parse_utc(since_str)
+        if since == _SENTINEL:
+            return "[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
 
     events = service.get_history(name, since=since, limit=30)
     if not events:

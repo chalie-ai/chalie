@@ -45,7 +45,7 @@ class _TextExtractor(HTMLParser):
         self._skip_depth = 0
         self._tag_stack = []
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag, _attrs):
         tag = tag.lower()
         self._tag_stack.append(tag)
         if tag in _STRIP_TAGS:
@@ -276,7 +276,7 @@ class LaravelSource(_Source):
         class_name = query.strip().split("\\")[-1].split("::")[-1]
         if class_name[0:1].isupper():
             results.append({
-                "url": f"https://laravel.com/api/11.x/Illuminate.html",
+                "url": "https://laravel.com/api/11.x/Illuminate.html",
                 "title": f"Laravel API: {class_name}",
             })
 
@@ -320,7 +320,7 @@ class PythonSource(_Source):
 
         if not candidates:
             candidates.append({
-                "url": f"https://docs.python.org/3/library/functions.html",
+                "url": "https://docs.python.org/3/library/functions.html",
                 "title": "Built-in Functions — Python docs",
             })
 
@@ -395,7 +395,7 @@ class NumPySource(_Source):
             if _head_ok(url):
                 return [{"url": url, "title": f"NumPy: {query}"}]
 
-        return [{"url": f"https://numpy.org/doc/stable/reference/index.html", "title": f"NumPy Reference"}]
+        return [{"url": "https://numpy.org/doc/stable/reference/index.html", "title": "NumPy Reference"}]
 
 
 class PandasSource(_Source):
@@ -524,10 +524,10 @@ class ReactSource(_Source):
         for topic in ["state", "effects", "context", "refs", "components",
                        "props", "rendering", "events", "forms"]:
             if topic in q_lower:
-                results.append({"url": f"https://react.dev/learn", "title": "React Learn"})
+                results.append({"url": "https://react.dev/learn", "title": "React Learn"})
                 return results
 
-        results.append({"url": f"https://react.dev/reference/react", "title": "React API Reference"})
+        results.append({"url": "https://react.dev/reference/react", "title": "React API Reference"})
         return results[:max_results]
 
 
@@ -1044,14 +1044,6 @@ for src in _ALL_SOURCES:
 def resolve_source(language):
     """Resolve a language name/alias to a source. Returns None if unknown."""
     return _ALIAS_MAP.get(language.strip().lower())
-
-
-def list_languages():
-    """Return list of {id, name, aliases, base_url} for all sources."""
-    return [
-        {"id": s.id, "name": s.name, "aliases": s.aliases, "base_url": s.base_url}
-        for s in _ALL_SOURCES
-    ]
 
 
 # ---------------------------------------------------------------------------

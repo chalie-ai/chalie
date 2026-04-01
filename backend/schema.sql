@@ -93,66 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_cortex_iterations_loop ON cortex_iterations(loop_
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_topic ON cortex_iterations(topic, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(exchange_id);
 
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC CONCEPTS — knowledge nodes
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_concepts (
-    id TEXT PRIMARY KEY,
-    concept_name TEXT NOT NULL,
-    concept_type TEXT NOT NULL,
-    definition TEXT NOT NULL,
-    abstraction_level INTEGER DEFAULT 3,
-    domain TEXT,
-    strength REAL DEFAULT 1.0,
-    activation_score REAL DEFAULT 1.0,
-    access_count INTEGER DEFAULT 0,
-    consolidation_count INTEGER DEFAULT 0,
-    confidence REAL DEFAULT 0.5,
-    source_episodes TEXT DEFAULT '[]',        -- JSONB
-    verification_status TEXT DEFAULT 'unverified',
-    context_constraints TEXT DEFAULT '{}',    -- JSONB
-    examples TEXT DEFAULT '[]',              -- JSONB
-    first_learned_at TEXT DEFAULT (datetime('now')),
-    last_accessed_at TEXT DEFAULT (datetime('now')),
-    last_reinforced_at TEXT DEFAULT (datetime('now')),
-    utility_score REAL DEFAULT 0.5,
-    decay_resistance REAL DEFAULT 0.5,
-    deleted_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    reliability TEXT DEFAULT 'reliable'       -- epistemic confidence: reliable|uncertain|contradicted|superseded
-);
-
-CREATE INDEX IF NOT EXISTS idx_concepts_name ON semantic_concepts(concept_name);
-CREATE INDEX IF NOT EXISTS idx_concepts_type ON semantic_concepts(concept_type);
-CREATE INDEX IF NOT EXISTS idx_concepts_domain ON semantic_concepts(domain);
-CREATE INDEX IF NOT EXISTS idx_concepts_strength ON semantic_concepts(strength DESC);
-CREATE INDEX IF NOT EXISTS idx_concepts_activation ON semantic_concepts(activation_score DESC);
-CREATE INDEX IF NOT EXISTS idx_concepts_deleted ON semantic_concepts(deleted_at) WHERE deleted_at IS NULL;
-
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC RELATIONSHIPS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_relationships (
-    id TEXT PRIMARY KEY,
-    source_concept_id TEXT NOT NULL REFERENCES semantic_concepts(id),
-    target_concept_id TEXT NOT NULL REFERENCES semantic_concepts(id),
-    relationship_type TEXT NOT NULL,
-    strength REAL DEFAULT 0.5,
-    bidirectional INTEGER DEFAULT 0,         -- BOOLEAN
-    source_episodes TEXT DEFAULT '[]',       -- JSONB
-    confidence REAL DEFAULT 0.5,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    deleted_at TEXT,
-    UNIQUE(source_concept_id, target_concept_id, relationship_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_relationships_source ON semantic_relationships(source_concept_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_target ON semantic_relationships(target_concept_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_type ON semantic_relationships(relationship_type);
-CREATE INDEX IF NOT EXISTS idx_relationships_strength ON semantic_relationships(strength DESC);
-
+-- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
 
 -- ────────────────────────────────────────────────────────────────
@@ -176,25 +117,40 @@ CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction
 CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_exchange ON interaction_log(exchange_id);
 
+-- procedural_memory removed — replaced by unified knowledge table.
+
 -- ────────────────────────────────────────────────────────────────
--- PROCEDURAL MEMORY — policy weights
+-- KNOWLEDGE — unified knowledge store (traits, procedures, concepts, relationships)
 -- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS procedural_memory (
-    id TEXT PRIMARY KEY,
-    action_name TEXT NOT NULL UNIQUE,
-    total_attempts INTEGER DEFAULT 0,
-    total_successes INTEGER DEFAULT 0,
-    success_rate REAL DEFAULT 0.0,
-    avg_reward REAL DEFAULT 0.0,
-    weight REAL DEFAULT 1.0,
-    reward_history TEXT DEFAULT '[]',        -- JSONB
-    context_stats TEXT DEFAULT '{}',         -- JSONB
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS knowledge (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    entity      TEXT NOT NULL DEFAULT 'user',
+    key         TEXT NOT NULL,
+    value       TEXT,
+    data        TEXT,
+    decay_class TEXT NOT NULL DEFAULT 'standard',
+    confidence  REAL NOT NULL DEFAULT 0.5,
+    reliability TEXT NOT NULL DEFAULT 'reliable',
+    source      TEXT,
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_accessed_at TEXT,
+    deleted_at  TEXT,
+    UNIQUE(entity, key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_procedural_action_name ON procedural_memory(action_name);
-CREATE INDEX IF NOT EXISTS idx_procedural_weight ON procedural_memory(weight DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entity ON knowledge(entity);
+CREATE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge(key);
+CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_decay_class ON knowledge(decay_class);
+CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE deleted_at IS NULL;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    key, value, kind, entity, content='knowledge', content_rowid='rowid'
+);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOPICS — semantic attractors
@@ -261,51 +217,7 @@ CREATE TABLE IF NOT EXISTS identity_events (
 CREATE INDEX IF NOT EXISTS idx_identity_events_time ON identity_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_identity_events_vector ON identity_events(vector_name, created_at);
 
--- ────────────────────────────────────────────────────────────────
--- USER TRAITS — per-user trait memory
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS user_traits (
-    id TEXT PRIMARY KEY,
-    trait_key TEXT NOT NULL,
-    trait_value TEXT NOT NULL,
-    category TEXT DEFAULT 'preference',
-    confidence REAL DEFAULT 0.5,
-    reinforcement_count INTEGER DEFAULT 1,
-    last_reinforced_at TEXT DEFAULT (datetime('now')),
-    last_conflict_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    reliability TEXT DEFAULT 'reliable',      -- epistemic confidence: reliable|uncertain|contradicted|superseded
-    UNIQUE(trait_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(category);
-CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(confidence);
-
--- ────────────────────────────────────────────────────────────────
--- DEPRECATED: unused, scheduled for removal
--- MESSAGE CYCLES — processing unit tracking
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS message_cycles (
-    cycle_id TEXT PRIMARY KEY,
-    parent_cycle_id TEXT REFERENCES message_cycles(cycle_id),
-    root_cycle_id TEXT NOT NULL,
-    topic TEXT NOT NULL,
-    cycle_type TEXT NOT NULL,
-    source TEXT NOT NULL,
-    content TEXT,
-    intent TEXT,                              -- JSONB
-    metadata TEXT DEFAULT '{}',              -- JSONB
-    status TEXT DEFAULT 'pending',
-    depth INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_cycles_parent ON message_cycles(parent_cycle_id);
-CREATE INDEX IF NOT EXISTS idx_cycles_root ON message_cycles(root_cycle_id);
-CREATE INDEX IF NOT EXISTS idx_cycles_topic_created ON message_cycles(topic, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cycles_status_type ON message_cycles(status, cycle_type);
+-- user_traits removed — replaced by unified knowledge table.
 
 -- ────────────────────────────────────────────────────────────────
 -- THREADS — conversation threads
@@ -373,7 +285,8 @@ CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     platform TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model TEXT NOT NULL,                     -- default model
+    models TEXT,                             -- JSON array of available models (NULL = [model])
     host TEXT,
     api_key BLOB,                            -- encrypted storage
     dimensions INTEGER,
@@ -388,6 +301,7 @@ CREATE TABLE IF NOT EXISTS job_provider_assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_name TEXT UNIQUE NOT NULL,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model TEXT,                              -- model override (NULL = use provider default)
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -443,11 +357,16 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_fired_at TEXT,
     group_id TEXT,
-    is_prompt INTEGER DEFAULT 0              -- BOOLEAN
+    is_prompt INTEGER DEFAULT 0,             -- BOOLEAN
+    source TEXT,                              -- origin: 'caldav', 'imap', 'system', NULL = user-created
+    external_uid TEXT,                        -- dedup key for external sources
+    metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
+    hidden INTEGER DEFAULT 0                  -- hide from user-facing list/API
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid);
 
 -- ────────────────────────────────────────────────────────────────
 -- AUTOBIOGRAPHY — user narrative synthesis
@@ -572,30 +491,6 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- ────────────────────────────────────────────────────────────────
--- CURIOSITY THREADS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS curiosity_threads (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    rationale TEXT,
-    thread_type TEXT NOT NULL CHECK (thread_type IN ('learning', 'behavioral')),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'dormant', 'abandoned')),
-    seed_topic TEXT,
-    learning_notes TEXT NOT NULL DEFAULT '[]',  -- JSONB
-    last_explored_at TEXT,
-    exploration_count INTEGER NOT NULL DEFAULT 0,
-    last_surfaced_at TEXT,
-    engagement_score REAL NOT NULL DEFAULT 0.5,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_curiosity_threads_status ON curiosity_threads(status);
-CREATE INDEX IF NOT EXISTS idx_curiosity_threads_explore
-    ON curiosity_threads(status, last_explored_at)
-    WHERE status = 'active';
 
 -- NOTE: moments were previously stored in a dedicated `moments` table.
 -- They are now stored as documents with source_type='moment' in the documents
@@ -675,27 +570,6 @@ CREATE TABLE IF NOT EXISTS watched_folders (
 CREATE INDEX IF NOT EXISTS idx_watched_folders_enabled
     ON watched_folders(enabled) WHERE enabled = 1;
 
--- ────────────────────────────────────────────────────────────────
--- CAPABILITY GAPS — user requests Chalie could not fulfill
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS capability_gaps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_summary TEXT NOT NULL,
-    detected_category TEXT,
-    detection_source TEXT NOT NULL,
-    confidence REAL DEFAULT 0.5,
-    occurrences INTEGER DEFAULT 1,
-    first_seen_at TEXT DEFAULT (datetime('now')),
-    last_seen_at TEXT DEFAULT (datetime('now')),
-    resolved_at TEXT,
-    resolved_by TEXT,
-    seeded_curiosity_thread_id TEXT REFERENCES curiosity_threads(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_capability_gaps_category
-    ON capability_gaps(detected_category) WHERE resolved_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_capability_gaps_occurrences
-    ON capability_gaps(occurrences DESC) WHERE resolved_at IS NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- DOCUMENTS — document metadata + chunks
@@ -753,43 +627,10 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks(document_id);
 
--- FTS5 for chunk search
+-- FTS5 for chunk search (porter stemming: "temperatures" matches "temperature")
 CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
-    content, section_title, content='document_chunks', content_rowid='id'
-);
-
--- ────────────────────────────────────────────────────────────────
--- TEMPORAL OBSERVATIONS — ambient inference signal history
--- ────────────────────────────────────────────────────────────────
--- Raw observations (append-only, periodic cleanup after retention_days).
--- Privacy: only generalized labels, HMAC'd geohash, user-local hour buckets.
-CREATE TABLE IF NOT EXISTS temporal_observations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    observation_type TEXT NOT NULL,     -- 'attention', 'energy', 'place', 'tempo', 'mobility'
-    observed_value TEXT NOT NULL,       -- 'deep_focus', 'high', 'home', 'rushed', etc.
-    day_of_week INTEGER NOT NULL,      -- 0=Monday..6=Sunday (explicit: Monday=0)
-    hour_bucket INTEGER NOT NULL,      -- 0-23 (user local time, timezone-normalized)
-    device_class TEXT,                 -- 'phone', 'desktop', 'tablet'
-    location_hash TEXT,                -- HMAC(geohash_5char, instance_key), never raw coords
-    recorded_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_temporal_obs_type_day_hour
-    ON temporal_observations(observation_type, day_of_week, hour_bucket);
-CREATE INDEX IF NOT EXISTS idx_temporal_obs_recorded
-    ON temporal_observations(recorded_at);
-
--- Precomputed aggregates — UPSERT on each write, mining reads this (not raw rows).
--- Bounded by value space (~17k rows max), not by time.
-CREATE TABLE IF NOT EXISTS temporal_aggregate (
-    observation_type TEXT NOT NULL,
-    observed_value TEXT NOT NULL,
-    day_of_week INTEGER NOT NULL,      -- 0=Monday..6=Sunday
-    hour_bucket INTEGER NOT NULL,      -- 0-23
-    device_class TEXT NOT NULL DEFAULT '',
-    count INTEGER DEFAULT 0,
-    last_seen TEXT,
-    PRIMARY KEY(observation_type, observed_value, day_of_week, hour_bucket, device_class)
+    content, section_title, content='document_chunks', content_rowid='id',
+    tokenize='porter unicode61'
 );
 
 -- ────────────────────────────────────────────────────────────────
@@ -865,7 +706,8 @@ CREATE TABLE IF NOT EXISTS goals (
     last_reinforced_at TEXT,                  -- when goal last received evidence
     last_acted_at TEXT,                       -- when goal was last acted upon
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    derived_from TEXT DEFAULT '[]'         -- JSON array of episode IDs that formed this goal
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
@@ -963,4 +805,34 @@ CREATE TABLE IF NOT EXISTS topic_compactions (
     token_count INTEGER DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (compacted_up_to_id) REFERENCES topic_transcript(id)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- BROWSER SNAPSHOTS — page monitoring change detection
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS browser_snapshots (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id   INTEGER NOT NULL,
+    snapshot_key TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    content_text TEXT NOT NULL,
+    captured_at  TEXT NOT NULL,
+    UNIQUE(account_id, snapshot_key)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- BROWSER CREDENTIALS — encrypted credential vault
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS browser_credentials (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id      INTEGER NOT NULL,
+    domain          TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    credential_type TEXT NOT NULL,
+    encrypted_data  TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    last_used_at    TEXT,
+    UNIQUE(account_id, domain, label)
 );

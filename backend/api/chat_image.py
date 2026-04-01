@@ -40,7 +40,7 @@ import logging
 import os
 import threading
 
-from flask import Blueprint, jsonify, redirect, url_for, request
+from flask import Blueprint, jsonify, redirect, request
 
 from .auth import require_session
 
@@ -366,22 +366,6 @@ def image_file(image_id):
         return jsonify({'error': 'Internal server error'}), 500
 
 
-@chat_image_bp.route('/chat/vision-capable', methods=['GET'])
-@require_session
-def vision_capable():
-    """
-    Check if a vision-capable provider is configured.
-
-    Frontend uses this to show or hide the image attachment option.
-    """
-    try:
-        from services.image_context_service import has_vision_provider
-        available = has_vision_provider()
-    except Exception:
-        available = False
-    return jsonify({'available': available})
-
-
 # ─── Background Analysis ──────────────────────────────────────────────────────
 
 def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
@@ -454,7 +438,7 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
         )
     except Exception as e:
         logger.error(f'[CHAT IMAGE] Analysis failed image_id={image_id}: {e}', exc_info=True)
-        error_result = {'error': str(e), 'description': '', 'ocr_text': '', 'has_text': False}
+        error_result = {'error': str(e), 'ocr_text': '', 'has_text': False}
         store = _get_store()
         store.set(result_key, json.dumps(error_result), ex=_TTL_RESULT)
         # B3 fix: stamp progress key as 'failed' so status checks surface the error.
@@ -478,12 +462,12 @@ def _persist_analysis_result(image_id: str, result: dict, success: bool) -> None
     """
     Update the document record with the completed (or failed) analysis result.
 
-    Called from ``_run_analysis`` after the vision LLM call.  Non-fatal: any
+    Called from ``_run_analysis`` after local OCR.  Non-fatal: any
     exception is logged and swallowed so the MemoryStore path always completes.
 
     Args:
         image_id: Document ID (== image_id returned at upload time).
-        result:   Analysis result dict (``description``, ``ocr_text``, ``has_text``,
+        result:   Analysis result dict (``ocr_text``, ``has_text``,
                   ``analysis_time_ms`` on success; ``error`` key on failure).
         success:  Whether analysis succeeded.
     """
@@ -491,21 +475,18 @@ def _persist_analysis_result(image_id: str, result: dict, success: bool) -> None
         doc_svc = _get_document_service()
 
         if success:
-            description = result.get('description', '')
             ocr_text = result.get('ocr_text', '')
             has_text = bool(result.get('has_text', False))
             analysis_time_ms = result.get('analysis_time_ms')
 
             extracted_metadata = {
-                'description': description,
                 'ocr_text': ocr_text,
                 'has_text': has_text,
             }
             if analysis_time_ms is not None:
                 extracted_metadata['analysis_time_ms'] = analysis_time_ms
 
-            # Build summary: prefer description, fall back to OCR text
-            summary_text = description or ocr_text or ''
+            summary_text = ocr_text or ''
             summary = summary_text[:500]
 
             # Optionally generate a summary embedding for semantic search
@@ -523,7 +504,7 @@ def _persist_analysis_result(image_id: str, result: dict, success: bool) -> None
                 metadata=extracted_metadata,
                 summary=summary,
                 summary_embedding=summary_embedding,
-                clean_text=ocr_text or description or '',
+                clean_text=ocr_text,
             )
             doc_svc.update_status(image_id, 'ready')
             logger.debug(f'[CHAT IMAGE] Document record updated to ready image_id={image_id}')

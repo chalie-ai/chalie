@@ -10,8 +10,8 @@ import time
 import logging
 import hashlib
 import threading
-from typing import Optional, Dict, List, Any
-from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from datetime import datetime
 from services.database_service import text
 
 logger = logging.getLogger(__name__)
@@ -189,9 +189,13 @@ class AutobiographyService:
                 # Gather traits (confidence > 0.3)
                 result = session.execute(
                     text("""
-                    SELECT trait_key, trait_value, category, confidence, reinforcement_count
-                    FROM user_traits
-                    WHERE confidence > 0.3
+                    SELECT key, value, json_extract(data, '$.category') AS category,
+                           confidence, evidence_count
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND confidence > 0.3
                     ORDER BY confidence DESC
                     """),
                     {}
@@ -205,12 +209,17 @@ class AutobiographyService:
                         "reinforcement_count": row[4]
                     })
 
-                # Gather concepts (top 30 by strength)
+                # Gather concepts (top 30 by confidence)
                 result = session.execute(
                     text("""
-                    SELECT concept_name, concept_type, definition, domain, strength
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
+                    SELECT key,
+                           json_extract(data, '$.concept_type') AS concept_type,
+                           value,
+                           COALESCE(json_extract(data, '$.domain'), 'general') AS domain,
+                           COALESCE(confidence, CAST(json_extract(data, '$.strength') AS REAL), 0.0) AS strength
+                    FROM knowledge
+                    WHERE kind = 'concept'
+                      AND deleted_at IS NULL
                     ORDER BY strength DESC
                     LIMIT 30
                     """),
@@ -222,18 +231,20 @@ class AutobiographyService:
                         "type": row[1],
                         "definition": row[2],
                         "domain": row[3],
-                        "strength": row[4]
+                        "strength": row[4] or 0.0
                     })
 
-                # Gather relationships (join to resolve UUIDs -> names)
+                # Gather relationships (resolve source/target from data JSON)
                 result = session.execute(
                     text("""
-                    SELECT sc1.concept_name, sc2.concept_name, sr.relationship_type, sr.strength
-                    FROM semantic_relationships sr
-                    JOIN semantic_concepts sc1 ON sr.source_concept_id = sc1.id
-                    JOIN semantic_concepts sc2 ON sr.target_concept_id = sc2.id
-                    WHERE sr.deleted_at IS NULL
-                    ORDER BY sr.strength DESC
+                    SELECT COALESCE(json_extract(r.data, '$.source_name'), json_extract(r.data, '$.source_key')) AS source_name,
+                           COALESCE(json_extract(r.data, '$.target_name'), json_extract(r.data, '$.target_key')) AS target_name,
+                           COALESCE(json_extract(r.data, '$.relationship_type'), r.value) AS relationship_type,
+                           COALESCE(r.confidence, CAST(json_extract(r.data, '$.strength') AS REAL), 0.0) AS strength
+                    FROM knowledge r
+                    WHERE r.kind = 'relationship'
+                      AND r.deleted_at IS NULL
+                    ORDER BY strength DESC
                     LIMIT 50
                     """),
                     {}
@@ -243,7 +254,7 @@ class AutobiographyService:
                         "source": row[0],
                         "target": row[1],
                         "type": row[2],
-                        "strength": row[3]
+                        "strength": row[3] or 0.0
                     })
 
                 # Gather constraint learning episodes (from idle consolidation)
@@ -408,14 +419,6 @@ class AutobiographyService:
                 except Exception as de:
                     logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
 
-                try:
-                    from services.goal_autobiography_bridge import refresh_all_goals
-                    refreshed = refresh_all_goals()
-                    if refreshed:
-                        logger.info(f"[AUTOBIOGRAPHY] Refreshed alignment for {refreshed} goals")
-                except Exception as ge:
-                    logger.debug(f"[AUTOBIOGRAPHY] Goal alignment refresh non-fatal: {ge}")
-
                 return True
 
         except Exception as e:
@@ -442,7 +445,6 @@ class AutobiographyService:
         """
         try:
             from services.background_llm_queue import create_background_llm_proxy
-            from services.config_service import ConfigService
 
             llm = create_background_llm_proxy("autobiography")
 
@@ -503,7 +505,7 @@ class AutobiographyService:
             for trait in inputs["traits"]:
                 lines.append(
                     f"- {trait['key']}: {trait['value']} "
-                    f"(confidence: {trait['confidence']:.2f}, category: {trait['category']})"
+                    f"(confidence: {trait['confidence']:.2f}, category: {trait.get('category') or 'general'})"
                 )
 
         if inputs["concepts"]:
@@ -511,7 +513,7 @@ class AutobiographyService:
             for concept in inputs["concepts"]:
                 lines.append(
                     f"- {concept['name']}: {concept['definition']} "
-                    f"(strength: {concept['strength']:.2f}, domain: {concept['domain']})"
+                    f"(strength: {concept['strength'] or 0:.2f}, domain: {concept.get('domain') or 'general'})"
                 )
 
         constraint_episodes = inputs.get("constraint_episodes", [])
@@ -633,9 +635,9 @@ def autobiography_synthesis_worker(shared_state=None) -> None:
     check_interval = 300  # Check every 5 minutes if synthesis needed
 
     try:
-        from services.database_service import get_lightweight_db_service
+        from services.database_service import get_shared_db_service
 
-        db = get_lightweight_db_service()
+        db = get_shared_db_service()
         service = AutobiographyService(db)
 
         last_synthesis = time.time()

@@ -23,8 +23,8 @@ class TestSummarizeEvent:
 
     def test_cron_tool_executed_includes_tool_name(self):
         from services.interaction_log_service import _summarize_event
-        result = _summarize_event('cron_tool_executed', {'tool_name': 'web_search'})
-        assert 'web_search' in result
+        result = _summarize_event('cron_tool_executed', {'tool_name': 'search'})
+        assert 'search' in result
 
     def test_unknown_event_type_returns_humanized_string(self):
         from services.interaction_log_service import _summarize_event
@@ -51,7 +51,7 @@ class TestActivityEventTypes:
         from services.interaction_log_service import _ACTIVITY_EVENT_TYPES
         expected = {
             'proactive_sent', 'act_loop_telemetry', 'cron_tool_executed',
-            'plan_proposed', 'curiosity_thread_seeded',
+            'plan_proposed',
         }
         for t in expected:
             assert t in _ACTIVITY_EVENT_TYPES
@@ -71,12 +71,11 @@ class TestInteractionLogServiceConstructor:
         svc = InteractionLogService(db)
         assert svc.db_service is db
 
-    def test_uses_shared_db_when_no_arg(self):
+    def test_uses_shared_db_when_no_arg(self, db):
         from services.interaction_log_service import InteractionLogService
-        mock_db = MagicMock()
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            svc = InteractionLogService()
-        assert svc.db_service is mock_db
+        from services.database_service import get_shared_db_service
+        svc = InteractionLogService()
+        assert svc.db_service is get_shared_db_service()
 
 
 # ── get_activity_feed ─────────────────────────────────────────────────────────

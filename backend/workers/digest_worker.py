@@ -22,21 +22,19 @@ and a lazy singleton accessor for the shared ``ContextAssemblyService``
 """
 
 import json
-import os
 import re
 import time
 import logging
-from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
+
+logger = logging.getLogger(__name__)
+from services import ConfigService, FrontalCortexService, OrchestratorService, SessionService
 from services.llm_service import create_llm_service
-from services.recent_topic_service import RecentTopicService
 from services.world_state_service import WorldStateService
 from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
-from services.topic_classifier_service import TopicClassifierService
 from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
-from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
@@ -46,14 +44,8 @@ from services.innate_skills.registry import ALL_SKILL_NAMES
 # Global session service instance (shared across worker invocations)
 _session_service = None
 
-# Global topic classifier instance (cached model per worker)
-_topic_classifier = None
-
 # Global mode router instance (shared across invocations)
 _mode_router = None
-
-# Global intent classifier instance
-_intent_classifier = None
 
 # Global orchestrator instance
 _orchestrator = None
@@ -63,6 +55,9 @@ _thread_conv_service = None
 
 # Global context relevance service
 _context_relevance_service = None
+
+import os
+_LOG_PROMPTS = os.environ.get('CHALIE_LOG_PROMPTS') == '1'
 
 
 def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
@@ -94,8 +89,8 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
             if raw:
                 try:
                     contexts.append(json.loads(raw))
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.debug(f"[DIGEST] Failed to parse image context JSON for {img_id!r}: {e}", exc_info=True)
                 break
             time.sleep(1)
         else:
@@ -157,22 +152,6 @@ def get_session_service():
     return _session_service
 
 
-def get_topic_classifier():
-    """Get or create global topic classifier instance (caches embedding model)."""
-    global _topic_classifier
-    if _topic_classifier is None:
-        _topic_classifier = TopicClassifierService()
-    return _topic_classifier
-
-
-def get_intent_classifier():
-    """Get or create global intent classifier instance."""
-    global _intent_classifier
-    if _intent_classifier is None:
-        _intent_classifier = IntentClassifierService()
-    return _intent_classifier
-
-
 def get_mode_router():
     """Get or create global mode router instance."""
     global _mode_router
@@ -188,7 +167,8 @@ def get_mode_router():
                 with open(generated_path, 'r') as f:
                     router_config = json.load(f)
                 logging.info("[DIGEST] Loaded generated mode router config")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[DIGEST] Failed to load generated mode router config, using default: {e}")
                 router_config = ConfigService.get_agent_config("mode-router")
         else:
             router_config = ConfigService.get_agent_config("mode-router")
@@ -207,13 +187,13 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
         import threading
 
         if len(prompt_message) > 300:
-            logger.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
+            logging.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
             return
 
         def _extract_traits():
             try:
                 import json
-                from services.user_trait_service import UserTraitService
+                from services.knowledge_service import KnowledgeService
                 from services.database_service import get_shared_db_service
                 from services.provider_cache_service import ProviderCacheService
 
@@ -260,14 +240,9 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 traits = parsed.get('traits', [])
 
                 CONFIDENCE_MAP = {'high': 0.85, 'medium': 0.55, 'low': 0.35}
-                CORE_KEYS = {
-                    'name', 'age', 'gender', 'occupation', 'nationality', 'language',
-                    'education', 'culture_region', 'language_preference',
-                    'relationship_status', 'ethnicity', 'birthday', 'location',
-                }
 
                 db = get_shared_db_service()
-                trait_service = UserTraitService(db)
+                ks = KnowledgeService(db)
 
                 # Stop words to strip from trait values (LLMs sometimes
                 # include pronouns/conjunctions like "alex and i")
@@ -279,30 +254,35 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 def _clean_value(v: str) -> str:
                     """Strip leading/trailing stop words from an extracted value."""
                     words = v.split()
-                    # Trim stop words from both ends
                     while words and words[0].lower() in _VALUE_STRIP:
                         words.pop(0)
                     while words and words[-1].lower() in _VALUE_STRIP:
                         words.pop()
                     return ' '.join(words) if words else v
 
+                stored_count = 0
                 for trait in traits:
                     key = trait.get('key', '').lower().strip()
                     value = _clean_value(trait.get('value', '').strip())
                     conf_label = trait.get('confidence', 'low')
+                    is_permanent = trait.get('permanent', False)
 
                     if not key or not value:
                         continue
 
                     confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
-                    category = 'core' if key in CORE_KEYS else 'preference'
+                    decay_class = 'permanent' if is_permanent else 'standard'
 
-                    trait_service.store_trait(
-                        trait_key=key,
-                        trait_value=value,
-                        confidence=confidence,
-                        category=category,
+                    ks.store(
+                        kind='trait', entity='user', key=key, value=value,
+                        data={'category': 'core' if is_permanent else 'preference'},
+                        decay_class=decay_class,
+                        confidence=confidence, source='llm_extraction',
                     )
+                    stored_count += 1
+
+                if stored_count > 0:
+                    _synthesize_user_sentence(db, provider_config)
 
             except Exception as e:
                 logging.debug(f"[TRAIT_EXTRACT] Failed: {e}")
@@ -316,8 +296,57 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 with open(prompt_path, 'r') as f:
                     template = f.read()
                 return template.replace('{{message}}', message)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[TRAIT_EXTRACT] Failed to load trait prompt template: {e}", exc_info=True)
                 return None
+
+        def _synthesize_user_sentence(db, provider_config) -> None:
+            """Fire a second LLM call to produce a single natural-language sentence
+            summarising ALL stored user traits, then persist it in the settings table."""
+            try:
+                import os
+
+                rows = db.execute_query(
+                    "SELECT key, value, confidence, decay_class "
+                    "FROM knowledge "
+                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
+                    "ORDER BY decay_class DESC, confidence DESC"
+                )
+                if not rows:
+                    return
+
+                trait_lines = []
+                for row in rows:
+                    key = row['key'] if isinstance(row, dict) else row[0]
+                    value = row['value'] if isinstance(row, dict) else row[1]
+                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
+                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
+                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+
+                prompt_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), 'prompts', 'trait-synthesis.md'
+                )
+                with open(prompt_path, 'r') as f:
+                    template = f.read()
+                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
+
+                llm = create_llm_service(provider_config)
+                llm_resp = llm.send_message(
+                    prompt_text,
+                    "Output only the sentence. No preamble, no explanation."
+                )
+                sentence = llm_resp.text.strip() if llm_resp and llm_resp.text else None
+                if not sentence:
+                    return
+
+                ks.store(
+                    kind='fact', entity='system', key='user_summary',
+                    value=sentence, decay_class='permanent',
+                    confidence=1.0, source='trait_synthesis',
+                )
+                logging.debug("[TRAIT_SYNTH] Sentence stored: %s", sentence)
+            except Exception as e:
+                logging.debug("[TRAIT_SYNTH] Failed: %s", e)
 
         t = threading.Thread(target=_extract_traits, daemon=True)
         t.start()
@@ -349,22 +378,6 @@ def load_configs():
     }
 
 
-def get_existing_topics_from_db() -> list:
-    """Retrieve existing topics from the topics SQLite table."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM topics ORDER BY created_at DESC LIMIT 20")
-            rows = cursor.fetchall()
-            cursor.close()
-            return [row[0] for row in rows if row[0]]
-    except Exception as e:
-        logging.debug(f"[DIGEST] Could not load existing topics from DB: {e}")
-        return []
-
-
 def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool, gists: list = None) -> float:
     """
     Calculate context warmth signal (0.0-1.0) for scaling uncertainty cost.
@@ -373,27 +386,6 @@ def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool
     world_score = 1.0 if world_state_nonempty else 0.0
     warmth = (wm_score + world_score) / 2
     return warmth
-
-
-def classify_prompt(text, existing_topics, recent_topic, gist_context, world_state, classifier_config, classifier_prompt):
-    """Classify the prompt and return classification result with timing."""
-    parts = []
-    if gist_context and gist_context != "No previous conversation context available":
-        parts.append(f"## Context\n{gist_context}")
-    if world_state:
-        parts.append(f"## World State\n{world_state}")
-    parts.append(f"## Prompt\n{text}")
-    if existing_topics:
-        topics_list = '\n'.join([f"- {topic}" for topic in existing_topics])
-        parts.append(f"## Existing Topics\n{topics_list}")
-
-    user_message = "\n\n".join(parts)
-    classifier = create_llm_service(classifier_config)
-    start_time = time.time()
-    response = classifier.send_message(classifier_prompt, user_message).text
-    classification_time = time.time() - start_time
-
-    return json.loads(response), classification_time
 
 
 def _format_visual_context(image_contexts: list) -> str:
@@ -410,171 +402,11 @@ def _format_visual_context(image_contexts: list) -> str:
     return "\n\n".join(parts)
 
 
-def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None, message_embedding=None):
-    """
-    Generate response for a terminal mode.
-
-    Single LLM call with mode-specific prompt. No decision gate, no alternative paths.
-
-    Args:
-        act_history_context: Optional act_history string from a preceding ACT loop.
-            When present, the LLM can reference tool results in its response.
-        thread_id: Thread ID for working memory + world state context.
-        signals: Routing signals dict for context relevance computation.
-
-    Returns:
-        dict: {mode, modifiers, response, generation_time, actions, confidence}
-    """
-    from services.config_service import ConfigService
-
-    prompt = cortex_prompt_map.get(mode, cortex_prompt_map['UNIFIED'])
-
-    # Load mode-specific config
-    config_name = f"frontal-cortex-{mode.lower()}"
-    try:
-        config = ConfigService.resolve_agent_config(config_name)
-        logging.info(f"[Mode:{mode}] Using config {config_name}.json with model {config.get('model')}")
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Config {config_name}.json not found, using base config: {e}")
-        config = cortex_config
-
-    # Compute context inclusion map using relevance service
-    inclusion_map = None
-    try:
-        context_relevance_service = get_context_relevance_service()
-        relevance_mode = mode
-        inclusion_map = context_relevance_service.compute_inclusion_map(
-            mode=relevance_mode,
-            signals=signals or {},
-            classification=classification,
-            returning_from_silence=returning_from_silence,
-        )
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Context relevance computation failed: {e}, proceeding without inclusion_map")
-
-    assembled_context = None
-    try:
-        assembled_context = get_context_assembly_service().assemble(
-            prompt=text,
-            topic=topic,
-            thread_id=thread_id,
-            message_embedding=message_embedding,
-        )
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Context assembly failed: {e}")
-
-    # Phase 2 — Ingestion detection: run contradiction check in parallel with
-    # context assembly. Time-boxed to 600ms — skip if slow.
-    # Runs for UNIFIED mode (has conversational context to weave into).
-    if mode == 'UNIFIED' and assembled_context is not None:
-        try:
-            from services.contradiction_classifier_service import ContradictionClassifierService
-            from services.uncertainty_service import UncertaintyService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            classifier = ContradictionClassifierService(db_service=db)
-            conflict = classifier.check_ingestion(text)
-            if conflict:
-                conflict_type = conflict.get('classification')  # e.g. 'temporal_change', 'true_contradiction'
-                mem_a = conflict.get('memory_a', {})
-                mem_b = conflict.get('memory_b', {})
-                unc_svc = UncertaintyService(db)
-
-                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
-                    # Auto-supersede silently — don't surface in response
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_id = unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=True,
-                        )
-                        unc_svc.resolve_uncertainty(
-                            uncertainty_id=unc_id,
-                            strategy='temporal_supersede',
-                            detail=conflict.get('reasoning', ''),
-                        )
-                elif conflict_type in ('true_contradiction', 'context_dependent'):
-                    # Flag for response weaving
-                    if assembled_context is None:
-                        assembled_context = {}
-                    assembled_context['contradiction_context'] = {
-                        'classification': conflict_type,
-                        'memory_a_text': mem_a.get('text', ''),
-                        'memory_b_text': mem_b.get('text', ''),
-                        'reasoning': conflict.get('reasoning', ''),
-                        'surface_context': conflict.get('surface_context', ''),
-                    }
-                    # Create uncertainty record if not already tracked
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=False,
-                            surface_context=conflict.get('surface_context'),
-                        )
-        except Exception as e:
-            logging.debug(f"[Mode:{mode}] Ingestion contradiction check skipped: {e}")
-
-    # Inject visual context from attached images into assembled_context
-    image_contexts = (metadata or {}).get('image_contexts', [])
-    if image_contexts:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['visual_context'] = _format_visual_context(image_contexts)
-
-    # Propagate message embedding so WorldStateService can apply semantic scoring
-    if message_embedding is not None:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['message_embedding'] = message_embedding
-
-    cortex_service = FrontalCortexService(config)
-    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-    # Use appended path (no tools) — produces a text response without JSON parsing.
-    # The unified prompt uses native tool calling protocol, not JSON output.
-    system_prompt = cortex_service.build_system_prompt(
-        system_prompt_template=prompt,
-        original_prompt=text,
-        classification=classification,
-        chat_history=chat_history,
-        assembled_context=assembled_context,
-        thread_id=thread_id,
-        returning_from_silence=returning_from_silence,
-        inclusion_map=inclusion_map,
-    )
-    # Act history goes in the message array (not system prompt) for cache efficiency
-    act_history = act_history_context or "(none)"
-    user_content = text
-    if act_history and act_history != "(none)":
-        user_content = f"{text}\n\nPrevious Internal Actions:\n{act_history}"
-    messages = [{"role": "user", "content": user_content}]
-    response_data = cortex_service.generate_response_appended(
-        system_prompt=system_prompt,
-        messages=messages,
-        cache_prefix=True,
-    )
-
-    # Router decided the mode, not the LLM
-    response_data['mode'] = mode
-
-    # Ensure non-empty response for terminal modes
-    if mode != 'IGNORE' and not response_data.get('response', '').strip():
-        response_data['response'] = "I understand. Let me think about that."
-
-    return response_data
-
-
 def unified_generate(topic, text, classification, thread_conv_service,
                      cortex_config, cortex_prompt_map, signals,
                      metadata=None, thread_id=None,
-                     returning_from_silence=False, message_embedding=None):
+                     returning_from_silence=False, message_embedding=None,
+                     topic_context=None):
     """
     Unified generation — single LLM call with all innate skills available.
 
@@ -617,7 +449,12 @@ def unified_generate(topic, text, classification, thread_conv_service,
             topic=topic,
             thread_id=thread_id,
             message_embedding=message_embedding,
+            context=topic_context,
         )
+        if topic_context and topic_context.failed_sections:
+            logging.warning(
+                f"[UNIFIED] Context assembly had failures: {topic_context.failed_sections}"
+            )
     except Exception as e:
         logging.warning(f"[UNIFIED] Context assembly failed: {e}")
 
@@ -690,6 +527,9 @@ def unified_generate(topic, text, classification, thread_conv_service,
 
     # Build system prompt and native tool schemas for the first call
     all_skills = list(ALL_SKILL_NAMES)
+    # Voice mode: exclude visual-only skills (rich_render outputs blocks unusable via TTS)
+    if (metadata or {}).get('source') == 'voice':
+        all_skills = [s for s in all_skills if s != 'rich_render']
     from services.tool_schema_service import get_skill_schemas
     native_tools = get_skill_schemas(all_skills)
 
@@ -713,6 +553,31 @@ def unified_generate(topic, text, classification, thread_conv_service,
             'tables, bullet lists, links, or structured formatting. Write as you would speak.')
     else:
         system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
+
+    # Prompt tracing — enabled via CHALIE_LOG_PROMPTS=1 env var.
+    # Logs the full assembled system prompt to interaction_log so the meta-harness
+    # can see exactly what the LLM received.
+    if _LOG_PROMPTS:
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+            _log_svc = InteractionLogService(get_shared_db_service())
+            _log_svc.log_event(
+                event_type='llm_prompt',
+                payload={
+                    'system_prompt': system_prompt,
+                    'user_message': text,
+                    'skills': all_skills,
+                    'tool_count': len(native_tools),
+                },
+                topic=topic,
+                exchange_id=(metadata or {}).get('exchange_id'),
+                source='unified_generate',
+                metadata=metadata,
+                thread_id=thread_id,
+            )
+        except Exception as _lp_e:
+            logging.debug(f"[DIGEST] Prompt logging failed: {_lp_e}")
 
     first_messages = [{"role": "user", "content": text}]
 
@@ -799,8 +664,8 @@ def unified_generate(topic, text, classification, thread_conv_service,
                     },
                 )
                 IntentService().emit(intent)
-            except Exception:
-                pass  # Non-critical — sse delivery is primary
+            except Exception as e:
+                logger.debug(f"[UNIFIED] Intent emit for narration failed (non-critical): {e}", exc_info=True)
 
         except Exception as _e:
             logging.error(f"[UNIFIED] Narration publish failed: {_e}", exc_info=True)
@@ -895,14 +760,14 @@ def unified_generate(topic, text, classification, thread_conv_service,
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, metadata=None, context_warmth=1.0,
-                       pre_routing_result=None, relevant_tools=None, selected_tools=None,
+                       _pre_routing_result=None, relevant_tools=None, selected_tools=None,
                        selected_skills=None, thread_id=None, returning_from_silence=False,
                        message_embedding=None):
     """
     Thin wrapper around unified_generate() — kept for backward compatibility.
 
     Called by process_tool_dialog() and _handle_proactive_drift().
-    The mode_router and pre_routing_result parameters are accepted but unused —
+    The mode_router and _pre_routing_result parameters are accepted but unused —
     unified_generate() handles routing internally.
 
     Returns:
@@ -1038,11 +903,15 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         # Build minimal routing signals — tool dialogs don't need full signal collection
         signals = {'_prompt_text': text}
 
-        assembled_context = None
         try:
-            assembled_context = get_context_assembly_service().assemble(
+            from services.topic_context import TopicContext
+            _tool_ctx = TopicContext(topic=topic, thread_id=thread_id)
+            get_context_assembly_service().assemble(
                 prompt=text, topic=topic, thread_id=thread_id,
+                context=_tool_ctx,
             )
+            if _tool_ctx.failed_sections:
+                logging.warning(f"[TOOL DIALOG] Context assembly had failures: {_tool_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[TOOL DIALOG] Context assembly failed for '{tool_name}': {e}")
 
@@ -1094,15 +963,11 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
     if not turns:
         return
 
-    topic = f'tool_dialog:{tool_name}'
-
     # Build compact exchange summary
     if len(turns) <= 2:
         prompt_msg = turns[0].get('request', '')
-        response_msg = turns[-1].get('response', '')
     else:
         prompt_msg = turns[0].get('request', '') + f'\n[{len(turns) - 2} intermediate turns omitted]'
-        response_msg = turns[-1].get('response', '')
 
     try:
         enqueue_trait_extraction(
@@ -1155,8 +1020,8 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
         try:
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
-        except Exception:
-            logging.warning("[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config")
+        except Exception as e:
+            logging.warning(f"[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config: {e}")
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         _cron_classification = {
@@ -1175,9 +1040,14 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
         assembled_context = None
         try:
+            from services.topic_context import TopicContext
+            _cron_ctx = TopicContext(topic=f'cron_tool:{tool_name}', thread_id=thread_id)
             assembled_context = get_context_assembly_service().assemble(
                 prompt=text, topic=f'cron_tool:{tool_name}', thread_id=thread_id,
+                context=_cron_ctx,
             )
+            if _cron_ctx.failed_sections:
+                logging.warning(f"[CRON TOOL] Context assembly had failures: {_cron_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[CRON TOOL] Context assembly failed: {e}")
 
@@ -1257,8 +1127,8 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
                 source='cron_tool',
                 metadata=metadata,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[CRON TOOL] Failed to log cron tool execution event: {e}", exc_info=True)
 
         logging.info(
             f"[CRON TOOL] {tool_name} delivered: priority={priority} "
@@ -1289,7 +1159,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     """
     configs = load_configs()
     cortex_config = configs['cortex']['config']
-    cortex_prompt_map = configs['cortex']['prompt_map']
 
     topic = metadata.get('related_topic', 'general')
     drift_gist = metadata.get('drift_gist', text)
@@ -1330,18 +1199,15 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             working_memory_len=len(wm_turns),
             world_state_nonempty=bool(world_state)
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[PROACTIVE] Context warmth calculation failed: {e}", exc_info=True)
 
     # Collect signals for mode routing
     try:
-        from services.session_service import SessionService
         session_service = get_session_service()
 
         # The prompt to the router is the drift thought itself
-        from services.topic_classifier_service import TopicClassifierService
-        topic_classifier = get_topic_classifier()
-        classification_result = topic_classifier.classify(drift_gist, recent_topic=topic)
+        classification_result = {'confidence': 1.0, 'is_new_topic': False}
 
         signals = collect_routing_signals(
             text=drift_gist,
@@ -1371,14 +1237,14 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
     # If router says IGNORE, respect it — the thought wasn't worth sharing
     if selected_mode == 'IGNORE':
-        logging.info(f"[PROACTIVE] Router selected IGNORE — thought filtered")
+        logging.info("[PROACTIVE] Router selected IGNORE — thought filtered")
         # Record as router_ignored for circuit breaker
         try:
             from services.autonomous_actions.engagement_tracker import EngagementTracker
             tracker = EngagementTracker()
             tracker._update_engagement_state(proactive_id, 'router_ignored', -0.3)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[PROACTIVE] Failed to record router_ignored engagement state: {e}", exc_info=True)
         return f"Topic '{topic}' | Mode: PROACTIVE_IGNORED | Router filtered thought"
 
     # ACT mode doesn't make sense for proactive thoughts — fall back to UNIFIED
@@ -1393,8 +1259,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
         try:
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex-proactive")
-        except Exception:
-            logging.warning("[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config")
+        except Exception as e:
+            logging.warning(f"[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config: {e}")
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         inclusion_map = None
@@ -1407,9 +1273,14 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
         assembled_context = None
         try:
+            from services.topic_context import TopicContext
+            _drift_ctx = TopicContext(topic=topic, thread_id=thread_id)
             assembled_context = get_context_assembly_service().assemble(
                 prompt=drift_gist, topic=topic, thread_id=thread_id,
+                context=_drift_ctx,
             )
+            if _drift_ctx.failed_sections:
+                logging.warning(f"[PROACTIVE] Context assembly had failures: {_drift_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[PROACTIVE] Context assembly failed: {e}")
 
@@ -1431,7 +1302,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         selected_mode = 'UNIFIED'
 
         if not response_data.get('response', '').strip():
-            logging.info(f"[PROACTIVE] Empty response generated — skipping delivery")
+            logging.info("[PROACTIVE] Empty response generated — skipping delivery")
             return f"Topic '{topic}' | Mode: PROACTIVE_EMPTY | No response generated"
 
         # Append assistant turn to working memory
@@ -1450,8 +1321,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
                 store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[PROACTIVE] Failed to store response tag in MemoryStore: {e}", exc_info=True)
 
         # Route through orchestrator for delivery
         try:
@@ -1489,8 +1360,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 source='proactive_drift',
                 metadata=metadata,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[PROACTIVE] Failed to log proactive_sent event: {e}", exc_info=True)
 
         logging.info(
             f"[PROACTIVE] Delivered: [{drift_type}] → {selected_mode} "
@@ -1505,22 +1376,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     except Exception as e:
         logging.error(f"[PROACTIVE] Failed: {e}")
         return f"Topic '{topic}' | ERROR: proactive - {e}"
-
-
-def _log_cycle_event(event_type: str, payload: dict, topic: str):
-    """Log a cycle-related event to interaction_log."""
-    try:
-        from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        log_service = InteractionLogService(db_service)
-        log_service.log_event(
-            event_type=event_type,
-            payload=payload,
-            topic=topic,
-            source='cycle_service',
-        )
-    except Exception:
-        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1583,12 +1438,11 @@ def _run_iip_hook(text: str, database_service) -> None:
             'name', matched_name, confidence=0.95, provisional=False
         )
 
-        from services.user_trait_service import UserTraitService
-        UserTraitService(database_service).store_trait(
-            trait_key='name',
-            trait_value=matched_name,
-            confidence=0.95,
-            category='core',
+        from services.knowledge_service import KnowledgeService
+        KnowledgeService(database_service).store(
+            kind='trait', entity='user', key='name', value=matched_name,
+            data={'category': 'core'},
+            decay_class='permanent', confidence=0.95, source='iip_hook',
         )
         logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
 
@@ -1634,17 +1488,17 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
         return
 
     try:
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
-        trait_service = UserTraitService(get_shared_db_service())
+        ks = KnowledgeService(get_shared_db_service())
 
-        traits = trait_service.get_all_traits()
+        traits = ks.get_by_kind('trait', entity='user', limit=100)
         if not traits:
             return
 
         for trait in traits:
-            key = trait.get('trait_key', '')
-            value = trait.get('trait_value', '')
+            key = trait.get('key', '')
+            value = trait.get('value', '')
             confidence = trait.get('confidence', 0)
 
             # GUARDRAIL 2: Skip low-confidence traits — don't churn noisy data
@@ -1664,7 +1518,7 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
                     text_lower
                 )
                 if negation_near_value:
-                    trait_service.delete_trait(key)
+                    ks.forget('user', key)
                     logging.info(f"[BELIEF CORRECTION] Deleted trait '{key}={value}' — user negated it")
                     continue
 
@@ -1679,7 +1533,7 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
                 # Cap at 3 words to avoid trailing clause capture
                 new_value = " ".join(raw_value.split()[:3])
                 if new_value and new_value.lower() != value.lower():
-                    trait_service.correct_trait(key, new_value, category=trait.get('category'))
+                    ks.update('user', key, value=new_value)
                     logging.info(f"[BELIEF CORRECTION] Corrected trait '{key}': '{value}' → '{new_value}'")
 
     except Exception as e:
@@ -1801,7 +1655,7 @@ def _detect_fork_response(text: str, thread_id: str):
     try:
         from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
 
         store = MemoryClientService.create_connection()
         fork_type = store.get(f"adaptive_fork_pending:{thread_id}")
@@ -1813,12 +1667,12 @@ def _detect_fork_response(text: str, thread_id: str):
         for pref_key, patterns in _FORK_RESPONSE_PATTERNS.items():
             if any(_re.search(p, text_lower) for p in patterns):
                 db_service = get_shared_db_service()
-                trait_service = UserTraitService(db_service)
-                trait_service.store_trait(
-                    trait_key=pref_key,
-                    trait_value='true',
-                    confidence=0.75,
-                    category='preference',
+                ks = KnowledgeService(db_service)
+                ks.store(
+                    kind='trait', entity='user', key=pref_key, value='true',
+                    data={'category': 'preference'},
+                    decay_class='standard', confidence=0.75,
+                    source='fork_response',
                 )
                 logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
                 # Clear the pending key
@@ -1838,7 +1692,6 @@ def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
     import json as _json
     try:
         from services.memory_client import MemoryClientService
-        import re as _re
 
         store = MemoryClientService.create_connection()
         snapshot = {
@@ -1906,7 +1759,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 2a: Initialize services
     thread_conv_service = ThreadConversationService()
-    recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
     world_state_service = WorldStateService()
 
     # Initialize working memory (keyed by thread_id)
@@ -1926,7 +1778,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         logging.warning(f"[DIGEST] Interaction log not available: {e}")
 
     # Initialize event bus
-    event_bus = EventBusService()
+    EventBusService()
 
     # Initialize metrics
     metrics = MetricsService()
@@ -1934,17 +1786,12 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     metrics.record_counter('requests_total')
     request_start_time = time.time()
 
-    # Initialize mode router
-    mode_router = get_mode_router()
-
     # ═══════════════════════════════════════════════════════════
     # PHASE A: IMMEDIATE COMMIT (before any LLM call)
     # ═══════════════════════════════════════════════════════════
 
-    # Step 3: Get existing topics and determine context topic
-    existing_topics = get_existing_topics_from_db()
-    recent_topic = recent_topic_service.get_recent_topic()
-    context_topic = recent_topic or (existing_topics[0] if existing_topics else None)
+    # Step 3: Derive context topic from thread_id (thread-scoped, no classifier needed)
+    context_topic = thread_id
     source = metadata.get('source', 'unknown') if metadata else 'unknown'
 
     # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
@@ -1964,8 +1811,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services import transcript_service
         transcript_service.append(context_topic, 'user', _wm_text)
-    except Exception:
-        logging.debug("[DIGEST] Transcript append (user) failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Transcript append (user) failed: {e}", exc_info=True)
 
     # Situational intelligence — update conversation phase and situation model for this
     # user message.  Both calls are non-blocking, fail-open, and write to MemoryStore
@@ -1974,14 +1821,14 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.conversation_phase_service import get_conversation_phase_service
         _phase_svc = get_conversation_phase_service()
         _phase_svc.update(thread_id, text, is_user=True, topic=context_topic)
-    except Exception:
-        logging.debug("[DIGEST] Phase update failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Phase update failed: {e}", exc_info=True)
 
     try:
         from services.situation_model_service import get_situation_model_service
         get_situation_model_service().update_on_message(thread_id)
-    except Exception:
-        logging.debug("[DIGEST] Situation update failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Situation update failed: {e}", exc_info=True)
 
     # IIP: Immediate Identity Promotion — synchronous, before any LLM call
     # Detects explicit name statements and writes to MemoryStore + SQLite immediately.
@@ -2013,8 +1860,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat())
         _current_count = int(_busy_store.get('recent_message_count_5min') or 0)
         _busy_store.setex('recent_message_count_5min', 300, str(_current_count + 1))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Message pace tracking failed: {e}", exc_info=True)
 
     # Step 3b.1: Check for save trigger (completion/deferral signal)
     try:
@@ -2042,8 +1889,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.autonomous_actions.communicate_action import CommunicateAction
         communicate = CommunicateAction()
         communicate.record_user_interaction()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] User interaction timestamp recording failed: {e}", exc_info=True)
 
     # Step 3f: Detect fork responses and store adaptive signals
     _detect_fork_response(text, thread_id)
@@ -2074,39 +1921,44 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE C: CLASSIFICATION + ROUTING + RESPONSE
     # ═══════════════════════════════════════════════════════════
 
-    # Step 6: Classify the prompt with deterministic embedding-based classifier
-    topic_classifier = get_topic_classifier()
-    classification_result = topic_classifier.classify(text, recent_topic=recent_topic, thread_id=thread_id)
-
-    # Extract for compatibility with handle_classification
-    classification = {
-        'topic': classification_result['topic'],
-        'confidence': int(classification_result['confidence'] * 10),
-        'similar_topic': '',
-        'topic_update': '',
-        'context_warmth': context_warmth,
-    }
-    classification_time = classification_result['classification_time']
-
-    # Reuse the embedding already computed by topic classifier — no redundant cache lookup
-    msg_embedding = classification_result.get('message_embedding')
-    if msg_embedding is not None:
+    # Step 6: Compute message embedding directly — thread_id is the topic key
+    _embed_start = time.time()
+    msg_embedding = None
+    try:
+        from services.embedding_service import EmbeddingService
+        msg_embedding = EmbeddingService().generate_embedding(text)
         try:
             from services.autonomous_actions.communicate_action import CommunicateAction
             communicate = CommunicateAction()
             communicate.record_user_interaction(message_embedding=msg_embedding)
         except Exception as e:
             logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
+    except Exception as e:
+        logging.debug(f"[DIGEST] Embedding computation failed: {e}")
+    embedding_time = time.time() - _embed_start
 
+    # Use thread_id as the topic key; supply static defaults for downstream signal consumers
+    topic = thread_id
+    classification_result = {'confidence': 1.0, 'is_new_topic': False}
+    classification = {
+        'topic': topic,
+        'confidence': 10,
+        'similar_topic': '',
+        'topic_update': '',
+        'context_warmth': context_warmth,
+    }
 
-    metrics.record_timing(trace_id, 'classification', classification_time * 1000)
-    metrics.record_counter('classifications_total')
+    metrics.record_timing(trace_id, 'embedding', embedding_time * 1000)
+    metrics.record_counter('embeddings_total')
+
+    # Step 6b: Create TopicContext — single source of truth for this message's topic identity
+    from services.topic_context import TopicContext
+    topic_ctx = TopicContext(topic=topic, thread_id=thread_id, message_embedding=msg_embedding)
 
     # Step 7: Add exchange to thread conversation
-    topic = classification_result['topic']
     exchange_id = thread_conv_service.add_exchange(thread_id, topic, {
         "message": text,
-        "classification_time": classification_time,
+        "embedding_time": embedding_time,
     })
 
     # Inject exchange_id into metadata so it flows through to SSE output
@@ -2124,60 +1976,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             topic=topic,
             exchange_id=exchange_id,
             source=source,
-            metadata={'classification_time': classification_time}
+            metadata={'embedding_time': embedding_time}
         )
-
-    # Step 7d: Focus auto-inference and distraction check
-    try:
-        from services.focus_session_service import FocusSessionService
-        focus_service = FocusSessionService()
-
-        # Count consecutive exchanges on current topic for auto-inference
-        try:
-            from services.memory_client import MemoryClientService
-            _store = MemoryClientService.create_connection()
-            _streak_key = f"topic_streak:{thread_id}"
-            _streak_raw = _store.get(_streak_key)
-            _streak_data = json.loads(_streak_raw) if _streak_raw else {}
-
-            if _streak_data.get('topic') == topic:
-                _streak_count = _streak_data.get('count', 0) + 1
-            else:
-                _streak_count = 1
-
-            _store.setex(_streak_key, 7200, json.dumps({'topic': topic, 'count': _streak_count}))
-
-            # Auto-infer focus after consecutive exchanges on same topic
-            focus_service.maybe_infer_focus(thread_id, topic, _streak_count)
-        except Exception as _se:
-            logging.debug(f"[DIGEST] Topic streak tracking failed: {_se}")
-
-        # Distraction check if focus is active and message embedding available
-        try:
-            if msg_embedding is not None:
-                distraction = focus_service.check_distraction(thread_id, msg_embedding)
-                if distraction.get('is_distraction'):
-                    logging.info(
-                        f"[DIGEST] Focus distraction detected: "
-                        f"similarity={distraction['similarity_to_focus']:.3f} "
-                        f"to '{distraction['focus_description'][:50]}'"
-                    )
-                    # Store as routing signal for focus distraction detection
-                    signals_extra = {'focus_distraction': True,
-                                     'focus_similarity': distraction['similarity_to_focus']}
-                else:
-                    signals_extra = {}
-            else:
-                signals_extra = {}
-        except Exception as _de:
-            logging.debug(f"[DIGEST] Distraction check failed: {_de}")
-            signals_extra = {}
-    except Exception as _fe:
-        logging.debug(f"[DIGEST] Focus services failed: {_fe}")
-        signals_extra = {}
-
-    # Step 8: Cache this topic as the most recent
-    recent_topic_service.set_recent_topic(topic)
 
     # Step 9: Track session and check for episode generation
     session_service = get_session_service()
@@ -2186,9 +1986,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Returning-from-silence detection — must be BEFORE track_classification()
     # updates last_activity_time so the gap is measured against prior activity.
     _session_silence = session_service.is_returning_from_silence(threshold_seconds=2700)
-    _boundary_returning = classification_result.get('just_reset_from_silence', False)
     # silence_seconds > 0 means returning; keep raw value for future tiered-warmth use
-    silence_seconds = _session_silence if _session_silence > 0 else (2700.0 if _boundary_returning else 0.0)
+    silence_seconds = _session_silence if _session_silence > 0 else 0.0
     returning_from_silence = silence_seconds > 0
     if returning_from_silence:
         logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")
@@ -2228,7 +2027,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 9c: Compute memory_confidence before intent classifier
     # Use FOK + context warmth + working memory depth as density proxy
     from services.memory_client import MemoryClientService
-    store = MemoryClientService.create_connection(decode_responses=True)
+    store = MemoryClientService.create_connection()
     raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
@@ -2247,24 +2046,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Get working memory turn count
     working_memory_turns = len(wm_turns) if wm_turns else 0
 
-    # Step 9d: Intent classification (~5ms, deterministic, no LLM)
-    intent_classifier = get_intent_classifier()
-    intent = intent_classifier.classify(
-        text=text,
-        topic=topic,
-        context_warmth=context_warmth,
-        memory_confidence=memory_confidence,
-        working_memory_turns=working_memory_turns,
-    )
-    logging.info(
-        f"[DIGEST] Intent: type={intent['intent_type']}, "
-        f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
-    )
+    # Step 9e: Enqueue trait extraction (fire-and-forget, daemon thread)
+    enqueue_trait_extraction(text, metadata=metadata, thread_id=thread_id)
 
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
     try:
-        _nlp = compute_nlp_signals(text, intent)
+        _nlp = compute_nlp_signals(text)
         _signals = {
             'context_warmth': context_warmth,
             'working_memory_turns': working_memory_turns,
@@ -2288,6 +2076,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata=metadata, thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             message_embedding=msg_embedding,
+            topic_context=topic_ctx,
         )
 
     except Exception as _gen_ex:
@@ -2392,8 +2181,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services import transcript_service
         transcript_service.append(topic, 'assistant', response_data['response'])
-    except Exception:
-        logging.debug("[DIGEST] Transcript append (assistant) failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Transcript append (assistant) failed: {e}", exc_info=True)
 
     # Fire compaction if context is approaching budget
     try:
@@ -2404,11 +2193,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _fc = FrontalCortexService(cortex_config, cortex_prompt_map)
             _ctx_limit = _fc.get_context_limit()
             _ctx_budget = min(int(_ctx_limit * 0.6), 150_000)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[DIGEST] Context limit resolution failed, using default: {e}", exc_info=True)
         compaction_service.check_and_compact(topic, _ctx_budget)
-    except Exception:
-        logging.debug("[DIGEST] Compaction check failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Compaction check failed: {e}", exc_info=True)
 
     # Update conversation phase with Chalie's response so momentum and direction
     # reflect the full exchange, not just the user turn.
@@ -2416,8 +2205,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.conversation_phase_service import get_conversation_phase_service
         _phase_svc_resp = get_conversation_phase_service()
         _phase_svc_resp.update(thread_id, response_data['response'], is_user=False, topic=topic)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Conversation phase update (assistant response) failed: {e}", exc_info=True)
 
     # Step 11b: Log system response event
     if interaction_log:
@@ -2458,15 +2247,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
 
-    # ── Phase D Step 11f: Goal signal extraction ──
-    try:
-        from services.goal_signal_service import extract_and_route_signals
-        _goal_classification = dict(classification or {})
-        _goal_classification['intent_type'] = (intent or {}).get('intent_type', '')
-        extract_and_route_signals(topic, text, _goal_classification)
-    except Exception as e:
-        logging.debug(f"[DIGEST] Goal signal extraction non-fatal: {e}")
-
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
     # ═══════════════════════════════════════════════════════════
@@ -2490,7 +2270,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Clear thread-busy flag — observer can now safely scan this thread
     try:
         _busy_store.delete(f"thread_busy:{thread_id}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Failed to clear thread-busy flag: {e}", exc_info=True)
 
     return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"

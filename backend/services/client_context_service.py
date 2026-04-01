@@ -10,7 +10,6 @@ Extended with:
 - Place transition detection
 - Session re-entry detection
 - Demographic trait seeding from locale/location
-- Circadian hourly interaction counts
 - Rich format_for_prompt with ambient inference
 """
 
@@ -131,7 +130,7 @@ class ClientContextService:
 
         Handles: location resolution, behavioral data merging, location history,
         place transition detection, session re-entry, demographic seeding,
-        and circadian data collection.
+        and place fingerprint recording.
         """
         cached_ctx = self.get()
 
@@ -179,14 +178,8 @@ class ClientContextService:
         # Demographic trait seeding (once per session)
         self._seed_demographic_traits(ctx)
 
-        # Circadian data collection
-        self._record_circadian(ctx)
-
         # Record place fingerprint for learning (after all context is saved)
         self._record_place_fingerprint(ctx)
-
-        # Record ambient observations for temporal pattern mining
-        self._record_ambient_observations(ctx)
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={ctx.get('device', {}).get('class')}")
@@ -392,6 +385,32 @@ class ClientContextService:
         """Check if the user just returned from an extended absence."""
         return bool(self._store.get(REENTRY_KEY))
 
+    def get_timezone_offset(self) -> int | None:
+        """Return the user's UTC offset in minutes, derived from the stored IANA timezone.
+
+        Positive values mean east of UTC (e.g. UTC+2 → 120).
+        Negative values mean west of UTC (e.g. UTC-5 → -300).
+        Returns None if no timezone is stored or the ZoneInfo lookup fails.
+        """
+        ctx = self.get()
+        timezone = ctx.get("timezone")
+        if not timezone:
+            return None
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime, timezone as dt_timezone
+            # Use the current wall-clock moment so DST is accounted for correctly.
+            now_utc = datetime.now(dt_timezone.utc)
+            tz = ZoneInfo(timezone)
+            local_dt = now_utc.astimezone(tz)
+            # utcoffset() returns a timedelta; convert to whole minutes.
+            offset = local_dt.utcoffset()
+            if offset is not None:
+                return int(offset.total_seconds() // 60)
+        except Exception as e:
+            logging.debug(f"[CLIENT CONTEXT] get_timezone_offset failed: {e}")
+        return None
+
     # ── Demographic Trait Seeding ──────────────────────────────────────
 
     def _seed_demographic_traits(self, ctx: dict):
@@ -426,53 +445,31 @@ class ClientContextService:
             return
 
         try:
-            from services.user_trait_service import UserTraitService
+            from services.knowledge_service import KnowledgeService
             from services.database_service import DatabaseService
 
             db = DatabaseService()
-            trait_service = UserTraitService(db)
-            trait_service.store_trait(
-                trait_key="culture_region",
-                trait_value=culture,
-                confidence=0.3,  # Possible tier
-                category="core",
+            ks = KnowledgeService(db)
+            ks.store(
+                kind='trait', entity='user', key='culture_region', value=culture,
+                data={'category': 'core'},
+                decay_class='permanent', confidence=0.3,
+                source='demographic_seeding',
             )
 
             # Also seed language preference
             if language:
-                trait_service.store_trait(
-                    trait_key="language_preference",
-                    trait_value=language,
-                    confidence=0.5,
-                    category="core",
+                ks.store(
+                    kind='trait', entity='user', key='language_preference', value=language,
+                    data={'category': 'core'},
+                    decay_class='permanent', confidence=0.5,
+                    source='demographic_seeding',
                 )
 
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
             logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
-
-    # ── Circadian Data Collection ──────────────────────────────────────
-
-    def _record_circadian(self, ctx: dict):
-        """
-        Store hourly interaction count in MemoryStore for future circadian analysis.
-        Passive — no inference yet.
-        """
-        timezone = ctx.get("timezone")
-        if not timezone:
-            return
-
-        try:
-            user_dt = datetime.now(ZoneInfo(timezone))
-            day_of_week = user_dt.weekday()  # 0=Monday
-            hour = user_dt.hour
-            key = f"ambient:circadian:{day_of_week}:{hour}"
-            self._store.incr(key)
-            # 7-day rolling window
-            self._store.expire(key, 86400 * 7)
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Circadian recording failed: {e}")
 
     # ── Place Fingerprint Recording ────────────────────────────────────
 
@@ -492,83 +489,3 @@ class ClientContextService:
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Place fingerprint recording failed: {e}")
 
-    # ── Ambient Observation Recording (Temporal Pattern Mining) ──────
-
-    def _record_ambient_observations(self, ctx: dict):
-        """Persist ambient inference results for temporal pattern mining.
-
-        Runs ambient inference and appends results to the observation buffer
-        (non-blocking, flushed to SQLite by the temporal pattern worker).
-        Throttled to 1 write per 15min per observation_type via MemoryStore debounce.
-        DST-safe: uses ZoneInfo for timezone-correct hour bucketing.
-        """
-        timezone = ctx.get("timezone")
-        if not timezone:
-            return
-
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-            from services.temporal_pattern_service import observation_buffer
-
-            # Run ambient inference
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            inferences = inference.infer(ctx)
-
-            # Extract day/hour from user's local timezone (DST-safe)
-            user_dt = datetime.now(ZoneInfo(timezone))
-            day_of_week = user_dt.weekday()  # 0=Monday
-            hour = user_dt.hour
-
-            device_class = ctx.get("device", {}).get("class", "")
-            location_hash = self._hash_location_for_temporal(ctx)
-
-            for obs_type, value in inferences.items():
-                if value is None or obs_type == 'device_context':
-                    continue
-
-                # 15min debounce per observation type + hour bucket
-                debounce_key = f"temporal:debounce:{obs_type}:{day_of_week}:{hour}"
-                if self._store.get(debounce_key):
-                    continue
-                self._store.setex(debounce_key, 900, "1")  # 15min
-
-                observation_buffer.append({
-                    'observation_type': obs_type,
-                    'observed_value': value,
-                    'day_of_week': day_of_week,
-                    'hour_bucket': hour,
-                    'device_class': device_class,
-                    'location_hash': location_hash,
-                })
-
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Ambient observation recording failed: {e}")
-
-    @staticmethod
-    def _hash_location_for_temporal(ctx: dict) -> str:
-        """HMAC-SHA256 of coarse geohash with per-instance key.
-
-        Uses 5-char equivalent precision (~5km). The same physical location
-        produces different hashes across installations — not reversible
-        without the instance key.
-        """
-        import hashlib
-        import hmac as _hmac
-        import os
-
-        location = ctx.get("location")
-        if not location or "lat" not in location or "lon" not in location:
-            return ""
-
-        # Coarse quantization (~5km precision)
-        qlat = round(location["lat"], 2)
-        qlon = round(location["lon"], 2)
-        raw = f"{qlat:.2f},{qlon:.2f}"
-
-        # HMAC with instance key (falls back to fixed salt if no key configured)
-        key = os.environ.get("DB_ENCRYPTION_KEY", "chalie-temporal-default").encode()
-        return _hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()[:12]

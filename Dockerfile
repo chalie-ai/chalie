@@ -25,7 +25,8 @@ WORKDIR /app
 # Install Python deps first (layer caching — only re-runs when requirements change)
 COPY backend/requirements.txt backend/requirements-voice.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt \
- && pip install --no-cache-dir -r backend/requirements-voice.txt
+ && pip install --no-cache-dir -r backend/requirements-voice.txt \
+ && playwright install chromium --with-deps || true
 
 # Fix sqlite-vec: the PyPI aarch64 wheel ships a 32-bit ARM .so (upstream bug).
 # Build the native extension from source and replace the broken binary.

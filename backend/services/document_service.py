@@ -14,13 +14,11 @@ import logging
 import os
 import secrets
 import shutil
-import struct
-import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from services.database_service import DictCursor
+from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ _DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "docu
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class DocumentService:
@@ -51,6 +49,7 @@ class DocumentService:
                 instance used for all document storage and retrieval operations.
         """
         self.db = db_service
+        self._write_queue = get_write_queue()
 
     # ─────────────────────────────────────────────
     # Document CRUD
@@ -90,16 +89,27 @@ class DocumentService:
         doc_id = doc_id or secrets.token_hex(4)
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO documents
-                        (id, original_name, mime_type, file_size_bytes, file_path,
-                         file_hash, source_type, watched_folder_id, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-                """, (doc_id, original_name, mime_type, file_size, file_path,
-                      file_hash, source_type, watched_folder_id))
-                cursor.close()
+            _params = (
+                doc_id, original_name, mime_type, file_size, file_path,
+                file_hash, source_type, watched_folder_id,
+            )
+
+            def _insert(params=_params, db=self.db):
+                """Insert the document row; executed on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """INSERT INTO documents
+                               (id, original_name, mime_type, file_size_bytes, file_path,
+                                file_hash, source_type, watched_folder_id,
+                                created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+                        params,
+                    )
+                    cursor.close()
+
+            # submit_sync so any DB error propagates via raise below
+            self._write_queue.submit_sync(_insert)
 
             logger.info(f"[DOCS] Created document '{original_name}' (id={doc_id})")
             return doc_id
@@ -298,15 +308,22 @@ class DocumentService:
             Exception: Propagates any database error to the caller.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents
-                    SET status = ?, error_message = ?, chunk_count = ?,
-                        updated_at = datetime('now')
-                    WHERE id = ?
-                """, (status, error_message, chunk_count, doc_id))
-                cursor.close()
+            _params = (status, error_message, chunk_count, doc_id)
+
+            def _update(params=_params, db=self.db):
+                """Persist document status change on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """UPDATE documents
+                           SET status = ?, error_message = ?, chunk_count = ?,
+                               updated_at = datetime('now')
+                           WHERE id = ?""",
+                        params,
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update)
             logger.info(f"[DOCS] Updated status for {doc_id}: {status}")
         except Exception as e:
             logger.error(f"[DOCS] update_status failed for {doc_id}: {e}")
@@ -333,7 +350,7 @@ class DocumentService:
         Raises on failure so the caller (process_document) can mark status='failed'.
         """
         set_parts = ["extracted_metadata = ?", "summary = ?", "updated_at = datetime('now')"]
-        params = [json.dumps(metadata), summary]
+        params: list = [json.dumps(metadata), summary]
 
         if clean_text is not None:
             set_parts.append("clean_text = ?")
@@ -350,29 +367,35 @@ class DocumentService:
 
         params.append(doc_id)
 
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
-                params,
-            )
+        packed_emb = _pack_embedding(summary_embedding) if summary_embedding is not None else None
+        sql = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?"
 
-            # Store summary embedding in the documents_vec virtual table
-            if summary_embedding is not None:
-                packed = _pack_embedding(summary_embedding)
-                # Upsert: delete old row then insert new one
-                # We need the rowid — use the documents table integer rowid
-                cursor.execute("SELECT rowid FROM documents WHERE id = ?", (doc_id,))
-                row = cursor.fetchone()
-                if row:
-                    rowid = row[0]
-                    cursor.execute("DELETE FROM documents_vec WHERE rowid = ?", (rowid,))
-                    cursor.execute(
-                        "INSERT INTO documents_vec (rowid, embedding) VALUES (?, ?)",
-                        (rowid, packed),
-                    )
+        def _update_meta(
+            stmt=sql,
+            p=params,
+            did=doc_id,
+            emb=packed_emb,
+            db=self.db,
+        ):
+            """Persist extracted metadata and optionally upsert the summary embedding."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(stmt, p)
 
-            cursor.close()
+                if emb is not None:
+                    cursor.execute("SELECT rowid FROM documents WHERE id = ?", (did,))
+                    row = cursor.fetchone()
+                    if row:
+                        rowid = row[0]
+                        cursor.execute("DELETE FROM documents_vec WHERE rowid = ?", (rowid,))
+                        cursor.execute(
+                            "INSERT INTO documents_vec (rowid, embedding) VALUES (?, ?)",
+                            (rowid, emb),
+                        )
+
+                cursor.close()
+
+        self._write_queue.submit_sync(_update_meta)
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
         """Mark a document as replacing (superseding) an older version.
@@ -382,13 +405,18 @@ class DocumentService:
             supersedes_id: ID of the older document being replaced.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents SET supersedes_id = ?, updated_at = datetime('now')
-                    WHERE id = ?
-                """, (supersedes_id, doc_id))
-                cursor.close()
+            def _supersede(did=doc_id, sid=supersedes_id, db=self.db):
+                """Set supersedes_id on the document row."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """UPDATE documents SET supersedes_id = ?,
+                           updated_at = datetime('now') WHERE id = ?""",
+                        (sid, did),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_supersede)
             logger.info(f"[DOCS] Document {doc_id} supersedes {supersedes_id}")
         except Exception as e:
             logger.error(f"[DOCS] set_supersedes failed: {e}")
@@ -498,15 +526,23 @@ class DocumentService:
         """
         try:
             purge_after = datetime.now(timezone.utc) + timedelta(days=PURGE_WINDOW_DAYS)
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents
-                    SET deleted_at = datetime('now'), purge_after = ?, updated_at = datetime('now')
-                    WHERE id = ? AND deleted_at IS NULL
-                """, (purge_after, doc_id))
-                updated = cursor.rowcount > 0
-                cursor.close()
+
+            def _soft_delete(did=doc_id, pa=purge_after, db=self.db):
+                """Set deleted_at and schedule purge; return rowcount."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """UPDATE documents
+                           SET deleted_at = datetime('now'), purge_after = ?,
+                               updated_at = datetime('now')
+                           WHERE id = ? AND deleted_at IS NULL""",
+                        (pa, did),
+                    )
+                    affected = cursor.rowcount
+                    cursor.close()
+                return affected
+
+            updated = self._write_queue.submit_sync(_soft_delete) > 0
 
             if updated:
                 logger.info(f"[DOCS] Soft-deleted document {doc_id}")
@@ -529,15 +565,22 @@ class DocumentService:
             ``True`` if the document was found and restored, ``False`` otherwise.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents
-                    SET deleted_at = NULL, purge_after = NULL, updated_at = datetime('now')
-                    WHERE id = ? AND deleted_at IS NOT NULL
-                """, (doc_id,))
-                updated = cursor.rowcount > 0
-                cursor.close()
+            def _restore(did=doc_id, db=self.db):
+                """Clear deleted_at and purge_after; return rowcount."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """UPDATE documents
+                           SET deleted_at = NULL, purge_after = NULL,
+                               updated_at = datetime('now')
+                           WHERE id = ? AND deleted_at IS NOT NULL""",
+                        (did,),
+                    )
+                    affected = cursor.rowcount
+                    cursor.close()
+                return affected
+
+            updated = self._write_queue.submit_sync(_restore) > 0
 
             if updated:
                 logger.info(f"[DOCS] Restored document {doc_id}")
@@ -565,31 +608,34 @@ class DocumentService:
             if not doc:
                 return False
 
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            def _hard_delete(did=doc_id, db=self.db):
+                """Delete all virtual-table rows then the document row; return rowcount."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    # Clean up virtual tables BEFORE the document delete —
+                    # sqlite-vec and FTS5 virtual tables don't support FK cascades.
+                    cursor.execute(
+                        "DELETE FROM documents_vec WHERE rowid = "
+                        "(SELECT rowid FROM documents WHERE id = ?)",
+                        (did,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM document_chunks_vec WHERE rowid IN "
+                        "(SELECT id FROM document_chunks WHERE document_id = ?)",
+                        (did,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM document_chunks_fts WHERE rowid IN "
+                        "(SELECT id FROM document_chunks WHERE document_id = ?)",
+                        (did,),
+                    )
+                    # Delete document — CASCADE removes document_chunks rows.
+                    cursor.execute("DELETE FROM documents WHERE id = ?", (did,))
+                    affected = cursor.rowcount
+                    cursor.close()
+                return affected
 
-                # Clean up virtual tables BEFORE the document delete —
-                # sqlite-vec and FTS5 virtual tables don't support FK cascades.
-                cursor.execute(
-                    "DELETE FROM documents_vec WHERE rowid = "
-                    "(SELECT rowid FROM documents WHERE id = ?)",
-                    (doc_id,)
-                )
-                cursor.execute(
-                    "DELETE FROM document_chunks_vec WHERE rowid IN "
-                    "(SELECT id FROM document_chunks WHERE document_id = ?)",
-                    (doc_id,)
-                )
-                cursor.execute(
-                    "DELETE FROM document_chunks_fts WHERE rowid IN "
-                    "(SELECT id FROM document_chunks WHERE document_id = ?)",
-                    (doc_id,)
-                )
-
-                # Delete document — CASCADE removes document_chunks rows.
-                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-                deleted = cursor.rowcount > 0
-                cursor.close()
+            deleted = self._write_queue.submit_sync(_hard_delete) > 0
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
@@ -658,35 +704,52 @@ class DocumentService:
             return
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                for chunk in chunks:
-                    embedding = chunk.get('embedding')
-                    cursor.execute("""
-                        INSERT INTO document_chunks
-                            (document_id, chunk_index, content, page_number,
-                             section_title, token_count)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        doc_id,
-                        chunk['chunk_index'],
-                        chunk['content'],
-                        chunk.get('page_number'),
-                        chunk.get('section_title'),
-                        chunk.get('token_count'),
-                    ))
+            # Pre-pack all embeddings on the calling thread to keep the closure small
+            prepared = []
+            for chunk in chunks:
+                raw_emb = chunk.get('embedding')
+                prepared.append({
+                    'chunk_index': chunk['chunk_index'],
+                    'content': chunk['content'],
+                    'page_number': chunk.get('page_number'),
+                    'section_title': chunk.get('section_title'),
+                    'token_count': chunk.get('token_count'),
+                    'packed_emb': _pack_embedding(raw_emb) if raw_emb is not None else None,
+                })
 
-                    # Store embedding in the sqlite-vec virtual table
-                    if embedding is not None:
-                        packed = _pack_embedding(embedding)
-                        rowid = cursor.lastrowid
+            def _store(did=doc_id, items=prepared, db=self.db):
+                """Bulk-insert chunks and their embeddings on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    for item in items:
                         cursor.execute(
-                            "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
-                            (rowid, packed),
+                            """INSERT INTO document_chunks
+                                   (document_id, chunk_index, content, page_number,
+                                    section_title, token_count)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (
+                                did,
+                                item['chunk_index'],
+                                item['content'],
+                                item['page_number'],
+                                item['section_title'],
+                                item['token_count'],
+                            ),
                         )
+                        rowid = cursor.lastrowid
+                        # FTS5 index for full-text search
+                        cursor.execute(
+                            "INSERT INTO document_chunks_fts (rowid, content, section_title) VALUES (?, ?, ?)",
+                            (rowid, item['content'], item.get('section_title') or ''),
+                        )
+                        if item['packed_emb'] is not None:
+                            cursor.execute(
+                                "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
+                                (rowid, item['packed_emb']),
+                            )
+                    cursor.close()
 
-                cursor.close()
-
+            self._write_queue.submit_sync(_store)
             logger.info(f"[DOCS] Stored {len(chunks)} chunks for document {doc_id}")
 
         except Exception as e:
@@ -743,7 +806,7 @@ class DocumentService:
         query_embedding: list,
         query_text: str,
         limit: int = 5,
-        distance_threshold: float = 0.65,
+        distance_threshold: float = 1.5,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid 3-signal search across document chunks:
@@ -989,13 +1052,17 @@ class DocumentService:
             tags: New list of tag strings to store.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents SET tags = ?, updated_at = datetime('now')
-                    WHERE id = ?
-                """, (json.dumps(tags), doc_id))
-                cursor.close()
+            def _update_tags(did=doc_id, t=json.dumps(tags), db=self.db):
+                """Persist updated tags on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE documents SET tags = ?, updated_at = datetime('now') WHERE id = ?",
+                        (t, did),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update_tags)
         except Exception as e:
             logger.error(f"[DOCS] update_tags failed: {e}")
 
@@ -1017,7 +1084,7 @@ class DocumentService:
         """
         try:
             set_parts = ["updated_at = datetime('now')"]
-            params = []
+            params: list = []
             if category is not None:
                 set_parts.append("doc_category = ?")
                 params.append(category)
@@ -1030,12 +1097,19 @@ class DocumentService:
             if lock:
                 set_parts.append("meta_locked = 1")
             params.append(doc_id)
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(f"""
-                    UPDATE documents SET {', '.join(set_parts)} WHERE id = ?
-                """, params)
-                cursor.close()
+
+            def _update_class(
+                stmt=f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
+                p=params,
+                db=self.db,
+            ):
+                """Persist classification metadata on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(stmt, p)
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update_class)
         except Exception as e:
             logger.error(f"[DOCS] update_classification failed: {e}")
 
@@ -1084,13 +1158,17 @@ class DocumentService:
             new_path: New absolute or relative file path string.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents SET file_path = ?, updated_at = datetime('now')
-                    WHERE id = ?
-                """, (new_path, doc_id))
-                cursor.close()
+            def _update_path(did=doc_id, path=new_path, db=self.db):
+                """Persist the renamed file path on the write-queue thread."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE documents SET file_path = ?, updated_at = datetime('now') WHERE id = ?",
+                        (path, did),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update_path)
         except Exception as e:
             logger.error(f"[DOCS] update_file_path failed: {e}")
 

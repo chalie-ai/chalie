@@ -5,10 +5,8 @@ Listens to: semantic_consolidation_queue
 
 import logging
 import json
-from services.database_service import DatabaseService
 from services.config_service import ConfigService
 from services.background_llm_queue import create_background_llm_proxy
-from services.semantic_storage_service import SemanticStorageService
 from services.semantic_consolidation_service import SemanticConsolidationService
 
 
@@ -17,13 +15,13 @@ class SemanticConsolidationWorker:
 
     def __init__(self):
         """Initialize worker with required services."""
-        # Load configs
-        from services.database_service import get_lightweight_db_service
+        from services.database_service import get_shared_db_service
+        from services.knowledge_service import KnowledgeService
 
         # Initialize services
-        self.db_service = get_lightweight_db_service()
+        self.db_service = get_shared_db_service()
         self.llm_service = create_background_llm_proxy("semantic-memory")
-        self.storage_service = SemanticStorageService(self.db_service)
+        self.storage_service = KnowledgeService(self.db_service)
         self.consolidation_service = SemanticConsolidationService(
             self.llm_service,
             self.storage_service,
@@ -58,7 +56,6 @@ class SemanticConsolidationWorker:
             extracted = self.consolidation_service.extract_from_episode(episode)
 
             concepts_count = len(extracted.get('concepts', []))
-            relationships_count = len(extracted.get('relationships', []))
 
             if concepts_count == 0:
                 logging.info(f"No concepts extracted from episode {episode_id}")
@@ -99,21 +96,6 @@ class SemanticConsolidationWorker:
                 f"Semantic extraction complete for episode {episode_id}: "
                 f"{len(concept_name_to_id)} concepts, {relationships_created} relationships"
             )
-
-            # Route new knowledge as cognitive signal for goal ecology
-            try:
-                from services.goal_signal_service import route_cognitive_signal
-                _topic = episode.get('topic', 'unknown')
-                for _concept in extracted.get('concepts', []):
-                    _content = _concept.get('name', '') or _concept.get('description', '')
-                    if _content:
-                        route_cognitive_signal({
-                            'signal_type': 'new_knowledge',
-                            'payload': {'content': _content},
-                            'source_id': f'semantic_consolidation:{_topic}',
-                        })
-            except Exception as e:
-                logging.debug(f"[SEMANTIC] Cognitive signal routing non-fatal: {e}")
 
             return {
                 'status': 'success',

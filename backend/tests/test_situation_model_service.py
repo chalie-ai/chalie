@@ -14,68 +14,33 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
+from services.memory_store import MemoryStore
+
 pytestmark = pytest.mark.unit
-
-
-# ─── Fake MemoryStore ──────────────────────────────────────────────────────────
-
-class FakeStore:
-    """Minimal MemoryStore substitute for unit tests."""
-
-    def __init__(self, initial: dict = None):
-        self._data = dict(initial or {})
-        self._lists = {}  # key → list of JSON strings (index 0 = head)
-
-    def get(self, key):
-        return self._data.get(key)
-
-    def set(self, key, value, ex=None):
-        self._data[key] = value
-
-    def setex(self, key, ttl, value):
-        self._data[key] = value
-
-    def delete(self, key):
-        self._data.pop(key, None)
-        self._lists.pop(key, None)
-
-    def incr(self, key):
-        val = int(self._data.get(key, 0)) + 1
-        self._data[key] = str(val)
-        return val
-
-    def lrange(self, key, start, end):
-        items = self._lists.get(key, [])
-        if end == -1:
-            return list(items[start:])
-        return list(items[start: end + 1])
-
-    def lpush(self, key, value):
-        lst = self._lists.setdefault(key, [])
-        lst.insert(0, value)
-
-    def ltrim(self, key, start, end):
-        lst = self._lists.get(key, [])
-        if end == -1:
-            self._lists[key] = lst[start:]
-        else:
-            self._lists[key] = lst[start: end + 1]
-
-    def expire(self, key, ttl):
-        pass
 
 
 # ─── Service factory ──────────────────────────────────────────────────────────
 
-def _make_service(store: FakeStore = None):
-    """Return a fresh SituationModelService instance wired to a FakeStore."""
+def _make_service(store: MemoryStore = None) -> "sms_mod.SituationModelService":
+    """Return a fresh SituationModelService instance wired to a real MemoryStore.
+
+    Reloads the service module each call so module-level singleton state does
+    not bleed between tests.
+
+    Args:
+        store: Optional pre-populated ``MemoryStore`` to inject.  A fresh
+               ``MemoryStore()`` is created when omitted.
+
+    Returns:
+        A ``SituationModelService`` instance with ``_store`` set to ``store``.
+    """
     # Import fresh each time so module-level state doesn't bleed between tests
     import importlib
     import services.situation_model_service as sms_mod
     importlib.reload(sms_mod)
 
     svc = sms_mod.SituationModelService()
-    svc._store = store or FakeStore()
+    svc._store = store or MemoryStore()
     return svc
 
 
@@ -297,21 +262,21 @@ class TestCognitiveLoadScore:
 class TestStabilityScore:
 
     def test_no_history_returns_default(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
         result = svc._score_stability()
         assert result["value"] == 0.8
         assert "score_variance_5m" in result["drivers"]
 
     def test_single_snapshot_returns_default(self):
-        store = FakeStore()
+        store = MemoryStore()
         store.lpush("situation:history", json.dumps({"scores": {"interruptibility": {"value": 0.5}, "receptiveness": {"value": 0.5}, "cognitive_load": {"value": 0.5}}}))
         svc = _make_service(store)
         result = svc._score_stability()
         assert result["value"] == 0.8
 
     def test_identical_snapshots_high_stability(self):
-        store = FakeStore()
+        store = MemoryStore()
         snapshot = json.dumps({
             "scores": {
                 "interruptibility": {"value": 0.5},
@@ -330,7 +295,7 @@ class TestStabilityScore:
     def test_high_variance_lower_stability_than_stable(self):
         """Alternating composites produce lower stability than identical ones."""
         # Stable scenario
-        stable_store = FakeStore()
+        stable_store = MemoryStore()
         stable_snapshot = json.dumps({
             "scores": {
                 "interruptibility": {"value": 0.5},
@@ -344,7 +309,7 @@ class TestStabilityScore:
         stable_result = stable_svc._score_stability()
 
         # Volatile scenario — alternating 0/1 values
-        volatile_store = FakeStore()
+        volatile_store = MemoryStore()
         for v in [0.0, 1.0, 0.0, 1.0, 0.0]:
             snapshot = json.dumps({
                 "scores": {
@@ -363,7 +328,7 @@ class TestStabilityScore:
         assert volatile_result["drivers"]["score_variance_5m"] > 0.0
 
     def test_stability_value_clamped_0_to_1(self):
-        store = FakeStore()
+        store = MemoryStore()
         for v in [0.0, 1.0, 0.0, 1.0]:
             store.lpush("situation:history", json.dumps({
                 "scores": {
@@ -585,7 +550,7 @@ class TestDirectiveGeneration:
 class TestMetaVersion:
 
     def test_version_increments_on_each_update(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -607,7 +572,7 @@ class TestMetaVersion:
         assert state2["meta"]["version"] < state3["meta"]["version"]
 
     def test_version_starts_at_1_on_fresh_store(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -655,7 +620,7 @@ class TestStalenessTracking:
         assert freshest["source"] == "unknown"
 
     def test_state_contains_computed_at(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -766,7 +731,7 @@ class TestGracefulDegradation:
 
     def test_ambient_collector_exception_returns_defaults(self):
         """_collect_ambient failure should return default dict, not raise."""
-        store = FakeStore()
+        store = MemoryStore()
         store.set("ambient:prev_inferences", "this is not valid json{{{{")
         svc = _make_service(store)
         result = svc._collect_ambient()
@@ -775,7 +740,7 @@ class TestGracefulDegradation:
         assert "updated_at" in result
 
     def test_engagement_collector_returns_default_on_bad_value(self):
-        store = FakeStore()
+        store = MemoryStore()
         store.set("proactive:engagement_score", "not_a_number")
         svc = _make_service(store)
         result = svc._collect_engagement()
@@ -789,7 +754,7 @@ class TestScoreDriversExposure:
     """get_score() always returns drivers alongside value."""
 
     def test_get_score_returns_drivers(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
 
         snapshot = {
@@ -814,7 +779,7 @@ class TestScoreDriversExposure:
             assert isinstance(result["drivers"], dict), f"'drivers' is not a dict for {score_name}"
 
     def test_get_score_returns_none_for_unknown(self):
-        store = FakeStore()
+        store = MemoryStore()
         store.set("situation:current", json.dumps({"scores": {}}))
         svc = _make_service(store)
         assert svc.get_score("nonexistent_score") is None
@@ -825,7 +790,7 @@ class TestScoreDriversExposure:
 class TestCacheRead:
 
     def test_get_current_returns_cached_state(self):
-        store = FakeStore()
+        store = MemoryStore()
         cached = {
             "scores": {"interruptibility": {"value": 0.5, "drivers": {}}},
             "phase": {"current": "exploring"},
@@ -838,7 +803,7 @@ class TestCacheRead:
         assert state["meta"]["version"] == 99
 
     def test_get_current_recomputes_on_cache_miss(self):
-        store = FakeStore()
+        store = MemoryStore()
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \

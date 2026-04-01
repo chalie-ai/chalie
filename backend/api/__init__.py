@@ -6,7 +6,7 @@ and static file serving (replaces nginx).
 import os
 import logging
 from pathlib import Path
-from flask import Flask, send_from_directory, send_file
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 
 from .auth import require_session
@@ -162,6 +162,8 @@ def create_app():
     from .updates import updates_bp
     from .query import query_bp
     from .intents import intents_bp
+    from .browser import browser_bp
+    from .capabilities import capabilities_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -186,6 +188,8 @@ def create_app():
     app.register_blueprint(updates_bp)
     app.register_blueprint(query_bp)
     app.register_blueprint(intents_bp)
+    app.register_blueprint(browser_bp)
+    app.register_blueprint(capabilities_bp)
 
     # ── Dashboard gateway (interface daemons) ─────────────────────
     _init_dashboard_gateway(app)

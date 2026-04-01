@@ -5,9 +5,10 @@ Backed by SQLite (scheduled_items table). Provides create, list, and cancel acti
 All DB access via get_shared_db_service() (lazy import inside function).
 """
 
+import json
 import uuid
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -100,26 +101,25 @@ def handle_scheduler(topic: str, params: dict) -> str:
     """
     Dispatch scheduler actions based on params['action'].
 
-    Args:
-        topic: Conversation topic for context
-        params: Dict with action and parameters
-
-    Returns:
-        Human-readable result string
+    Returns a JSON string:
+      success: {"status": "success", "action_performed": "create"|"delete"|"list", "record": {...}}
+      error:   {"status": "error", "error": "<reason>"}
     """
     action = params.get("action", "list").lower()
 
     if action == "create":
-        return _create(topic, params)
+        result = _create(topic, params)
     elif action == "list":
-        return _list(topic, params)
+        result = _list(topic, params)
     elif action == "cancel":
-        return _cancel(topic, params)
+        result = _cancel(topic, params)
     else:
-        return f"Unknown scheduler action: {action}"
+        result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
+
+    return json.dumps(result)
 
 
-def _create(topic: str, params: dict) -> str:
+def _create(topic: str, params: dict) -> dict:
     """Create a new scheduled item."""
     try:
         from services.database_service import get_shared_db_service
@@ -132,24 +132,21 @@ def _create(topic: str, params: dict) -> str:
 
         message = params.get("message", "").strip()
         if not message:
-            return "Error: message is required"
+            return {"status": "error", "error": "message is required"}
 
         if len(message) > 1000:
-            return "Error: message exceeds 1000 characters"
+            return {"status": "error", "error": "message exceeds 1000 characters"}
 
         due_at_str = params.get("due_at", "").strip()
         if not due_at_str:
-            return "Error: due_at (ISO 8601 with timezone) is required"
+            return {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
 
         # Parse due_at
-        try:
-            due_at = datetime.fromisoformat(due_at_str)
-        except Exception as e:
-            return f"Error: invalid ISO 8601 due_at: {e}"
-
-        # Ensure due_at has timezone info (convert naive to UTC if needed)
-        if due_at.tzinfo is None:
-            due_at = due_at.replace(tzinfo=timezone.utc)
+        from services.time_utils import parse_utc
+        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+        due_at = parse_utc(due_at_str)
+        if due_at == _SENTINEL:
+            return {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
 
         # Validate in future
         now = datetime.now(timezone.utc)
@@ -158,11 +155,11 @@ def _create(topic: str, params: dict) -> str:
                 f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future "
                 f"(now={now.isoformat()})"
             )
-            return f"Error: due_at must be in the future (current time: {now.isoformat()})"
+            return {"status": "error", "error": f"due_at must be in the future (current time: {now.isoformat()})"}
 
         item_type = params.get("item_type", "notification").lower()
         if item_type not in ("notification", "prompt"):
-            return f"Error: item_type must be 'notification' or 'prompt', got {item_type}"
+            return {"status": "error", "error": f"item_type must be 'notification' or 'prompt', got {item_type}"}
 
         recurrence = params.get("recurrence")
         if recurrence:
@@ -173,35 +170,34 @@ def _create(topic: str, params: dict) -> str:
                     try:
                         mins = int(recurrence.split(":", 1)[1])
                         if not (1 <= mins <= 1440):
-                            return f"Error: interval minutes must be 1–1440, got {mins}"
+                            return {"status": "error", "error": f"interval minutes must be 1–1440, got {mins}"}
                         recurrence = f"interval:{mins}"
                     except (ValueError, IndexError):
-                        return "Error: interval recurrence must be 'interval:N' where N is 1–1440"
+                        return {"status": "error", "error": "interval recurrence must be 'interval:N' where N is 1–1440"}
                 else:
-                    return f"Error: recurrence must be one of {valid_recurrences} or 'interval:N', got {recurrence}"
+                    return {"status": "error", "error": f"recurrence must be one of {valid_recurrences} or 'interval:N', got {recurrence}"}
 
         # Validate and normalize window_start/window_end
         window_start = params.get("window_start")
         window_end = params.get("window_end")
 
         if (window_start or window_end) and recurrence != "hourly":
-            return "Error: window_start/window_end only valid with recurrence='hourly'"
+            return {"status": "error", "error": "window_start/window_end only valid with recurrence='hourly'"}
 
         if window_start or window_end:
             if not (window_start and window_end):
-                return "Error: both window_start and window_end required if using hourly windows"
+                return {"status": "error", "error": "both window_start and window_end required if using hourly windows"}
 
-            # Validate HH:MM format
             window_start = _normalize_hhmm(window_start)
             if not window_start:
-                return "Error: window_start must be HH:MM format (e.g., '09:00')"
+                return {"status": "error", "error": "window_start must be HH:MM format (e.g., '09:00')"}
 
             window_end = _normalize_hhmm(window_end)
             if not window_end:
-                return "Error: window_end must be HH:MM format (e.g., '17:00')"
+                return {"status": "error", "error": "window_end must be HH:MM format (e.g., '17:00')"}
 
             if window_start >= window_end:
-                return "Error: window_start must be before window_end"
+                return {"status": "error", "error": "window_start must be before window_end"}
 
         # Insert into database
         db = get_shared_db_service()
@@ -224,7 +220,12 @@ def _create(topic: str, params: dict) -> str:
                 conn.commit()
                 existing_id = existing[0]
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
-                return f"Schedule already exists [id:{existing_id}]"
+                return {
+                    "status": "success",
+                    "action_performed": "create",
+                    "record": {"id": existing_id, "message": message, "due_at": due_at.isoformat()},
+                    "note": "already_existed",
+                }
 
             cursor.execute("""
                 INSERT INTO scheduled_items
@@ -248,14 +249,24 @@ def _create(topic: str, params: dict) -> str:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
-        return f"Scheduled {item_type} [id:{item_id}]: {message}"
+        return {
+            "status": "success",
+            "action_performed": "create",
+            "record": {
+                "id": item_id,
+                "message": message,
+                "due_at": due_at.isoformat(),
+                "item_type": item_type,
+                "recurrence": recurrence,
+            },
+        }
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
-        return f"Error creating scheduled item: {e}"
+        return {"status": "error", "error": f"Create failed: {e}"}
 
 
-def _list(topic: str, params: dict) -> str:
+def _list(topic: str, params: dict) -> dict:
     """List pending scheduled items, optionally filtered by time_range."""
     try:
         from services.database_service import get_shared_db_service
@@ -263,43 +274,48 @@ def _list(topic: str, params: dict) -> str:
         db = get_shared_db_service()
         time_range = params.get("time_range", "all").lower()
 
-        # Build time bounds and card label
-        start_dt, end_dt, card_label = _resolve_time_range(time_range)
+        start_dt, end_dt, _ = _resolve_time_range(time_range)
 
         with db.connection() as conn:
             cursor = conn.cursor()
             if start_dt and end_dt:
-                # Include fired items so "today" shows what already fired today
                 cursor.execute("""
                     SELECT id, item_type, message, due_at, recurrence, status
                     FROM scheduled_items
                     WHERE status IN ('pending', 'fired') AND due_at BETWEEN ? AND ?
+                      AND hidden = 0
                     ORDER BY due_at ASC
                 """, (start_dt, end_dt))
             else:
                 cursor.execute("""
                     SELECT id, item_type, message, due_at, recurrence, status
                     FROM scheduled_items
-                    WHERE status = 'pending'
+                    WHERE status = 'pending' AND hidden = 0
                     ORDER BY due_at ASC
                 """)
             rows = cursor.fetchall()
 
-        lines = []
+        records = []
         for row in rows:
             item_id, item_type, message, due_at, recurrence, status = row
-            due_str = due_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(due_at, 'strftime') else str(due_at)
-            recur_str = f" ({recurrence})" if recurrence else ""
-            lines.append(f"  * [{item_id}] {message} -- {due_str}{recur_str}")
+            records.append({
+                "id": item_id,
+                "message": message,
+                "due_at": str(due_at),
+                "item_type": item_type,
+                "recurrence": recurrence,
+                "status": status,
+            })
 
-        if not lines:
-            return f"No scheduled items found ({card_label})."
-
-        return f"{card_label}:\n" + "\n".join(lines)
+        return {
+            "status": "success",
+            "action_performed": "list",
+            "records": records,
+        }
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} List failed: {e}", exc_info=True)
-        return f"Error listing scheduled items: {e}"
+        return {"status": "error", "error": f"List failed: {e}"}
 
 
 def _resolve_time_range(time_range: str):
@@ -312,7 +328,6 @@ def _resolve_time_range(time_range: str):
 
     now_utc = datetime.now(timezone.utc)
 
-    # Try to get user's local time for accurate day boundaries
     try:
         from services.client_context_service import ClientContextService
         from zoneinfo import ZoneInfo
@@ -356,7 +371,7 @@ def _resolve_time_range(time_range: str):
         return None, None, "All Scheduled Items"
 
 
-def _cancel(topic: str, params: dict) -> str:
+def _cancel(topic: str, params: dict) -> dict:
     """Cancel a scheduled item by item_id or by fuzzy message match."""
     try:
         from services.database_service import get_shared_db_service
@@ -365,7 +380,7 @@ def _cancel(topic: str, params: dict) -> str:
         message_query = params.get("message", "").strip()
 
         if not item_id and not message_query:
-            return "Error: item_id or message is required to cancel"
+            return {"status": "error", "error": "item_id or message is required to cancel"}
 
         db = get_shared_db_service()
 
@@ -373,19 +388,17 @@ def _cancel(topic: str, params: dict) -> str:
             cursor = conn.cursor()
 
             if item_id:
-                # Exact lookup by ID
                 cursor.execute(
                     "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
                     (item_id,)
                 )
                 affected = cursor.rowcount
             else:
-                # Fuzzy match by message content (pending items only)
                 pattern = f"%{message_query}%"
                 cursor.execute(
                     """SELECT id, item_type, message, due_at, recurrence
                        FROM scheduled_items
-                       WHERE status='pending' AND message LIKE ?
+                       WHERE status='pending' AND hidden = 0 AND message LIKE ?
                        ORDER BY due_at ASC""",
                     (pattern,)
                 )
@@ -393,17 +406,20 @@ def _cancel(topic: str, params: dict) -> str:
 
                 if not matches:
                     conn.commit()
-                    return f"Error: no pending reminder matching '{message_query}' found"
+                    return {"status": "error", "error": f"no pending reminder matching '{message_query}' found"}
 
                 if len(matches) > 1:
                     descriptions = ", ".join(
                         f"'{r[2][:40]}' (id:{r[0]})" for r in matches
                     )
                     conn.commit()
-                    return (
-                        f"Error: multiple pending reminders match '{message_query}': {descriptions}. "
-                        f"Use item_id to cancel the specific one."
-                    )
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"multiple pending reminders match '{message_query}': {descriptions}. "
+                            f"Use item_id to cancel the specific one."
+                        ),
+                    }
 
                 item_id = matches[0][0]
                 cursor.execute(
@@ -415,14 +431,41 @@ def _cancel(topic: str, params: dict) -> str:
             conn.commit()
 
         if affected == 0:
-            return f"Error: item {item_id} not found or already fired/cancelled"
+            return {"status": "error", "error": f"item {item_id} not found or already fired/cancelled"}
 
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
-        return f"Cancelled scheduled item [id:{item_id}]"
+
+        # Fetch the full cancelled row so the LLM has complete context
+        record = {"id": item_id}
+        try:
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, item_type, message, due_at, recurrence, status FROM scheduled_items WHERE id = ?",
+                    (item_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    record = {
+                        "id": row[0],
+                        "item_type": row[1],
+                        "message": row[2],
+                        "due_at": str(row[3]),
+                        "recurrence": row[4],
+                        "status": row[5],
+                    }
+        except Exception as fetch_err:
+            logger.debug(f"{LOG_PREFIX} Could not fetch cancelled row (non-fatal): {fetch_err}")
+
+        return {
+            "status": "success",
+            "action_performed": "delete",
+            "record": record,
+        }
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Cancel failed: {e}", exc_info=True)
-        return f"Error cancelling scheduled item: {e}"
+        return {"status": "error", "error": f"Cancel failed: {e}"}
 
 
 def _normalize_hhmm(time_str: str) -> str:

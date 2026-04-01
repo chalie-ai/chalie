@@ -13,7 +13,7 @@ Module-level cache per location key, 10min TTL.
 
 import logging
 import time
-from datetime import datetime
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -300,4 +300,4 @@ def _estimate_daylight(obs_time: str) -> bool:
                 return 6 <= hour <= 20
     except Exception:
         pass
-    return 6 <= datetime.now().hour <= 20
+    return 6 <= utc_now().hour <= 20

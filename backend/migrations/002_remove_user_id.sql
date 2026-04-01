@@ -8,10 +8,14 @@
 PRAGMA foreign_keys = OFF;
 
 -- ── user_traits ─────────────────────────────────────────────────────────────
--- Note: source and is_literal columns were removed (migration 006 / schema.sql update).
--- This migration must match schema.sql's current column set so it works on both
--- fresh installs (where schema.sql already created the table) and upgrades
--- (where the old table had source/is_literal — migration 006 strips them).
+-- On fresh installs schema.sql no longer creates user_traits (dropped by 019).
+-- Create a stub so the INSERT copies zero rows and the migration is a no-op.
+CREATE TABLE IF NOT EXISTS user_traits (
+    id TEXT PRIMARY KEY, trait_key TEXT, trait_value TEXT, category TEXT,
+    confidence REAL, reinforcement_count INTEGER, last_reinforced_at TEXT,
+    last_conflict_at TEXT, created_at TEXT, updated_at TEXT, reliability TEXT
+);
+
 CREATE TABLE IF NOT EXISTS user_traits_new (
     id TEXT PRIMARY KEY,
     trait_key TEXT NOT NULL,
@@ -123,6 +127,19 @@ DROP TABLE IF EXISTS user_tool_preferences;
 ALTER TABLE user_tool_preferences_new RENAME TO user_tool_preferences;
 
 -- ── temporal_aggregate ───────────────────────────────────────────────────────
+-- On fresh installs schema.sql no longer creates temporal_aggregate (dropped by 020).
+-- Create a stub so the INSERT copies zero rows and the migration is a no-op.
+CREATE TABLE IF NOT EXISTS temporal_aggregate (
+    observation_type TEXT NOT NULL,
+    observed_value TEXT NOT NULL,
+    day_of_week INTEGER NOT NULL,
+    hour_bucket INTEGER NOT NULL,
+    device_class TEXT NOT NULL DEFAULT '',
+    count INTEGER DEFAULT 0,
+    last_seen TEXT,
+    PRIMARY KEY(observation_type, observed_value, day_of_week, hour_bucket, device_class)
+);
+
 CREATE TABLE IF NOT EXISTS temporal_aggregate_new (
     observation_type TEXT NOT NULL,
     observed_value TEXT NOT NULL,

@@ -13,7 +13,7 @@ Text extraction is delegated to services.text_extractor (shared with the `read` 
 import hashlib
 import logging
 import re
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 
 from services.text_extractor import extract_text as _extract_text_from_file
 from services.text_extractor import normalize_text as _normalize_text_fn
@@ -235,7 +235,7 @@ class DocumentProcessingService:
             logger.info(f"[DOC PROC] {fname} complete — total: {_elapsed()}")
 
             # Step 14: Document classification (non-fatal enrichment)
-            # Infers category, project, and date via LLM.
+            # Infers category, project, and date via embedding similarity.
             try:
                 from services.document_classification_service import DocumentClassificationService
                 folder_context = ''
@@ -766,7 +766,7 @@ class DocumentProcessingService:
             if 'synthesis' in result:
                 return result
 
-            logger.warning(f"[DOC PROC] Synthesis response missing 'synthesis' key")
+            logger.warning("[DOC PROC] Synthesis response missing 'synthesis' key")
             return None
 
         except Exception as e:

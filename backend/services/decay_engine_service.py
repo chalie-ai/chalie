@@ -10,8 +10,17 @@ import math
 import logging
 from typing import Optional
 
-from .memory_client import MemoryClientService
 from .config_service import ConfigService
+
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        GOAL_LIFECYCLE,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception as e:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+    logging.getLogger(__name__).debug(f"Telemetry import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +48,14 @@ class DecayEngineService:
         try:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.episodic_decay_rate = episodic_config.get('episodic_decay_rate', 0.05)
-            self.semantic_decay_rate = episodic_config.get('semantic_decay_rate', 0.03)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
             self.episodic_decay_rate = 0.05
-            self.semantic_decay_rate = 0.03
 
         logger.info(
             f"[DECAY ENGINE] Initialized "
             f"(interval={decay_interval}s, "
-            f"episodic_rate={self.episodic_decay_rate}, "
-            f"semantic_rate={self.semantic_decay_rate})"
+            f"episodic_rate={self.episodic_decay_rate})"
         )
 
     def run(self, shared_state: Optional[dict] = None) -> None:
@@ -71,7 +78,8 @@ class DecayEngineService:
                     if richness < 0.1:
                         logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.1, skipping cycle")
                         continue
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"[DECAY ENGINE] Memory richness check failed, running decay anyway: {e}")
                     richness = 1.0  # fail-open: run decay if telemetry unavailable
 
                 logger.info("[DECAY ENGINE] Running decay cycle...")
@@ -88,37 +96,75 @@ class DecayEngineService:
     def run_decay_cycle(self, richness: float = 1.0):
         """Run one full decay cycle across all memory types.
 
-        When richness < 0.3, only essential sub-cycles run (episodic + traits).
-        Non-essential sub-cycles (semantic, identity, external knowledge, thread
-        dormancy) are skipped to conserve resources on sparse memory systems.
+        When richness < 0.3, only essential sub-cycles run (episodic + knowledge).
+        Non-essential sub-cycles (identity, external knowledge) are skipped to
+        conserve resources on sparse memory systems.
 
         Args:
             richness: Current memory richness score in [0.0, 1.0].  Values below
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
-        trait_stats = self._decay_user_traits()
+        knowledge_count = self._decay_knowledge()
+        goal_decay_count = self._decay_goals()
 
         # Non-essential sub-cycles gated on sufficient memory richness
         if richness >= 0.3:
-            semantic_count = self._decay_semantic()
             identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
-            thread_dormancy = self._apply_thread_dormancy()
         else:
-            semantic_count = identity_count = external_count = 0
-            thread_dormancy = {}
+            identity_count = external_count = 0
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
-            f"semantic={semantic_count} updated, "
+            f"knowledge={knowledge_count} updated, "
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
-            f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted, "
-            f"threads={thread_dormancy} dormancy-applied"
+            f"goals={goal_decay_count} decayed"
         )
+
+    def _decay_goals(self) -> int:
+        """Decay unreinforced goals via :class:`~services.goal_ecology_service.GoalEcologyService`.
+
+        Delegates to :meth:`~services.goal_ecology_service.GoalEcologyService.decay_unreinforced`
+        to identify goals whose salience has not been reinforced within their
+        configured timescale window.  After the sub-service returns, emits a
+        single ``GOAL_LIFECYCLE`` telemetry event summarising the number of goals
+        transitioned to *decayed* status during this cycle.
+
+        Returns:
+            Number of goals whose status was set to ``'decayed'``, or ``0`` on
+            any error (failure is non-fatal; the rest of the decay cycle
+            continues regardless).
+        """
+        try:
+            from services.goal_ecology_service import GoalEcologyService
+
+            service = GoalEcologyService()
+            decayed_count = service.decay_unreinforced()
+
+            if _TELEMETRY_AVAILABLE:
+                try:
+                    get_telemetry_collector().record(
+                        GOAL_LIFECYCLE,
+                        {
+                            "action": "decay",
+                            "decayed_count": decayed_count,
+                            "source": "decay_engine",
+                        },
+                    )
+                except Exception as _tel_err:
+                    logger.debug(
+                        "[DECAY ENGINE] GOAL_LIFECYCLE 'decay' telemetry emit failed (non-fatal): %s",
+                        _tel_err,
+                    )
+
+            return decayed_count
+        except Exception as e:
+            logger.error(f"[DECAY ENGINE] Goal decay sub-cycle failed: {e}", exc_info=True)
+            return 0
 
     def _decay_episodic(self) -> int:
         """
@@ -133,9 +179,9 @@ class DecayEngineService:
             Number of episodes updated
         """
         try:
-            from .database_service import get_lightweight_db_service
+            from .database_service import get_shared_db_service
 
-            db_service = get_lightweight_db_service()
+            db_service = get_shared_db_service()
 
             try:
                 with db_service.connection() as conn:
@@ -221,90 +267,29 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
             return 0
 
-    def _decay_semantic(self) -> int:
-        """
-        Apply decay to semantic concept strength, respecting decay_resistance.
+    def _decay_knowledge(self) -> int:
+        """Apply decay to unified knowledge table via KnowledgeService.
 
-        Formula: strength = MAX(0.2, strength - (decay_rate * (1 - decay_resistance)))
+        Delegates to :meth:`KnowledgeService.decay_cycle` which handles
+        per-decay-class rates, reliability multipliers, soft-deletion at
+        confidence floor, and memory_pressure signal emission.
 
         Returns:
-            Number of concepts updated
+            Number of knowledge entries updated, or 0 on any error.
         """
         try:
-            from .database_service import get_lightweight_db_service
+            from .database_service import get_shared_db_service
+            from .knowledge_service import KnowledgeService
 
-            db_service = get_lightweight_db_service()
-
+            db = get_shared_db_service()
             try:
-                with db_service.connection() as conn:
-                    cursor = conn.cursor()
-
-                    # Batch update: decay strength respecting decay_resistance and reliability.
-                    # Reliability multiplier is embedded in SQL via CASE to keep this a
-                    # single-pass batch UPDATE (avoids a costly row-by-row Python loop).
-                    cursor.execute("""
-                        UPDATE semantic_concepts
-                        SET strength = MAX(
-                            0.2,
-                            strength - (
-                                ? * (1.0 - COALESCE(decay_resistance, 0.5)) *
-                                CASE COALESCE(reliability, 'reliable')
-                                    WHEN 'uncertain'    THEN 1.5
-                                    WHEN 'contradicted' THEN 2.0
-                                    WHEN 'superseded'   THEN 3.0
-                                    ELSE 1.0
-                                END
-                            )
-                        ),
-                        updated_at = datetime('now')
-                        WHERE deleted_at IS NULL
-                          AND strength > 0.2
-                          AND last_accessed_at < datetime('now', '-1 hour')
-                    """, (self.semantic_decay_rate,))
-
-                    updated = cursor.rowcount
-
-                    # Emit memory_pressure signals for concepts approaching forgetting threshold
-                    try:
-                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                        cursor.execute("""
-                            SELECT id, concept_name, definition, strength, domain
-                            FROM semantic_concepts
-                            WHERE deleted_at IS NULL
-                              AND strength > 0.2 AND strength < 0.5
-                              AND last_accessed_at < datetime('now', '-24 hours')
-                            ORDER BY strength ASC
-                            LIMIT 3
-                        """)
-                        for row in cursor.fetchall():
-                            emit_reasoning_signal(ReasoningSignal(
-                                signal_type='memory_pressure',
-                                source='decay_engine',
-                                concept_id=row[0],
-                                concept_name=row[1],
-                                topic=row[4] or 'general',
-                                content=f"Fading concept '{row[1]}' (strength={row[3]:.2f}): {(row[2] or '')[:100]}",
-                                activation_energy=0.5,
-                            ))
-                    except Exception as e:
-                        logger.debug(f"[DECAY ENGINE] Reasoning signal emission failed: {e}")
-
-                    cursor.close()
-
-                    if updated > 0:
-                        logger.info(f"[DECAY ENGINE] Decayed {updated} semantic concept strengths")
-                    return updated
-
-            except Exception as e:
-                logger.error(f"[DECAY ENGINE] Semantic decay failed: {e}")
-                return 0
+                svc = KnowledgeService(db)
+                return svc.decay_cycle()
             finally:
-                db_service.close_pool()
-
+                db.close_pool()
         except Exception as e:
-            logger.error(f"[DECAY ENGINE] Could not initialize DB for semantic decay: {e}")
+            logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
             return 0
-
 
     # Sources that qualify for accelerated external knowledge decay
     EXTERNAL_KNOWLEDGE_PREFIXES = ("external_specialist:",)
@@ -353,7 +338,8 @@ class DecayEngineService:
                                 if new_ttl < ttl:
                                     store.expire(key, new_ttl)
                                     count += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[DECAY ENGINE] Failed to process external knowledge key '{key}': {e}")
                         continue
 
                 if cursor == 0:
@@ -370,48 +356,6 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] External knowledge decay failed: {e}")
             return 0
 
-    def _decay_user_traits(self) -> dict:
-        """
-        Apply confidence decay to user traits via UserTraitService.
-
-        Returns:
-            dict: {decayed: int, deleted: int}
-        """
-        try:
-            from .database_service import get_lightweight_db_service
-            from .user_trait_service import UserTraitService
-
-            db_service = get_lightweight_db_service()
-            try:
-                trait_service = UserTraitService(db_service)
-                return trait_service.apply_decay()
-            finally:
-                db_service.close_pool()
-        except ImportError:
-            return {'decayed': 0, 'deleted': 0}
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] User trait decay failed: {e}")
-            return {'decayed': 0, 'deleted': 0}
-
-    def _apply_thread_dormancy(self) -> int:
-        """
-        Apply dormancy rules to curiosity threads.
-
-        Active threads not explored in 45 days → dormant.
-        Dormant + engagement < 0.2 + dormant > 60 days → abandoned.
-
-        Returns:
-            Number of threads transitioned
-        """
-        try:
-            from .curiosity_thread_service import CuriosityThreadService
-            return CuriosityThreadService().apply_dormancy()
-        except ImportError:
-            return 0
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Thread dormancy failed: {e}")
-            return 0
-
     def _apply_identity_inertia(self) -> int:
         """Pull identity activations toward their baselines via the inertia mechanism.
 
@@ -419,8 +363,8 @@ class DecayEngineService:
             Number of identity vectors whose activation was adjusted.
         """
         try:
-            from .database_service import get_lightweight_db_service
-            db_service = get_lightweight_db_service()
+            from .database_service import get_shared_db_service
+            db_service = get_shared_db_service()
             try:
                 from .identity_service import IdentityService
                 identity = IdentityService(db_service)
@@ -441,7 +385,8 @@ def decay_engine_worker(shared_state=None):
     try:
         episodic_config = ConfigService.get_agent_config("episodic-memory")
         decay_interval = episodic_config.get('decay_interval_seconds', 1800)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[DECAY ENGINE] Failed to load decay_interval from config, using default 1800s: {e}")
         decay_interval = 1800
 
     service = DecayEngineService(decay_interval=decay_interval)

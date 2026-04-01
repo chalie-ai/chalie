@@ -22,11 +22,19 @@ Block schema (every block has at least a ``type`` key):
 No external dependencies — stdlib only.
 """
 
+import json
 import logging
 import re
-from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Block types that can be emitted via fenced-code directives (```metric, ```card, etc.)
+# When the LLM writes a fenced block with one of these as the language tag and the
+# content is valid JSON, the parser emits the parsed block instead of a code block.
+DIRECTIVE_TYPES: frozenset[str] = frozenset({
+    "metric", "card", "chart", "progress", "timeline",
+    "alert", "badge", "keyvalue", "columns", "section",
+})
 
 
 class BlocksRenderService:
@@ -155,6 +163,17 @@ class BlocksRenderService:
                 raw_code = "\n".join(code_lines)
                 # Strip a single leading newline and a single trailing newline only.
                 raw_code = raw_code.strip("\n")
+
+                # Check if the language tag is a block directive (e.g. ```metric)
+                if language in DIRECTIVE_TYPES:
+                    try:
+                        directive_data = json.loads(raw_code)
+                        if isinstance(directive_data, dict):
+                            directive_data["type"] = language
+                            blocks.append(directive_data)
+                            continue
+                    except (json.JSONDecodeError, ValueError):
+                        pass  # Fall through to regular code block
 
                 blocks.append(
                     {"type": "code", "content": raw_code, "language": language}
@@ -405,33 +424,6 @@ class BlocksRenderService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_table_row(line: str) -> list[str]:
-        """Extract cell values from a GFM table row string.
-
-        The line is expected to start and end with ``|``.  Leading/trailing
-        whitespace inside each cell is stripped.
-
-        Args:
-            line: A raw table row line, e.g. ``"| foo | bar |"``.
-
-        Returns:
-            List of cell strings.
-        """
-        stripped = line.strip()
-        # Remove leading and trailing pipe, then split on remaining pipes.
-        inner = stripped[1:-1] if stripped.startswith("|") and stripped.endswith("|") else stripped
-        return [cell.strip() for cell in inner.split("|")]
-
-    @staticmethod
-    def _is_table_separator(line: str) -> bool:
-        """Return True if ``line`` is a GFM table separator row (``|---|---|``)."""
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return False
-        cells = [c.strip() for c in stripped[1:-1].split("|")]
-        return bool(cells) and all(re.match(r"^:?-{1,}:?$", c) for c in cells if c)
-
     # ------------------------------------------------------------------
     # Convenience: validate a block list (used in tests / debug)
     # ------------------------------------------------------------------
@@ -449,6 +441,25 @@ class BlocksRenderService:
             "divider",
             "actions",
             "carousel",
+            # Rich render directive types
+            "metric",
+            "card",
+            "chart",
+            "progress",
+            "timeline",
+            # Layout & feedback types
+            "columns",
+            "section",
+            "tabs",
+            "container",
+            "badge",
+            "alert",
+            "loading",
+            "thought",
+            "input",
+            "select",
+            "toggle",
+            "form",
         }
     )
 
@@ -508,5 +519,31 @@ class BlocksRenderService:
                 errors.append(f"{prefix}: actions block missing 'buttons' list")
             if btype == "carousel" and not isinstance(block.get("slides"), list):
                 errors.append(f"{prefix}: carousel block missing 'slides' list")
+            # Rich render directive types
+            if btype == "metric":
+                if "label" not in block:
+                    errors.append(f"{prefix}: metric block missing 'label'")
+                if "value" not in block:
+                    errors.append(f"{prefix}: metric block missing 'value'")
+            if btype == "card" and "title" not in block:
+                errors.append(f"{prefix}: card block missing 'title'")
+            if btype == "chart":
+                if not isinstance(block.get("series"), list):
+                    errors.append(f"{prefix}: chart block missing 'series' list")
+            if btype == "progress":
+                if "label" not in block:
+                    errors.append(f"{prefix}: progress block missing 'label'")
+                if not isinstance(block.get("value"), (int, float)):
+                    errors.append(f"{prefix}: progress 'value' must be a number")
+            if btype == "timeline" and not isinstance(block.get("events"), list):
+                errors.append(f"{prefix}: timeline block missing 'events' list")
+            if btype == "columns" and not isinstance(block.get("columns"), list):
+                errors.append(f"{prefix}: columns block missing 'columns' list")
+            if btype == "section" and not isinstance(block.get("blocks"), list):
+                errors.append(f"{prefix}: section block missing 'blocks' list")
+            if btype == "badge" and "text" not in block:
+                errors.append(f"{prefix}: badge block missing 'text'")
+            if btype == "alert" and "message" not in block:
+                errors.append(f"{prefix}: alert block missing 'message'")
 
         return errors

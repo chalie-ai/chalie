@@ -70,11 +70,11 @@ class PromptQueue:
         t.start()
         return t  # callers that need the job reference get the thread
 
-    def consume(self, burst=False):
+    def consume(self, _burst=False):
         """No-op — threads are dispatched on enqueue(), no separate consumer needed."""
         pass
 
-    def consume_multiprocess(self, worker_id: str, worker_type: str, shared_state):
+    def consume_multiprocess(self, worker_id: str, _worker_type: str, shared_state):
         """No-op — PromptQueue dispatches threads on enqueue(). Returns None."""
         return None
 

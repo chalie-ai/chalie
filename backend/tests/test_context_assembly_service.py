@@ -22,14 +22,13 @@ class TestContextAssemblyService:
         with patch.object(svc, '_get_working_memory', return_value='wm'), \
              patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value='eps'), \
-             patch.object(svc, '_get_procedural_hints', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hello', topic='test')
 
         expected_keys = {
             'working_memory', 'moments',
-            'episodes', 'procedural', 'concepts', 'previous_session', 'total_tokens_est',
+            'episodes', 'concepts', 'previous_session', 'total_tokens_est',
             'self_awareness',
         }
         assert expected_keys == set(result.keys())
@@ -65,34 +64,6 @@ class TestContextAssemblyService:
 
         assert result['working_memory'] == 'User said hello'
 
-    def test_working_memory_uses_thread_id_when_provided(self):
-        """When thread_id is passed, it should be used as the identifier."""
-        config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            svc.assemble(prompt='hi', topic='t', thread_id='thread-123')
-
-        mock_wm.assert_called_once_with('thread-123', 't')
-
-    def test_working_memory_falls_back_to_topic_without_thread_id(self):
-        """Without thread_id, topic should be used as the identifier."""
-        config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            svc.assemble(prompt='hi', topic='my-topic')
-
-        mock_wm.assert_called_once_with('my-topic', 'my-topic')
-
     # ── Episodes ──────────────────────────────────────────────────────
 
     def test_episodes_included_when_available(self):
@@ -108,31 +79,6 @@ class TestContextAssemblyService:
             result = svc.assemble(prompt='hi', topic='t')
 
         assert result['episodes'] == 'Went to gym'
-
-    # ── Layer failure graceful degradation ────────────────────────────
-
-    def test_working_memory_failure_returns_empty_string(self):
-        """If WorkingMemoryService import fails, return ''."""
-        config = {'max_context_tokens': 100_000}
-        svc2 = ContextAssemblyService(config)
-        with patch('services.working_memory_service.WorkingMemoryService', side_effect=Exception('boom')), \
-             patch.object(svc2, '_get_moments', return_value=''), \
-             patch.object(svc2, '_get_episodes', return_value=''), \
-             patch.object(svc2, '_get_concepts', return_value=''):
-
-            result = svc2.assemble(prompt='hi', topic='t')
-
-        assert result['working_memory'] == ''
-
-    def test_episodes_failure_returns_empty_string(self):
-        """If EpisodicRetrievalService fails, _get_episodes returns ''."""
-        config = {}
-        svc = ContextAssemblyService(config)
-
-        with patch('services.episodic_retrieval_service.EpisodicRetrievalService', side_effect=Exception('boom')):
-            result = svc._get_episodes('prompt', 'topic')
-
-        assert result == ''
 
     # ── Budget constraint ─────────────────────────────────────────────
 
@@ -202,253 +148,178 @@ class TestContextAssemblyService:
 
     # ── _get_concepts ─────────────────────────────────────────────────
 
-    def test_get_concepts_returns_formatted_string_when_concepts_exist(self):
+    def test_get_concepts_returns_formatted_string_when_concepts_exist(self, db):
         """_get_concepts() returns '## Relevant Concepts' section when concepts are available."""
         svc = ContextAssemblyService({})
         mock_concepts = [
-            {'concept_name': 'Python', 'definition': 'A programming language', 'concept_type': 'technology', 'strength': 0.8},
-            {'concept_name': 'Weak', 'definition': 'A weak concept', 'concept_type': 'unknown', 'strength': 0.1},  # below 0.2 gate
-            {'concept_name': 'NoDef', 'definition': '', 'concept_type': 'other', 'strength': 0.9},  # no definition
+            {'key': 'Python', 'value': 'A programming language', 'kind': 'concept', 'confidence': 0.8, 'rrf_score': 0.8},
+            {'key': 'Weak', 'value': 'A weak concept', 'kind': 'concept', 'confidence': 0.1, 'rrf_score': 0.1},  # below 0.2 gate
+            {'key': 'NoDef', 'value': '', 'kind': 'concept', 'confidence': 0.9, 'rrf_score': 0.9},  # no value/definition
         ]
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('What is Python?', 'programming')
 
         assert '## Relevant Concepts' in result
         assert '**Python**' in result
         assert 'A programming language' in result
-        # Weak concept (strength 0.1) should be excluded
+        # Weak concept (confidence 0.1) should be excluded
         assert 'Weak' not in result
         # Concept without definition should be excluded
         assert 'NoDef' not in result
 
-    def test_get_concepts_returns_empty_when_no_concepts(self):
+    def test_get_concepts_returns_empty_when_no_concepts(self, db):
         """_get_concepts() returns '' when retrieval returns empty list."""
         svc = ContextAssemblyService({})
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = []
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = []
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
-    def test_get_concepts_returns_empty_when_all_filtered(self):
-        """_get_concepts() returns '' when all concepts fail the strength/definition gate."""
+    def test_get_concepts_returns_empty_when_all_filtered(self, db):
+        """_get_concepts() returns '' when all concepts fail the confidence/definition gate."""
         svc = ContextAssemblyService({})
         mock_concepts = [
-            {'concept_name': 'Noisy', 'definition': '', 'concept_type': 'other', 'strength': 0.9},
-            {'concept_name': 'Weak', 'definition': 'Some def', 'concept_type': 'other', 'strength': 0.1},
+            {'key': 'Noisy', 'value': '', 'kind': 'concept', 'confidence': 0.9, 'rrf_score': 0.9},
+            {'key': 'Weak', 'value': 'Some def', 'kind': 'concept', 'confidence': 0.1, 'rrf_score': 0.1},
         ]
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
-    def test_get_concepts_returns_empty_on_service_failure(self):
-        """_get_concepts() gracefully returns '' when SemanticRetrievalService fails."""
+    def test_get_concepts_returns_empty_on_service_failure(self, db):
+        """_get_concepts() gracefully returns '' when KnowledgeService fails."""
         svc = ContextAssemblyService({})
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', side_effect=Exception('DB down')):
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('DB down')):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
-    def test_assemble_includes_concepts_in_result(self):
-        """assemble() passes concept retrieval result into the 'concepts' key."""
+    # ── TopicContext integration ─────────────────────────────────────
+
+    def test_assemble_accepts_topic_context(self):
+        """assemble() works when a TopicContext is passed."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='test-topic', thread_id='thread-99')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            result = svc.assemble(prompt='hi', topic='test-topic', context=ctx)
+
+        assert result['working_memory'] == 'wm'
+        assert ctx.failed_sections == []
+
+    def test_backward_compat_without_context(self):
+        """assemble() still works when context is not passed (backward compat)."""
         config = {'max_context_tokens': 100_000}
         svc = ContextAssemblyService(config)
 
-        with patch.object(svc, '_get_working_memory', return_value=''), \
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
              patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value='## Relevant Concepts\n- **AI**: Artificial intelligence'):
+             patch.object(svc, '_get_concepts', return_value=''):
 
-            result = svc.assemble(prompt='tell me about AI', topic='tech')
+            result = svc.assemble(prompt='hi', topic='t')
 
-        assert result['concepts'] == '## Relevant Concepts\n- **AI**: Artificial intelligence'
+        assert 'working_memory' in result
 
+    def test_failed_sections_populated_on_error(self, db):
+        """When a section fails, TopicContext records the failure."""
+        from services.topic_context import TopicContext
 
-# ── Plan 09: Procedural Memory in Context Assembly ────────────────────────────
-
-
-@pytest.mark.unit
-class TestDefaultWeightsWithProcedural:
-
-    def test_procedural_in_default_weights(self):
-        assert 'procedural' in ContextAssemblyService.DEFAULT_WEIGHTS
-
-    def test_procedural_weight_between_episodes_and_concepts(self):
-        w = ContextAssemblyService.DEFAULT_WEIGHTS
-        assert w['episodes'] > w['procedural'] > w['concepts']
-
-    def test_procedural_weight_is_065(self):
-        assert ContextAssemblyService.DEFAULT_WEIGHTS['procedural'] == 0.65
-
-
-@pytest.mark.unit
-class TestGetProceduralHints:
-
-    def _make_service(self):
-        return ContextAssemblyService({'max_context_tokens': 8000})
-
-    def _make_skill(self, name, success_rate, attempts):
-        return {'name': name, 'success_rate': success_rate, 'attempts': attempts}
-
-    def test_returns_empty_when_no_ranked_skills(self):
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = []
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('research')
-
-        assert result == ""
-
-    def test_excludes_skills_below_8_attempts(self):
-        svc = self._make_service()
-        skills = [self._make_skill('web_search', 0.90, 5)]  # < 8 attempts
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('research')
-
-        assert result == ""
-
-    def test_includes_skills_with_exactly_8_attempts(self):
-        svc = self._make_service()
-        skills = [self._make_skill('web_search', 0.90, 8)]
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('research')
-
-        assert 'web_search' in result
-
-    def test_reliable_label_above_85_percent(self):
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('recall', 0.92, 20)]
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        assert 'reliable' in result
-
-    def test_moderate_label_between_70_and_85_percent(self):
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('calendar_check', 0.75, 15)]
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        assert 'moderate' in result
-
-    def test_less_consistent_label_below_70_percent(self):
-        """Soft language avoids discouraging use of borderline skills."""
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('email_search', 0.55, 12)]
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        assert 'less consistent' in result
-        assert 'unreliable' not in result
-
-    def test_limits_to_top_3_skills(self):
-        svc = self._make_service()
-        skills = [self._make_skill(f'skill_{i}', 0.90, 10) for i in range(6)]
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        skill_lines = [l for l in result.split('\n') if l.startswith('- ')]
-        assert len(skill_lines) == 3
-
-    def test_includes_percentage_and_attempt_count(self):
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('web_search', 0.88, 25)]
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        assert '88%' in result
-        assert '25' in result
-
-    def test_error_returns_empty_string(self):
-        svc = self._make_service()
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception("db down")):
-            result = svc._get_procedural_hints('test')
-
-        assert result == ""
-
-    def test_header_present_when_skills_surfaced(self):
-        svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('recall', 0.90, 10)]
-        mock_db = MagicMock()
-
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_procedural_hints('test')
-
-        assert '## Learned Action Reliability' in result
-
-
-@pytest.mark.unit
-class TestProceduralInAssemble:
-
-    def test_procedural_key_in_assemble_output(self):
-        config = {'max_context_tokens': 8000}
+        config = {'max_context_tokens': 100_000}
         svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='t')
 
-        with patch.object(svc, '_get_working_memory', return_value=""), \
-             patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_episodes', return_value=""), \
-             patch.object(svc, '_get_procedural_hints', return_value=""), \
-             patch.object(svc, '_get_concepts', return_value=""):
-            result = svc.assemble(prompt="test", topic="test_topic")
+        with patch.object(svc, '_get_working_memory', return_value=''), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', side_effect=Exception('ep fail')), \
+             patch.object(svc, '_get_concepts', return_value=''):
 
-        assert 'procedural' in result
+            # _get_episodes raises, but assemble calls it internally —
+            # we need to let the real method run to trigger record_failure
+            pass
 
-    def test_procedural_content_flows_through_assemble(self):
-        config = {'max_context_tokens': 8000}
+        # Test the private method directly to verify record_failure
+        with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep fail')), \
+             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
+            svc._get_episodes('prompt', 'topic', context=ctx)
+
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'episodes'
+        assert 'ep fail' in ctx.failed_sections[0][1]
+
+    def test_multiple_failures_tracked(self, db):
+        """Multiple section failures all appear in TopicContext."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
         svc = ContextAssemblyService(config)
-        hints = "## Learned Action Reliability\n- recall: reliable (92% over 20 uses)"
+        ctx = TopicContext(topic='t')
 
-        with patch.object(svc, '_get_working_memory', return_value=""), \
-             patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_episodes', return_value=""), \
-             patch.object(svc, '_get_procedural_hints', return_value=hints), \
-             patch.object(svc, '_get_concepts', return_value=""):
-            result = svc.assemble(prompt="which tool works best?", topic="tools")
+        # Force two different sections to fail
+        with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep boom')), \
+             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
+            svc._get_episodes('p', 't', context=ctx)
 
-        assert result['procedural'] == hints
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks boom')):
+            svc._get_concepts('p', 't', context=ctx)
+
+        assert len(ctx.failed_sections) == 2
+        section_names = [s[0] for s in ctx.failed_sections]
+        assert 'episodes' in section_names
+        assert 'concepts' in section_names
+
+    def test_failed_sections_empty_on_success(self):
+        """When no section fails, failed_sections stays empty."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='t')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            svc.assemble(prompt='hi', topic='t', context=ctx)
+
+        assert ctx.failed_sections == []
+
+    def test_context_wm_identifier_used(self):
+        """TopicContext.wm_identifier is used for working memory lookup."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='fallback-topic', thread_id='ctx-thread-77')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm') as mock_wm, \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            svc.assemble(prompt='hi', topic='fallback-topic', context=ctx)
+
+        # The first positional arg should be the wm_identifier from context
+        call_args = mock_wm.call_args
+        assert call_args[0][0] == 'ctx-thread-77'
+
+

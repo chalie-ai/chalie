@@ -8,7 +8,6 @@ the others.
 """
 
 import logging
-from typing import Optional
 
 from services.time_utils import utc_now, parse_utc
 
@@ -139,46 +138,48 @@ def _query_last_consolidation(db) -> str:
 
 
 def _query_semantic_structure(db) -> str:
-    """Summarise the concept graph: top domains, relationship count, density."""
+    """Summarise the knowledge graph: top kinds, relationship count, density."""
     try:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Top concept domains
+            # Top kinds in knowledge table
             cursor.execute(
                 """
-                SELECT COALESCE(domain, 'unclassified') AS d, COUNT(*) AS c
-                FROM semantic_concepts
+                SELECT kind, COUNT(*) AS c
+                FROM knowledge
                 WHERE deleted_at IS NULL
-                GROUP BY d
+                GROUP BY kind
                 ORDER BY c DESC
                 LIMIT 5
                 """
             )
-            domain_rows = cursor.fetchall()
+            kind_rows = cursor.fetchall()
 
-            # Relationship count
-            cursor.execute('SELECT COUNT(*) FROM semantic_relationships')
+            # Relationship count (kind='relationship')
+            cursor.execute(
+                "SELECT COUNT(*) FROM knowledge WHERE kind = 'relationship' AND deleted_at IS NULL"
+            )
             rel_count = cursor.fetchone()[0] or 0
 
             # Concept count for density
             cursor.execute(
-                'SELECT COUNT(*) FROM semantic_concepts WHERE deleted_at IS NULL'
+                "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"
             )
             concept_count = cursor.fetchone()[0] or 0
 
             cursor.close()
 
-        if not domain_rows and rel_count == 0:
+        if not kind_rows and rel_count == 0:
             return ''
 
         parts = []
-        if domain_rows:
-            domain_strs = [f'{row[0]} ({row[1]})' for row in domain_rows]
-            parts.append(f'Top domains: {", ".join(domain_strs)}')
+        if kind_rows:
+            kind_strs = [f'{row[0]} ({row[1]})' for row in kind_rows]
+            parts.append(f'Knowledge kinds: {", ".join(kind_strs)}')
 
         if concept_count > 0:
-            density = rel_count / concept_count
+            density = rel_count / concept_count if concept_count else 0
             parts.append(
                 f'{rel_count:,} relationships ({density:.1f} per concept)'
             )
@@ -196,7 +197,7 @@ def _query_semantic_structure(db) -> str:
 def _scope_skill_tool_usage() -> str:
     rows = []
 
-    # Innate skills via ProceduralMemoryService
+    # Innate skills via KnowledgeService (procedural entries)
     rows.extend(_innate_skill_rows())
 
     # External tools via user_tool_preferences
@@ -217,24 +218,31 @@ def _scope_skill_tool_usage() -> str:
 
 def _innate_skill_rows() -> list:
     try:
-        from services.procedural_memory_service import ProceduralMemoryService
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
         from services.innate_skills.registry import ALL_SKILL_NAMES, SKILL_DESCRIPTIONS
 
         db = get_shared_db_service()
-        service = ProceduralMemoryService(db)
+        ks = KnowledgeService(db)
         rows = []
 
         for skill_name in sorted(ALL_SKILL_NAMES):
-            stats = service.get_action_stats(skill_name)
-            if not stats:
+            entry = ks.get('chalie', skill_name)
+            if not entry or entry.get('kind') != 'procedure':
                 continue
-            attempts = stats.get('total_attempts', 0)
+            data = entry.get('data', {})
+            if isinstance(data, str):
+                import json
+                try:
+                    data = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    data = {}
+            attempts = data.get('total_attempts', 0)
             if attempts == 0:
                 continue
 
-            successes = stats.get('total_successes', 0)
-            updated_at = stats.get('updated_at', '')
+            successes = data.get('total_successes', 0)
+            updated_at = entry.get('updated_at', '')
             last_used = _relative_time(updated_at) if updated_at else 'never'
             last_result = 'success' if successes >= attempts * 0.5 else 'failed'
             summary = SKILL_DESCRIPTIONS.get(skill_name, '')[:50]
@@ -335,22 +343,6 @@ def _scope_reasoning_state() -> str:
 
 
 def _reasoning_focus() -> str:
-    try:
-        from services.focus_session_service import FocusSessionService
-        from services.memory_client import MemoryClientService
-
-        # Try to find the most recent active focus session by scanning known threads
-        store = MemoryClientService.create_connection()
-        thread_id = store.get('recent_thread_id') or ''
-
-        if thread_id:
-            session = FocusSessionService().get_focus(thread_id)
-            if session:
-                desc = session.get('description', '').strip()
-                if desc:
-                    return f"Currently focused on '{desc}'."
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_focus failed: {e}')
     return ''
 
 
@@ -396,7 +388,7 @@ def _reasoning_upcoming_reminders() -> str:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT message, due_at FROM scheduled_items "
-                "WHERE status = 'pending' AND due_at > datetime('now') "
+                "WHERE status = 'pending' AND due_at > datetime('now') AND hidden = 0 "
                 "ORDER BY due_at ASC LIMIT 5"
             )
             rows = cursor.fetchall()
@@ -521,11 +513,22 @@ def _identity_relationship_depth() -> str:
 
 def _identity_communication_style() -> str:
     try:
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
 
         db = get_shared_db_service()
-        style = UserTraitService(db).get_communication_style()
+        ks = KnowledgeService(db)
+
+        # Look up communication style traits from knowledge table
+        style = {}
+        for dim in ('verbosity', 'directness', 'formality'):
+            entry = ks.get('user', f'communication_style_{dim}')
+            if entry and entry.get('value'):
+                try:
+                    style[dim] = float(entry['value'])
+                except (ValueError, TypeError):
+                    pass
+
         if not style:
             return ''
 

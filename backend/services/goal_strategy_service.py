@@ -86,8 +86,8 @@ def _gather_evidence_context(goal_id: str) -> str:
         Formatted string listing up to 5 recent evidence items.
     """
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
 
         with db.connection() as conn:
             cursor = conn.cursor()
@@ -126,8 +126,8 @@ def _get_user_context() -> str:
         Truncated autobiography excerpt (~500 chars) or empty string on failure.
     """
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
 
         from services.autobiography_service import AutobiographyService
         auto_service = AutobiographyService(db)
@@ -170,8 +170,8 @@ def _get_user_context() -> str:
 def _gather_rejected_strategies(goal_id: str) -> str:
     """Fetch previously rejected strategies from outcome_feedback."""
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
 
         with db.connection() as conn:
             cursor = conn.cursor()
@@ -276,10 +276,10 @@ def _store_strategy(goal_id: str, strategy: str) -> None:
         goal_id: Goal UUID.
         strategy: Strategy text to store.
     """
-    from services.database_service import get_lightweight_db_service
+    from services.database_service import get_shared_db_service
     from services.time_utils import utc_now
 
-    db = get_lightweight_db_service()
+    db = get_shared_db_service()
     now = utc_now().isoformat()
 
     with db.connection() as conn:

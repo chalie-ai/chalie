@@ -93,7 +93,7 @@ class TestOAuthServiceAuthUrl:
 class TestOAuthServiceExchangeCode:
     """Test code exchange."""
 
-    def test_exchanges_code_and_stores_tokens(self, mock_store, mock_db):
+    def test_exchanges_code_and_stores_tokens(self, mock_store, db):
         svc = OAuthService()
 
         # Pre-seed state in MemoryStore
@@ -122,12 +122,12 @@ class TestOAuthServiceExchangeCode:
             "client_id": "cid", "client_secret": "csec"
         }.get(k)), \
         patch('requests.post', return_value=mock_response), \
-        patch.object(svc, '_store_tokens') as mock_store:
+        patch.object(svc, '_store_tokens') as mock_store_tokens:
             result = svc.exchange_code(state, "auth-code-123")
 
         assert result["tool_name"] == "test_tool"
         assert result["connected"] is True
-        mock_store.assert_called_once()
+        mock_store_tokens.assert_called_once()
 
     def test_invalid_state_raises(self, mock_store):
         svc = OAuthService()
@@ -167,7 +167,7 @@ class TestOAuthServiceRefresh:
 
         assert result == "valid-token"
 
-    def test_refreshes_expired_token(self, mock_db):
+    def test_refreshes_expired_token(self, db):
         svc = OAuthService()
         expired = str(int(time.time()) - 100)
 
@@ -227,17 +227,27 @@ class TestOAuthServiceStatus:
         assert status["connected"] is False
         assert status["scopes"] == []
 
-    def test_disconnect(self, mock_db):
+    def test_disconnect(self, db):
         svc = OAuthService()
-        mock_config_svc = MagicMock()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.tool_config_service.ToolConfigService', return_value=mock_config_svc):
-            result = svc.disconnect("tool")
+        # Seed OAuth keys so disconnect has something to delete
+        for key in RESERVED_OAUTH_KEYS:
+            db.execute(
+                "INSERT INTO tool_configs (tool_name, config_key, config_value) "
+                "VALUES (?, ?, ?)",
+                ("tool", key, "test-value"),
+            )
+        db.commit()
+
+        result = svc.disconnect("tool")
 
         assert result is True
-        # Should have called delete for each oauth key
-        assert mock_config_svc.delete_tool_config_key.call_count == len(RESERVED_OAUTH_KEYS)
+
+        # Verify all OAuth keys were deleted
+        row = db.execute(
+            "SELECT COUNT(*) FROM tool_configs WHERE tool_name = 'tool'"
+        ).fetchone()
+        assert row[0] == 0
 
 
 @pytest.mark.unit

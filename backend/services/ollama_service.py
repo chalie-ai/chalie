@@ -13,7 +13,6 @@ import time
 
 import requests
 import json
-import ollama
 from services.llm_service import LLMResponse, RateLimitError
 
 
@@ -85,7 +84,6 @@ class OllamaService:
         if self.format != "text":
             payload["format"] = self.format
 
-        last_exception = None
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
@@ -99,7 +97,6 @@ class OllamaService:
                     tokens_output=data.get('eval_count'),
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                last_exception = e
                 if attempt < self.max_retries:
                     backoff = 2 * (2 ** attempt)
                     logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
@@ -118,7 +115,6 @@ class OllamaService:
                             pass
                     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
                 elif e.response is not None and e.response.status_code >= 500:
-                    last_exception = e
                     if attempt < self.max_retries:
                         backoff = 1.5 * (2 ** attempt)
                         logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {e.response.status_code} — backoff {backoff}s")
@@ -157,7 +153,6 @@ class OllamaService:
                 for t in tools
             ]
 
-        last_exception = None
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
@@ -190,7 +185,6 @@ class OllamaService:
                     stop_reason='tool_use' if tool_calls else 'end_turn',
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                last_exception = e
                 if attempt < self.max_retries:
                     backoff = 2 * (2 ** attempt)
                     logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
@@ -209,7 +203,6 @@ class OllamaService:
                             pass
                     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
                 elif e.response is not None and e.response.status_code >= 500:
-                    last_exception = e
                     if attempt < self.max_retries:
                         backoff = 1.5 * (2 ** attempt)
                         logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {e.response.status_code} — backoff {backoff}s")
@@ -252,7 +245,7 @@ class OllamaService:
             parts.append(json.dumps(tools, default=str))
         return estimate_tokens(' '.join(parts))
 
-    def generate_embedding(self, text: str, embedding_model: str = None, target_dimensions: int = None) -> list:
+    def generate_embedding(self, text: str, _embedding_model: str = None, _target_dimensions: int = None) -> list:
         """
         Generate embedding vector via EmbeddingService (no Ollama required).
 
@@ -282,7 +275,6 @@ class OllamaService:
 
 def _ollama_convert_messages(messages: list) -> list:
     """Convert normalized messages to Ollama format (OpenAI-compatible)."""
-    import json as _json
     result = []
     for msg in messages:
         if msg['role'] == 'assistant' and msg.get('tool_calls'):

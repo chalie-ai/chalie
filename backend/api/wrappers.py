@@ -17,7 +17,7 @@ import logging
 
 from flask import Blueprint, g, jsonify, request
 
-from .auth import require_auth, require_session
+from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 

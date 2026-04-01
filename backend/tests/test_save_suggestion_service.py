@@ -1,12 +1,14 @@
 """Tests for SaveSuggestionService — detection heuristics, flag lifecycle,
 trigger signals, rate limiting, and document creation flow."""
 
+import hashlib
 import json
 import time
 import pytest
 from unittest.mock import patch, MagicMock
 
 from services.save_suggestion_service import SaveSuggestionService
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
@@ -20,11 +22,14 @@ def service():
 
 @pytest.fixture
 def mock_store():
-    """Provide a mock MemoryStore that default-returns no existing keys."""
-    store = MagicMock()
-    store.exists.return_value = False
-    store.get.return_value = None
-    return store
+    """Provide a real MemoryStore for save-suggestion tests.
+
+    A fresh empty store already returns ``None`` for ``get()`` and ``False``
+    for ``exists()``, matching the previous MagicMock defaults.
+
+    # TODO: rename fixture to ``store`` after all references migrated.
+    """
+    return MemoryStore()
 
 
 # ── Sample content ────────────────────────────────────────────
@@ -204,7 +209,7 @@ class TestFalsePositiveGuards:
 
     def test_cooldown_prevents_detection(self, service, mock_store):
         """If cooldown key exists, detection returns None."""
-        mock_store.exists.return_value = True  # cooldown exists
+        mock_store.set('save_suggest:cooldown:thread1', '1')  # pre-populate cooldown key
         with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness', 'thread1')
 
@@ -216,20 +221,21 @@ class TestFalsePositiveGuards:
 class TestFlagLifecycle:
 
     def test_flag_set_and_get(self, service, mock_store):
+        """``flag_saveable`` writes flag JSON with correct key, TTL, and payload."""
         with patch.object(service, '_get_store', return_value=mock_store):
             service.flag_saveable('thread1', 'fitness', 'plan', 'ex123')
 
-        mock_store.setex.assert_called_once()
-        call_args = mock_store.setex.call_args
-        assert call_args[0][0] == 'saveable:thread1'
-        assert call_args[0][1] == 1800  # 30min TTL
-        data = json.loads(call_args[0][2])
+        raw = mock_store.get('saveable:thread1')
+        assert raw is not None, "flag key must exist in store after flag_saveable"
+        data = json.loads(raw)
         assert data['content_type'] == 'plan'
         assert data['exchange_id'] == 'ex123'
+        assert 0 < mock_store.ttl('saveable:thread1') <= 1800  # 30-min TTL
 
     def test_get_flag_returns_data(self, service, mock_store):
+        """``get_saveable_flag`` deserialises an existing flag from the store."""
         flag_data = json.dumps({'content_type': 'plan', 'topic': 'fitness', 'ts': 123})
-        mock_store.get.return_value = flag_data
+        mock_store.set('saveable:thread1', flag_data)
         with patch.object(service, '_get_store', return_value=mock_store):
             result = service.get_saveable_flag('thread1')
 
@@ -237,17 +243,20 @@ class TestFlagLifecycle:
         assert result['content_type'] == 'plan'
 
     def test_get_flag_returns_none_when_missing(self, service, mock_store):
-        mock_store.get.return_value = None
+        """``get_saveable_flag`` returns None when no flag key exists."""
+        # fresh empty store → get() returns None by default
         with patch.object(service, '_get_store', return_value=mock_store):
             result = service.get_saveable_flag('thread1')
 
         assert result is None
 
     def test_clear_flag(self, service, mock_store):
+        """``clear_flag`` removes the saveable flag key from the store."""
+        mock_store.set('saveable:thread1', 'some_data')
         with patch.object(service, '_get_store', return_value=mock_store):
             service.clear_flag('thread1')
 
-        mock_store.delete.assert_called_once_with('saveable:thread1')
+        assert mock_store.get('saveable:thread1') is None
 
 
 # ── Trigger Signal Detection ─────────────────────────────────
@@ -292,18 +301,18 @@ class TestTriggerDetection:
 class TestRateLimiting:
 
     def test_record_rejection_sets_cooldown_and_reject(self, service, mock_store):
+        """``record_rejection`` persists both the per-thread cooldown and the topic-rejection keys."""
         with patch.object(service, '_get_store', return_value=mock_store):
             service.record_rejection('thread1', 'fitness')
 
-        # Should set both cooldown and topic rejection keys
-        assert mock_store.setex.call_count == 2
-        keys_set = [call[0][0] for call in mock_store.setex.call_args_list]
-        assert 'save_suggest:cooldown:thread1' in keys_set
-        assert 'save_suggest:reject:thread1:fitness' in keys_set
+        # Both keys must exist with non-zero TTLs after a rejection
+        assert mock_store.exists('save_suggest:cooldown:thread1'), "cooldown key must be set"
+        assert mock_store.exists('save_suggest:reject:thread1:fitness'), "topic reject key must be set"
 
     def test_duplicate_prevention(self, service, mock_store):
-        """First call returns False (not duplicate), second returns True."""
-        mock_store.exists.side_effect = [False, True]
+        """First call returns False (not duplicate); second call returns True (already seen)."""
+        # The real MemoryStore sets the hash key on the first call so the second
+        # call naturally finds it — no side_effect manipulation required.
         with patch.object(service, '_get_store', return_value=mock_store):
             assert service._is_duplicate('hash123') is False
             assert service._is_duplicate('hash123') is True
@@ -315,7 +324,7 @@ class TestDocumentCreation:
 
     def test_create_document_full_flow(self, service, mock_store):
         """Test the full create flow: conversation → synthesis → document."""
-        mock_store.exists.return_value = False  # no duplicate
+        # fresh empty store → no duplicate (exists returns False by default)
 
         turns = [
             {'role': 'user', 'content': 'Create a workout plan'},
@@ -354,10 +363,12 @@ class TestDocumentCreation:
 
     def test_create_document_duplicate_skipped(self, service, mock_store):
         """Returns None if duplicate conversation hash detected."""
-        mock_store.exists.return_value = True  # duplicate exists
+        conv = "User: test\n\nAssistant: test response"
+        dup_key = f"save_suggest:hash:{hashlib.sha256(conv.encode()).hexdigest()}"
+        mock_store.set(dup_key, '1')  # pre-populate duplicate hash so first call sees it
 
         with patch.object(service, '_get_store', return_value=mock_store), \
-             patch.object(service, '_get_conversation_window', return_value="User: test\n\nAssistant: test response"):
+             patch.object(service, '_get_conversation_window', return_value=conv):
             result = service.create_document_from_conversation('thread1', 'topic', 'plan')
 
         assert result is None

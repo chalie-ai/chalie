@@ -20,14 +20,17 @@ Termination model (fatigue-free):
   - Hard iteration cap: max_iterations (default 30)
   - Cumulative timeout: safety net for runaway loops
   - Semantic repetition: embedding-based (>0.85 cosine similarity)
-  - Type-based repetition: same action 3x in a row
   - No actions returned by LLM: natural completion signal
   - Soft nudge: at iteration 10, inject a prompt hint encouraging
     the LLM to conclude if it has enough information.
+  - Forced-exit synthesis: when loop exits without a final response,
+    one last tool-free LLM call synthesizes from accumulated results.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import json
+import re
+import threading
 import time
 import logging
 from dataclasses import dataclass, field
@@ -37,6 +40,17 @@ from services.act_loop_service import ActLoopService
 from services.innate_skills.registry import COGNITIVE_PRIMITIVES
 from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
 from services.llm_service import estimate_tokens
+
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        ACT_LOOP_ITERATION,
+        ACT_LOOP_COMPLETE,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception as e:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+    logging.debug(f"Telemetry service import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -72,7 +86,7 @@ class ACTOrchestrator:
         per_action_timeout: float = 10.0,
         critic_enabled: bool = False,
         smart_repetition: bool = True,
-        escalation_hints: bool = False,
+        escalation_hints: bool = False,  # Deprecated — type-based repetition removed
         persistent_task_exit: bool = False,
         execution_gate: bool = True,
     ):
@@ -85,7 +99,9 @@ class ACTOrchestrator:
             critic_enabled: Deprecated — accepted for backward compatibility but
                 ignored. Post-loop reflection always runs via _post_loop_reflection().
             smart_repetition: Embedding-based semantic repetition detection
-            escalation_hints: Inject pivot hints on type-based repetition
+            escalation_hints: Deprecated — accepted for backward compatibility but
+                ignored. Type-based repetition was removed; smart (embedding-based)
+                repetition detection is the sole mechanism.
             persistent_task_exit: Exit loop when a persistent_task is dispatched
             execution_gate: Whether to apply the autonomous execution gate to
                 non-safe actions. False for user-initiated ACT loops (the user
@@ -208,7 +224,8 @@ class ACTOrchestrator:
         # Auto-calculate context budget from provider limits
         try:
             _context_limit = cortex_service.get_context_limit()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} get_context_limit failed, using fallback 32000: {e}")
             _context_limit = 32000  # Safe fallback
         _context_budget = min(int(_context_limit * 0.6), 150_000)
         logger.info(
@@ -218,9 +235,6 @@ class ACTOrchestrator:
         )
 
         # ── Repetition detection state ──────────────────────────────────
-        consecutive_same_action = 0
-        last_action_type = None
-        pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
 
         # ── Tool health tracking (cross-loop via MemoryStore) ─────────
@@ -235,6 +249,18 @@ class ACTOrchestrator:
         # ── Main loop ───────────────────────────────────────────────────
         while True:
             iteration_start = time.time()
+
+            # ── Telemetry: iteration start ─────────────────────────────
+            if _TELEMETRY_AVAILABLE:
+                try:
+                    get_telemetry_collector().record(ACT_LOOP_ITERATION, {
+                        "iteration": act_loop.iteration_number,
+                        "elapsed_seconds": round(
+                            iteration_start - act_loop.start_time, 2
+                        ),
+                    })
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} ACT_LOOP_ITERATION telemetry emit failed: {e}")
 
             # ── Collect tool names for health hints ───────────────────
             _tool_names = set()
@@ -301,7 +327,7 @@ class ACTOrchestrator:
                     started_at=iteration_start, completed_at=time.time(),
                     chosen_mode='ACT', chosen_confidence=0.0,
                     actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
-                    termination_reason=termination_reason, decision_data={'net_value': 0.0},
+                    termination_reason=termination_reason,
                 )
                 act_loop.iteration_number += 1
                 break
@@ -337,49 +363,7 @@ class ACTOrchestrator:
                     except Exception as e:
                         logger.error(f"{LOG_PREFIX} Narration callback error: {e}", exc_info=True)
 
-            # ── Repetition detection (type-based) ───────────────────────
-            if actions and len(actions) == 1:
-                current_type = actions[0].get('type', '')
-                if current_type == last_action_type:
-                    consecutive_same_action += 1
-                else:
-                    consecutive_same_action = 1
-                last_action_type = current_type
-            elif actions:
-                consecutive_same_action = 0
-                last_action_type = None
-
-            if consecutive_same_action >= 3:
-                if self.escalation_hints and not pivot_hint_injected:
-                    # Digest-worker style: inject pivot hint, give one more chance
-                    logger.info(
-                        f"{LOG_PREFIX} Repetition '{last_action_type}' x{consecutive_same_action} "
-                        f"— injecting pivot hint"
-                    )
-                    act_loop.append_results([{
-                        'action_type': 'system',
-                        'status': 'info',
-                        'execution_time': 0.0,
-                        'result': (
-                            f"SYSTEM: You have called '{last_action_type}' "
-                            f"{consecutive_same_action} times with similar queries. "
-                            "Try a DIFFERENT action type that builds on existing results, "
-                            "or return empty actions to finish."
-                        ),
-                    }])
-                    pivot_hint_injected = True
-                    consecutive_same_action = 0
-                    can_continue, termination_reason = act_loop.can_continue()
-                else:
-                    # Tool-worker style: hard exit on repetition
-                    logger.warning(
-                        f"{LOG_PREFIX} Repetition detected: '{last_action_type}' "
-                        f"x{consecutive_same_action} — forcing exit"
-                    )
-                    termination_reason = 'repetition_detected'
-                    can_continue = False
-            else:
-                can_continue, termination_reason = act_loop.can_continue()
+            can_continue, termination_reason = act_loop.can_continue()
 
             # ── Soft nudge at iteration 10 ───────────────────────────────
             if (
@@ -417,7 +401,6 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -432,7 +415,6 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -519,8 +501,8 @@ class ACTOrchestrator:
                             topic, 'tool', _result[:80000],
                             tool_name=_atype,
                         )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} Transcript append failed (non-fatal): {e}")
 
             # ── Smart repetition detection (embedding-based) ────────────
             if self.smart_repetition and not termination_reason:
@@ -563,7 +545,6 @@ class ACTOrchestrator:
                 actions_executed=actions_executed,
                 frontal_cortex_response=response_data,
                 termination_reason=termination_reason if termination_reason else None,
-                decision_data={'net_value': 0.0},
             )
 
             act_loop.iteration_number += 1
@@ -581,6 +562,41 @@ class ACTOrchestrator:
 
             if termination_reason:
                 break
+
+        # ── Post-loop: synthesis call for forced exits ────────────────
+        # When the loop was forced to exit (timeout, repetition, etc.)
+        # the LLM never got a chance to produce a final text response.
+        # Make one last call WITHOUT tools so it can synthesize from the
+        # accumulated tool results in _messages.
+        if not _final_response and termination_reason and termination_reason != 'generation_error':
+            logger.info(
+                f"{LOG_PREFIX} Forced exit ({termination_reason}) with no final response "
+                f"— running synthesis call"
+            )
+            _messages.append({
+                "role": "user",
+                "content": (
+                    "SYSTEM: The action loop has ended. Based on the results above, "
+                    "respond to the user now. Do NOT call any tools."
+                ),
+            })
+            try:
+                _synth = cortex_service.generate_response_appended(
+                    system_prompt=_system_prompt,
+                    messages=self._prune_messages(_messages, _context_budget),
+                    cache_prefix=True,
+                )
+                _final_response = (
+                    _synth.get('response', '') or _synth.get('narration', '')
+                )
+                if _final_response:
+                    logger.info(
+                        f"{LOG_PREFIX} Synthesis produced {len(_final_response)} chars"
+                    )
+            except Exception as _synth_err:
+                logger.warning(
+                    f"{LOG_PREFIX} Synthesis call failed: {_synth_err}"
+                )
 
         # ── Post-loop: batch write iterations ───────────────────────────
         if act_loop.iteration_logs:
@@ -614,6 +630,18 @@ class ACTOrchestrator:
         loop_telemetry['termination_reason'] = termination_reason
         logger.info(f"{LOG_PREFIX} Loop telemetry: {loop_telemetry}")
 
+        # ── Telemetry: loop complete ──────────────────────────────────
+        if _TELEMETRY_AVAILABLE:
+            try:
+                get_telemetry_collector().record(ACT_LOOP_COMPLETE, {
+                    "iterations_used": loop_telemetry.get("iterations_used"),
+                    "termination_reason": termination_reason,
+                    "elapsed_seconds": loop_telemetry.get("elapsed_seconds"),
+                    "actions_total": loop_telemetry.get("actions_total"),
+                })
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} ACT_LOOP_COMPLETE telemetry emit failed: {e}")
+
         try:
             from services.database_service import get_shared_db_service
             from services.interaction_log_service import InteractionLogService
@@ -625,25 +653,25 @@ class ACTOrchestrator:
                 topic=topic,
                 source='act_loop',
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Loop telemetry write failed (non-fatal): {e}")
 
-        # ── Post-loop: automatic reflection (fire-and-forget) ────────
-        _maybe_auto_reflect(
-            topic=topic,
-            iteration_logs=act_loop.iteration_logs,
-            termination_reason=termination_reason,
-            iterations_used=act_loop.iteration_number,
-        )
-
-        # ── Post-loop: critic reflection → procedural memory ─────────
-        reflection = self._post_loop_reflection(
-            act_history=act_loop.act_history,
-            original_goal=text,
-            iterations_used=act_loop.iteration_number,
-            termination_reason=termination_reason or '',
-            topic=topic,
-        )
+        # ── Post-loop: methodology learning (fire-and-forget) ──────
+        reflection = None  # Async — never blocks
+        if act_loop.iteration_number >= 2:
+            _ml_thread = threading.Thread(
+                target=self._update_methodology_learning,
+                args=(
+                    text,
+                    act_loop.get_history_context(),
+                    termination_reason or '',
+                    act_loop.loop_id or '',
+                    act_loop.iteration_number,
+                ),
+                daemon=True,
+                name=f"methodology-{(act_loop.loop_id or 'x')[:8]}",
+            )
+            _ml_thread.start()
 
         return ACTResult(
             act_history=act_loop.act_history,
@@ -731,107 +759,143 @@ class ACTOrchestrator:
         )
         return pruned
 
-    def _post_loop_reflection(
+    def _update_methodology_learning(
         self,
-        act_history: list,
-        original_goal: str,
-        iterations_used: int,
+        exchange_text: str,
+        act_history_text: str,
         termination_reason: str,
-        topic: str,
-    ) -> Optional[dict]:
-        """Run post-loop critic reflection and store the lesson in procedural memory.
+        loop_id: str,
+        iterations_used: int,
+    ) -> None:
+        """Post-loop methodology learning. Always runs in a daemon thread.
 
-        This is the only critic call in the ACT loop. It runs once, after the loop
-        exits, and feeds the result into procedural memory. It never blocks the
-        response — failures are caught and logged.
+        Each execution creates a NEW knowledge record keyed to this specific goal,
+        preserving the original goal embedding forever. Prior records are never
+        mutated — they serve as context for synthesising the new paragraph via
+        existing_goal_guidance, so knowledge compounds naturally across similar goals.
 
-        Returns:
-            Reflection dict {outcome_quality, what_worked, what_failed, lesson,
-            confidence} or None if reflection failed or was skipped.
+        1. Embed exchange_text
+        2. KNN search for existing methodology records to load as context.
+           Among records within 0.05 distance of the best match, prefer the
+           most recently created one (it has the most compounded knowledge).
+        3. Call PostLoopReflectionService.reflect(...)
+        4. Quality gate: outcome_quality < 0.35 → skip (don't store noise)
+        5. Always store a NEW record with the current goal's embedding
         """
-        # Skip trivial single-action loops — not enough signal
-        if iterations_used < 2:
-            return None
-
         try:
-            from services.critic_service import CriticService
+            from services.embedding_utils import pack_embedding
+            from services.knowledge_service import KnowledgeService
+            from services.database_service import get_shared_db_service
+            from services.embedding_service import get_embedding_service
+            from services.post_loop_reflection_service import PostLoopReflectionService
+            from services.time_utils import utc_now
 
-            # Extract actions and results from act_history
-            actions_taken = []
-            results = []
-            for entry in act_history:
-                if isinstance(entry, dict):
-                    atype = entry.get('action_type', '')
-                    if atype and atype != 'system':
-                        actions_taken.append({'type': atype})
-                        results.append(entry)
+            db = get_shared_db_service()
+            ks = KnowledgeService(db)
+            emb_service = get_embedding_service()
 
-            if not results:
-                return None
+            # Step 1: Embed exchange_text
+            query_embedding = emb_service.generate_embedding(exchange_text)
+            if query_embedding is None:
+                logger.warning(f"{LOG_PREFIX} Methodology learning: embedding failed, skipping")
+                return
 
-            critic = CriticService()
-            reflection = critic.reflect_on_execution(
-                actions_taken=actions_taken,
-                results=results,
-                original_goal=original_goal,
-                iterations=iterations_used,
+            # Step 2: KNN — load most relevant prior record as context
+            # Among records within 0.05 of the best match distance, prefer the
+            # most recently created (it has compounded knowledge from earlier goals).
+            existing_goal_guidance = ''
+            blob = pack_embedding(query_embedding)
+            if blob:
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT v.rowid, v.distance
+                        FROM knowledge_vec v
+                        WHERE v.embedding MATCH ? AND k = ?
+                        ORDER BY v.distance
+                    """, (blob, 8))
+                    vec_results = cursor.fetchall()
+
+                    candidates = []  # (distance, created_at, value)
+                    for rid, distance in vec_results:
+                        cursor.execute("""
+                            SELECT value, created_at
+                            FROM knowledge
+                            WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
+                              AND deleted_at IS NULL AND value != ''
+                        """, (rid,))
+                        row = cursor.fetchone()
+                        if row:
+                            candidates.append((distance, row[1] or '', row[0]))
+
+                    if candidates:
+                        best_dist = candidates[0][0]
+                        # Among records within 0.05 of best match, pick most recent
+                        close = [c for c in candidates if c[0] <= best_dist + 0.05]
+                        close.sort(key=lambda c: c[1], reverse=True)  # newest first
+                        existing_goal_guidance = close[0][2]
+
+                    cursor.close()
+
+            # Step 3: Call PostLoopReflectionService
+            reflection_service = PostLoopReflectionService()
+            reflection = reflection_service.reflect(
+                exchange_text=exchange_text,
+                act_history_text=act_history_text,
                 termination_reason=termination_reason,
+                existing_goal_guidance=existing_goal_guidance,
+                loop_id=loop_id,
+                iterations_used=iterations_used,
             )
 
-            if reflection is None:
-                return None
+            if not reflection:
+                logger.warning(f"{LOG_PREFIX} Methodology learning: reflection empty, skipping")
+                return
 
-            # Store lesson in procedural memory for each unique action type used
-            lesson = reflection.get('lesson')
             outcome_quality = reflection.get('outcome_quality', 0.5)
-            if lesson:
-                try:
-                    from services.database_service import get_shared_db_service
-                    from services.procedural_memory_service import ProceduralMemoryService
-                    db = get_shared_db_service()
-                    proc_mem = ProceduralMemoryService(db)
+            goal_guidance = reflection.get('goal_guidance', '')
 
-                    # Record outcome for each action type used in the loop
-                    seen_types = set()
-                    for entry in results:
-                        atype = entry.get('action_type', '')
-                        if not atype or atype in ('system', 'critic_escalation') or atype in seen_types:
-                            continue
-                        seen_types.add(atype)
-                        success = outcome_quality >= 0.5
-                        reward = (outcome_quality - 0.5) * 2.0  # map [0,1] → [-1,1]
-                        proc_mem.record_action_outcome(
-                            action_name=atype,
-                            success=success,
-                            reward=reward,
-                            topic=topic,
-                        )
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Procedural memory write failed (non-fatal): {e}")
+            # Step 4: Quality gate — don't store noise
+            if outcome_quality < 0.35:
+                logger.info(
+                    f"{LOG_PREFIX} Methodology learning: poor outcome "
+                    f"({outcome_quality:.2f}), skipping storage"
+                )
+                return
 
-            # Record failure lessons when outcome is poor
-            if outcome_quality < 0.4 and reflection.get('what_failed'):
-                for atype in seen_types:
-                    self._record_failure_lesson(
-                        action_type=atype,
-                        failure_context={
-                            'original_request': original_goal,
-                            'action_type': atype,
-                            'action_intent': {},
-                            'action_result': {'status': 'poor_outcome', 'quality': outcome_quality},
-                            'error_signals': {
-                                'what_failed': reflection['what_failed'],
-                                'termination_reason': termination_reason,
-                            },
-                        },
-                        severity='minor',
-                    )
+            # Step 5: Always create a new record keyed to this specific goal.
+            # The goal's embedding is stored as-is and never regenerated, so
+            # future KNN searches always match on goal-text similarity.
+            slug_words = re.sub(r'[^a-z0-9\s]', '', exchange_text.lower()).split()[:6]
+            slug = '_'.join(slug_words)[:60]
+            if not slug:
+                slug = f"goal_{loop_id[:8]}" if loop_id else 'goal_unknown'
 
-            return reflection
+            observation = {
+                'ts': utc_now().isoformat(),
+                'outcome_quality': outcome_quality,
+                'lesson': reflection.get('lesson') or '',
+                'loop_id': loop_id or '',
+            }
+
+            ks.store(
+                kind='procedure', entity='methodology', key=slug,
+                value=goal_guidance or existing_goal_guidance,
+                data={'total_count': 1, 'observations': [observation]},
+                decay_class='very_slow',
+                confidence=0.3,
+                source='post_loop_reflection',
+                embedding=query_embedding,
+            )
+
+            logger.info(
+                f"{LOG_PREFIX} Methodology learning: stored '{slug}' "
+                f"(quality={outcome_quality:.2f}, "
+                f"guidance_from={'prior' if not goal_guidance else 'reflection'})"
+            )
 
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _post_loop_reflection failed (non-fatal): {e}")
-            return None
+            logger.warning(f"{LOG_PREFIX} _update_methodology_learning failed: {e}")
 
     def _get_cautionary_lessons(self, recent_history: list) -> str:
         """Retrieve failure lessons relevant to recently executed action types."""
@@ -856,35 +920,9 @@ class ACTOrchestrator:
                 for l in all_lessons[:3]
             ]
             return '\n'.join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _get_cautionary_lessons failed (non-fatal): {e}")
             return ''
-
-    def _record_failure_lesson(
-        self, action_type: str, failure_context: dict, severity: str = 'minor'
-    ) -> None:
-        """Analyse a failed action and store a lesson. Major = sync, minor = async."""
-        def _do_record():
-            try:
-                from services.failure_analysis_service import FailureAnalysisService
-                from services.database_service import get_shared_db_service
-                db = get_shared_db_service()
-                fas = FailureAnalysisService(db)
-                analysis = fas.analyze(failure_context)
-                if analysis:
-                    fas.store_lesson(analysis, action_type)
-            except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} Failure lesson recording failed: {exc}")
-
-        if severity == 'major':
-            _do_record()
-        else:
-            import threading
-            t = threading.Thread(
-                target=_do_record,
-                daemon=True,
-                name=f"failure-lesson-{action_type[:20]}",
-            )
-            t.start()
 
     def _escalate_and_wait(
         self,
@@ -968,91 +1006,10 @@ class ACTOrchestrator:
                     f"(threshold={self.repetition_sim_threshold})"
                 )
                 return 'smart_repetition'
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _check_smart_repetition failed (non-fatal): {e}")
         return None
 
-
-
-# ── Auto-reflection (post-loop, fire-and-forget) ────────────────────
-
-# Thresholds for triggering automatic reflection
-_AUTO_REFLECT_HIGH_VALUE = 3.0    # Total net value above this → "what worked"
-_AUTO_REFLECT_LOW_VALUE = -1.0    # Total net value below this → "what didn't"
-_AUTO_REFLECT_COOLDOWN_S = 1800   # 30 min cooldown per topic
-_AUTO_REFLECT_MIN_ITERATIONS = 2  # Skip trivial 1-iteration loops
-
-# Termination reasons that indicate degraded exits worth reflecting on
-_DEGRADED_EXITS = frozenset({
-    'repetition_detected', 'smart_repetition', 'tool_exhausted',
-})
-
-
-def _maybe_auto_reflect(
-    topic: str,
-    iteration_logs: list,
-    termination_reason: str | None,
-    iterations_used: int,
-) -> None:
-    """
-    Fire background reflection after significant ACT loops.
-
-    Triggers on: high-value loops, negative-value loops, or degraded exits.
-    Uses MemoryStore cooldown to prevent spam (1 per topic per 30 min).
-    Never blocks — runs in a daemon thread.
-    """
-    import threading
-
-    if iterations_used < _AUTO_REFLECT_MIN_ITERATIONS:
-        return
-
-    # Aggregate net value from iteration logs
-    total_net_value = sum(
-        log.get('net_value', 0.0) for log in iteration_logs
-    )
-
-    should_reflect = (
-        total_net_value >= _AUTO_REFLECT_HIGH_VALUE
-        or total_net_value <= _AUTO_REFLECT_LOW_VALUE
-        or (termination_reason or '') in _DEGRADED_EXITS
-    )
-
-    if not should_reflect:
-        return
-
-    # Check cooldown
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        cooldown_key = f"auto_reflect_cooldown:{topic}"
-        if store.get(cooldown_key):
-            logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown active for {topic}")
-            return
-        store.setex(cooldown_key, _AUTO_REFLECT_COOLDOWN_S, '1')
-    except Exception:
-        pass  # If cooldown check fails, proceed anyway
-
-    reason = (
-        f"high_value({total_net_value:.1f})" if total_net_value >= _AUTO_REFLECT_HIGH_VALUE
-        else f"low_value({total_net_value:.1f})" if total_net_value <= _AUTO_REFLECT_LOW_VALUE
-        else f"degraded_exit({termination_reason})"
-    )
-    logger.info(f"{LOG_PREFIX} Triggering auto-reflect: {reason}")
-
-    def _run_reflect():
-        try:
-            from services.innate_skills.reflect_skill import handle_reflect
-            handle_reflect(topic, {
-                'query': f'automatic reflection triggered by: {reason}',
-                'scope': 'recent',
-                'store': True,
-            })
-            logger.info(f"{LOG_PREFIX} Auto-reflect completed for {topic}")
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Auto-reflect failed: {e}")
-
-    t = threading.Thread(target=_run_reflect, daemon=True, name=f"auto-reflect-{topic[:20]}")
-    t.start()
 
 
 # ── Fingerprinting utilities (shared across all loop callers) ───────

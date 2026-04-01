@@ -2,57 +2,56 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from services.tool_performance_service import ToolPerformanceService
+from services.database_service import get_shared_db_service
+
 pytestmark = pytest.mark.unit
 
 
 class TestRecordInvocation:
-    def test_records_successful_invocation(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        mock_db = MagicMock()
-        svc._db = mock_db
+    def test_records_successful_invocation(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         svc.record_invocation("duckduckgo_search", "exch_123", True, 250.0)
 
-        assert mock_db.execute.call_count >= 1
-        # Check the INSERT call happened
-        first_call = mock_db.execute.call_args_list[0]
-        assert 'tool_performance_metrics' in first_call[0][0]
+        row = db.execute(
+            "SELECT * FROM tool_performance_metrics WHERE tool_name = ?",
+            ("duckduckgo_search",)
+        ).fetchone()
+        assert row is not None
+        assert row['invocation_success'] == 1
+        assert row['latency_ms'] == pytest.approx(250.0)
 
-    def test_records_failed_invocation(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        mock_db = MagicMock()
-        svc._db = mock_db
+    def test_records_failed_invocation(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         svc.record_invocation("weather", "exch_456", False, 5100.0)
-        assert mock_db.execute.call_count >= 1
+
+        row = db.execute(
+            "SELECT * FROM tool_performance_metrics WHERE tool_name = ?",
+            ("weather",)
+        ).fetchone()
+        assert row is not None
+        assert row['invocation_success'] == 0
+        assert row['latency_ms'] == pytest.approx(5100.0)
 
 
 class TestGetToolStats:
-    def test_returns_defaults_for_no_data(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [{'total': 0, 'successes': 0, 'avg_latency': None, 'avg_cost': None}]
-        svc._db = mock_db
+    def test_returns_defaults_for_no_data(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         stats = svc.get_tool_stats("unknown_tool")
         assert 'success_rate' in stats
         assert stats['success_rate'] == 0.5  # default
 
-    def test_computes_correct_success_rate(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [{
-            'total': 10,
-            'successes': 8,
-            'avg_latency': 300.0,
-            'avg_cost': 0.0,
-            'total_cost': 0.0,
-        }]
-        svc._db = mock_db
+    def test_computes_correct_success_rate(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+
+        # Seed 10 invocations: 8 success, 2 failure
+        for i in range(8):
+            svc.record_invocation("good_tool", f"exch_{i}", True, 300.0)
+        for i in range(8, 10):
+            svc.record_invocation("good_tool", f"exch_{i}", False, 300.0)
 
         stats = svc.get_tool_stats("good_tool")
         assert stats['success_rate'] == pytest.approx(0.8)
@@ -60,9 +59,8 @@ class TestGetToolStats:
 
 
 class TestRankCandidates:
-    def test_returns_sorted_by_score(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_returns_sorted_by_score(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         # Mock get_tool_stats, _get_user_preference, _get_reliability
         def mock_stats(tool_name, days=30):
@@ -80,14 +78,12 @@ class TestRankCandidates:
         # duckduckgo_search should rank higher (better success rate, lower latency)
         assert result[0]['name'] == 'duckduckgo_search'
 
-    def test_empty_candidates_returns_empty(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_empty_candidates_returns_empty(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
         assert svc.rank_candidates([]) == []
 
-    def test_single_candidate_returned(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_single_candidate_returned(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         svc.get_tool_stats = lambda tool, days=30: {'success_rate': 0.7, 'avg_latency': 400, 'avg_cost': 0}
         svc._get_user_preference = lambda tool: 0.0
@@ -98,9 +94,8 @@ class TestRankCandidates:
         assert result[0]['name'] == 'weather'
         assert 0 <= result[0]['score'] <= 1
 
-    def test_score_is_between_0_and_1(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_score_is_between_0_and_1(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
 
         svc.get_tool_stats = lambda tool, days=30: {'success_rate': 1.0, 'avg_latency': 0, 'avg_cost': 0}
         svc._get_user_preference = lambda tool: 1.0
@@ -112,41 +107,45 @@ class TestRankCandidates:
 
 
 class TestNormalization:
-    def test_normalize_latency_fast(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_normalize_latency_fast(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
         assert svc._normalize_latency(0) == 0.0
 
-    def test_normalize_latency_slow(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_normalize_latency_slow(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
         assert svc._normalize_latency(10000) == 1.0  # Capped at 1
 
-    def test_normalize_preference_neutral(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        assert svc._normalize_preference(0.0) == pytest.approx(0.5)  # 0 → middle
+    def test_normalize_preference_neutral(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+        assert svc._normalize_preference(0.0) == pytest.approx(0.5)  # 0 -> middle
 
-    def test_normalize_preference_positive(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_normalize_preference_positive(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
         assert svc._normalize_preference(2.0) == pytest.approx(1.0)
 
-    def test_normalize_preference_negative(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
+    def test_normalize_preference_negative(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
         assert svc._normalize_preference(-2.0) == pytest.approx(0.0)
 
 
 class TestPreferenceDecay:
-    def test_decay_updates_old_preferences(self):
-        from services.tool_performance_service import ToolPerformanceService
-        svc = ToolPerformanceService()
-        mock_db = MagicMock()
-        svc._db = mock_db
+    def test_decay_updates_old_preferences(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+
+        # Seed a preference row with old last_used_at
+        db.execute("""
+            INSERT INTO user_tool_preferences
+                (tool_name, implicit_preference, last_used_at, updated_at)
+            VALUES (?, 0.5, datetime('now', '-31 days'), datetime('now'))
+        """, ("old_tool",))
+        db.commit()
 
         svc.apply_preference_decay()
-        mock_db.execute.assert_called_once()
-        call_sql = mock_db.execute.call_args[0][0]
-        assert 'implicit_preference' in call_sql
-        assert '30 days' in call_sql
+
+        row = db.execute(
+            "SELECT implicit_preference FROM user_tool_preferences WHERE tool_name = ?",
+            ("old_tool",)
+        ).fetchone()
+        assert row is not None
+        # 0.5 * 0.8 = 0.4
+        assert row['implicit_preference'] == pytest.approx(0.4, abs=0.01)

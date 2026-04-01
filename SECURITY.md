@@ -14,7 +14,7 @@ The only external network calls Chalie makes are to whichever LLM provider you c
 
 All LLM provider API keys are:
 - Stored in the local SQLite database (`backend/data/chalie.db`)
-- Encrypted at rest using AES-256-GCM (via the `DB_ENCRYPTION_KEY` environment variable, auto-generated on first run if not set)
+- Encrypted at rest using AES-256-GCM envelope encryption (password-derived KEK wraps a random DEK via VaultService)
 - Never written to plain-text config files or logs
 - Never transmitted to Chalie infrastructure (there is no Chalie cloud)
 

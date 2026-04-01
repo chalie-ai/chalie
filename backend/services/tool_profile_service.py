@@ -19,8 +19,6 @@ import hashlib
 import json
 import logging
 import re
-import struct
-import time
 from collections import defaultdict
 from typing import Optional
 
@@ -44,7 +42,7 @@ def _compute_manifest_hash(manifest: dict) -> str:
     return hashlib.md5(content.encode()).hexdigest()
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
@@ -113,8 +111,8 @@ class ToolProfileService:
     def _get_db(self):
         if self._db:
             return self._db
-        from services.database_service import get_lightweight_db_service
-        return get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        return get_shared_db_service()
 
     def _get_llm(self):
         from services.llm_service import create_llm_service
@@ -452,16 +450,16 @@ class ToolProfileService:
             cached = ms.get(TRIAGE_SUMMARIES_CACHE_KEY)
             if cached:
                 return cached
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Triage summaries cache read failed (non-fatal): {e}", exc_info=False)
 
         summaries = self._build_triage_summaries()
 
         try:
             ms = self._get_store()
             ms.setex(TRIAGE_SUMMARIES_CACHE_KEY, TRIAGE_SUMMARIES_TTL, summaries)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Triage summaries cache write failed (non-fatal): {e}", exc_info=False)
 
         return summaries
 
@@ -659,8 +657,8 @@ class ToolProfileService:
             try:
                 iface_rows = db.fetch_all("SELECT DISTINCT tool_name FROM interface_tools")
                 valid_names |= {r['tool_name'] for r in (iface_rows or [])}
-            except Exception:
-                pass  # table may not exist on fresh install
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} interface_tools table not available (expected on fresh install): {e}", exc_info=False)
 
             existing = db.fetch_all("SELECT tool_name FROM tool_capability_profiles")
             stale = [r['tool_name'] for r in (existing or []) if r['tool_name'] not in valid_names]
@@ -880,5 +878,5 @@ class ToolProfileService:
         try:
             ms = self._get_store()
             ms.delete(TRIAGE_SUMMARIES_CACHE_KEY)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Cache invalidation failed (non-fatal): {e}", exc_info=False)

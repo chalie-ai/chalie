@@ -11,9 +11,10 @@ Side effects preserved:
   - Background enrichment via moment_enrichment_service
 """
 
+# WS4 batch-5: silent catches audited 2026-03-23 — zero silent catches found
+
 import json
 import logging
-import struct
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MOMENTS]"
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class MomentService:

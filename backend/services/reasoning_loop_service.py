@@ -34,17 +34,15 @@ import random
 import threading
 import uuid
 import logging
-from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
-from services.semantic_storage_service import SemanticStorageService
-from services.semantic_retrieval_service import SemanticRetrievalService
-from services.episodic_retrieval_service import EpisodicRetrievalService
+from services.knowledge_service import KnowledgeService
+from services.episodic_service import EpisodicService
 from services.embedding_service import EmbeddingService
 from services.background_llm_queue import create_background_llm_proxy
-from services.database_service import get_lightweight_db_service
+from utils.logger import Logger
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +131,6 @@ class ReasoningLoopService:
         'novel_observation': '_handle_reasoning_signal',
         'ambient_context': '_handle_reasoning_signal',
         'episode_created': '_handle_reasoning_signal',
-        'curiosity_finding': '_handle_reasoning_signal',
         'goal_inferred': '_handle_reasoning_signal',
         # Lightweight handlers: update state, no full reasoning cycle
         'trait_changed': '_handle_trait_changed',
@@ -171,15 +168,13 @@ class ReasoningLoopService:
         ).get("name", "semantic_consolidation_queue")
 
         # Database + services
-        self.db_service = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        self.db_service = get_shared_db_service()
         self.embedding_service = EmbeddingService()
-        self.semantic_storage = SemanticStorageService(self.db_service)
-        self.semantic_retrieval = SemanticRetrievalService(
-            self.db_service, self.embedding_service, self.semantic_storage
-        )
+        self.knowledge_service = KnowledgeService(self.db_service)
 
         episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        self.episodic_retrieval = EpisodicRetrievalService(self.db_service, episodic_config)
+        self.episodic_retrieval = EpisodicService(self.db_service, episodic_config)
 
         # LLM for thought synthesis — refreshable so provider changes take effect without restart
         self.ollama = create_background_llm_proxy("cognitive-drift")
@@ -219,19 +214,12 @@ class ReasoningLoopService:
         from services.autonomous_actions.nothing_action import NothingAction
         from services.autonomous_actions.communicate_action import CommunicateAction
         from services.autonomous_actions.reflect_action import ReflectAction
-        from services.autonomous_actions.seed_thread_action import SeedThreadAction
-
         router = ActionDecisionRouter()
 
         # Always register NOTHING (fallback)
         router.register(NothingAction())
 
         action_config = self.config.get('autonomous_actions', {})
-
-        # Register SEED_THREAD (priority 6, above REFLECT=5)
-        seed_config = action_config.get('seed_thread', {})
-        if seed_config.get('enabled', True):
-            router.register(SeedThreadAction(config=seed_config))
 
         # Register PLAN (priority 7)
         from services.autonomous_actions.plan_action import PlanAction
@@ -300,17 +288,15 @@ class ReasoningLoopService:
 
         while True:
             try:
-                # Check for deferred thoughts from quiet hours
-                self._process_deferred()
-
-                # Goal ecology runs every cycle regardless of worker/episode state
-                self._run_goal_ecology_cycle()
-
-                # Block until a signal arrives or idle_timeout elapses
+                # Drain all pending priority signals first — user messages must
+                # never wait behind slow maintenance tasks (goal ecology, deferred
+                # thought processing).  Only run maintenance when idle.
                 result = self.store.blpop([PRIORITY_QUEUE_KEY, SIGNAL_QUEUE_KEY], timeout=self.idle_timeout)
 
                 if result is None:
-                    # Timeout — no signal arrived; enter discovery mode
+                    # Timeout — no signal arrived; run maintenance then enter discovery mode
+                    self._process_deferred()
+                    self._run_goal_ecology_cycle()
                     logger.debug(f"{LOG_PREFIX} Idle timeout, entering discovery mode")
                     self._handle_idle_signal()
                 else:
@@ -354,19 +340,8 @@ class ReasoningLoopService:
                 from services.database_service import get_shared_db_service
                 svc = DomainConfidenceService(get_shared_db_service(), self.store)
                 svc.invalidate_all()
-            except Exception:
-                pass
-
-        # Track signal topic for goal inference pattern detection
-        if signal.topic and signal.signal_type != 'user_message':
-            try:
-                self.store.zadd('goal_inference:signal_topics', {signal.topic: time.time()})
-                # Prune topics older than lookback window (14 days)
-                self.store.zremrangebyscore(
-                    'goal_inference:signal_topics', '-inf', time.time() - 86400 * 14
-                )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Domain confidence cache invalidation failed: {e}", exc_info=True)
 
     def _handle_reasoning_signal(self, signal: ReasoningSignal) -> None:
         """Full reasoning path: gates → seed → spreading activation → synthesis → action."""
@@ -389,8 +364,8 @@ class ReasoningLoopService:
                     f"skipping signal"
                 )
                 return
-        except Exception:
-            pass  # Fall through to existing checks
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Situation model proactivity check failed: {e}", exc_info=True)  # Fall through to existing checks
         # Gate 3: Deep focus
         if self._is_user_deep_focus():
             logger.info(f"{LOG_PREFIX} User in deep focus, skipping signal")
@@ -457,8 +432,8 @@ class ReasoningLoopService:
                     svc.invalidate_domain(domain)
                 else:
                     svc.invalidate_all()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Domain confidence invalidation on trait change failed: {e}", exc_info=True)
 
             # High-energy trait changes (corrections, overwrites) deserve reasoning
             if signal.activation_energy >= 0.6:
@@ -489,8 +464,8 @@ class ReasoningLoopService:
                         updated_at=signal.timestamp,
                         deadline=signal.metadata.get('deadline') if signal.metadata else None,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} World state task notification failed: {e}", exc_info=True)
 
             # Task completions (energy >= 0.6) may warrant reasoning about next steps
             if signal.activation_energy >= 0.6:
@@ -511,8 +486,8 @@ class ReasoningLoopService:
                         status='fired',
                         due_at=signal.metadata.get('due_at') if signal.metadata else None,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} World state schedule notification failed: {e}", exc_info=True)
 
             # Schedule fires always go through reasoning — they may need user surfacing
             self._handle_reasoning_signal(signal)
@@ -557,8 +532,8 @@ class ReasoningLoopService:
         if signal.topic:
             try:
                 self.store.zadd('reasoning_loop:active_topics', {signal.topic: time.time()})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Active topic tracking failed: {e}", exc_info=True)
 
         # Dispatch to digest worker — same thread-spawn pattern the WebSocket used to do
         text = signal.content or ''
@@ -575,8 +550,8 @@ class ReasoningLoopService:
                 logger.error(f"{LOG_PREFIX} digest_worker error for {request_id}: {e}", exc_info=True)
                 try:
                     self.store.publish(sse_channel, json.dumps({"error": str(e)}))
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"{LOG_PREFIX} Failed to publish error to SSE channel: {e2}", exc_info=True)
 
         thread = threading.Thread(target=run_digest, daemon=True)
         thread.start()
@@ -596,8 +571,8 @@ class ReasoningLoopService:
                 'reasoning_loop:active_topics', time.time() - 3600, '+inf'
             )
             context['active_topics'] = list(topics[:10]) if topics else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get active topics for context: {e}", exc_info=True)
 
         # Recent identity shifts
         try:
@@ -605,15 +580,15 @@ class ReasoningLoopService:
             context['recent_identity_shifts'] = [
                 json.loads(s) for s in shifts
             ] if shifts else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get identity shifts for context: {e}", exc_info=True)
 
         # Last task event
         try:
             task_event = self.store.get('reasoning_loop:last_task_event')
             context['last_task_event'] = json.loads(task_event) if task_event else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get last task event for context: {e}", exc_info=True)
 
         # Recent expired threads
         try:
@@ -621,8 +596,8 @@ class ReasoningLoopService:
             context['recent_thread_expiries'] = [
                 json.loads(e) for e in expiries
             ] if expiries else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get expired threads for context: {e}", exc_info=True)
 
         # Last reasoning state (what was Chalie just thinking about?)
         try:
@@ -632,16 +607,16 @@ class ReasoningLoopService:
                     'seed_concept': state.get('last_seed_concept', ''),
                     'seed_type': state.get('last_seed_type', ''),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get last reasoning state for context: {e}", exc_info=True)
 
         # World model summary — scheduled items, tasks, lists, ambient, topics
         try:
             ws = self._get_world_state_service()
             if ws:
                 context['world_model'] = ws.get_world_model_summary()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get world model summary for context: {e}", exc_info=True)
 
         return context
 
@@ -662,16 +637,21 @@ class ReasoningLoopService:
         # Content-based lookup via semantic retrieval
         if signal.content:
             try:
-                concepts = self.semantic_retrieval.retrieve_concepts(signal.content, limit=3)
+                concepts = self.knowledge_service.recall(signal.content, kinds=['concept'], limit=3)
                 for concept in concepts:
                     cid = str(concept.get('id', ''))
                     if cid and not self._is_on_cooldown(cid):
+                        data = concept.get('data') or {}
+                        if isinstance(data, str):
+                            import json as _json
+                            try: data = _json.loads(data)
+                            except Exception: data = {}
                         return {
                             'concept_id': cid,
-                            'concept_name': concept.get('concept_name', ''),
-                            'definition': concept.get('definition', ''),
+                            'concept_name': concept.get('key', ''),
+                            'definition': concept.get('value', ''),
                             'seed_type': signal.signal_type,
-                            'topic': signal.topic or concept.get('domain', 'general'),
+                            'topic': signal.topic or data.get('domain', 'general'),
                         }
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Semantic lookup for signal failed: {e}")
@@ -707,13 +687,8 @@ class ReasoningLoopService:
         if ws:
             try:
                 ws.refresh_model()
-            except Exception:
-                pass
-
-        # Goal inference: check for latent goals (cooldown-gated)
-        if self._should_run_goal_inference():
-            self._run_goal_inference()
-            # Don't return — still run normal idle discovery after goal check
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} World model refresh failed: {e}", exc_info=True)
 
         # Pick strategy: 60% salient, 40% insight
         seed = None
@@ -733,51 +708,13 @@ class ReasoningLoopService:
         idle_signal = ReasoningSignal(
             signal_type='idle_discovery',
             source='reasoning_loop',
-            concept_id=int(seed['concept_id']) if seed['concept_id'].isdigit() else None,
+            concept_id=int(seed['concept_id']) if seed.get('concept_id') is not None else None,
             concept_name=seed.get('concept_name'),
             topic=seed.get('topic'),
             content=seed.get('definition'),
             activation_energy=0.5,
         )
         self._reason_from_seed(seed, idle_signal)
-
-    def _should_run_goal_inference(self) -> bool:
-        """Check if goal inference cooldown has expired."""
-        try:
-            last_run = self.store.get('goal_inference:last_run')
-            if last_run:
-                elapsed = time.time() - float(last_run)
-                cooldown = self.config.get('goal_inference', {}).get('cooldown_hours', 6) * 3600
-                if elapsed < cooldown:
-                    return False
-            return True
-        except Exception:
-            return False
-
-    def _run_goal_inference(self) -> None:
-        """Run the goal inference pipeline during idle time."""
-        try:
-            from services.goal_inference_service import GoalInferenceService
-            service = GoalInferenceService(self.db_service)
-            proposed = service.detect_and_propose()
-
-            if proposed:
-                logger.info(
-                    f"{LOG_PREFIX} Goal inference proposed {len(proposed)} goal(s): "
-                    f"{[g['goal'][:50] for g in proposed]}"
-                )
-            else:
-                logger.debug(f"{LOG_PREFIX} Goal inference: no goals detected this cycle")
-
-            # Reset cooldown regardless of result
-            self.store.set('goal_inference:last_run', str(time.time()))
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Goal inference failed: {e}")
-            # Set cooldown even on failure to prevent retry storms
-            try:
-                self.store.set('goal_inference:last_run', str(time.time()))
-            except Exception:
-                pass
 
     # -- Goal ecology idle cycle ------------------------------------------------
 
@@ -795,10 +732,7 @@ class ReasoningLoopService:
             # 1. Decay unreinforced goals
             decayed = ecology.decay_unreinforced()
 
-            # 2. Detect patterns from unmatched signals -> create new goals
-            new_goals = ecology.detect_patterns_from_unmatched()
-
-            # 3. Check for actionable goals -> trigger proactive actions
+            # 2. Check for actionable goals -> trigger proactive actions
             actionable = ecology.get_actionable_goals()
             if actionable:
                 from services.goal_proactive_service import check_and_execute
@@ -814,18 +748,8 @@ class ReasoningLoopService:
             self.store.incrby("goal_ecology:cycles_total", 1)
             if decayed:
                 self.store.incrby("goal_ecology:goals_decayed_total", decayed)
-            if new_goals:
-                self.store.incrby("goal_ecology:goals_created_total", len(new_goals))
             if actionable:
                 self.store.incrby("goal_ecology:proactive_attempts_total", 1)
-
-            # Periodic autobiography alignment refresh (~10% of cycles ≈ every 50min)
-            if random.random() < 0.1:
-                try:
-                    from services.goal_autobiography_bridge import refresh_all_goals
-                    refresh_all_goals()
-                except Exception:
-                    pass
 
             # Cross-goal inference (~1% of cycles ≈ every 8 hours)
             if random.random() < 0.01:
@@ -836,17 +760,62 @@ class ReasoningLoopService:
                             f"{LOG_PREFIX} Cross-goal inference found "
                             f"{len(clusters)} cluster(s)"
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Cross-goal cluster detection failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Goal ecology cycle failed (non-fatal): {e}")
 
+    def _spreading_activation_knowledge(self, concept_name: str, max_depth: int = 2) -> list:
+        """BFS spreading activation over knowledge relationships."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            try:
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    visited = {}
+                    queue = [(concept_name, 1.0, 0)]
+                    while queue:
+                        name, score, depth = queue.pop(0)
+                        if name in visited or depth > max_depth:
+                            continue
+                        visited[name] = score
+                        if depth < max_depth:
+                            cursor.execute("""
+                                SELECT key, data FROM knowledge
+                                WHERE kind = 'relationship' AND deleted_at IS NULL
+                                  AND (json_extract(data, '$.source_key') = ?
+                                   OR json_extract(data, '$.target_key') = ?)
+                            """, (name, name))
+                            for row in cursor.fetchall():
+                                import json as _json
+                                try:
+                                    d = _json.loads(row[1]) if row[1] else {}
+                                except Exception:
+                                    d = {}
+                                neighbor = d.get('target_key') if d.get('source_key') == name else d.get('source_key')
+                                if neighbor and neighbor not in visited:
+                                    strength = float(d.get('strength', 0.5))
+                                    queue.append((neighbor, score * 0.7 * strength, depth + 1))
+                    results = []
+                    for name, act_score in visited.items():
+                        entry = self.knowledge_service.get('chalie', name)
+                        if entry:
+                            entry['activation_score'] = act_score
+                            results.append(entry)
+                    return results
+            finally:
+                db.close_pool()
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Spreading activation failed: {e}")
+            return []
+
     def _reason_from_seed(self, seed: Dict, signal: ReasoningSignal) -> None:
         """Core reasoning pipeline: spreading activation → synthesis → action."""
         # Step 3: Spreading activation from seed
-        activated = self.semantic_retrieval.spreading_activation(
-            [seed['concept_id']], max_depth=self.max_activation_depth
+        activated = self._spreading_activation_knowledge(
+            seed['concept_name'], max_depth=self.max_activation_depth
         )
 
         # Step 4: Check activation energy threshold
@@ -870,7 +839,7 @@ class ReasoningLoopService:
 
         # Step 6: Retrieve grounding episode
         grounding_episode = None
-        concept_names = [c['concept_name'] for c in activated[:3]]
+        concept_names = [c.get('concept_name') or c.get('name', '') for c in activated[:3]]
         if concept_names:
             query_text = " ".join(concept_names)
             episodes = self.episodic_retrieval.retrieve_episodes(
@@ -994,8 +963,8 @@ class ReasoningLoopService:
             if pending > 0:
                 logger.info(f"{LOG_PREFIX} Priority signal waiting — preempting background reasoning")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Priority preempt check failed: {e}", exc_info=True)
         return False
 
     # -- Fatigue ---------------------------------------------------------------
@@ -1032,7 +1001,8 @@ class ReasoningLoopService:
             from services.ambient_inference_service import AmbientInferenceService
             inference = AmbientInferenceService()
             return inference.is_user_deep_focus()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Deep focus check failed: {e}", exc_info=True)
             return False
 
     # -- Cooldown --------------------------------------------------------------
@@ -1089,21 +1059,20 @@ class ReasoningLoopService:
             for row in episodes
         ]
         episode_row = random.choices(episodes, weights=weights, k=1)[0]
-        episode_id = str(episode_row[0])
         episode_gist = episode_row[1]
         episode_topic = episode_row[2]
 
         # Use episode gist as embedding query against concepts
-        concepts = self.semantic_retrieval.retrieve_concepts(episode_gist, limit=5)
+        concepts = self.knowledge_service.recall(episode_gist, kinds=['concept'], limit=5)
 
         if not concepts:
             return None
 
         concept = random.choice(concepts)
         return {
-            'concept_id': concept['id'],
-            'concept_name': concept['concept_name'],
-            'definition': concept['definition'],
+            'concept_id': concept.get('id', ''),
+            'concept_name': concept.get('key', ''),
+            'definition': concept.get('value', ''),
             'seed_type': 'salient',
             'topic': episode_topic or concept.get('domain', 'general'),
         }
@@ -1116,7 +1085,7 @@ class ReasoningLoopService:
         """
         insight_cap = self.config.get('insight_sessions_cap', 5)
 
-        last_insight_key = f"drift:insight_seed:last_used"
+        last_insight_key = "drift:insight_seed:last_used"
         last_used_epoch = self.store.get(last_insight_key)
         if last_used_epoch:
             # Check if enough drift cycles have passed (approximate: cap * check_interval)
@@ -1153,16 +1122,16 @@ class ReasoningLoopService:
                 weights = [float(row[1]) for row in recurring]
                 chosen_topic = random.choices(topics, weights=weights, k=1)[0]
 
-                # Find a concept associated with the recurring topic
+                # Find a concept associated with the recurring topic (knowledge table)
                 cursor.execute("""
-                    SELECT id, concept_name, definition, domain
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
+                    SELECT id, key, value
+                    FROM knowledge
+                    WHERE kind = 'concept'
                       AND confidence >= 0.4
-                      AND (domain = ? OR concept_name LIKE ?)
-                    ORDER BY strength DESC
+                      AND (key LIKE ? OR value LIKE ?)
+                    ORDER BY confidence DESC
                     LIMIT 5
-                """, (chosen_topic, f'%{chosen_topic}%'))
+                """, (f'%{chosen_topic}%', f'%{chosen_topic}%'))
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -1198,8 +1167,8 @@ class ReasoningLoopService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE semantic_concepts
-                    SET strength = MIN(10.0, strength + ?),
+                    UPDATE knowledge
+                    SET confidence = MIN(1.0, confidence + ?),
                         updated_at = datetime('now')
                     WHERE id = ? AND deleted_at IS NULL
                 """, (self.decaying_reinforce_bump, seed['concept_id']))
@@ -1239,13 +1208,13 @@ class ReasoningLoopService:
             if the LLM fails or returns an invalid response after all retries.
         """
         # Build prompt from template
-        seed_text = f"{seed['concept_name']}: {seed['definition']}"
+        seed_text = f"{seed['concept_name']}: {seed.get('definition', '')}"
 
         activated_text = "\n".join(
-            f"- {c['concept_name']}: {c.get('definition', 'N/A')} "
+            f"- {c.get('concept_name') or c.get('name', '?')}: {c.get('definition', 'N/A')} "
             f"(activation: {c.get('activation_score', 0):.2f})"
             for c in activated[:self.max_activated_concepts]
-            if c['id'] != seed['concept_id']
+            if c.get('id') != seed.get('concept_id')
         ) or "No additional associations."
 
         episode_text = "No related experience recalled."
@@ -1256,51 +1225,37 @@ class ReasoningLoopService:
                 f"Outcome: {episode.get('outcome', 'N/A')}"
             )
 
-        # Temporal rhythm context (may be empty if no patterns yet)
-        rhythm_text = ""
-        try:
-            from services.temporal_pattern_service import TemporalPatternService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            rhythm_text = TemporalPatternService(db).get_rhythm_summary()
-        except Exception:
-            pass
-
         # Inject constraint context so drift thoughts can factor in blocked paths
         constraint_context = ''
         try:
             from services.constraint_memory_service import ConstraintMemoryService
             constraint_context = ConstraintMemoryService().format_for_prompt(mode='drift')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Constraint context fetch failed: {e}", exc_info=True)
 
         # Inject user traits so drift thoughts orbit the user's actual life
         # instead of generic philosophizing
         user_context = ''
         try:
-            from services.database_service import get_shared_db_service
-            from services.user_trait_service import UserTraitService
-            db = get_shared_db_service()
-            traits = UserTraitService(db).get_all_traits()
+            traits = self.knowledge_service.get_by_kind('trait', entity='user', limit=10, min_confidence=0.3)
             # Pick top traits by confidence, skip style_baseline (not human-readable)
             top_traits = [
                 t for t in sorted(traits, key=lambda t: t.get('confidence', 0), reverse=True)
-                if t.get('trait_key') != 'style_baseline'
+                if t.get('key') != 'style_baseline'
             ][:5]
             if top_traits:
                 lines = [
-                    f"- {t.get('trait_key', '?')}: {t.get('trait_value', '?')}"
+                    f"- {t.get('key', '?')}: {t.get('value', '?')}"
                     for t in top_traits
                 ]
                 user_context = '\n'.join(lines)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} User traits context fetch failed: {e}", exc_info=True)
 
         user_message = self.prompt_template \
             .replace("{{seed_concept}}", seed_text) \
             .replace("{{activated_concepts}}", activated_text) \
             .replace("{{grounding_episode}}", episode_text) \
-            .replace("{{temporal_rhythm}}", rhythm_text) \
             .replace("{{constraint_context}}", constraint_context) \
             .replace("{{user_context}}", user_context)
 
@@ -1411,13 +1366,8 @@ class ReasoningLoopService:
             # Map signal patterns to reflective seed thoughts
             if 'recall' in signal or 'activation' in signal:
                 reflection = (
-                    f"I notice my memory recall is struggling. "
-                    f"I should consolidate what I know into stronger semantic concepts."
-                )
-            elif 'capability_gap' in signal:
-                reflection = (
-                    f"Users keep asking me to do something I can't: {signal.split(':', 1)[-1].strip()}. "
-                    f"I should think about how to help them differently."
+                    "I notice my memory recall is struggling. "
+                    "I should consolidate what I know into stronger semantic concepts."
                 )
             elif 'queue' in signal or 'congestion' in signal:
                 reflection = (
@@ -1483,7 +1433,8 @@ class ReasoningLoopService:
              what it considered but couldn't do.
         """
         try:
-            db_service = get_lightweight_db_service()
+            from services.database_service import get_shared_db_service
+            db_service = get_shared_db_service()
             try:
                 from services.interaction_log_service import InteractionLogService
                 log_service = InteractionLogService(db_service)
@@ -1542,15 +1493,17 @@ class ReasoningLoopService:
 
                         # Feed gate rejections into procedural memory as soft failures
                         try:
-                            from services.procedural_memory_service import ProceduralMemoryService
-                            proc = ProceduralMemoryService(db_service)
+                            from services.knowledge_service import KnowledgeService
+                            ks = KnowledgeService(db_service)
                             for r in meaningful:
-                                proc.record_gate_rejection(
+                                ks.record_procedure_outcome(
                                     action_name=r.get('action', 'unknown'),
-                                    reason=r.get('reason', ''),
+                                    success=False,
+                                    reward=0.0,
+                                    failure_class='gate_rejection',
                                 )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"{LOG_PREFIX} Failed to record gate rejection in procedural memory: {e}", exc_info=True)
             finally:
                 db_service.close_pool()
         except Exception as e:
@@ -1559,11 +1512,12 @@ class ReasoningLoopService:
 
 def reasoning_loop_worker(shared_state=None):
     """Module-level wrapper for threading."""
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
     try:
         config = ConfigService.get_agent_config("cognitive-drift")
         check_interval = config.get('check_interval', 300)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Failed to load cognitive-drift config, using default check_interval=300: {e}", exc_info=True)
         check_interval = 300
 
     engine = ReasoningLoopService(check_interval=check_interval)

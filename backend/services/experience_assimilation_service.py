@@ -289,7 +289,7 @@ class ExperienceAssimilationService:
             logger.debug(f"{LOG_PREFIX} Topic '{topic}': nothing worth reflecting")
             tool_names = [o.get('tool', 'unknown') for o in tool_outputs]
             self._log_rejection(topic, 'not_worth_reflecting',
-                                f"LLM judged tool outputs not worth reflecting",
+                                "LLM judged tool outputs not worth reflecting",
                                 {'tools': tool_names})
             return
 
@@ -392,7 +392,7 @@ class ExperienceAssimilationService:
         """Persist a single reflection observation as an episodic memory entry.
 
         Embeds the observation text, builds the episode payload, and writes it
-        via :class:`~services.episodic_storage_service.EpisodicStorageService`.
+        via :class:`~services.episodic_service.EpisodicService`.
         Also triggers profile enrichment for high-salience episodes.
 
         Args:
@@ -402,8 +402,8 @@ class ExperienceAssimilationService:
             user_prompt: Original user prompt that triggered the ACT loop.
             tool_outputs: List of tool output dicts used to produce the observation.
         """
-        from services.database_service import get_lightweight_db_service
-        from services.episodic_storage_service import EpisodicStorageService
+        from services.database_service import get_shared_db_service
+        from services.episodic_service import EpisodicService
         from services.embedding_service import get_embedding_service
 
         obs_text = observation['text']
@@ -436,9 +436,9 @@ class ExperienceAssimilationService:
             },
         }
 
-        db_service = get_lightweight_db_service()
+        db_service = get_shared_db_service()
         try:
-            storage = EpisodicStorageService(db_service)
+            storage = EpisodicService(db_service)
             episode_id = storage.store_episode(episode_data)
 
             # Trigger profile enrichment for high-salience episodes

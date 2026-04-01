@@ -117,6 +117,9 @@ class WorldStateService:
         # 7. External signals (from paired interfaces — zero LLM)
         items.extend(self._get_external_signals(message_embedding))
 
+        # 8. Engagement signal (low/high engagement from proactive response scoring)
+        items.extend(self._get_engagement_signal())
+
         if not items:
             return ""
 
@@ -151,15 +154,16 @@ class WorldStateService:
 
                 # Scheduled items — same window as the live query
                 cursor.execute("""
-                    SELECT id, message, due_at, status, item_type, recurrence
+                    SELECT id, message, due_at, status, item_type, recurrence, metadata
                     FROM scheduled_items
-                    WHERE (status = 'pending' AND due_at <= datetime(?, '+7 days'))
-                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours'))
+                    WHERE ((status = 'pending' AND due_at <= datetime(?, '+7 days'))
+                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours')))
+                      AND COALESCE(hidden, 0) = 0
                     ORDER BY due_at ASC
                     LIMIT ?
                 """, (now.isoformat(), now.isoformat(), MAX_SCHEDULED_CANDIDATES))
                 for row in cursor.fetchall():
-                    item_id, message, due_at_str, status, item_type, recurrence = row
+                    item_id, message, due_at_str, status, item_type, recurrence, metadata = row
                     payload['scheduled_items'].append({
                         'id': item_id,
                         'message': message,
@@ -167,6 +171,7 @@ class WorldStateService:
                         'status': status,
                         'item_type': item_type,
                         'recurrence': recurrence,
+                        'metadata': metadata,
                     })
 
                 # Persistent tasks
@@ -524,7 +529,8 @@ class WorldStateService:
                         bucket['best_salience'] = salience
                         bucket['best_content'] = content
 
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[WORLD STATE] external signal parse failed: {e}")
                     continue
 
             # Build one world state item per source — most salient signal wins
@@ -863,6 +869,32 @@ class WorldStateService:
             logger.debug(f"{LOG_PREFIX} _get_reasoning_focus failed (non-fatal): {e}")
             return []
 
+    def _get_engagement_signal(self) -> list:
+        """
+        Surface the rolling engagement score as a world-state item when it is
+        outside the unremarkable band.
+
+        Delegates to :class:`~services.engagement_signal_service.EngagementSignalService`
+        which reads ``proactive:engagement_score`` from MemoryStore (written by
+        :class:`~services.autonomous_actions.engagement_tracker.EngagementTracker`).
+
+        This method is fail-open: any import error or runtime exception is caught,
+        logged at debug level, and an empty list is returned so that the rest of
+        ``get_world_state()`` is never blocked.
+
+        Returns:
+            list: Zero or one world-state dict with keys ``type`` (str),
+            ``label`` (str), and ``salience`` (float).
+        """
+        try:
+            from services.engagement_signal_service import EngagementSignalService
+            return EngagementSignalService().get_engagement_items()
+        except Exception as e:
+            logger.debug(
+                f"{LOG_PREFIX} _get_engagement_signal failed (non-fatal): {e}"
+            )
+            return []
+
     def get_world_model_summary(self) -> dict:
         """
         Return a structured dict representation of the current world model for
@@ -907,22 +939,22 @@ class WorldStateService:
                             summary['scheduled'].append(
                                 f"[{time_str}] {entry.get('message', '')}"
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed scheduled entry: {e}", exc_info=False)
 
                 for entry in payload.get('persistent_tasks', []):
                     try:
                         status = entry.get('status', '')
                         goal = entry.get('goal', '')
                         summary['tasks'].append(f"[{status.upper()}] {goal[:80]}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed task entry: {e}", exc_info=False)
 
                 for entry in payload.get('lists', []):
                     try:
                         summary['lists'].append(entry.get('name', ''))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed list entry: {e}", exc_info=False)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} get_world_model_summary: cache read failed: {e}")
@@ -975,8 +1007,9 @@ class WorldStateService:
                 cursor.execute("""
                     SELECT id, message, due_at, status, item_type, recurrence
                     FROM scheduled_items
-                    WHERE (status = 'pending' AND due_at <= datetime(?, '+7 days'))
-                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours'))
+                    WHERE ((status = 'pending' AND due_at <= datetime(?, '+7 days'))
+                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours')))
+                      AND COALESCE(hidden, 0) = 0
                     ORDER BY due_at ASC
                     LIMIT ?
                 """, (now.isoformat(), now.isoformat(), MAX_SCHEDULED_CANDIDATES))
@@ -999,6 +1032,9 @@ class WorldStateService:
                     if salience >= SALIENCE_THRESHOLD:
                         if status == 'fired':
                             label = f"[DONE] {message}"
+                        elif item_type == 'event':
+                            time_str = self._relative_time(now, due_at)
+                            label = f"[CALENDAR {time_str}] {message}"
                         else:
                             time_str = self._relative_time(now, due_at)
                             recur_suffix = (

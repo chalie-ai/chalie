@@ -10,21 +10,18 @@ over-influencing ranking). Applies preference decay for stale tools and
 checks for usage-triggered full profile rebuilds.
 """
 
-import struct
 import time
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[PROFILE ENRICHMENT]"
 
 CYCLE_INTERVAL_SECONDS = 6 * 3600  # 6 hours
-RELIABILITY_DECAY_DAYS = 30  # Decay reliability if no new data in 30 days
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class ProfileEnrichmentService:
@@ -36,8 +33,8 @@ class ProfileEnrichmentService:
     def _get_db(self):
         if self._db:
             return self._db
-        from services.database_service import get_lightweight_db_service
-        return get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        return get_shared_db_service()
 
     def run(self, shared_state=None):
         """Background loop. Runs enrichment cycle every 6 hours."""

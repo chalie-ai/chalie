@@ -36,9 +36,6 @@ def _strip_tool_markers(text: str) -> str:
 # Their results aren't needed for subsequent iteration reasoning.
 FIRE_AND_FORGET: frozenset = frozenset({'memorize', 'focus'})
 
-# Iteration threshold after which the soft nudge hint is injected once.
-_SOFT_NUDGE_AFTER = 10
-
 
 class ActLoopService:
     """Manages ACT loop with hard iteration cap, timeout, and repetition detection."""
@@ -50,7 +47,6 @@ class ActLoopService:
         per_action_timeout: float = 10.0,
         max_iterations: int = 30,
         cortex_iteration_service=None,
-        critic=None,
         dispatcher=None,
         loop_id: str = '',
         execution_gate: bool = True,
@@ -65,7 +61,6 @@ class ActLoopService:
             per_action_timeout: Maximum time per individual action (seconds)
             max_iterations: Hard cap on iteration count (default 30)
             cortex_iteration_service: Service for exploration bonus calculation
-            critic: Optional CriticService instance for post-action verification
             dispatcher: Optional ActDispatcherService instance (reused across iterations)
             loop_id: Unique ID for this loop instance
             execution_gate: Whether the dispatcher should apply the autonomous
@@ -78,8 +73,7 @@ class ActLoopService:
         self.cortex_iteration_service = cortex_iteration_service
         self.execution_gate = execution_gate
 
-        # Critic and dispatcher (injected, not monkey-patched)
-        self._critic = critic
+        # Dispatcher (injected, not monkey-patched)
         self._dispatcher = dispatcher
 
         # Loop state
@@ -143,17 +137,6 @@ class ActLoopService:
 
         # Can continue ACT mode
         return True, None
-
-    def get_critic_telemetry(self) -> dict:
-        """Return critic telemetry if a critic was attached, else empty dict.
-
-        Returns:
-            Dict of critic telemetry metrics, or an empty dict when no critic
-            was injected.
-        """
-        if self._critic is not None:
-            return self._critic.get_telemetry()
-        return {}
 
     def get_loop_telemetry(self) -> dict:
         """Return loop metrics for telemetry logging.
@@ -341,7 +324,6 @@ class ActLoopService:
         frontal_cortex_response: Dict = None,
         termination_reason: Optional[str] = None,
         alternative_paths: List[Dict] = None,
-        decision_data: Dict = None
     ) -> None:
         """
         Log iteration data to iteration_logs list for batch write.
@@ -355,7 +337,6 @@ class ActLoopService:
             frontal_cortex_response: Full response from LLM
             termination_reason: Reason if loop terminates
             alternative_paths: Alternative paths from LLM (optional)
-            decision_data: Decision gate results dict (optional)
         """
         execution_time_ms = (completed_at - started_at) * 1000
         actions_executed = actions_executed or []
@@ -377,10 +358,6 @@ class ActLoopService:
             'frontal_cortex_response': frontal_cortex_response,
             'cumulative_cost': self.cumulative_cost,
         }
-
-        # Include net_value from decision_data if available
-        if decision_data:
-            iteration_log['net_value'] = decision_data.get('net_value', 0.0)
 
         self.iteration_logs.append(iteration_log)
         logging.debug(f"[MODE:{chosen_mode}] [ACT LOOP] Logged iteration {self.iteration_number}, total logs: {len(self.iteration_logs)}")

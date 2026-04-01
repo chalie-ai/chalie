@@ -16,7 +16,10 @@ Key operations:
 """
 
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 from services.llm_service import estimate_tokens
 from services.time_utils import utc_now
@@ -59,7 +62,7 @@ Do NOT preserve:
 Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."""
 
 
-def check_and_compact(topic: str, context_budget: int) -> bool:
+def check_and_compact(topic: str, context_budget: int, _context: 'TopicContext' = None) -> bool:
     """Check if compaction is needed for a topic and run it if so.
 
     Args:
@@ -73,7 +76,7 @@ def check_and_compact(topic: str, context_budget: int) -> bool:
         return False
 
     # Get current compaction state
-    compaction = get_compaction(topic)
+    compaction = get_compaction(topic, _context=_context)
     compacted_tokens = compaction['token_count'] if compaction else 0
     watermark = compaction['compacted_up_to_id'] if compaction else 0
 
@@ -104,10 +107,10 @@ def check_and_compact(topic: str, context_budget: int) -> bool:
     )
 
     previous_text = compaction['compacted_text'] if compaction else ''
-    return _run_compaction(topic, previous_text, entries)
+    return _run_compaction(topic, previous_text, entries, _context=_context)
 
 
-def get_compaction(topic: str) -> Optional[Dict]:
+def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict]:
     """Retrieve the stored compaction for a topic.
 
     Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at.
@@ -142,6 +145,8 @@ def get_compaction(topic: str) -> Optional[Dict]:
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Failed to get compaction for {topic}: {e}")
+        if _context is not None:
+            _context.record_failure('compaction_read', e)
         return None
 
 
@@ -154,7 +159,7 @@ def get_entries_since(topic: str, watermark: int = 0, limit: int = 500) -> List[
     return transcript_service.get_recent(topic, limit=limit, since_id=watermark)
 
 
-def _run_compaction(topic: str, previous_text: str, entries: List[Dict]) -> bool:
+def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _context: 'TopicContext' = None) -> bool:
     """Execute the compaction LLM call and store the result.
 
     Args:
@@ -195,6 +200,8 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict]) -> bool
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Compaction LLM call failed for {topic}: {e}")
+        if _context is not None:
+            _context.record_failure('compaction_llm', e)
         return False
 
     # Determine watermark (highest entry id)
@@ -230,4 +237,6 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict]) -> bool
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Failed to store compaction for {topic}: {e}")
+        if _context is not None:
+            _context.record_failure('compaction_store', e)
         return False

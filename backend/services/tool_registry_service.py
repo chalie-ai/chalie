@@ -14,12 +14,8 @@ Cost metadata is appended to every result.
 
 import json
 import logging
-import re
-import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -100,14 +96,15 @@ class _CronToolWorker:
                             f"prompt-queue depth={queue_depth}"
                         )
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug(f"[TOOL CRON] {self.tool_name}: queue depth check failed: {e}", exc_info=True)
 
                 try:
                     from services.tool_config_service import ToolConfigService
                     from services.database_service import get_shared_db_service
                     settings = ToolConfigService(get_shared_db_service()).get_tool_config(self.tool_name)
-                except Exception:
+                except Exception as e:
+                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to load tool config: {e}", exc_info=True)
                     settings = {}
 
                 # OAuth token refresh for cron tools
@@ -125,8 +122,8 @@ class _CronToolWorker:
                 try:
                     from services.client_context_service import ClientContextService
                     raw_telemetry = ClientContextService().get()
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to get client telemetry: {e}", exc_info=True)
 
                 # Flatten telemetry using same logic as ToolRegistryService
                 loc = raw_telemetry.get("location") or {}
@@ -159,8 +156,8 @@ class _CronToolWorker:
                     state_json = _store.get(state_key)
                     if state_json:
                         tool_state = json.loads(state_json)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to load persisted tool state: {e}", exc_info=True)
 
                 payload = {"params": {"_state": tool_state}, "settings": settings, "telemetry": flattened_telemetry}
 
@@ -238,13 +235,8 @@ class _CronToolWorker:
 
                 # --- Legacy output routing (backward compat: no "output" field) ---
                 result_text = ""
-                result_html = None
-                result_title = None
-
                 if isinstance(result, dict):
                     result_text = result.get("text", "")
-                    result_html = result.get("html")
-                    result_title = result.get("title")
                     if not result.get("notify", True):
                         _log.debug(f"[TOOL CRON] {self.tool_name}: notify=false, skipping enqueue")
                         continue
@@ -283,8 +275,8 @@ class _CronToolWorker:
         if len(parts) >= 1 and parts[0].startswith("*/"):
             try:
                 return int(parts[0][2:]) * 60
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.debug(f"[TOOL CRON] Failed to parse cron interval from '{schedule}': {e}", exc_info=True)
         return 1800
 
     def _format_result(self, result) -> str:
@@ -383,7 +375,8 @@ class ToolRegistryService:
             from services.config_service import ConfigService
             fc_config = ConfigService.get_agent_config("frontal-cortex")
             self._enabled = fc_config.get("tools_enabled", True)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] config load failed, defaulting to enabled: {e}")
             self._enabled = True
 
         if not self._enabled:
@@ -395,7 +388,7 @@ class ToolRegistryService:
     def _load_tools(self):
         """Load first-party tools from ToolLibraryService."""
         try:
-            from services.tool_library_service import TOOL_METADATA, ALL_TOOL_NAMES
+            from services.tool_library_service import TOOL_METADATA, get_all_tool_names
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Failed to import ToolLibraryService: {e}")
             return
@@ -406,14 +399,16 @@ class ToolRegistryService:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             config_svc = ToolConfigService(get_shared_db_service())
-            for name in ALL_TOOL_NAMES:
+            all_names = get_all_tool_names()
+            for name in all_names:
                 if not config_svc.is_tool_enabled(name):
                     logger.info(f"[TOOL REGISTRY] Skipping disabled tool '{name}'")
                     disabled.add(name)
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
+            all_names = get_all_tool_names()
 
-        for name in ALL_TOOL_NAMES:
+        for name in all_names:
             if name in disabled:
                 continue
             metadata = TOOL_METADATA.get(name, {})
@@ -547,7 +542,8 @@ class ToolRegistryService:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to load tool config for '{tool_name}': {e}", exc_info=True)
             settings = {}
 
         # OAuth token refresh
@@ -558,8 +554,8 @@ class ToolRegistryService:
         try:
             from services.client_context_service import ClientContextService
             raw_telemetry = ClientContextService().get()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for '{tool_name}': {e}", exc_info=True)
         flattened_telemetry = self._build_telemetry(raw_telemetry)
 
         # Resolve handler from library
@@ -592,13 +588,11 @@ class ToolRegistryService:
         # Extract text and html from formalized contract output
         result_text = ""
         result_html = None
-        result_title = None
         result_error = None
 
         if isinstance(result, dict):
             result_text = result.get("text", "")
             result_html = result.get("html")
-            result_title = result.get("title")
             result_error = result.get("error")
             # Fallback: if runner didn't set "text", convert dict to readable text
             if not result_text:
@@ -661,8 +655,8 @@ class ToolRegistryService:
                             value = bool(value)
                     elif param_type == "string":
                         value = str(value)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[TOOL REGISTRY] Param coercion failed for '{param_name}': {e}", exc_info=True)
                 validated[param_name] = value
             elif required:
                 raise ValueError(f"Missing required parameter: {param_name}")
@@ -804,13 +798,6 @@ class ToolRegistryService:
 
             logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
 
-    def get_interface_id_for_tool(self, tool_name: str) -> str | None:
-        """Return the interface_id for an interface-sourced tool, or None."""
-        tool = self.tools.get(tool_name)
-        if tool and tool.get("source_type") == "interface":
-            return tool.get("interface_id")
-        return None
-
     # ── Public API ──────────────────────────────────────────────────
 
     def _is_ready(self, name: str, tool: dict) -> bool:
@@ -829,7 +816,8 @@ class ToolRegistryService:
             from services.interface_registry_service import InterfaceRegistryService
             iface = InterfaceRegistryService().get_interface(tool.get("interface_id", ""))
             return iface is not None and iface.get("status") == "online"
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Interface online check failed for '{tool.get('interface_id', '')}': {e}", exc_info=True)
             return False
 
     def get_tool_names(self) -> List[str]:
@@ -1036,7 +1024,8 @@ class ToolRegistryService:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to load webhook tool config for '{tool_name}': {e}", exc_info=True)
             settings = {}
 
         # OAuth token refresh
@@ -1046,8 +1035,8 @@ class ToolRegistryService:
         try:
             from services.client_context_service import ClientContextService
             raw_telemetry = ClientContextService().get()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for webhook '{tool_name}': {e}", exc_info=True)
         flattened_telemetry = self._build_telemetry(raw_telemetry)
 
         # Load persisted state (shared key with cron)
@@ -1059,8 +1048,8 @@ class ToolRegistryService:
             state_json = store.get(state_key)
             if state_json:
                 tool_state = json.loads(state_json)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to load persisted webhook tool state for '{tool_name}': {e}", exc_info=True)
 
         payload = {
             "params": {"_webhook": webhook_body, "_state": tool_state},
@@ -1093,6 +1082,6 @@ class ToolRegistryService:
         if len(parts) >= 1 and parts[0].startswith("*/"):
             try:
                 return int(parts[0][2:]) * 60
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.debug(f"[TOOL REGISTRY] Failed to parse cron interval from '{schedule}': {e}", exc_info=True)
         return 1800

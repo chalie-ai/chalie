@@ -64,7 +64,7 @@ For descriptor: a compact label used for discovery. Format: `tool_name (synonym1
 - Max 5 synonyms. Each synonym is 1-2 words.
 - Synonyms must be grounded in the tool's actual capabilities — only words that appear in or directly describe the tool's code, manifest, or documentation. Do not invent synonyms.
 - Include the most common ways a user would refer to this capability.
-- Examples: `schedule (reminders, alarms, recurring tasks)`, `web_search (google, look up, find online)`, `email (gmail, inbox, send message)`
+- Examples: `schedule (reminders, alarms, recurring tasks)`, `search (google, look up, find online)`, `email (gmail, inbox, send message)`
 
 For the invocation example at the end of full_profile: use the exact tool name from the manifest's "name" field and the most important parameter name from "parameters". Example format:
 Invoke as: {"type": "weather", "location": "London"}

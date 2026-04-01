@@ -145,13 +145,18 @@ def system_status():
             db = get_shared_db_service()
             with db.connection() as conn:
                 cursor = conn.cursor()
-                for table in ["episodes", "semantic_concepts", "user_traits"]:
+                for table_label, query in [
+                    ("episodes", "SELECT COUNT(*) FROM episodes"),
+                    ("concepts", "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"),
+                    ("traits", "SELECT COUNT(*) FROM knowledge WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"),
+                ]:
                     try:
-                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        cursor.execute(query)
                         row = cursor.fetchone()
-                        result["storage"][table] = row[0] if row else 0
-                    except Exception:
-                        result["storage"][table] = -1
+                        result["storage"][table_label] = row[0] if row else 0
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
+                        result["storage"][table_label] = -1
         except Exception as e:
             result["status"] = "degraded"
             result["database_error"] = str(e)
@@ -160,15 +165,16 @@ def system_status():
         for queue_name in ["prompt-queue", "output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
                 result["queues"][queue_name] = -1
 
         # Last proactive drift run
         try:
             last_run = store.get("cognitive_drift:last_run")
             result["last_proactive_run"] = last_run if last_run else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[SYSTEM] Failed to read cognitive_drift:last_run: {e}")
 
         return jsonify(result), 200
 
@@ -211,13 +217,15 @@ def observability_memory():
         avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
 
         concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM semantic_concepts"
+            "SELECT COUNT(*) AS cnt FROM knowledge "
+            "WHERE kind = 'concept' AND deleted_at IS NULL"
         )
         concepts = concept_row[0]['cnt'] if concept_row else 0
 
         trait_row = db.fetch_all(
             "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
-            "FROM user_traits"
+            "FROM knowledge "
+            "WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"
         )
         traits = trait_row[0]['cnt'] if trait_row else 0
         avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
@@ -283,8 +291,8 @@ def observability_tools():
         try:
             from services.tool_registry_service import ToolRegistryService
             valid_names = set(ToolRegistryService().tools.keys()) | ALL_SKILL_NAMES
-        except Exception:
-            pass  # If registry is unavailable, show all profiles rather than nothing
+        except Exception as e:
+            logger.warning(f"[OBS] Tool registry unavailable, showing all profiles: {e}")
 
         if valid_names is not None:
             placeholders = ','.join('?' * len(valid_names))
@@ -310,8 +318,8 @@ def observability_tools():
             perf_stats = ToolPerformanceService().get_all_tool_stats(30)
             for s in (perf_stats or []):
                 perf_by_name[s.get('tool_name', '')] = s
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[OBS] Tool performance stats unavailable: {e}")
 
         import json as _json
         tools = []
@@ -320,7 +328,8 @@ def observability_tools():
             if isinstance(triggers, str):
                 try:
                     triggers = _json.loads(triggers)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[OBS] Failed to parse triage_triggers JSON for tool '{r.get('tool_name', '?')}': {e}")
                     triggers = []
             entry = {
                 'tool_name': r['tool_name'],
@@ -383,12 +392,11 @@ def observability_identity():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks and curiosity threads."""
+    """Active persistent tasks."""
     try:
         result = {
             'generated_at': _now_iso(),
             'persistent_tasks': [],
-            'curiosity_threads': [],
         }
 
         # Persistent tasks
@@ -403,19 +411,6 @@ def observability_tasks():
             result['persistent_tasks'] = svc.get_active_tasks(account_id)
         except Exception as e:
             logger.warning(f"[OBS] persistent tasks error: {e}")
-
-        # Curiosity threads — datetime fields need str() conversion
-        try:
-            from services.curiosity_thread_service import CuriosityThreadService
-            svc = CuriosityThreadService()
-            threads = svc.get_active_threads()
-            for t in threads:
-                for key in ('last_explored_at', 'created_at', 'last_surfaced_at'):
-                    if key in t and t[key] is not None and not isinstance(t[key], str):
-                        t[key] = str(t[key])
-            result['curiosity_threads'] = threads
-        except Exception as e:
-            logger.warning(f"[OBS] curiosity threads error: {e}")
 
         # Goal ecology stats
         try:
@@ -512,9 +507,13 @@ def observability_traits():
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT trait_key, trait_value, confidence, category, "
-                "reinforcement_count, updated_at "
-                "FROM user_traits "
+                "SELECT key, value, confidence, "
+                "json_extract(data, '$.category') AS category, "
+                "evidence_count, updated_at "
+                "FROM knowledge "
+                "WHERE kind IN ('trait', 'preference') "
+                "AND entity = 'user' "
+                "AND deleted_at IS NULL "
                 "ORDER BY category, confidence DESC"
             )
             rows = cursor.fetchall()
@@ -547,11 +546,10 @@ def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
         from services.database_service import get_shared_db_service
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
 
         db = get_shared_db_service()
-        svc = UserTraitService(db)
-        deleted = svc.delete_trait(trait_key)
+        deleted = KnowledgeService(db).forget('user', trait_key)
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200
@@ -583,61 +581,6 @@ def observability_world_state():
         return jsonify({"error": "Failed to retrieve world state"}), 500
 
 
-@system_bp.route('/system/observability/temporal', methods=['GET'])
-@require_session
-def observability_temporal():
-    """Temporal pattern mining stats and prediction availability."""
-    try:
-        from services.temporal_pattern_service import TemporalPatternService
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
-
-        db = get_shared_db_service()
-        service = TemporalPatternService(db)
-        stats = service.get_observation_stats()
-
-        # Add last mining run time from MemoryStore
-        store = MemoryClientService.create_connection()
-        last_run = store.get("temporal:last_mining_run")
-        stats['mining_last_run'] = last_run if last_run else None
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            **stats,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/temporal error: {e}")
-        return jsonify({"error": "Failed to retrieve temporal data"}), 500
-
-
-@system_bp.route('/system/observability/temporal/mine', methods=['POST'])
-@require_session
-def observability_temporal_mine():
-    """Trigger on-demand temporal pattern mining."""
-    try:
-        from services.temporal_pattern_service import TemporalPatternService, observation_buffer
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-
-        # Flush pending observations first
-        observation_buffer.flush(db)
-
-        # Run mining
-        service = TemporalPatternService(db)
-        patterns = service.mine_patterns()
-
-        return jsonify({
-            'patterns_mined': len(patterns),
-            'mining_duration_seconds': round(service._last_mining_duration, 3),
-            'patterns': [{'key': p['key'], 'value': p['value'],
-                          'confidence': p['confidence']} for p in patterns],
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] temporal/mine error: {e}")
-        return jsonify({"error": "Mining failed"}), 500
-
-
 @system_bp.route('/system/observability/self-model', methods=['GET'])
 @require_session
 def observability_self_model():
@@ -664,24 +607,6 @@ def observability_pipeline_health():
     except Exception as e:
         logger.error(f"[REST API] observability/pipeline-health error: {e}")
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
-
-
-@system_bp.route('/system/observability/capability-gaps', methods=['GET'])
-@require_session
-def observability_capability_gaps():
-    """Capability gaps — things users ask for that Chalie cannot do."""
-    try:
-        from services.self_model_service import SelfModelService
-        service = SelfModelService()
-        gaps = service.get_frequent_gaps(min_occurrences=1, limit=20)
-        return jsonify({
-            'generated_at': datetime.now(timezone.utc).isoformat(),
-            'total_unresolved': len(gaps),
-            'gaps': gaps,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/capability-gaps error: {e}")
-        return jsonify({"error": "Failed to retrieve capability gaps"}), 500
 
 
 @system_bp.route('/system/activity', methods=['GET'])
@@ -746,6 +671,64 @@ def observability_situation():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
+@system_bp.route('/system/observability/write-queue', methods=['GET'])
+@require_session
+def observability_write_queue():
+    """Write queue runtime statistics.
+
+    Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
+    singleton covering current backlog depth, completed writes, and error
+    count since process start.
+
+    Responses:
+        200: JSON object with keys ``queue_size`` (int), ``processed`` (int),
+             and ``errors`` (int).
+        500: JSON error object if the write-queue service is unavailable.
+    """
+    try:
+        from services.write_queue_service import get_write_queue
+        stats = get_write_queue().get_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/write-queue error: {e}")
+        return jsonify({"error": "Failed to retrieve write queue stats"}), 500
+
+
+@system_bp.route('/system/observability/telemetry', methods=['GET'])
+@require_session
+def observability_telemetry():
+    """Telemetry event summary across all tracked event types.
+
+    Returns a per-event-type breakdown produced by the process-level
+    :class:`~services.telemetry_service.TelemetryCollector` singleton.
+    Each key in the response body corresponds to one of the seven canonical
+    telemetry event types (e.g. ``memory_recall``, ``act_loop_complete``).
+    All types are present even when no events have been recorded yet.
+
+    The response is wrapped with a ``generated_at`` ISO 8601 timestamp so
+    callers can detect a stale/cached response.
+
+    Responses:
+        200: JSON object structured as::
+
+                {
+                    "generated_at": "<ISO-8601>",
+                    "memory_recall": {"count": 42, "recent": [...]},
+                    "context_assembly": {"count": 7, "recent": [...]},
+                    ...
+                }
+
+        500: JSON error object if the telemetry collector is unavailable.
+    """
+    try:
+        from services.telemetry_service import get_telemetry_collector
+        summary = get_telemetry_collector().get_summary()
+        return jsonify({"generated_at": _now_iso(), **summary}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/telemetry error: {e}")
+        return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
+
+
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────
@@ -787,6 +770,39 @@ def update_apply():
 
 
 # ──────────────────────────────────────────────
+# Thread reset (test harness support)
+# ──────────────────────────────────────────────
+
+@system_bp.route('/system/reset-thread', methods=['POST'])
+@require_session
+def reset_thread():
+    """Expire the active thread for a channel, forcing the next message to start fresh.
+
+    Used by the nightly-test harness to test cross-thread memory recall
+    (i.e., knowledge pipeline) vs. in-context transcript recall.
+
+    Body (optional): {"channel": "default"}
+    """
+    try:
+        from services.thread_service import ThreadService
+
+        data = request.get_json(silent=True) or {}
+        channel_id = data.get('channel', 'default')
+
+        ts = ThreadService()
+        thread_id = ts.get_active_thread_id(channel_id)
+
+        if not thread_id:
+            return jsonify({'ok': True, 'message': 'No active thread', 'expired': None}), 200
+
+        ts.expire_thread(thread_id)
+        logger.info(f"[RESET-THREAD] Expired thread {thread_id} for channel {channel_id}")
+        return jsonify({'ok': True, 'expired': thread_id}), 200
+    except Exception as e:
+        logger.error(f"[REST API] reset-thread error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # Settings endpoints
 # ──────────────────────────────────────────────
 

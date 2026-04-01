@@ -2458,7 +2458,115 @@ body.has-task-strip .conversation-spine {
 }
 
 /* --------------------------------------------------------------------------
-   34. App Overlay (full-screen)
+   34. Activity Panel (slide-out, z-index 240 — below Apps panel at 250)
+   -------------------------------------------------------------------------- */
+
+/**
+ * .activity-panel
+ * Slide-in panel from the right that displays a reverse-chronological
+ * activity log. Mirrors the .apps-panel layout but sits one z-level lower
+ * so both panels can coexist without collision.
+ */
+.activity-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 320px;
+  max-width: 85vw;
+  height: 100vh;
+  z-index: 240;
+  background: rgba(8, 10, 18, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform var(--duration-normal) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  box-shadow: -8px 0 40px rgba(0, 0, 0, 0.40);
+}
+
+.activity-panel.open {
+  transform: translateX(0);
+}
+
+.activity-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: 56px;
+  flex-shrink: 0;
+}
+
+.activity-panel__title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.activity-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-sm) 0;
+}
+
+/* --------------------------------------------------------------------------
+   Activity entry row
+   -------------------------------------------------------------------------- */
+
+/**
+ * .activity-entry
+ * Single activity log row. Each type variant sets --entry-accent inline;
+ * the left border picks that up so a single rule covers all variants.
+ */
+.activity-entry {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--entry-accent, #888888);
+  margin: 2px var(--space-sm);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  transition: background var(--duration-fast);
+  cursor: default;
+}
+
+.activity-entry:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Per-type accent colours — also set as --entry-accent inline by JS. */
+.activity-entry--memory    { --entry-accent: #00F0FF; }
+.activity-entry--goal      { --entry-accent: #8A5CFF; }
+.activity-entry--proactive { --entry-accent: #FF00AA; }
+.activity-entry--task      { --entry-accent: #888888; }
+
+.activity-entry__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-entry__message {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.activity-entry__time {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+/* Active state for the toggle button in the title bar. */
+#activityBtn.active {
+  color: var(--dusk-blue, #00F0FF);
+}
+
+/* --------------------------------------------------------------------------
+   35. App Overlay (full-screen)
    -------------------------------------------------------------------------- */
 .app-overlay {
   position: fixed;
@@ -2895,6 +3003,252 @@ details.block-section[open] > summary.block-section__title::before {
 .block-loading__label {
   font-size: 0.85rem;
   color: var(--text-secondary);
+}
+
+/* -- Metric -- */
+.block-metric {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid var(--violet);
+  min-width: 120px;
+  margin-bottom: var(--space-xs);
+}
+
+.block-metric--up { border-left-color: #34d399; }
+.block-metric--down { border-left-color: #ef4444; }
+.block-metric--neutral { border-left-color: var(--text-secondary); }
+
+.block-metric__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.block-metric__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.block-metric__value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.block-metric__unit {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.block-metric__change {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.block-metric--up .block-metric__change { color: #34d399; }
+.block-metric--down .block-metric__change { color: #ef4444; }
+
+/* -- Card -- */
+.block-card {
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 3px solid var(--violet);
+  overflow: hidden;
+  margin-bottom: var(--space-sm);
+}
+
+.block-card--violet { border-top-color: var(--violet); }
+.block-card--cyan { border-top-color: var(--dusk-blue); }
+.block-card--magenta { border-top-color: var(--sand); }
+.block-card--green { border-top-color: #34d399; }
+.block-card--red { border-top-color: #ef4444; }
+.block-card--amber { border-top-color: #f59e0b; }
+
+.block-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.block-card__icon {
+  font-size: 1rem;
+  opacity: 0.7;
+}
+
+.block-card__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.block-card__body {
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* -- Chart -- */
+.block-chart {
+  padding: var(--space-sm) 0;
+  margin-bottom: var(--space-sm);
+}
+
+.block-chart__title {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-xs);
+}
+
+.block-chart__svg {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+}
+
+.block-chart__label {
+  font-size: 9px;
+  fill: var(--text-secondary);
+}
+
+.block-chart__legend {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-xs);
+}
+
+.block-chart__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.block-chart__legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* -- Progress -- */
+.block-progress {
+  margin-bottom: var(--space-sm);
+}
+
+.block-progress__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.block-progress__label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.block-progress__pct {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.block-progress__track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.block-progress__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--violet);
+  transition: width var(--duration-normal) ease;
+}
+
+.block-progress__fill--info { background: var(--dusk-blue); }
+.block-progress__fill--success { background: #34d399; }
+.block-progress__fill--warning { background: #f59e0b; }
+.block-progress__fill--error { background: #ef4444; }
+
+/* -- Timeline -- */
+.block-timeline {
+  padding-left: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.block-timeline__item {
+  display: flex;
+  gap: var(--space-sm);
+  padding-bottom: var(--space-sm);
+  position: relative;
+}
+
+.block-timeline__item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.block-timeline__dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.block-timeline__item--done .block-timeline__dot {
+  background: #34d399;
+  border-color: #34d399;
+}
+
+.block-timeline__item--active .block-timeline__dot {
+  background: var(--violet);
+  border-color: var(--violet);
+  box-shadow: 0 0 6px rgba(138, 92, 255, 0.4);
+}
+
+.block-timeline__item--pending .block-timeline__dot {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.block-timeline__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.block-timeline__label {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.block-timeline__item--pending .block-timeline__label {
+  color: var(--text-secondary);
+}
+
+.block-timeline__detail {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
 }
 
 /* -- Action buttons (base) -- */
@@ -3384,4 +3738,120 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-mode__exit:hover {
   color: var(--text-secondary);
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ==========================================================================
+   WS6 — Proactive Thought Card  (.block-thought)
+   Uses the existing --dusk-blue (#00F0FF) cyan accent for the top edge and
+   header text; all other values follow the established interface tokens.
+   ========================================================================== */
+
+/* ---- Card container (glass morphism) ------------------------------------ */
+.block-thought {
+  position: relative;
+  border-top: 3px solid var(--dusk-blue);         /* cyan top accent edge   */
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);          /* semi-transparent glass */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  margin-block: var(--space-md);
+  /* Smooth fade-out when dismissed */
+  transition: opacity var(--duration-slow) ease, transform var(--duration-slow) ease;
+}
+
+/* Fading state — triggered by "Not now" */
+.block-thought--fading {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+/* ---- Header (cyan label) ------------------------------------------------ */
+.block-thought__header {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dusk-blue);                        /* #00F0FF cyan           */
+  margin-bottom: var(--space-sm);
+}
+
+/* ---- Body text ---------------------------------------------------------- */
+.block-thought__body {
+  font-size: var(--font-size-base, 0.9375rem);
+  color: var(--text-primary);
+  line-height: 1.55;
+  margin: 0 0 var(--space-xs);
+}
+
+/* ---- Optional context line ---------------------------------------------- */
+.block-thought__context {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: var(--space-xs) 0 0;
+}
+
+/* ---- Action row --------------------------------------------------------- */
+.block-thought__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  flex-wrap: wrap;
+}
+
+/* ---- Shared button base ------------------------------------------------- */
+.block-thought__btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 5px var(--space-sm);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast),
+              background var(--duration-fast);
+  line-height: 1.4;
+}
+
+/* ---- "Tell me more" — cyan primary action ------------------------------- */
+.block-thought__btn--expand {
+  color: var(--dusk-blue);
+  border-color: rgba(0, 240, 255, 0.30);
+}
+
+.block-thought__btn--expand:hover {
+  background: rgba(0, 240, 255, 0.08);
+  border-color: rgba(0, 240, 255, 0.55);
+  color: var(--dusk-blue);
+}
+
+/* ---- "Not now" — muted secondary action --------------------------------- */
+.block-thought__btn--dismiss {
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.block-thought__btn--dismiss:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ---- "×" close — ghost, pushed to the far right ------------------------ */
+.block-thought__btn--close {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  border-color: transparent;
+  font-size: 1rem;
+  padding: 4px 6px;
+}
+
+.block-thought__btn--close:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
 }

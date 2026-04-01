@@ -1,32 +1,70 @@
 """
-Tests for DocumentService — CRUD, chunk storage, soft delete, purge, search.
+Tests for DocumentService -- CRUD, chunk storage, soft delete, purge, search.
+
+Migrated from mock_db to real SQLite via the shared `db` fixture.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, call
-from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
 from services.document_service import DocumentService
+from services.database_service import get_shared_db_service
+
+
+class _InlineWriteQueue:
+    """Minimal write queue that executes closures inline (same thread).
+
+    Avoids thread-local SQLite connection issues in tests by running
+    the DocumentService's write closures on the calling thread instead
+    of a background daemon.
+    """
+
+    def submit_sync(self, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+
+
+def _insert_document(db, doc_id='abc123', original_name='test.pdf',
+                     mime_type='application/pdf', file_size=1024,
+                     file_path='abc123/test.pdf', file_hash='sha256hash',
+                     source_type='upload', status='pending', **extra):
+    """Seed a document row directly for read-path tests."""
+    cols = dict(
+        id=doc_id,
+        original_name=original_name,
+        mime_type=mime_type,
+        file_size_bytes=file_size,
+        file_path=file_path,
+        file_hash=file_hash,
+        source_type=source_type,
+        status=status,
+    )
+    cols.update(extra)
+    col_names = ', '.join(cols.keys())
+    placeholders = ', '.join(['?'] * len(cols))
+    db.execute(
+        f"INSERT INTO documents ({col_names}) VALUES ({placeholders})",
+        list(cols.values()),
+    )
+    db.commit()
+    return doc_id
 
 
 @pytest.fixture
-def mock_db():
-    db = MagicMock()
-    conn = MagicMock()
-    cursor = MagicMock()
-    db.connection.return_value.__enter__ = MagicMock(return_value=conn)
-    db.connection.return_value.__exit__ = MagicMock(return_value=False)
-    conn.cursor.return_value = cursor
-    return db, cursor
+def doc_service(db):
+    """DocumentService wired to the test database with inline write queue."""
+    svc = DocumentService(get_shared_db_service())
+    svc._write_queue = _InlineWriteQueue()
+    return svc
 
 
 @pytest.mark.unit
 class TestCreateDocument:
-    def test_creates_document_and_returns_id(self, mock_db):
-        db, cursor = mock_db
-        service = DocumentService(db)
-
-        doc_id = service.create_document(
+    def test_creates_document_and_returns_id(self, db, doc_service):
+        doc_id = doc_service.create_document(
             original_name='test.pdf',
             mime_type='application/pdf',
             file_size=1024,
@@ -37,14 +75,17 @@ class TestCreateDocument:
 
         assert doc_id is not None
         assert len(doc_id) == 8  # secrets.token_hex(4)
-        cursor.execute.assert_called_once()
-        cursor.close.assert_called_once()
 
-    def test_creates_document_with_camera_source(self, mock_db):
-        db, cursor = mock_db
-        service = DocumentService(db)
+        # Verify row exists in DB
+        row = db.execute(
+            "SELECT id, original_name, mime_type FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        assert row is not None
+        assert row['original_name'] == 'test.pdf'
 
-        doc_id = service.create_document(
+    def test_creates_document_with_camera_source(self, db, doc_service):
+        doc_id = doc_service.create_document(
             original_name='scan.jpg',
             mime_type='image/jpeg',
             file_size=2048,
@@ -54,161 +95,142 @@ class TestCreateDocument:
         )
 
         assert doc_id is not None
-        # Verify source_type is passed to SQL
-        sql_args = cursor.execute.call_args[0][1]
-        assert 'camera' in sql_args
+        row = db.execute(
+            "SELECT source_type FROM documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        assert row['source_type'] == 'camera'
 
 
 @pytest.mark.unit
 class TestGetDocument:
-    def test_returns_none_when_not_found(self, mock_db):
-        db, cursor = mock_db
-        cursor.fetchone.return_value = None
-        service = DocumentService(db)
-
-        result = service.get_document('nonexistent')
+    def test_returns_none_when_not_found(self, db, doc_service):
+        result = doc_service.get_document('nonexistent')
         assert result is None
 
-    def test_returns_dict_when_found(self, mock_db):
-        db, cursor = mock_db
-        now = datetime.now(timezone.utc)
-        cursor.fetchone.return_value = (
-            'abc123', 'test.pdf', 'application/pdf', 1024, 'abc123/test.pdf',
-            'hash', 5, 'ready', None, 10,
-            'upload', ['tag1'], 'summary text', {'key': 'val'}, None,
-            'clean text', 'en', 'fingerprint123',
-            None, None, None, 0,  # doc_category, doc_project, doc_date, meta_locked
-            None,  # watched_folder_id
-            now, now, None, None,
-        )
-        service = DocumentService(db)
+    def test_returns_dict_when_found(self, db, doc_service):
+        _insert_document(db, doc_id='abc123', status='ready')
 
-        result = service.get_document('abc123')
+        result = doc_service.get_document('abc123')
         assert result is not None
         assert result['id'] == 'abc123'
         assert result['original_name'] == 'test.pdf'
         assert result['status'] == 'ready'
-        assert result['tags'] == ['tag1']
 
 
 @pytest.mark.unit
 class TestSoftDelete:
-    def test_soft_delete_sets_deleted_at(self, mock_db):
-        db, cursor = mock_db
-        cursor.rowcount = 1
-        service = DocumentService(db)
+    def test_soft_delete_sets_deleted_at(self, db, doc_service):
+        _insert_document(db, doc_id='abc123')
 
-        result = service.soft_delete('abc123')
+        result = doc_service.soft_delete('abc123')
         assert result is True
-        cursor.execute.assert_called_once()
 
-    def test_soft_delete_returns_false_when_not_found(self, mock_db):
-        db, cursor = mock_db
-        cursor.rowcount = 0
-        service = DocumentService(db)
+        row = db.execute(
+            "SELECT deleted_at FROM documents WHERE id = 'abc123'"
+        ).fetchone()
+        assert row['deleted_at'] is not None
 
-        result = service.soft_delete('nonexistent')
+    def test_soft_delete_returns_false_when_not_found(self, db, doc_service):
+        result = doc_service.soft_delete('nonexistent')
         assert result is False
 
 
 @pytest.mark.unit
 class TestRestore:
-    def test_restore_clears_deleted_at(self, mock_db):
-        db, cursor = mock_db
-        cursor.rowcount = 1
-        service = DocumentService(db)
+    def test_restore_clears_deleted_at(self, db, doc_service):
+        _insert_document(db, doc_id='abc123')
+        doc_service.soft_delete('abc123')
 
-        result = service.restore('abc123')
+        result = doc_service.restore('abc123')
         assert result is True
 
-    def test_restore_returns_false_when_not_deleted(self, mock_db):
-        db, cursor = mock_db
-        cursor.rowcount = 0
-        service = DocumentService(db)
+        row = db.execute(
+            "SELECT deleted_at FROM documents WHERE id = 'abc123'"
+        ).fetchone()
+        assert row['deleted_at'] is None
 
-        result = service.restore('abc123')
+    def test_restore_returns_false_when_not_deleted(self, db, doc_service):
+        _insert_document(db, doc_id='abc123')
+
+        result = doc_service.restore('abc123')
         assert result is False
 
 
 @pytest.mark.unit
 class TestStoreChunks:
-    def test_stores_multiple_chunks(self, mock_db):
-        db, cursor = mock_db
-        service = DocumentService(db)
+    def test_stores_multiple_chunks(self, db, doc_service):
+        _insert_document(db, doc_id='abc123')
 
         chunks = [
             {'chunk_index': 0, 'content': 'Hello', 'page_number': 1,
-             'section_title': 'Intro', 'token_count': 5, 'embedding': [0.1] * 768},
+             'section_title': 'Intro', 'token_count': 5},
             {'chunk_index': 1, 'content': 'World', 'page_number': 1,
-             'section_title': 'Body', 'token_count': 5, 'embedding': [0.2] * 768},
+             'section_title': 'Body', 'token_count': 5},
         ]
 
-        service.store_chunks('abc123', chunks)
-        # 2 chunks → at least 2 main INSERTs (plus vec table ops per chunk)
-        insert_calls = [
-            c for c in cursor.execute.call_args_list
-            if 'INSERT INTO document_chunks' in str(c[0][0])
-               and '_vec' not in str(c[0][0])
-        ]
-        assert len(insert_calls) == 2
+        doc_service.store_chunks('abc123', chunks)
 
-    def test_stores_nothing_when_empty(self, mock_db):
-        db, cursor = mock_db
-        service = DocumentService(db)
+        rows = db.execute(
+            "SELECT chunk_index, content FROM document_chunks "
+            "WHERE document_id = 'abc123' ORDER BY chunk_index"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]['content'] == 'Hello'
+        assert rows[1]['content'] == 'World'
 
-        service.store_chunks('abc123', [])
-        cursor.execute.assert_not_called()
+    def test_stores_nothing_when_empty(self, db, doc_service):
+        _insert_document(db, doc_id='abc123')
+
+        doc_service.store_chunks('abc123', [])
+
+        rows = db.execute(
+            "SELECT COUNT(*) as cnt FROM document_chunks WHERE document_id = 'abc123'"
+        ).fetchone()
+        assert rows['cnt'] == 0
 
 
 @pytest.mark.unit
 class TestGetAllDocuments:
-    def test_returns_empty_list_when_no_docs(self, mock_db):
-        db, cursor = mock_db
-        cursor.fetchall.return_value = []
-        service = DocumentService(db)
-
-        result = service.get_all_documents()
+    def test_returns_empty_list_when_no_docs(self, db, doc_service):
+        result = doc_service.get_all_documents()
         assert result == []
 
-    def test_excludes_deleted_by_default(self, mock_db):
-        db, cursor = mock_db
-        cursor.fetchall.return_value = []
-        service = DocumentService(db)
+    def test_excludes_deleted_by_default(self, db, doc_service):
+        _insert_document(db, doc_id='live1')
+        _insert_document(db, doc_id='dead1')
+        doc_service.soft_delete('dead1')
 
-        service.get_all_documents(include_deleted=False)
-        sql = cursor.execute.call_args[0][0]
-        assert 'deleted_at IS NULL' in sql
+        result = doc_service.get_all_documents(include_deleted=False)
+        ids = [d['id'] for d in result]
+        assert 'live1' in ids
+        assert 'dead1' not in ids
 
 
 @pytest.mark.unit
 class TestFindDuplicates:
-    def test_finds_exact_hash_match(self, mock_db):
-        db, cursor = mock_db
-        now = datetime.now(timezone.utc)
-        cursor.fetchall.return_value = [('dup1', 'existing.pdf', now)]
-        service = DocumentService(db)
+    def test_finds_exact_hash_match(self, db, doc_service):
+        _insert_document(db, doc_id='dup1', original_name='existing.pdf',
+                         file_hash='same_hash')
 
-        results = service.find_duplicates('same_hash', None, 0)
+        results = doc_service.find_duplicates('same_hash', None, 0)
         assert len(results) == 1
         assert results[0]['match_type'] == 'exact'
 
-    def test_skips_semantic_for_short_text(self, mock_db):
-        db, cursor = mock_db
-        cursor.fetchall.return_value = []
-        service = DocumentService(db)
-
-        results = service.find_duplicates('hash', [0.1] * 768, 50)
-        # Should only do hash check, not semantic (text_length < 200)
-        assert cursor.execute.call_count == 1
+    def test_skips_semantic_for_short_text(self, db, doc_service):
+        """When text_length < 200, only hash dedup runs -- no semantic."""
+        results = doc_service.find_duplicates('unique_hash', [0.1] * 256, 50)
+        # No hash match exists, and semantic skipped due to short text
+        assert results == []
 
 
 @pytest.mark.unit
 class TestUpdateStatus:
-    def test_updates_status(self, mock_db):
-        db, cursor = mock_db
-        service = DocumentService(db)
+    def test_updates_status(self, db, doc_service):
+        _insert_document(db, doc_id='abc123', status='pending')
 
-        service.update_status('abc123', 'processing')
-        cursor.execute.assert_called_once()
-        args = cursor.execute.call_args[0][1]
-        assert 'processing' in args
+        doc_service.update_status('abc123', 'processing')
+
+        row = db.execute(
+            "SELECT status FROM documents WHERE id = 'abc123'"
+        ).fetchone()
+        assert row['status'] == 'processing'

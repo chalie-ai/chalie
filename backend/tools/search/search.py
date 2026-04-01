@@ -66,11 +66,6 @@ def _get_provider(name: str) -> dict | None:
     return providers.get(name)
 
 
-def _all_providers() -> list:
-    """Get all enabled providers as a list of dicts."""
-    return list(_load_providers().values())
-
-
 # ── Tool entry point ─────────────────────────────────────────────────────────
 
 def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict:
@@ -120,7 +115,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
 
     # DDG auto-fallback if all providers returned empty
     if not results and 'ddg' not in providers_used:
-        logger.info(f'[SEARCH] all providers empty, falling back to DDG')
+        logger.info('[SEARCH] all providers empty, falling back to DDG')
         results = fetch_ddg_fallback(query, limit)
         if results:
             providers_used.append('ddg')

@@ -73,7 +73,7 @@ def _get_db():
 def update_belief():
     """Set or correct a user trait (belief update).
 
-    Delegates directly to :meth:`UserTraitService.store_trait`.  The ``key``
+    Delegates directly to :meth:`KnowledgeService.store`.  The ``key``
     and ``value`` fields are required; ``category`` and ``confidence`` are
     optional with sensible defaults.
 
@@ -113,13 +113,14 @@ def update_belief():
     confidence = max(0.0, min(1.0, confidence))
 
     try:
-        from services.user_trait_service import UserTraitService
-        svc = UserTraitService(_get_db())
-        stored = svc.store_trait(
-            trait_key=key,
-            trait_value=str(value),
-            confidence=confidence,
-            category=category,
+        from services.knowledge_service import KnowledgeService
+        _DECAY_MAP = {'core': 'permanent', 'behavioral': 'slow'}
+        ks = KnowledgeService(_get_db())
+        stored = ks.store(
+            kind='trait', entity='user', key=key, value=str(value),
+            data={'category': category},
+            decay_class=_DECAY_MAP.get(category, 'standard'),
+            confidence=confidence, source='updates_api',
         )
         if not stored:
             logger.info(
@@ -176,17 +177,19 @@ def update_memory():
         salience = 5
 
     try:
-        from services.innate_skills.memorize_skill import handle_memorize
+        from services.innate_skills.memory_skill import handle_memory
         confidence = 0.5 + (salience / 20.0)  # 0.55 – 1.0 range
-        result = handle_memorize(
+        result = handle_memory(
             topic=topic,
             params={
-                "traits": [
+                "action": "store",
+                "entries": [
                     {
                         "key": f"memory_{uuid.uuid4().hex[:8]}",
                         "value": content,
-                        "confidence": confidence,
-                        "category": "behavioral",
+                        "kind": "fact",
+                        "decay_class": "standard",
+                        "data": {"confidence": confidence, "category": "behavioral"},
                     }
                 ]
             },

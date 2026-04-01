@@ -35,6 +35,26 @@ ASK_THRESHOLD = 0.7
 SUGGEST_THRESHOLD = 0.85
 
 
+def _get_user_local_hour() -> int:
+    """Return the current hour (0-23) in the user's local timezone.
+
+    Reads the IANA timezone from ClientContextService and derives the local
+    hour via get_timezone_offset(). Falls back to the UTC hour if no timezone
+    is available or any error occurs.
+    """
+    try:
+        from services.client_context_service import ClientContextService
+        ctx_service = ClientContextService()
+        offset_minutes = ctx_service.get_timezone_offset()
+        if offset_minutes is not None:
+            from datetime import timedelta
+            local = utc_now() + timedelta(minutes=offset_minutes)
+            return local.hour
+    except Exception:
+        pass
+    return utc_now().hour
+
+
 def check_and_execute(goal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Check initiation conditions and execute proactive action for a goal.
@@ -81,6 +101,18 @@ def check_and_execute(goal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"style={style}, description='{description[:60]}'"
         )
 
+        # 6. Emit telemetry for the proactive trigger decision
+        try:
+            from services.telemetry_service import get_telemetry_collector, PROACTIVE_TRIGGER
+            get_telemetry_collector().record(PROACTIVE_TRIGGER, {
+                "confidence": confidence,
+                "social_cost": social_cost,
+                "action_taken": style,
+                "goal_id": goal_id,
+            })
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Telemetry emit for proactive trigger failed: {e}")
+
         return result
 
     except Exception as e:
@@ -103,8 +135,8 @@ def _calculate_social_cost() -> float:
         inference = AmbientInferenceService()
         if inference.is_user_deep_focus():
             cost += 0.3
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Deep focus check failed: {e}")
 
     # Recent ignored attempts
     try:
@@ -113,8 +145,8 @@ def _calculate_social_cost() -> float:
         recent_ignored = store.get('goal:recent_ignored_count')
         if recent_ignored and int(recent_ignored) >= 2:
             cost += 0.3
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Recent ignored attempts check failed: {e}")
 
     # Message momentum: active conversation = higher cost
     try:
@@ -133,14 +165,14 @@ def _calculate_social_cost() -> float:
             # Re-entry after gap (2-8 hours) — good time to suggest
             elif 7200 < gap_seconds < 28800:
                 cost -= 0.15
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Message momentum check failed: {e}")
 
     # Quiet hours: learned from interaction log
     try:
         cost += _get_quiet_hours_cost()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Quiet hours cost check failed: {e}")
 
     # Rapid conversation pace: multiple messages in quick succession
     try:
@@ -149,8 +181,8 @@ def _calculate_social_cost() -> float:
         recent_count = store.get('recent_message_count_5min')
         if recent_count and int(recent_count) >= 3:
             cost += 0.25  # User is in active conversation, don't interrupt
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Rapid conversation pace check failed: {e}")
 
     return min(1.0, cost)
 
@@ -180,7 +212,7 @@ def _get_quiet_hours_cost() -> float:
         else:
             return 0.0
 
-    current_hour = utc_now().hour
+    current_hour = _get_user_local_hour()
     if current_hour in quiet_hours:
         return 0.4
 
@@ -191,20 +223,36 @@ def _learn_quiet_hours() -> Optional[List[int]]:
     """
     Learn quiet hours from interaction_log timestamps.
 
-    Bucket interaction timestamps by hour. Hours with < 5% of total
+    Bucket interaction timestamps by user-local hour (via stored IANA timezone).
+    Falls back to UTC if no timezone is available. Hours with < 5% of total
     interactions are considered quiet hours.
 
     Returns:
         List of quiet hour integers (0-23) or None if insufficient data.
     """
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+
+        # Determine the user's UTC offset so we can shift SQLite timestamps.
+        offset_minutes = 0
+        try:
+            from services.client_context_service import ClientContextService
+            offset = ClientContextService().get_timezone_offset()
+            if offset is not None:
+                offset_minutes = offset
+        except Exception:
+            pass
+
+        # Build a SQLite datetime modifier that shifts UTC timestamps to local.
+        # E.g. UTC+2 → '+120 minutes'; UTC-5 → '-300 minutes'.
+        sign = '+' if offset_minutes >= 0 else '-'
+        tz_modifier = f"'{sign}{abs(offset_minutes)} minutes'"
 
         with db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour,
+            cursor.execute(f"""
+                SELECT CAST(strftime('%H', datetime(created_at, {tz_modifier})) AS INTEGER) as hour,
                        COUNT(*) as count
                 FROM interaction_log
                 WHERE created_at > datetime('now', '-30 days')
@@ -300,8 +348,8 @@ def _execute_via_persistent_task(goal: Dict[str, Any]) -> Dict[str, Any]:
                 cursor.close()
                 if row:
                     account_id = row[0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Account ID resolution failed, using default: {e}")
 
         # Check for duplicate tasks (don't re-create for the same goal)
         existing = task_service.find_duplicate(task_goal)
@@ -418,8 +466,8 @@ def _mark_acted(goal_id: str) -> None:
     try:
         now = utc_now().isoformat()
 
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""

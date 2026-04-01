@@ -22,8 +22,8 @@ def memory_search():
 
     try:
         from services.database_service import get_shared_db_service
-        from services.episodic_retrieval_service import EpisodicRetrievalService
-        from services.semantic_retrieval_service import SemanticRetrievalService
+        from services.episodic_service import EpisodicService
+        from services.knowledge_service import KnowledgeService
         from services.config_service import ConfigService
 
         db = get_shared_db_service()
@@ -32,7 +32,7 @@ def memory_search():
         # Episodic search
         try:
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            retrieval = EpisodicRetrievalService(db, episodic_config)
+            retrieval = EpisodicService(db, episodic_config)
             episodes = retrieval.retrieve_episodes(query_text=query, limit=5)
             for ep in episodes:
                 results.append({
@@ -44,16 +44,16 @@ def memory_search():
         except Exception as e:
             logger.warning(f"[Memory] Episode search failed: {e}")
 
-        # Semantic concept search
+        # Knowledge concept search
         try:
-            semantic = SemanticRetrievalService(db)
-            concepts = semantic.retrieve_concepts(query=query, limit=5)
+            ks = KnowledgeService(db)
+            concepts = ks.recall(query, kinds=['concept'], limit=5)
             for c in concepts:
                 results.append({
                     "type": "concept",
-                    "content": c.get("name", "") + ": " + c.get("definition", ""),
-                    "score": c.get("score", c.get("similarity", 0)),
-                    "strength": c.get("strength", 0),
+                    "content": c.get("key", "") + ": " + c.get("value", ""),
+                    "score": c.get("rrf_score", c.get("confidence", 0)),
+                    "confidence": c.get("confidence", 0),
                 })
         except Exception as e:
             logger.warning(f"[Memory] Concept search failed: {e}")

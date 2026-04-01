@@ -1,0 +1,10 @@
+id: mail
+name: Mail
+version: 1.0.0
+entry_class: MailCapability
+description: Unified email, calendar, and contacts via IMAP/SMTP, CalDAV, and CardDAV.
+providers:
+  - google
+  - apple
+  - yahoo
+  - outlook

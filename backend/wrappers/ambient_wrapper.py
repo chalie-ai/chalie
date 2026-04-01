@@ -21,10 +21,8 @@ All location-dependent polls are silently skipped when no fingerprint exists.
 import json
 import logging
 import threading
-import time
 import urllib.request
 import urllib.error
-from datetime import timezone
 from typing import Optional, Tuple
 
 from services.config_service import ConfigService
@@ -730,17 +728,3 @@ class AmbientWrapper(threading.Thread):
         except Exception:
             return defaults
 
-
-def ambient_wrapper_worker(shared_state=None):
-    """Worker function compatible with WorkerManager.register_service().
-
-    Creates and starts an :class:`AmbientWrapper` thread, then blocks
-    indefinitely so WorkerManager can monitor this worker's liveness.
-
-    Args:
-        shared_state: Ignored — present for WorkerManager compatibility.
-    """
-    wrapper = AmbientWrapper()
-    wrapper.start()
-    # Block this function so WorkerManager sees us as alive
-    wrapper.join()

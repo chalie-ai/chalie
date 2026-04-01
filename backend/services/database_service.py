@@ -10,7 +10,6 @@ import logging
 import os
 import sqlite3
 import threading
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -86,10 +85,6 @@ def get_shared_db_service() -> 'DatabaseService':
                 _shared_db_service = DatabaseService(get_db_path())
                 logger.info("[DB] Created shared DatabaseService singleton")
     return _shared_db_service
-
-
-# Kept for compatibility — SQLite needs no lightweight variant
-get_lightweight_db_service = get_shared_db_service
 
 
 class SessionProxy:
@@ -551,21 +546,42 @@ class DatabaseService:
                 ("tool_capability_profiles", "skill_category", "TEXT", None),
                 ("tool_capability_profiles", "descriptor", "TEXT", None),
                 # Uncertainty Engine Phase 1 — reliability columns on durable memory stores
-                ("user_traits",       "reliability", "TEXT DEFAULT 'reliable'", None),
+                # user_traits and semantic_concepts dropped in migration 019
                 ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),
-                ("semantic_concepts", "reliability", "TEXT DEFAULT 'reliable'", None),
                 # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
                 ("goals", "is_muted", "INTEGER DEFAULT 0", None),
+                # Multi-model providers — JSON array of available models per provider
+                ("providers", "models", "TEXT", None),
+                # Per-job model override — overrides provider default when set
+                ("job_provider_assignments", "model", "TEXT", None),
+                # Scheduler — external source integration columns
+                ("scheduled_items", "source", "TEXT", None),
+                ("scheduled_items", "external_uid", "TEXT",
+                 ["DROP INDEX IF EXISTS idx_scheduled_items_external_uid",
+                  "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid)"]),
+                ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
+                ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
+                ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")
-                existing_cols = {row[1] for row in cursor.fetchall()}
+                rows = cursor.fetchall()
+                if not rows:
+                    continue  # table doesn't exist (may have been dropped by a migration)
+                existing_cols = {row[1] for row in rows}
                 if col not in existing_cols:
                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
                     logger.info(f"Added column {table}.{col}")
                 # Always try to create the index (idempotent)
                 if extra and extra[0]:
-                    cursor.execute(extra[0])
+                    stmts = extra[0] if isinstance(extra[0], list) else [extra[0]]
+                    for stmt in stmts:
+                        cursor.execute(stmt)
+
+            # Data migration: populate providers.models from providers.model where NULL
+            cursor.execute("UPDATE providers SET models = json_array(model) WHERE models IS NULL AND model IS NOT NULL")
+            if cursor.rowcount > 0:
+                logger.info(f"Migrated {cursor.rowcount} providers: populated models from model")
 
             if pending_count == 0:
                 logger.info("No pending migrations")

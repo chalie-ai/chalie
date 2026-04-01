@@ -10,7 +10,7 @@ sustained, consistent reinforcement.
 import json
 import logging
 import statistics
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from .config_service import ConfigService
 from .time_utils import utc_now, parse_utc

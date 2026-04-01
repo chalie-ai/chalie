@@ -17,10 +17,12 @@ a single cohesive service. Provides episode persistence, hybrid search
 import json
 import logging
 import math
-import struct
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 from services.database_service import DatabaseService, DictCursor
 from services.embedding_utils import pack_embedding
@@ -107,13 +109,6 @@ class EpisodicService:
                 cursor.close()
 
                 logging.info(f"Stored episode {episode_id} for topic '{episode_data['topic']}'")
-
-                # Notify curiosity pursuit service for conversational reinforcement
-                try:
-                    from services.curiosity_pursuit_service import CuriosityPursuitService
-                    CuriosityPursuitService().on_new_episode(episode_data)
-                except Exception:
-                    pass  # Non-fatal
 
                 return episode_id
 
@@ -307,7 +302,7 @@ class EpisodicService:
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
                          weights: dict = None, semantic_concepts: List[Dict] = None,
-                         query_embedding=None) -> List[dict]:
+                         query_embedding=None, _context: 'TopicContext' = None) -> List[dict]:
         """Retrieve relevant episodes using hybrid search and composite scoring."""
         try:
             scoring_weights = weights or self.weights
@@ -341,6 +336,8 @@ class EpisodicService:
 
         except Exception as e:
             logging.error(f"Failed to retrieve episodes: {e}")
+            if _context is not None:
+                _context.record_failure('episodic_retrieval', e)
             return []
 
     def _apply_reconsolidation(self, episodes: List[dict]) -> None:
@@ -441,31 +438,36 @@ class EpisodicService:
                 cursor.execute(vector_query, vector_params)
                 vector_results = cursor.fetchall()
 
-                fts_query = """
-                    SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                           e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
-                           e.last_accessed_at, e.salience_factors, e.open_loops,
-                           COALESCE(e.reliability, 'reliable') AS reliability,
-                           episodes_fts.rank AS text_rank
-                    FROM episodes_fts
-                    JOIN episodes e ON e.rowid = episodes_fts.rowid
-                    WHERE episodes_fts MATCH ?
-                      AND e.deleted_at IS NULL
-                """
                 import re as _re
-                fts_safe = _re.sub(r'[:\(\)\*\^"\\?,\'.]', ' ', query_text)
+                fts_safe = _re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
-                fts_params = [fts_safe or '*']
+                # Quote each token to prevent FTS5 interpreting words as column names or operators
+                fts_terms = ' '.join(f'"{w}"' for w in fts_safe.split() if w)
 
-                if topic:
-                    fts_query += " AND e.topic = ?"
-                    fts_params.append(topic)
+                fts_results = []
+                if fts_terms:
+                    fts_query = """
+                        SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
+                               e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                               e.last_accessed_at, e.salience_factors, e.open_loops,
+                               COALESCE(e.reliability, 'reliable') AS reliability,
+                               episodes_fts.rank AS text_rank
+                        FROM episodes_fts
+                        JOIN episodes e ON e.rowid = episodes_fts.rowid
+                        WHERE episodes_fts MATCH ?
+                          AND e.deleted_at IS NULL
+                    """
+                    fts_params = [fts_terms]
 
-                fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
-                fts_params.append(limit)
+                    if topic:
+                        fts_query += " AND e.topic = ?"
+                        fts_params.append(topic)
 
-                cursor.execute(fts_query, fts_params)
-                fts_results = cursor.fetchall()
+                    fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
+                    fts_params.append(limit)
+
+                    cursor.execute(fts_query, fts_params)
+                    fts_results = cursor.fetchall()
 
                 candidates = self._merge_with_rrf(vector_results, fts_results)
 
@@ -692,9 +694,3 @@ class EpisodicService:
 
         boost = min(10, (matched_concepts / len(concepts)) * 10) if concepts else 0
         return boost
-
-
-# ── Backwards compatibility aliases ──────────────────────────────────
-# Allow old imports to resolve without changing every caller immediately.
-EpisodicStorageService = EpisodicService
-EpisodicRetrievalService = EpisodicService

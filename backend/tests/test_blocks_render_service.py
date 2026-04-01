@@ -527,3 +527,174 @@ class TestFromActions:
         btn = {"label": "Go", "skill": "navigate"}
         blocks = self.svc.from_actions([btn])
         assert blocks[0]["buttons"][0] is btn
+
+
+# ---------------------------------------------------------------------------
+# Block directives — fenced code blocks parsed as typed blocks
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestBlockDirectives:
+    def setup_method(self):
+        self.svc = BlocksRenderService()
+
+    def test_metric_directive(self):
+        md = '```metric\n{"label":"CPU","value":"73%","trend":"up"}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "metric"
+        assert blocks[0]["label"] == "CPU"
+        assert blocks[0]["value"] == "73%"
+        assert blocks[0]["trend"] == "up"
+
+    def test_card_directive(self):
+        md = '```card\n{"title":"Summary","body":"All good","accent":"cyan"}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "card"
+        assert blocks[0]["title"] == "Summary"
+        assert blocks[0]["accent"] == "cyan"
+
+    def test_chart_directive(self):
+        md = '```chart\n{"series":[{"label":"S1","values":[1,2,3]}],"chartType":"bar"}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "chart"
+        assert blocks[0]["series"][0]["values"] == [1, 2, 3]
+
+    def test_progress_directive(self):
+        md = '```progress\n{"label":"Upload","value":42}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "progress"
+        assert blocks[0]["value"] == 42
+
+    def test_timeline_directive(self):
+        md = '```timeline\n{"events":[{"label":"Step 1","status":"done"},{"label":"Step 2","status":"active"}]}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "timeline"
+        assert len(blocks[0]["events"]) == 2
+
+    def test_alert_directive(self):
+        md = '```alert\n{"message":"Watch out","variant":"warning"}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "alert"
+        assert blocks[0]["variant"] == "warning"
+
+    def test_invalid_json_falls_back_to_code_block(self):
+        md = '```metric\nnot valid json\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "code"
+        assert blocks[0]["language"] == "metric"
+
+    def test_json_array_falls_back_to_code_block(self):
+        md = '```metric\n[1, 2, 3]\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "code"
+
+    def test_non_directive_language_stays_as_code(self):
+        md = '```python\nprint("hello")\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "code"
+        assert blocks[0]["language"] == "python"
+
+    def test_directive_mixed_with_text(self):
+        md = 'Here are the results:\n\n```metric\n{"label":"Score","value":"95"}\n```\n\nLooks great!'
+        blocks = self.svc.from_markdown(md)
+        assert blocks[0]["type"] == "text"
+        assert blocks[1]["type"] == "metric"
+        assert blocks[2]["type"] == "text"
+
+    def test_multiple_directives(self):
+        md = '```metric\n{"label":"A","value":"1"}\n```\n```metric\n{"label":"B","value":"2"}\n```'
+        blocks = self.svc.from_markdown(md)
+        assert len(blocks) == 2
+        assert blocks[0]["label"] == "A"
+        assert blocks[1]["label"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# Validation — new block types
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestValidateNewTypes:
+    def setup_method(self):
+        self.svc = BlocksRenderService()
+
+    def test_metric_valid(self):
+        errors = self.svc.validate([{"type": "metric", "label": "CPU", "value": "73%"}])
+        assert errors == []
+
+    def test_metric_missing_label(self):
+        errors = self.svc.validate([{"type": "metric", "value": "73%"}])
+        assert any("label" in e for e in errors)
+
+    def test_metric_missing_value(self):
+        errors = self.svc.validate([{"type": "metric", "label": "CPU"}])
+        assert any("value" in e for e in errors)
+
+    def test_card_valid(self):
+        errors = self.svc.validate([{"type": "card", "title": "Test"}])
+        assert errors == []
+
+    def test_card_missing_title(self):
+        errors = self.svc.validate([{"type": "card", "body": "text"}])
+        assert any("title" in e for e in errors)
+
+    def test_chart_valid(self):
+        errors = self.svc.validate([{"type": "chart", "series": [{"label": "S", "values": [1]}]}])
+        assert errors == []
+
+    def test_chart_missing_series(self):
+        errors = self.svc.validate([{"type": "chart"}])
+        assert any("series" in e for e in errors)
+
+    def test_progress_valid(self):
+        errors = self.svc.validate([{"type": "progress", "label": "X", "value": 50}])
+        assert errors == []
+
+    def test_progress_value_not_number(self):
+        errors = self.svc.validate([{"type": "progress", "label": "X", "value": "50"}])
+        assert any("number" in e for e in errors)
+
+    def test_timeline_valid(self):
+        errors = self.svc.validate([{"type": "timeline", "events": [{"label": "Step"}]}])
+        assert errors == []
+
+    def test_timeline_missing_events(self):
+        errors = self.svc.validate([{"type": "timeline"}])
+        assert any("events" in e for e in errors)
+
+    def test_previously_unknown_types_now_known(self):
+        """badge, alert, columns, section, etc. should no longer trigger 'unknown type'."""
+        for btype in ("badge", "alert", "columns", "section", "tabs", "loading", "thought"):
+            errors = self.svc.validate([{"type": btype}])
+            assert not any("unknown type" in e for e in errors), f"{btype} flagged as unknown"
+
+
+# ---------------------------------------------------------------------------
+# Rich render skill
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRichRenderSkill:
+    def test_returns_reference_string(self):
+        from services.innate_skills.rich_render_skill import handle_rich_render
+        result = handle_rich_render("test-topic", {})
+        assert isinstance(result, str)
+        assert "metric" in result
+        assert "card" in result
+        assert "chart" in result
+        assert "timeline" in result
+        assert "progress" in result
+
+    def test_tool_schema_present(self):
+        from services.innate_skills.rich_render_skill import TOOL_SCHEMA
+        assert TOOL_SCHEMA["name"] == "rich_render"
+        assert "input_schema" in TOOL_SCHEMA

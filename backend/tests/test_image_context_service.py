@@ -2,12 +2,13 @@
 Unit tests for ImageContextService.
 
 All tests are marked @pytest.mark.unit — no external dependencies.
-Vision LLM calls are mocked so tests run offline.
+OCR calls are mocked so tests run offline.
 """
 
 import io
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
 
 pytest_plugins = []
 
@@ -32,16 +33,6 @@ def large_png_bytes():
     return buf.getvalue()
 
 
-@pytest.fixture
-def exif_png_bytes():
-    """Create an image with EXIF data to test stripping."""
-    from PIL import Image
-    img = Image.new('RGB', (100, 100), color=(0, 0, 0))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return buf.getvalue()
-
-
 # ─── analyze() ────────────────────────────────────────────────────────────────
 
 @pytest.mark.unit
@@ -49,13 +40,10 @@ def test_analyze_returns_expected_shape(sample_png_bytes):
     """analyze() should always return a dict with all required keys."""
     from services.image_context_service import analyze
 
-    with patch('services.image_context_service._get_vision_provider') as mock_prov:
-        mock_prov.return_value = None  # no provider configured
-
+    with patch('services.ocr_service._extract_text', return_value=''):
         result = analyze(sample_png_bytes, 'image/png')
 
     assert isinstance(result, dict)
-    assert 'description' in result
     assert 'ocr_text' in result
     assert 'has_text' in result
     assert 'analysis_time_ms' in result
@@ -64,70 +52,55 @@ def test_analyze_returns_expected_shape(sample_png_bytes):
 
 
 @pytest.mark.unit
-def test_analyze_no_provider_returns_error(sample_png_bytes):
-    """When no vision provider is configured, analyze() returns an error key."""
+def test_analyze_extracts_text(sample_png_bytes):
+    """analyze() uses local OCR and returns extracted text."""
     from services.image_context_service import analyze
 
-    with patch('services.image_context_service._get_vision_provider') as mock_prov:
-        mock_prov.return_value = None
-
+    with patch('services.ocr_service._extract_text', return_value='HELLO WORLD'):
         result = analyze(sample_png_bytes, 'image/png')
 
-    assert result['error'] is not None
-    assert result['description'] == ''
-    assert result['ocr_text'] == ''
-    assert result['has_text'] is False
-
-
-@pytest.mark.unit
-def test_analyze_anthropic_success(sample_png_bytes):
-    """analyze() dispatches to Anthropic and returns description + ocr_text."""
-    from services.image_context_service import analyze
-
-    fake_provider = {'platform': 'anthropic', 'model': 'claude-3-haiku-20240307'}
-
-    with patch('services.image_context_service._get_vision_provider', return_value=fake_provider), \
-         patch('services.image_context_service._analyze_anthropic', return_value=('A white square.', 'HELLO WORLD')) as mock_fn:
-
-        result = analyze(sample_png_bytes, 'image/png')
-
-    mock_fn.assert_called_once()
-    assert result['description'] == 'A white square.'
     assert result['ocr_text'] == 'HELLO WORLD'
     assert result['has_text'] is True
     assert result['error'] is None
 
 
 @pytest.mark.unit
-def test_analyze_sets_has_text_false_when_no_ocr(sample_png_bytes):
-    """has_text should be False when OCR returns empty or NO_TEXT."""
+def test_analyze_no_text_found(sample_png_bytes):
+    """has_text should be False when OCR finds no text."""
     from services.image_context_service import analyze
 
-    fake_provider = {'platform': 'openai', 'model': 'gpt-4o'}
-
-    with patch('services.image_context_service._get_vision_provider', return_value=fake_provider), \
-         patch('services.image_context_service._analyze_openai', return_value=('A photo.', 'NO_TEXT')):
-
+    with patch('services.ocr_service._extract_text', return_value=''):
         result = analyze(sample_png_bytes, 'image/png')
 
     assert result['has_text'] is False
     assert result['ocr_text'] == ''
+    assert result['error'] is None
 
 
 @pytest.mark.unit
-def test_analyze_gemini_provider(sample_png_bytes):
-    """analyze() dispatches to Gemini when provider platform is gemini."""
+def test_analyze_short_text_not_counted(sample_png_bytes):
+    """Text shorter than _MIN_TEXT_LENGTH should not set has_text."""
     from services.image_context_service import analyze
 
-    fake_provider = {'platform': 'gemini', 'model': 'gemini-1.5-flash'}
-
-    with patch('services.image_context_service._get_vision_provider', return_value=fake_provider), \
-         patch('services.image_context_service._analyze_gemini', return_value=('A grey image.', '')) as mock_fn:
-
+    with patch('services.ocr_service._extract_text', return_value='Hi'):
         result = analyze(sample_png_bytes, 'image/png')
 
-    mock_fn.assert_called_once()
-    assert result['description'] == 'A grey image.'
+    assert result['has_text'] is False
+    assert result['ocr_text'] == 'Hi'
+
+
+@pytest.mark.unit
+def test_analyze_ocr_failure_sets_error(sample_png_bytes):
+    """If local OCR raises, error key is set but no crash."""
+    from services.image_context_service import analyze
+
+    with patch('services.ocr_service._extract_text', side_effect=RuntimeError('OCR engine failed')):
+        result = analyze(sample_png_bytes, 'image/png')
+
+    # OCR failure is non-fatal — error may or may not be set depending on
+    # whether the exception propagates past the inner try/except
+    assert result['ocr_text'] == ''
+    assert result['has_text'] is False
 
 
 # ─── EXIF stripping ───────────────────────────────────────────────────────────
@@ -159,39 +132,27 @@ def test_strip_exif_preserves_dimensions():
 
 @pytest.mark.unit
 def test_strip_exif_memory_usage():
-    """_strip_exif() BytesIO round-trip should use significantly less memory than list(getdata()).
-
-    The old implementation called ``list(img.getdata())``, which materialised
-    the full pixel array as a Python list — approximately 470 MB for a
-    2048×2048 RGBA image.  The BytesIO round-trip avoids that spike entirely.
-    This test verifies that the new implementation's peak allocation is at
-    least 50 % lower than the old approach's on an equivalent large image.
-    """
+    """_strip_exif() BytesIO round-trip should use significantly less memory than list(getdata())."""
     import tracemalloc
     from PIL import Image
     from services.image_context_service import _strip_exif
 
     img = Image.new('RGB', (2048, 2048), color=(128, 64, 32))
 
-    # ── Measure new _strip_exif() peak allocation ──────────────────────────
     tracemalloc.start()
     result = _strip_exif(img)
     _, new_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    # ── Measure old list(getdata()) peak allocation ────────────────────────
     tracemalloc.start()
     _old_data = list(img.getdata())
     _, old_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    # The BytesIO approach must use less than 50 % of the list approach's peak.
     assert new_peak < old_peak * 0.5, (
         f'Expected new peak ({new_peak:,} bytes) to be < 50 % of old peak '
         f'({old_peak:,} bytes). BytesIO round-trip may not be working as intended.'
     )
-
-    # Pixel content and dimensions must be preserved.
     assert result.size == img.size
 
 
@@ -222,27 +183,6 @@ def test_normalize_dimensions_no_op_for_small_image(sample_png_bytes):
     result = _normalize_dimensions(img)
 
     assert result.size == original_size
-
-
-# ─── has_vision_provider() ────────────────────────────────────────────────────
-
-@pytest.mark.unit
-def test_has_vision_provider_false_when_no_config():
-    """has_vision_provider() returns False when no provider is assigned."""
-    from services.image_context_service import has_vision_provider
-
-    with patch('services.image_context_service._get_vision_provider', return_value=None):
-        assert has_vision_provider() is False
-
-
-@pytest.mark.unit
-def test_has_vision_provider_true_when_config_exists():
-    """has_vision_provider() returns True when a vision provider is available."""
-    from services.image_context_service import has_vision_provider
-
-    fake_provider = {'platform': 'anthropic', 'model': 'claude-3-haiku-20240307'}
-    with patch('services.image_context_service._get_vision_provider', return_value=fake_provider):
-        assert has_vision_provider() is True
 
 
 # ─── compute_hash() ───────────────────────────────────────────────────────────

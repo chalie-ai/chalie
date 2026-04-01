@@ -1,15 +1,67 @@
 """
 Goals Skill — Natural language goal management via the ACT loop.
 
-Actions: list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
+Actions: create, list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
 """
 
 import json
 import logging
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOALS SKILL]"
+
+TOOL_SCHEMA = {
+    "name": "goals",
+    "description": (
+        "Create, view, track, and manage user goals. Use when the user states an "
+        "intention, ambition, resolution, or target they want to achieve — including "
+        "learning goals, fitness goals, career goals, habits, or any aspiration. "
+        "Also catch casual intent: 'I was thinking about...', 'it would be nice to...', "
+        "plans or interests mentioned in passing. "
+        "Also use to list, complete, dismiss, or get a narrative of existing goals."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "create", "list", "view", "confirm", "complete",
+                    "dismiss", "adjust", "mute", "unmute", "narrate",
+                ],
+                "description": (
+                    "create: Track a new goal from user's stated intention. "
+                    "list: Show active goals sorted by salience. "
+                    "view: Detailed goal info with evidence timeline. "
+                    "confirm: Elevate an inferred goal to stated. "
+                    "complete: Mark goal as achieved. "
+                    "dismiss: User-initiated removal. "
+                    "adjust: Change urgency or timescale. "
+                    "mute/unmute: Toggle proactive actions. "
+                    "narrate: LLM narrative synthesis of goal evolution."
+                ),
+            },
+            "description": {
+                "type": "string",
+                "description": "For create: the goal description (what the user wants to achieve).",
+            },
+            "timescale": {
+                "type": "string",
+                "enum": ["immediate", "short_term", "medium_term", "long_term"],
+                "description": "For create/adjust: goal timescale (default: short_term).",
+            },
+            "goal_id": {
+                "type": "string",
+                "description": "For view/confirm/complete/dismiss/adjust/mute/unmute: target goal ID.",
+            },
+            "urgency": {
+                "type": "number",
+                "description": "For adjust: urgency value 0.0-1.0.",
+            },
+        },
+        "required": ["action"],
+    },
+}
 
 
 def handle_goals(topic: str, params: dict) -> str:
@@ -29,7 +81,9 @@ def handle_goals(topic: str, params: dict) -> str:
         from services.goal_ecology_service import GoalEcologyService
         ecology = GoalEcologyService()
 
-        if action == 'list':
+        if action == 'create':
+            return _handle_create(ecology, params.get('description'), params.get('timescale', 'short_term'))
+        elif action == 'list':
             return _handle_list(ecology)
         elif action == 'view':
             return _handle_view(ecology, params.get('goal_id'))
@@ -53,7 +107,7 @@ def handle_goals(topic: str, params: dict) -> str:
             return _handle_cluster_dismiss(ecology, params)
         else:
             return (
-                f"[GOALS] Unknown action: {action}. Valid: list, view, confirm, "
+                f"[GOALS] Unknown action: {action}. Valid: create, list, view, confirm, "
                 f"complete, dismiss, adjust, mute, unmute, narrate, "
                 f"cluster_confirm, cluster_dismiss"
             )
@@ -61,6 +115,37 @@ def handle_goals(topic: str, params: dict) -> str:
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error: {e}", exc_info=True)
         return f"[GOALS] Error: {e}"
+
+
+def _handle_create(ecology, description: str, timescale: str) -> str:
+    """Create a stated goal from the user's explicit intention."""
+    if not description:
+        return "[GOALS] description required for create action"
+
+    valid_timescales = ('immediate', 'short_term', 'medium_term', 'long_term')
+    if timescale not in valid_timescales:
+        return f"[GOALS] Invalid timescale '{timescale}'. Valid: {', '.join(valid_timescales)}"
+
+    goal = ecology.create_goal(
+        description=description,
+        type='stated',
+        timescale=timescale,
+    )
+    if not goal:
+        return "[GOALS] Failed to create goal"
+
+    ecology.add_evidence(
+        goal_id=goal['id'],
+        signal_type='explicit_statement',
+        content=description,
+        source='user_stated',
+        strength=1.0,
+    )
+
+    return (
+        f"[GOALS] Goal created: {goal['description'][:120]}\n"
+        f"  timescale={timescale} | confidence={goal.get('confidence', 0):.0%} | id={goal['id']}"
+    )
 
 
 def _handle_list(ecology) -> str:
@@ -105,8 +190,8 @@ def _handle_view(ecology, goal_id: str) -> str:
 
     # Evidence timeline
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -277,8 +362,8 @@ def _handle_narrate(ecology, params: dict) -> str:
 def _get_evidence_for_goal(goal_id: str, limit: int = 10) -> list:
     """Fetch recent evidence for a goal."""
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""

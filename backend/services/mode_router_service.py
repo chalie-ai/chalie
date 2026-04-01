@@ -18,9 +18,8 @@ A small LLM tie-breaker handles ambiguous cases when top-2 scores are within mar
 
 import re
 import time
-import json
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ NEGATIVE_FEEDBACK = re.compile(
     re.IGNORECASE
 )
 
-def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
+def compute_nlp_signals(text: str) -> Dict[str, Any]:
     """
     Compute regex-only NLP signals from user text (<1ms).
 
@@ -58,7 +57,6 @@ def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
 
     Args:
         text: User's raw prompt text
-        intent: Optional intent classification dict
 
     Returns:
         Dict of NLP-derived signals
@@ -89,17 +87,7 @@ def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
         'explicit_feedback': explicit_feedback,
         'information_density': information_density,
         'implicit_reference': implicit_reference,
-
-        # Intent signals (from IntentClassifierService, if available)
-        'intent_complexity': 'simple',
-        'intent_type': None,
-        'intent_confidence': 0.0,
     }
-
-    if intent:
-        signals['intent_complexity'] = intent.get('complexity', 'simple')
-        signals['intent_type'] = intent.get('intent_type')
-        signals['intent_confidence'] = intent.get('confidence', 0.0)
 
     return signals
 
@@ -112,7 +100,6 @@ def collect_routing_signals(
     world_state_service,
     classification_result: dict,
     session_service,
-    intent: dict = None,
 ) -> Dict[str, Any]:
     """
     Collect all routing signals from existing services and NLP analysis.
@@ -127,8 +114,6 @@ def collect_routing_signals(
         world_state_service: WorldStateService instance
         classification_result: Dict from topic classifier
         session_service: SessionService instance
-        intent: Optional intent classification dict from IntentClassifierService
-            (tool selection handled by unified generation path)
 
     Returns:
         Dict of routing signals
@@ -167,7 +152,7 @@ def collect_routing_signals(
     memory_confidence = round(memory_confidence, 3)
 
     # NLP signals via standalone function
-    nlp = compute_nlp_signals(text, intent)
+    nlp = compute_nlp_signals(text)
 
     signals = {
         # Context signals
@@ -258,7 +243,7 @@ class ModeRouterService:
         signals: Dict[str, Any],
         prompt_text: str,
         previous_mode: Optional[str] = None,
-        previous_router_confidence: Optional[float] = None,
+        _previous_router_confidence: Optional[float] = None,
         skip_tiebreaker: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -268,7 +253,7 @@ class ModeRouterService:
             signals: Dict from collect_routing_signals()
             prompt_text: Raw user text (for tie-breaker context)
             previous_mode: Mode from last exchange (anti-oscillation)
-            previous_router_confidence: Confidence from last routing decision
+            _previous_router_confidence: Confidence from last routing decision (unused)
             skip_tiebreaker: Skip ONNX tie-breaker even when scores are close.
                 Use for post-ACT re-routing where terminal mode is already implicit.
 
@@ -362,18 +347,12 @@ class ModeRouterService:
         warmth = signals['context_warmth']
         has_q = signals['has_question_mark']
         interrog = signals['interrogative_words']
-        greeting = signals['greeting_pattern']
-        feedback = signals['explicit_feedback']
-        density = signals['information_density']
         implicit_ref = signals['implicit_reference']
-        wm_turns = signals['working_memory_turns']
-        is_new = signals['is_new_topic']
         token_count = signals['prompt_token_count']
 
         # Derived signals
         is_question = has_q or interrog
         is_cold = warmth < 0.3
-        is_warm = warmth > 0.6
         is_empty = token_count == 0
 
         w = self.weights
@@ -401,9 +380,6 @@ class ModeRouterService:
         # Tool relevance weights removed — unified generation path handles tool dispatch
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
-        # Action intent — user wants Chalie to DO something (set reminder, manage list, etc.)
-        if signals.get('intent_type') == 'action':
-            act += w.get('act.action_intent', 0.40)
         # Graduated memory confidence: low recall confidence → lean toward ACT
         # Only for genuinely memory-seeking questions, not general knowledge
         mem_conf = signals.get('memory_confidence', 1.0)
@@ -617,7 +593,6 @@ class ModeRouterService:
             f"explicit_feedback: {signals['explicit_feedback'] or 'null'}",
             f"information_density: {signals['information_density']:.2f}",
             f"implicit_reference: {_bool(signals['implicit_reference'])}",
-            f"intent_type: {signals.get('intent_type') or 'null'}",
             f"memory_confidence: {signals.get('memory_confidence', 0.5):.2f}",
             "",
             f"A: {mode_a} — {self.MODE_DESCRIPTIONS.get(mode_a, '')}",

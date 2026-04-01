@@ -10,10 +10,11 @@ Handles:
 """
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import requests
 
@@ -22,6 +23,13 @@ from tools.search.transformers import transform
 logger = logging.getLogger(__name__)
 
 _MAX_WORKERS = 3
+
+# ── DuckDuckGo rate-limit guard ──────────────────────────────────────────────
+_DDG_COOLDOWN = 2.0
+_ddg_last_call = 0.0
+_ddg_lock = threading.Lock()
+
+_DDG_TIME_RANGE_MAP = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
 
 # ── Circuit Breaker ──────────────────────────────────────────────────────────
@@ -151,6 +159,7 @@ def _fetch_one(provider: dict, query: str, limit: int) -> list:
             headers=headers,
             timeout=timeout,
             allow_redirects=True,
+            verify=False,
         )
         response.raise_for_status()
 
@@ -245,33 +254,48 @@ def fetch_providers(providers: list, query: str, limit: int = 5) -> list:
 
 
 def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
-    """
-    Fall back to DDG web search.
-
-    Reuses the existing web_search tool's DDG logic.
-    Returns results in standard format.
-    """
+    """Fall back to DDG web search. Returns results in standard format."""
     try:
-        from tools.web_search import execute as web_search_execute
+        from duckduckgo_search import DDGS
+        from duckduckgo_search.exceptions import RatelimitException, DuckDuckGoSearchException
 
-        result = web_search_execute(
-            topic='',
-            params={'query': query, 'limit': limit},
-        )
+        global _ddg_last_call
+        limit = max(1, min(8, limit))
 
-        # Normalize to our standard format
-        raw_results = result.get('results', [])
-        return [
-            {
-                'title': r.get('title', ''),
-                'snippet': r.get('snippet', ''),
-                'url': r.get('url', ''),
-                'provider': 'ddg',
-                'date': None,
-            }
-            for r in raw_results
-        ]
-
+        for attempt in range(3):
+            with _ddg_lock:
+                elapsed = time.time() - _ddg_last_call
+                if elapsed < _DDG_COOLDOWN:
+                    time.sleep(_DDG_COOLDOWN - elapsed)
+                _ddg_last_call = time.time()
+            try:
+                raw = list(DDGS().text(keywords=query, max_results=limit))
+                results = []
+                seen = set()
+                for r in raw:
+                    url = (r.get("href") or "").strip()
+                    if not url or url in seen:
+                        continue
+                    seen.add(url)
+                    snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
+                    try:
+                        domain = urlparse(url).netloc.lstrip("www.")
+                    except Exception:
+                        domain = ""
+                    results.append({
+                        'title': (r.get('title') or '').strip(),
+                        'snippet': snippet,
+                        'url': url,
+                        'provider': 'ddg',
+                        'date': None,
+                    })
+                return results
+            except RatelimitException:
+                time.sleep(2 ** attempt * 3)
+            except (DuckDuckGoSearchException, Exception) as e:
+                logger.warning(f'[SEARCH] DDG fallback error (attempt {attempt+1}): {e}')
+                break
+        return []
     except Exception as e:
         logger.warning(f'[SEARCH] DDG fallback failed: {e}')
         return []

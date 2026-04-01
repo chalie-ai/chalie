@@ -6,31 +6,70 @@ tools in Python code. No manifest.json, no runner.py, no per-tool directories.
 
 Tools are simple callable Python modules in backend/tools/. Each exposes an
 execute(topic, params, config, telemetry) -> dict function.
+
+Dynamic registration
+--------------------
+Capability plugins (and tests) may register and unregister tools at runtime via
+:func:`register_tool` and :func:`unregister_tool`.  All mutations and reads of
+:data:`TOOL_HANDLERS` / :data:`TOOL_METADATA` are protected by the
+module-level :data:`_registry_lock` so concurrent calls across threads are safe.
+
+Use :func:`get_all_tool_names` rather than the :data:`ALL_TOOL_NAMES` constant
+whenever the set of registered tools may have changed since import time.
 """
 
+import threading
+
 from tools.weather import execute as _weather_execute
-from tools.web_search import execute as _web_search_execute
 from tools.code_eval import execute as _code_eval_execute
 from tools.programming_docs_search import execute as _docs_execute
 from tools.search.search import execute as _search_execute
+from tools.news.news import execute as _news_execute
+
+# Optional: headless browser (requires playwright + chromium)
+try:
+    from tools.browser.browser import execute as _browser_execute
+    _BROWSER_AVAILABLE = True
+except ImportError:
+    _BROWSER_AVAILABLE = False
 
 
 # -- Handler registry ----------------------------------------------------------
 
 TOOL_HANDLERS = {
     "weather": _weather_execute,
-    "web_search": _web_search_execute,
     "search": _search_execute,
     "code_eval": _code_eval_execute,
     "programming_docs_search": _docs_execute,
+    "news": _news_execute,
 }
 
+if _BROWSER_AVAILABLE:
+    TOOL_HANDLERS["browser"] = _browser_execute
+
+#: Snapshot of built-in tool names taken at import time.  This constant is
+#: preserved for backward compatibility but reflects only the tools registered
+#: before any dynamic ``register_tool()`` calls.  Prefer
+#: :func:`get_all_tool_names` for code that runs after capability loading.
 ALL_TOOL_NAMES: frozenset = frozenset(TOOL_HANDLERS.keys())
+
+#: Module-level lock that serialises all reads and writes to
+#: :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA`.
+_registry_lock: threading.Lock = threading.Lock()
 
 
 def get_handler(name: str):
-    """Return the execute() callable for a tool, or None."""
-    return TOOL_HANDLERS.get(name)
+    """Return the execute() callable for a named tool, or ``None``.
+
+    Args:
+        name: The registered tool name (e.g. ``"weather"``).
+
+    Returns:
+        The ``execute`` callable for the tool, or ``None`` if the tool is not
+        registered.
+    """
+    with _registry_lock:
+        return TOOL_HANDLERS.get(name)
 
 
 # -- Metadata (replaces manifest.json) ----------------------------------------
@@ -175,58 +214,6 @@ TOOL_METADATA: dict = {
         ],
     },
 
-    "web_search": {
-        "name": "web_search",
-        "description": "Deprecated — use 'search' tool instead. DuckDuckGo-only web search.",
-        "documentation": (
-            "DEPRECATED: Use the 'search' tool instead, which includes DuckDuckGo as "
-            "a fallback alongside 12 other providers with semantic routing. This tool "
-            "is kept for backward compatibility only. "
-            "Searches the web via DuckDuckGo and returns titles, snippets, URLs, "
-            "and optional images. Use for general web queries when no domain-specific "
-            "tool applies. Supports time_range filtering (day/week/month/year). "
-            "Pair with read skill to fetch full page content from promising results. "
-            "DuckDuckGo may rate-limit on burst usage — space queries."
-        ),
-        "category": "research",
-        "icon": "fa-magnifying-glass",
-        "trigger": {"type": "on_demand"},
-        "parameters": {
-            "query": {
-                "type": "string",
-                "required": True,
-                "description": "Search query",
-            },
-            "limit": {
-                "type": "integer",
-                "required": False,
-                "default": 5,
-                "description": "Number of results to return (1-8).",
-            },
-            "time_range": {
-                "type": "string",
-                "required": False,
-                "description": "Filter results by time: 'day', 'week', 'month', or 'year'.",
-            },
-        },
-        "returns": {
-            "results": {"type": "array", "description": "List of {title, snippet, url, domain}"},
-            "count": {"type": "integer"},
-            "_meta": {"type": "object", "description": "Observability fields"},
-        },
-        "constraints": {"timeout_seconds": 15},
-        "config_schema": {},
-        "output": {
-            "synthesize": True,
-            "card": {"enabled": True, "mode": "immediate", "title": "Web Search",
-                     "accent_color": "#1a8fff", "background_color": "rgba(26,143,255,0.06)"},
-        },
-        "tips": [
-            "Set time_range='day' or 'week' for recent results on fast-moving topics",
-            "Pair with read skill to fetch full content from the most relevant result",
-        ],
-    },
-
     "code_eval": {
         "name": "code_eval",
         "description": (
@@ -319,12 +306,372 @@ TOOL_METADATA: dict = {
         "tips": [
             "Use when you need exact function signatures or parameter descriptions",
             "Supports frameworks directly: django, flask, numpy, pandas, node, react, vue, laravel, spring, rails, flutter",
-            "Prefer this over web_search when you know the language/framework",
+            "Prefer this over the search tool when you know the language/framework",
         ],
+    },
+
+    "news": {
+        "name": "news",
+        "description": (
+            "Search and browse news from 56 global RSS sources across 8 categories. "
+            "Get real-time headlines, search for specific topics, discover trending "
+            "stories, and explore available sources."
+        ),
+        "documentation": (
+            "News search and browsing tool with 4 actions:\n\n"
+            "**search** — Find news articles matching a query. Optionally filter by source.\n"
+            "  Required: query (string)\n"
+            "  Optional: source (string), limit (integer, default 10)\n\n"
+            "**digest** — Get a curated news digest with international headlines and local news.\n"
+            "  Optional: category (string), source (string)\n\n"
+            "**trending** — Discover trending stories clustered by topic coverage across multiple sources.\n"
+            "  Optional: category (string, default 'international'), limit (integer, default 5), "
+            "min_sources (integer, default 2)\n\n"
+            "**sources** — List available news sources. Filter by category or search by name.\n"
+            "  Optional: category (string), query (string via 'source' param)"
+        ),
+        "category": "research",
+        "icon": "fa-solid fa-newspaper",
+        "trigger": {"type": "on_demand"},
+        "parameters": {
+            "action": {
+                "type": "string",
+                "required": True,
+                "description": "Action to perform: search, digest, trending, or sources",
+            },
+            "query": {
+                "type": "string",
+                "required": False,
+                "description": "Search query (required for search action)",
+            },
+            "category": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "News category: international, us, uk, tech, business, "
+                    "science, sports, entertainment"
+                ),
+            },
+            "source": {
+                "type": "string",
+                "required": False,
+                "description": "Source ID or name to filter by",
+            },
+            "limit": {
+                "type": "integer",
+                "required": False,
+                "description": "Maximum number of results (default 10, max 20)",
+                "default": 10,
+            },
+            "min_sources": {
+                "type": "integer",
+                "required": False,
+                "description": "Minimum sources for a trending cluster (default 2)",
+                "default": 2,
+            },
+        },
+        "returns": {
+            "text": {"type": "string", "description": "Formatted news results"},
+            "title": {"type": "string", "description": "Result section title"},
+            "error": {"type": "string", "description": "Error message if any"},
+        },
+        "output": {
+            "synthesize": True,
+            "card": {"enabled": False},
+        },
+        "tips": [
+            "Use 'search' with a query to find specific news topics",
+            "Use 'trending' to see what stories are being covered by multiple sources",
+            "Use 'digest' for a quick overview of current headlines",
+        ],
+        "ambient": {"enabled": False},
+        "config_schema": {
+            "preferred_source": {
+                "type": "string",
+                "description": "Default news source ID",
+                "default": "bbc_world",
+            },
+            "topics": {
+                "type": "string",
+                "description": "Comma-separated interest topics for digest",
+            },
+            "location_override": {
+                "type": "string",
+                "description": "Override location for local news",
+            },
+        },
     },
 }
 
 
+if _BROWSER_AVAILABLE:
+    TOOL_METADATA["browser"] = {
+        "name": "browser",
+        "timeout": 90,
+        "description": (
+            "Render JavaScript-heavy web pages, take screenshots, fill forms, "
+            "and monitor pages for changes. Use when the read skill returns "
+            "empty or broken content, when interaction with a web page is needed, "
+            "or when you need to visually verify page state."
+        ),
+        "documentation": (
+            "Headless browser for the modern web. Four actions:\n\n"
+            "**render** — Load URL with full JavaScript execution, extract clean text. "
+            "Use when the read skill fails on JS-heavy pages (SPAs, dynamic content, "
+            "Cloudflare-protected sites). Returns extracted text + page links.\n\n"
+            "**screenshot** — Capture visual state of a page as PNG. Optionally run OCR "
+            "to extract text from the image. Use for dashboards, visual verification, "
+            "or when text extraction fails.\n\n"
+            "**interact** — Fill forms, click buttons, select dropdowns, navigate "
+            "multi-step flows. Provide an ordered list of steps. Use for login flows, "
+            "search filtering, form submission, multi-page navigation. Steps execute "
+            "sequentially; stops on first failure with partial results.\n\n"
+            "**monitor** — Track page changes over time. Renders a page, extracts "
+            "content, compares against the previous snapshot. Use in persistent tasks "
+            "to watch prices, availability, status changes. Requires a unique "
+            "snapshot_key to identify what's being monitored.\n\n"
+            "The read skill is faster for static pages — try it first. "
+            "Use browser when JavaScript rendering or page interaction is required.\n\n"
+            "Supports custom wait strategies: 'networkidle' (default), "
+            "'domcontentloaded', 'selector:<css>' (wait for element), "
+            "'timeout:<ms>' (fixed wait)."
+        ),
+        "category": "research",
+        "icon": "fa-globe",
+        "trigger": {"type": "on_demand"},
+        "parameters": {
+            "action": {
+                "type": "string",
+                "required": True,
+                "description": "Action: render, screenshot, interact, monitor",
+            },
+            "url": {
+                "type": "string",
+                "required": True,
+                "description": "URL to load",
+            },
+            "wait_for": {
+                "type": "string",
+                "required": False,
+                "default": "networkidle",
+                "description": (
+                    "Wait strategy: 'networkidle' (default), 'domcontentloaded', "
+                    "'selector:<css>' (wait for element to appear), "
+                    "'timeout:<ms>' (fixed additional wait)"
+                ),
+            },
+            "selector": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "CSS selector to scope extraction or screenshot to a specific "
+                    "element (e.g. 'main', 'article', '#content', '.price-display')"
+                ),
+            },
+            "extract": {
+                "type": "string",
+                "required": False,
+                "default": "text",
+                "description": "Extraction format for render action: 'text' or 'html'",
+            },
+            "max_chars": {
+                "type": "integer",
+                "required": False,
+                "default": 8000,
+                "description": "Maximum characters to extract",
+            },
+            "steps": {
+                "type": "array",
+                "required": False,
+                "description": (
+                    "Interaction steps for interact action. Each step: "
+                    "{action: click|fill|select|check|wait|scroll|press|hover|type, "
+                    "selector: 'css', value: 'text', timeout: ms}"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "click|fill|select|check|wait|scroll|press|hover|type"},
+                        "selector": {"type": "string", "description": "CSS selector for target element"},
+                        "value": {"type": "string", "description": "Value for fill/select/type/press actions"},
+                        "timeout": {"type": "integer", "description": "Step timeout in ms (default 5000)"},
+                    },
+                    "required": ["action"],
+                },
+            },
+            "snapshot_key": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Unique identifier for monitor action snapshots. Use a descriptive "
+                    "key like 'price-watch-amazon-xyz' or 'flight-lhr-mla-jun15'"
+                ),
+            },
+            "viewport_width": {
+                "type": "integer",
+                "required": False,
+                "default": 1280,
+                "description": "Browser viewport width in pixels",
+            },
+            "viewport_height": {
+                "type": "integer",
+                "required": False,
+                "default": 720,
+                "description": "Browser viewport height in pixels",
+            },
+            "full_page": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Capture full scrollable page (screenshot action)",
+            },
+            "screenshot_after": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Take screenshot after interaction steps complete",
+            },
+            "ocr": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Run OCR on screenshot to extract text from image",
+            },
+            "save_session": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": (
+                    "Save session cookies after successful interaction (encrypted). "
+                    "Enables cookie replay on future visits to the same domain."
+                ),
+            },
+            "credential_label": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Load stored credentials for this label. Injects saved cookies "
+                    "for the URL's domain into the browser context."
+                ),
+            },
+        },
+        "returns": {
+            "text": {"type": "string", "description": "Extracted page text"},
+            "screenshot_b64": {"type": "string", "description": "Base64 PNG screenshot"},
+            "ocr_text": {"type": "string", "description": "OCR-extracted text from screenshot"},
+            "title": {"type": "string", "description": "Page title"},
+            "url": {"type": "string", "description": "Final URL after redirects"},
+            "links": {"type": "array", "description": "Navigable page links [{text, url}]"},
+            "changed": {"type": "boolean", "description": "Whether monitored page changed (monitor)"},
+            "diff": {"type": "string", "description": "Unified diff of changes (monitor)"},
+            "change_ratio": {"type": "number", "description": "Fraction of content changed (monitor)"},
+            "first_check": {"type": "boolean", "description": "True if no previous snapshot (monitor)"},
+            "steps_completed": {"type": "integer", "description": "Steps completed (interact)"},
+            "steps_total": {"type": "integer", "description": "Total steps (interact)"},
+            "step_error": {"type": "string", "description": "First failed step error (interact)"},
+            "error": {"type": "string", "description": "Error message if any"},
+        },
+        "constraints": {"timeout_seconds": 90},
+        "config_schema": {},
+        "output": {
+            "synthesize": True,
+            "card": {
+                "enabled": True,
+                "mode": "immediate",
+                "title": "Browser",
+                "accent_color": "#00C8FF",
+                "background_color": "rgba(0, 200, 255, 0.06)",
+            },
+        },
+        "ambient": {"enabled": False},
+        "tips": [
+            "Use 'render' when the read skill returned empty or garbled content from a JS-heavy site",
+            "Use 'screenshot' + ocr=true for visual content that resists text extraction",
+            "Use 'interact' for multi-step workflows: login, form fill, apply filters, navigate pages",
+            "Use 'monitor' with snapshot_key in persistent tasks to track page changes over time",
+            "Always try the read skill first — it is much faster for static pages",
+            "Use wait_for='selector:.price' to wait for a specific element before extracting",
+            "For shopping: use interact with fill + select steps to apply filters, then extract results",
+            "For flight search: interact to set dates/routes, wait for results, extract and compare",
+            "Use save_session=true after login to persist cookies for future visits",
+        ],
+    }
+
+
 def get_metadata(name: str) -> dict | None:
-    """Return metadata dict for a tool, or None."""
-    return TOOL_METADATA.get(name)
+    """Return the metadata dict for a named tool, or ``None``.
+
+    Args:
+        name: The registered tool name (e.g. ``"weather"``).
+
+    Returns:
+        The metadata ``dict`` for the tool, or ``None`` if the tool is not
+        registered or has no metadata entry.
+    """
+    with _registry_lock:
+        return TOOL_METADATA.get(name)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic registration API
+# ---------------------------------------------------------------------------
+
+def register_tool(name: str, handler, metadata: dict) -> None:
+    """Register a tool handler and its metadata at runtime.
+
+    Both :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA` are updated
+    atomically under :data:`_registry_lock`, making this function safe to call
+    from any thread (e.g. capability workers, test fixtures).
+
+    If *name* is already registered the existing entries are **replaced**
+    without raising an error, so callers can safely re-register after a
+    reconnect.
+
+    Args:
+        name:     Unique tool identifier (must match ``metadata["name"]``).
+        handler:  Callable with signature
+                  ``execute(topic, params, config=None, telemetry=None) -> dict``.
+        metadata: Tool metadata dict following the schema used in
+                  :data:`TOOL_METADATA` (must include at least ``"name"`` and
+                  ``"description"``).
+
+    Returns:
+        None
+    """
+    with _registry_lock:
+        TOOL_HANDLERS[name] = handler
+        TOOL_METADATA[name] = metadata
+
+
+def unregister_tool(name: str) -> None:
+    """Remove a tool handler and its metadata from the registry.
+
+    Both :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA` are updated
+    atomically under :data:`_registry_lock`.  If *name* is not currently
+    registered the call is a no-op (no exception is raised).
+
+    Args:
+        name: The tool name to remove.
+
+    Returns:
+        None
+    """
+    with _registry_lock:
+        TOOL_HANDLERS.pop(name, None)
+        TOOL_METADATA.pop(name, None)
+
+
+def get_all_tool_names() -> set:
+    """Return the current set of registered tool names.
+
+    Unlike the module-level :data:`ALL_TOOL_NAMES` constant (which is a
+    snapshot taken at import time), this function acquires :data:`_registry_lock`
+    and computes the set from the live :data:`TOOL_HANDLERS` dict, so it
+    reflects any tools added or removed via :func:`register_tool` /
+    :func:`unregister_tool` after module load.
+
+    Returns:
+        A new ``set`` of registered tool name strings.
+    """
+    with _registry_lock:
+        return set(TOOL_HANDLERS.keys())

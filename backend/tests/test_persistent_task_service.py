@@ -3,12 +3,14 @@ Tests for backend/services/persistent_task_service.py
 
 Covers: state machine transitions, CRUD operations, Jaccard duplicate detection,
 rate limiting, auto-expiry, and checkpoint/completion logic.
+
+Migrated from mock_db to real SQLite via the shared `db` fixture.
 """
 
 import pytest
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from services.persistent_task_service import (
     PersistentTaskService,
@@ -18,50 +20,82 @@ from services.persistent_task_service import (
     DEFAULT_EXPIRY_DAYS,
     DUPLICATE_SIMILARITY_THRESHOLD,
 )
-from tests.helpers import make_task_row
+from services.database_service import get_shared_db_service
+
+
+def _seed_account(db):
+    """Insert a master_account row so FK constraints are satisfied."""
+    db.execute(
+        "INSERT OR IGNORE INTO master_account (id, username, password_hash) "
+        "VALUES (1, 'testuser', 'hash')"
+    )
+    db.commit()
+
+
+def _insert_task(db, **overrides):
+    """Insert a persistent_task directly and return its id."""
+    defaults = dict(
+        account_id=1,
+        goal="Test background task",
+        scope=None,
+        status="accepted",
+        priority=5,
+        progress="{}",
+        result=None,
+        result_artifact=None,
+        iterations_used=0,
+        max_iterations=20,
+        fatigue_budget=15.0,
+    )
+    defaults.update(overrides)
+
+    # Compute expires_at if not provided
+    if 'expires_at' not in defaults:
+        defaults['expires_at'] = (
+            datetime.now(timezone.utc) + timedelta(days=DEFAULT_EXPIRY_DAYS)
+        ).isoformat()
+
+    db.execute(
+        """INSERT INTO persistent_tasks
+           (account_id, goal, scope, status, priority, progress, result,
+            result_artifact, iterations_used, max_iterations, fatigue_budget, expires_at)
+           VALUES (:account_id, :goal, :scope, :status, :priority, :progress,
+                   :result, :result_artifact, :iterations_used, :max_iterations,
+                   :fatigue_budget, :expires_at)""",
+        defaults,
+    )
+    db.commit()
+    return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
 @pytest.mark.unit
 class TestPersistentTaskService:
 
-    @pytest.fixture
-    def mock_db(self):
-        """Provides (db, cursor) pair wired for db.connection() context manager."""
-        db = MagicMock()
-        cursor = MagicMock()
-        conn = MagicMock()
-        conn.cursor.return_value = cursor
-        ctx = MagicMock()
-        ctx.__enter__ = MagicMock(return_value=conn)
-        ctx.__exit__ = MagicMock(return_value=False)
-        db.connection.return_value = ctx
-        return db, cursor
+    @pytest.fixture(autouse=True)
+    def _seed(self, db):
+        """Seed the master_account row for every test in this class."""
+        _seed_account(db)
 
     @pytest.fixture
-    def service(self, mock_db):
-        db, _ = mock_db
-        return PersistentTaskService(db)
+    def service(self, db):
+        return PersistentTaskService(get_shared_db_service())
 
-    # ── State Machine Transitions ────────────────────────────────────
+    # -- State Machine Transitions ----------------------------------------
 
-    def test_transition_accepted_to_in_progress_succeeds(self, service, mock_db):
+    def test_transition_accepted_to_in_progress_succeeds(self, db, service):
         """Valid transition accepted -> in_progress should return (True, message)."""
-        _, cursor = mock_db
-        row = make_task_row(task_id=1, status='accepted')
-        cursor.fetchone.return_value = row
+        task_id = _insert_task(db, status='accepted')
 
-        success, msg = service.transition(1, 'in_progress')
+        success, msg = service.transition(task_id, 'in_progress')
 
         assert success is True
         assert 'in_progress' in msg
 
-    def test_transition_accepted_to_completed_fails(self, service, mock_db):
+    def test_transition_accepted_to_completed_fails(self, db, service):
         """Invalid transition accepted -> completed should return (False, message)."""
-        _, cursor = mock_db
-        row = make_task_row(task_id=1, status='accepted')
-        cursor.fetchone.return_value = row
+        task_id = _insert_task(db, status='accepted')
 
-        success, msg = service.transition(1, 'completed')
+        success, msg = service.transition(task_id, 'completed')
 
         assert success is False
         assert "Cannot transition" in msg
@@ -70,66 +104,59 @@ class TestPersistentTaskService:
         """The 'proposed' state should not exist in the state machine."""
         assert 'proposed' not in VALID_TRANSITIONS
 
-    # ── accept_task ──────────────────────────────────────────────────
+    # -- accept_task ------------------------------------------------------
 
-    def test_accept_task_enforces_max_active_limit(self, service, mock_db):
+    def test_accept_task_enforces_max_active_limit(self, db, service):
         """accept_task should reject when MAX_ACTIVE_TASKS active tasks exist."""
-        _, cursor = mock_db
+        # Insert MAX_ACTIVE_TASKS accepted tasks
+        for _ in range(MAX_ACTIVE_TASKS):
+            _insert_task(db, status='accepted')
 
-        # get_task returns the task to accept
-        task_row = make_task_row(task_id=10, account_id=1, status='accepted')
-        # get_active_tasks returns 5 accepted tasks (at the limit)
-        active_rows = [
-            make_task_row(task_id=i, account_id=1, status='accepted')
-            for i in range(1, 6)
-        ]
+        # Insert one more task to try to accept
+        target_id = _insert_task(db, status='accepted')
 
-        cursor.fetchone.return_value = task_row
-        cursor.fetchall.return_value = active_rows
-
-        success, msg = service.accept_task(10)
+        success, msg = service.accept_task(target_id)
 
         assert success is False
         assert str(MAX_ACTIVE_TASKS) in msg
 
-    def test_accept_task_succeeds_under_limit(self, service, mock_db):
+    def test_accept_task_succeeds_under_limit(self, db, service):
         """accept_task should succeed when fewer than MAX_ACTIVE_TASKS are active."""
-        _, cursor = mock_db
+        # Insert 3 accepted tasks (under the limit of 5)
+        for _ in range(3):
+            _insert_task(db, status='accepted')
 
-        task_row = make_task_row(task_id=10, account_id=1, status='accepted')
-        # Only 3 accepted tasks -- under the limit of 5
-        active_rows = [
-            make_task_row(task_id=i, account_id=1, status='accepted')
-            for i in range(1, 4)
-        ]
+        # Insert a task that is already accepted -- accept_task on it
+        # will try to transition accepted->accepted which is not valid
+        target_id = _insert_task(db, status='accepted')
 
-        cursor.fetchone.return_value = task_row
-        cursor.fetchall.return_value = active_rows
+        success, msg = service.accept_task(target_id)
 
-        # accept_task on an already-accepted task should be idempotent
-        success, msg = service.accept_task(10)
-
-        # It will try to transition accepted->accepted which isn't valid,
-        # but this is fine — the task is already accepted
+        # The task is already accepted, so transition accepted->accepted fails.
+        # This is idempotent by design.
         assert success is False or 'accepted' in msg.lower()
 
-    # ── Checkpoint ───────────────────────────────────────────────────
+    # -- Checkpoint -------------------------------------------------------
 
-    def test_checkpoint_increments_iterations(self, service, mock_db):
-        """checkpoint should execute UPDATE with iterations_used + 1."""
-        _, cursor = mock_db
+    def test_checkpoint_increments_iterations(self, db, service):
+        """checkpoint should increment iterations_used and store progress."""
+        task_id = _insert_task(db, status='in_progress', iterations_used=0, max_iterations=20)
 
         progress = {'last_summary': 'Step 1 done', 'coverage_estimate': 0.3}
-        result = service.checkpoint(task_id=1, progress=progress)
+        result = service.checkpoint(task_id=task_id, progress=progress)
 
         assert result is True
-        # Verify the SQL update was executed
-        all_sqls = [x[0][0] for x in cursor.execute.call_args_list]
-        update_sqls = [s for s in all_sqls if 'iterations_used = iterations_used + 1' in s]
-        assert len(update_sqls) > 0
-        assert 'progress' in update_sqls[0]
 
-    # ── Jaccard Similarity / Duplicate Detection ─────────────────────
+        # Verify in the database
+        row = db.execute(
+            "SELECT iterations_used, progress FROM persistent_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        assert row['iterations_used'] == 1
+        stored_progress = json.loads(row['progress'])
+        assert stored_progress['last_summary'] == 'Step 1 done'
+
+    # -- Jaccard Similarity / Duplicate Detection -------------------------
 
     def test_jaccard_exact_match_returns_one(self):
         """Identical strings should yield Jaccard similarity of 1.0."""
@@ -139,20 +166,13 @@ class TestPersistentTaskService:
         """Completely disjoint word sets should yield 0.0."""
         assert _jaccard_similarity("alpha beta gamma", "delta epsilon zeta") == 0.0
 
-    def test_find_duplicate_above_threshold(self, service, mock_db):
+    def test_find_duplicate_above_threshold(self, db, service):
         """find_duplicate should return matching task when similarity exceeds threshold."""
-        _, cursor = mock_db
-
-        # get_active_tasks returns one task with a very similar goal
-        existing_row = make_task_row(
-            task_id=5,
-            account_id=1,
+        task_id = _insert_task(
+            db,
             status='in_progress',
             goal="research best Python testing frameworks",
         )
-        cursor.fetchall.return_value = [existing_row]
-        # get_active_tasks does not call fetchone, only fetchall
-        cursor.fetchone.return_value = None
 
         result = service.find_duplicate(
             account_id=1,
@@ -160,7 +180,7 @@ class TestPersistentTaskService:
         )
 
         assert result is not None
-        assert result['id'] == 5
+        assert result['id'] == task_id
         # Verify the similarity is actually above threshold
         sim = _jaccard_similarity(
             "research best Python testing frameworks",
@@ -168,18 +188,13 @@ class TestPersistentTaskService:
         )
         assert sim > DUPLICATE_SIMILARITY_THRESHOLD
 
-    def test_find_duplicate_below_threshold_returns_none(self, service, mock_db):
+    def test_find_duplicate_below_threshold_returns_none(self, db, service):
         """find_duplicate should return None when no task exceeds similarity threshold."""
-        _, cursor = mock_db
-
-        existing_row = make_task_row(
-            task_id=5,
-            account_id=1,
+        _insert_task(
+            db,
             status='in_progress',
             goal="research Python testing",
         )
-        cursor.fetchall.return_value = [existing_row]
-        cursor.fetchone.return_value = None
 
         result = service.find_duplicate(
             account_id=1,
@@ -194,90 +209,87 @@ class TestPersistentTaskService:
         )
         assert sim <= DUPLICATE_SIMILARITY_THRESHOLD
 
-    # ── CRUD Operations ──────────────────────────────────────────────
+    # -- CRUD Operations --------------------------------------------------
 
-    def test_create_task_returns_dict_with_accepted_status(self, service, mock_db):
+    @patch('services.persistent_task_service.PersistentTaskService._embed_task')
+    @patch('services.memory_client.MemoryClientService.create_connection')
+    def test_create_task_returns_dict_with_accepted_status(
+        self, mock_redis, mock_embed, db, service
+    ):
         """create_task should INSERT and return a task dict with 'accepted' status."""
-        _, cursor = mock_db
-
-        # create_task uses cursor.lastrowid (SQLite), then calls get_task(lastrowid)
-        cursor.lastrowid = 42
-        full_row = make_task_row(task_id=42, account_id=1, goal="Learn Rust", status='accepted')
-        cursor.fetchone.return_value = full_row
-
         result = service.create_task(account_id=1, goal="Learn Rust")
 
         assert result is not None
-        assert result['id'] == 42
+        assert result['id'] > 0
         assert result['status'] == 'accepted'
         assert result['goal'] == "Learn Rust"
 
-    def test_get_task_returns_none_when_not_found(self, service, mock_db):
+    def test_get_task_returns_none_when_not_found(self, db, service):
         """get_task should return None when the task does not exist."""
-        _, cursor = mock_db
-        cursor.fetchone.return_value = None
-
         result = service.get_task(999)
-
         assert result is None
 
-    def test_get_task_returns_dict_when_found(self, service, mock_db):
+    def test_get_task_returns_dict_when_found(self, db, service):
         """get_task should return a fully populated task dict when found."""
-        _, cursor = mock_db
-        row = make_task_row(
-            task_id=7,
-            account_id=2,
+        task_id = _insert_task(
+            db,
             goal="Write documentation",
             status='in_progress',
             priority=3,
             iterations_used=5,
             max_iterations=20,
+            account_id=1,
         )
-        cursor.fetchone.return_value = row
 
-        result = service.get_task(7)
+        result = service.get_task(task_id)
 
         assert result is not None
-        assert result['id'] == 7
-        assert result['account_id'] == 2
+        assert result['id'] == task_id
+        assert result['account_id'] == 1
         assert result['goal'] == "Write documentation"
         assert result['status'] == 'in_progress'
         assert result['priority'] == 3
         assert result['iterations_used'] == 5
         assert result['max_iterations'] == 20
 
-    # ── Auto-Expiry ──────────────────────────────────────────────────
+    # -- Auto-Expiry ------------------------------------------------------
 
-    def test_expire_stale_tasks_returns_count(self, service, mock_db):
+    def test_expire_stale_tasks_returns_count(self, db, service):
         """expire_stale_tasks should return the number of tasks that were expired."""
-        _, cursor = mock_db
-        # Single fetchall: accepted/in_progress/paused tasks past expiry
-        cursor.fetchall.return_value = [(10,), (11,), (12,)]
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        _insert_task(db, status='accepted', expires_at=past)
+        _insert_task(db, status='in_progress', expires_at=past)
+        _insert_task(db, status='paused', expires_at=past)
 
         count = service.expire_stale_tasks()
 
         assert count == 3
-        # Should have called execute at least twice: SELECT + UPDATE
-        all_sqls = [c[0][0] for c in cursor.execute.call_args_list]
-        assert any("persistent_tasks" in sql for sql in all_sqls)
-        assert any("status = 'expired'" in sql for sql in all_sqls)
 
-    # ── Completion ───────────────────────────────────────────────────
+        # Verify all three are now expired
+        rows = db.execute(
+            "SELECT status FROM persistent_tasks WHERE status = 'expired'"
+        ).fetchall()
+        assert len(rows) == 3
 
-    def test_complete_task_sets_status_and_result(self, service, mock_db):
+    # -- Completion -------------------------------------------------------
+
+    def test_complete_task_sets_status_and_result(self, db, service):
         """complete_task should UPDATE status to completed and store the result."""
-        _, cursor = mock_db
+        task_id = _insert_task(db, status='in_progress')
 
         result = service.complete_task(
-            task_id=1,
+            task_id=task_id,
             result="Successfully gathered all data",
             artifact={"summary": "3 sources found"},
         )
 
         assert result is True
-        executed_sql = cursor.execute.call_args[0][0]
-        assert "status = 'completed'" in executed_sql
-        params = cursor.execute.call_args[0][1]
-        assert params[0] == "Successfully gathered all data"
-        assert json.loads(params[1]) == {"summary": "3 sources found"}
-        assert params[2] == 1
+
+        # Verify DB state
+        row = db.execute(
+            "SELECT status, result, result_artifact FROM persistent_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        assert row['status'] == 'completed'
+        assert row['result'] == "Successfully gathered all data"
+        assert json.loads(row['result_artifact']) == {"summary": "3 sources found"}

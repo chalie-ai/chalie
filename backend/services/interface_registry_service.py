@@ -18,6 +18,7 @@ import requests
 
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now, parse_utc
+from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class InterfaceRegistryService:
                 used.  Pass an in-memory instance in tests.
         """
         self._db = db or get_shared_db_service()
+        self._write_queue = get_write_queue()
 
     # ------------------------------------------------------------------
     # Pairing key generation
@@ -75,18 +77,29 @@ class InterfaceRegistryService:
         now = utc_now()
         expires = now + timedelta(seconds=_PAIRING_KEY_TTL)
 
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            # Purge expired keys to prevent unbounded table growth
-            cursor.execute(
-                "DELETE FROM interface_pairing_keys WHERE expires_at < ?",
-                (now.isoformat(),),
-            )
-            cursor.execute(
-                "INSERT INTO interface_pairing_keys (key_hash, created_at, expires_at) VALUES (?, ?, ?)",
-                (key_hash, now.isoformat(), expires.isoformat()),
-            )
-            cursor.close()
+        def _purge_and_insert(_kh=key_hash, _now=now, _exp=expires, _db=self._db):
+            """Purge expired pairing keys and insert the new one atomically.
+
+            Args:
+                _kh: SHA-256 hex digest of the new raw key.
+                _now: Current UTC datetime.
+                _exp: Expiry UTC datetime for the new key.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                # Purge expired keys to prevent unbounded table growth
+                cursor.execute(
+                    "DELETE FROM interface_pairing_keys WHERE expires_at < ?",
+                    (_now.isoformat(),),
+                )
+                cursor.execute(
+                    "INSERT INTO interface_pairing_keys (key_hash, created_at, expires_at) VALUES (?, ?, ?)",
+                    (_kh, _now.isoformat(), _exp.isoformat()),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_purge_and_insert)
 
         return {
             "pairing_key": raw_key,
@@ -130,7 +143,7 @@ class InterfaceRegistryService:
         now = utc_now()
         key_hash = _hash(pairing_key)
 
-        # Validate pairing key
+        # Validate pairing key (read-only — stays on caller thread)
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -138,24 +151,34 @@ class InterfaceRegistryService:
                 (key_hash,),
             )
             row = cursor.fetchone()
-            if not row:
-                cursor.close()
-                raise ValueError("Invalid pairing key")
-
-            expires_at = parse_utc(row[0])
-            if row[1]:  # used_at is set
-                cursor.close()
-                raise ValueError("Pairing key already used")
-            if now > expires_at:
-                cursor.close()
-                raise ValueError("Pairing key expired")
-
-            # Mark as used
-            cursor.execute(
-                "UPDATE interface_pairing_keys SET used_at = ? WHERE key_hash = ?",
-                (now.isoformat(), key_hash),
-            )
             cursor.close()
+
+        if not row:
+            raise ValueError("Invalid pairing key")
+
+        expires_at = parse_utc(row[0])
+        if row[1]:  # used_at is set
+            raise ValueError("Pairing key already used")
+        if now > expires_at:
+            raise ValueError("Pairing key expired")
+
+        def _mark_used(_kh=key_hash, _now=now, _db=self._db):
+            """Mark the pairing key as used on the write-queue thread.
+
+            Args:
+                _kh: SHA-256 hex digest of the key to mark.
+                _now: Timestamp to store as used_at.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE interface_pairing_keys SET used_at = ? WHERE key_hash = ?",
+                    (_now.isoformat(), _kh),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_mark_used)
 
         # Health-check interface
         base_url = f"http://{host}:{port}"
@@ -185,25 +208,37 @@ class InterfaceRegistryService:
             "description": health.get("name", name),
         }
 
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO interfaces
-                    (id, name, host, port, status, capabilities_hash,
-                     last_seen_at, paired_at, metadata)
-                   VALUES (?, ?, ?, ?, 'online', ?, ?, ?, ?)""",
-                (
-                    interface_id,
-                    name,
-                    host,
-                    port,
-                    caps_hash,
-                    now.isoformat(),
-                    now.isoformat(),
-                    json.dumps(metadata),
-                ),
-            )
-            cursor.close()
+        def _insert_interface(
+            _id=interface_id, _name=name, _host=host, _port=port,
+            _ch=caps_hash, _now=now, _meta=metadata, _db=self._db,
+        ):
+            """Insert the new interface record on the write-queue thread.
+
+            Args:
+                _id: Pre-generated interface UUID.
+                _name: Human-readable label for the interface.
+                _host: Interface hostname.
+                _port: Interface port number.
+                _ch: SHA-256 of the capabilities JSON for change detection.
+                _now: Pairing timestamp.
+                _meta: Metadata dict (version, description).
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT INTO interfaces
+                        (id, name, host, port, status, capabilities_hash,
+                         last_seen_at, paired_at, metadata)
+                       VALUES (?, ?, ?, ?, 'online', ?, ?, ?, ?)""",
+                    (
+                        _id, _name, _host, _port, _ch,
+                        _now.isoformat(), _now.isoformat(), json.dumps(_meta),
+                    ),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_insert_interface)
 
         # Issue signal token via WrapperAuthService (reuse existing infrastructure).
         # If this fails, remove the interface record — a paired interface without
@@ -219,19 +254,40 @@ class InterfaceRegistryService:
                 wrapper_id_override=f"iface_{interface_id[:8]}",
             )
             # Store signal_token_hash in interface record
-            with self._db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE interfaces SET signal_token_hash = ? WHERE id = ?",
-                    (_hash(signal_token), interface_id),
-                )
-                cursor.close()
+            _tok_hash = _hash(signal_token)
+
+            def _set_token_hash(_th=_tok_hash, _id=interface_id, _db=self._db):
+                """Store the hashed signal token on the interface record.
+
+                Args:
+                    _th: SHA-256 hex digest of the signal token.
+                    _id: Interface UUID.
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE interfaces SET signal_token_hash = ? WHERE id = ?",
+                        (_th, _id),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_set_token_hash)
         except Exception as e:
             # Rollback: remove orphan interface record
-            with self._db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM interfaces WHERE id = ?", (interface_id,))
-                cursor.close()
+            def _rollback_delete(_id=interface_id, _db=self._db):
+                """Delete the orphaned interface record on rollback.
+
+                Args:
+                    _id: Interface UUID to remove.
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM interfaces WHERE id = ?", (_id,))
+                    cursor.close()
+
+            self._write_queue.submit_sync(_rollback_delete)
             raise ValueError(f"Failed to create signal token: {e}") from e
 
         # Register capabilities as tools
@@ -268,22 +324,33 @@ class InterfaceRegistryService:
             List of registered capability names.
         """
         now = utc_now().isoformat()
-        cap_names = []
+        # Compute cap_names from the capabilities manifest (pure Python, no DB).
+        cap_names = [cap.get("name", "") for cap in capabilities if cap.get("name", "")]
 
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            for cap in capabilities:
-                cap_name = cap.get("name", "")
-                if not cap_name:
-                    continue
-                cursor.execute(
-                    """INSERT OR REPLACE INTO interface_tools
-                       (interface_id, tool_name, manifest_json, registered_at)
-                       VALUES (?, ?, ?, ?)""",
-                    (interface_id, cap_name, json.dumps(cap), now),
-                )
-                cap_names.append(cap_name)
-            cursor.close()
+        def _upsert_tools(_id=interface_id, _caps=capabilities, _now=now, _db=self._db):
+            """Bulk insert-or-replace capability tool records on the write-queue thread.
+
+            Args:
+                _id: Interface UUID that owns these tools.
+                _caps: List of capability manifest dicts from the interface.
+                _now: ISO-format timestamp for registered_at.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                for cap in _caps:
+                    cap_name = cap.get("name", "")
+                    if not cap_name:
+                        continue
+                    cursor.execute(
+                        """INSERT OR REPLACE INTO interface_tools
+                           (interface_id, tool_name, manifest_json, registered_at)
+                           VALUES (?, ?, ?, ?)""",
+                        (_id, cap_name, json.dumps(cap), _now),
+                    )
+                cursor.close()
+
+        self._write_queue.submit_sync(_upsert_tools)
 
         # Register in ToolRegistryService
         try:
@@ -346,13 +413,24 @@ class InterfaceRegistryService:
 
         if new_hash != iface.get("capabilities_hash"):
             self._unregister_tools(interface_id)
-            with self._db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE interfaces SET capabilities_hash = ? WHERE id = ?",
-                    (new_hash, interface_id),
-                )
-                cursor.close()
+
+            def _update_caps_hash(_nh=new_hash, _id=interface_id, _db=self._db):
+                """Persist the updated capabilities hash.
+
+                Args:
+                    _nh: New SHA-256 hex digest of the capabilities JSON.
+                    _id: Interface UUID.
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE interfaces SET capabilities_hash = ? WHERE id = ?",
+                        (_nh, _id),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit(_update_caps_hash)
 
         self._register_tools(interface_id, capabilities)
         logger.info(
@@ -426,8 +504,9 @@ class InterfaceRegistryService:
             health_data = resp.json()
             if health_data.get("status") != "ok":
                 raise ValueError("Health check returned non-ok status")
-        except Exception:
+        except Exception as e:
             # Increment failure count
+            logger.debug("[INTERFACE] Health check failed for %s: %s", interface_id[:8], e)
             count = _failure_counts.get(interface_id, 0) + 1
             _failure_counts[interface_id] = count
 
@@ -441,13 +520,23 @@ class InterfaceRegistryService:
         _failure_counts[interface_id] = 0
         now = utc_now().isoformat()
 
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE interfaces SET last_seen_at = ? WHERE id = ?",
-                (now, interface_id),
-            )
-            cursor.close()
+        def _update_last_seen(_now=now, _id=interface_id, _db=self._db):
+            """Persist the successful health-check timestamp.
+
+            Args:
+                _now: ISO-format UTC timestamp to record as last_seen_at.
+                _id: Interface UUID.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE interfaces SET last_seen_at = ? WHERE id = ?",
+                    (_now, _id),
+                )
+                cursor.close()
+
+        self._write_queue.submit(_update_last_seen)
 
         # Recovery: was offline, now online
         if iface["status"] == "offline":
@@ -490,14 +579,23 @@ class InterfaceRegistryService:
 
             wrapper_svc = WrapperAuthService(self._db)
             wrapper_svc.revoke(f"iface_{interface_id[:8]}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[INTERFACE] Signal token revocation failed for %s: %s", interface_id[:8], e)
 
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM interface_tools WHERE interface_id = ?", (interface_id,))
-            cursor.execute("DELETE FROM interfaces WHERE id = ?", (interface_id,))
-            cursor.close()
+        def _delete_all(_id=interface_id, _db=self._db):
+            """Delete interface tools and the interface record together.
+
+            Args:
+                _id: Interface UUID to remove.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM interface_tools WHERE interface_id = ?", (_id,))
+                cursor.execute("DELETE FROM interfaces WHERE id = ?", (_id,))
+                cursor.close()
+
+        self._write_queue.submit_sync(_delete_all)
 
         _failure_counts.pop(interface_id, None)
         logger.info("[INTERFACE] Removed '%s'", iface["name"])
@@ -613,10 +711,20 @@ class InterfaceRegistryService:
             interface_id: The interface UUID.
             status: New status string (``online``, ``offline``, ``revoked``).
         """
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE interfaces SET status = ? WHERE id = ?",
-                (status, interface_id),
-            )
-            cursor.close()
+        def _update_status(_st=status, _id=interface_id, _db=self._db):
+            """Persist the new interface status.
+
+            Args:
+                _st: New status string (``online``, ``offline``, ``revoked``).
+                _id: Interface UUID.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE interfaces SET status = ? WHERE id = ?",
+                    (_st, _id),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_update_status)

@@ -6,7 +6,6 @@ Separate from Chalie's database. Auto-creates on first boot.
 
 import json
 import logging
-import os
 import sqlite3
 import threading
 

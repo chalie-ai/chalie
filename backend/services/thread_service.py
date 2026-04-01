@@ -10,7 +10,7 @@ Thread ID format: {platform}:{channel_id}:{sequence}
 import json
 import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List
 
 from services.memory_client import MemoryClientService
@@ -349,6 +349,9 @@ class ThreadService:
                 """, (channel_id,))
                 row = cursor.fetchone()
                 if not row:
+                    # No active thread — still restore seq counter to prevent
+                    # _create_new_thread from reusing old thread IDs
+                    self._restore_seq_counter(channel_id, conn)
                     cursor.close()
                     return None
 
@@ -367,7 +370,9 @@ class ThreadService:
                 cursor.close()
 
                 if not ts_row or not ts_row[0]:
-                    return None  # No exchanges — let caller create new thread
+                    # No exchanges — still restore seq counter
+                    self._restore_seq_counter(channel_id, conn)
+                    return None
 
                 last_activity = parse_utc(ts_row[0])
                 gap_seconds = (utc_now() - last_activity).total_seconds()
@@ -378,6 +383,9 @@ class ThreadService:
                         "UPDATE threads SET state = 'expired', expired_at = ? WHERE thread_id = ?",
                         (utc_now().isoformat(), thread_id)
                     )
+                    # Restore sequence counter even on expiry to prevent
+                    # _create_new_thread from reusing old thread IDs
+                    self._restore_seq_counter(channel_id, conn)
                     return None
 
                 # Rehydrate MemoryStore — restore pointer, thread hash, and sequence counter
@@ -426,6 +434,44 @@ class ThreadService:
         except Exception as e:
             logging.debug(f"[THREAD] SQLite recovery failed: {e}")
             return None
+
+    def _restore_seq_counter(self, channel_id: str, conn=None):
+        """Restore the MemoryStore sequence counter from SQLite max thread sequence.
+
+        Prevents _create_new_thread from generating thread IDs that collide
+        with existing threads after a MemoryStore reset (restart / TTL expiry).
+        """
+        try:
+            if conn is None:
+                from services.database_service import get_shared_db_service
+                db = get_shared_db_service()
+                conn = db.connection().__enter__()
+
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT thread_id FROM threads WHERE channel_id = ? ORDER BY created_at DESC",
+                (channel_id,),
+            )
+            max_seq = 0
+            for row in cursor.fetchall():
+                parts = row[0].rsplit(":", 1)
+                if len(parts) == 2:
+                    try:
+                        seq = int(parts[1])
+                        if seq > max_seq:
+                            max_seq = seq
+                    except ValueError:
+                        pass
+            cursor.close()
+
+            if max_seq > 0:
+                seq_key = f"thread_seq:{channel_id}"
+                current_seq = self.store.get(seq_key)
+                if not current_seq or int(current_seq) < max_seq:
+                    self.store.set(seq_key, str(max_seq))
+                    logging.debug(f"[THREAD] Restored seq counter for {channel_id}: {max_seq}")
+        except Exception as e:
+            logging.debug(f"[THREAD] Seq counter restore failed: {e}")
 
     def _persist_thread_created(self, thread_id: str, channel_id: str, platform: str):
         """Write thread creation to SQLite."""

@@ -8,7 +8,6 @@ Usage:
     text = response.text
 """
 
-import os
 import time
 import logging
 from dataclasses import dataclass
@@ -311,8 +310,8 @@ def _log_llm_call(job_name: str, response: LLMResponse):
             tokens_output=response.tokens_output or 0,
             latency_ms=response.latency_ms or 0,
         )
-    except Exception:
-        pass  # Never fail a response because of logging
+    except Exception as e:
+        logger.debug(f"[LLM] _log_llm_call: persistent log write failed (non-fatal): {e}")
 
 
 class RefreshableLLMService:
@@ -335,7 +334,7 @@ class RefreshableLLMService:
         Args:
             agent_name: Agent configuration name used to resolve provider
                 settings via ``ConfigService.resolve_agent_config``
-                (e.g., ``'cognitive-drift'``, ``'mode-reflection'``).
+                (e.g., ``'cognitive-drift'``, ``'episodic-memory'``).
         """
         self._agent_name = agent_name
         self._version = None  # Last seen provider cache version
@@ -423,7 +422,7 @@ def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
     is added, updated, or reassigned via the Brain UI).
 
     Args:
-        agent_name: Agent config name (e.g., 'cognitive-drift', 'mode-reflection')
+        agent_name: Agent config name (e.g., 'cognitive-drift', 'episodic-memory')
 
     Returns:
         RefreshableLLMService that transparently re-creates its client on changes.
@@ -497,8 +496,8 @@ class AnthropicService:
                     if ra:
                         try:
                             retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
 
         response = _call_with_retry(_call)
@@ -555,8 +554,8 @@ class AnthropicService:
                     if ra:
                         try:
                             retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
 
         response = _call_with_retry(_call)
@@ -745,8 +744,8 @@ class OpenAIService:
                     if ra:
                         try:
                             retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
 
         response = _call_with_retry(_call)
@@ -820,8 +819,8 @@ class OpenAIService:
                     if ra:
                         try:
                             retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
 
         response = _call_with_retry(_call)
@@ -892,7 +891,7 @@ class OpenAIService:
             overhead = (len(messages) + 1) * 4  # ~4 tokens per message for framing
             return len(enc.encode(text)) + overhead
         except ImportError:
-            pass  # tiktoken not installed — fall through to estimate
+            logger.debug("[LLM] tiktoken not installed; falling back to token estimate")
         except Exception as e:
             logger.debug(f"[OpenAIService] tiktoken counting failed: {e}")
         parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
