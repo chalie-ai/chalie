@@ -5,9 +5,14 @@ Rule: ALL datetime values in this codebase must be timezone-aware UTC.
 - Use utc_now() instead of datetime.now() or datetime.utcnow()
 - Use parse_utc() whenever reading a datetime from SQLite, JSON, or any external source
 - Never create naive datetimes (datetimes without tzinfo)
+- Use get_user_tz() to get the user's IANA timezone (for display/conversion)
 """
 
+import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
@@ -43,3 +48,35 @@ def parse_utc(value) -> datetime:
             pass
 
     return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def get_user_tz() -> ZoneInfo:
+    """Return the user's IANA timezone as a ZoneInfo object.
+
+    Resolution order:
+    1. ClientContextService (live heartbeat — most fresh)
+    2. SettingsService "user_timezone" (persistent across restarts)
+    3. Falls back to UTC
+    """
+    # 1. Live heartbeat context (MemoryStore, TTL 1h)
+    try:
+        from services.client_context_service import ClientContextService
+        ctx = ClientContextService().get()
+        tz_name = ctx.get("timezone")
+        if tz_name:
+            return ZoneInfo(tz_name)
+    except Exception:
+        pass
+
+    # 2. Persistent setting (survives restarts, no heartbeat needed)
+    try:
+        from services.database_service import get_shared_db_service
+        from services.settings_service import SettingsService
+        tz_name = SettingsService(get_shared_db_service()).get("user_timezone")
+        if tz_name:
+            return ZoneInfo(tz_name)
+    except Exception:
+        pass
+
+    # 3. UTC fallback
+    return ZoneInfo("UTC")

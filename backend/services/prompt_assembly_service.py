@@ -280,11 +280,13 @@ class PromptAssemblyService:
             else ''
         )
 
-        # Replace placeholders
+        # Replace placeholders — use user's local timezone when available
         try:
-            from services.time_utils import utc_now
-            _now = utc_now()
-            _current_datetime = _now.strftime('%A, %Y-%m-%d %H:%M UTC')
+            from services.time_utils import utc_now, get_user_tz
+            _tz = get_user_tz()
+            _now = utc_now().astimezone(_tz)
+            _tz_abbr = _now.strftime('%Z') or _tz.key
+            _current_datetime = _now.strftime(f'%A, %Y-%m-%d %H:%M {_tz_abbr}')
             _current_date = _now.strftime('%A, %Y-%m-%d')
         except Exception:
             from datetime import datetime, timezone

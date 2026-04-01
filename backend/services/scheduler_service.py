@@ -352,34 +352,32 @@ def _calculate_next_due(
         next_dt = due_at + timedelta(hours=1)
 
         # If window_start/window_end set, enforce the window
+        # Windows are in user-local time — convert for comparison
         if window_start and window_end:
             start_hour, start_min = map(int, window_start.split(":"))
             end_hour, end_min = map(int, window_end.split(":"))
 
+            from services.time_utils import get_user_tz
+            tz = get_user_tz()
+
             # Cascade prevention: loop up to 48 times to find next valid hour within window
             for _ in range(48):
-                next_hour = next_dt.hour
-                next_min = next_dt.minute
-
-                # Check if within window
-                current_time = (next_hour, next_min)
+                local_dt = next_dt.astimezone(tz)
+                current_time = (local_dt.hour, local_dt.minute)
                 window_start_time = (start_hour, start_min)
                 window_end_time = (end_hour, end_min)
 
                 if window_start_time <= current_time < window_end_time:
-                    # Within window, return this time
                     return next_dt
 
-                # Outside window: advance to next day's window_start
+                # Outside window: advance in local time, convert back to UTC
                 if current_time >= window_end_time:
-                    # Past end of window, advance to tomorrow's start
-                    next_dt = (next_dt + timedelta(days=1)).replace(
+                    local_next = (local_dt + timedelta(days=1)).replace(
                         hour=start_hour, minute=start_min
                     )
                 else:
-                    # Before window_start, jump to window_start today
-                    next_dt = next_dt.replace(hour=start_hour, minute=start_min)
-            # Fallback if loop completes without finding a valid slot
+                    local_next = local_dt.replace(hour=start_hour, minute=start_min)
+                next_dt = local_next.astimezone(timezone.utc)
             return None
 
         return next_dt

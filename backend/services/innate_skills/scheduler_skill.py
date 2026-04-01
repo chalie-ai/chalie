@@ -17,7 +17,7 @@ TOOL_SCHEMA = {
         "Create, list, or cancel scheduled reminders and prompts. "
         "Use when the user asks to be reminded of something, schedule a recurring check, "
         "or manage existing reminders. Always normalize natural time expressions to ISO 8601 "
-        "UTC before calling create. due_at must be in the future. "
+        "with the user's timezone offset before calling create. due_at must be in the future. "
         "Use the injected current date/time as anchor for relative expressions — never use "
         "training-time knowledge of today's date. "
         "'notification' surfaces text as-is at the scheduled time; 'prompt' feeds text to "
@@ -42,8 +42,9 @@ TOOL_SCHEMA = {
             "due_at": {
                 "type": "string",
                 "description": (
-                    "Required for create: ISO 8601 UTC timestamp "
-                    "(e.g. '2026-03-20T09:00:00+00:00'). Must be in the future."
+                    "Required for create: ISO 8601 timestamp with timezone offset "
+                    "(e.g. '2026-03-20T09:00:00+02:00'). Use the user's timezone offset. "
+                    "Must be in the future."
                 ),
             },
             "item_type": {

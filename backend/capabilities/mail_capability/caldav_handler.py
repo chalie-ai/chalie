@@ -15,7 +15,7 @@ import uuid
 from datetime import timedelta
 from itertools import combinations
 
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now, parse_utc, get_user_tz
 
 logger = logging.getLogger(__name__)
 
@@ -100,17 +100,16 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 
 
 def _get_user_tz():
-    """Return user's ZoneInfo timezone or None."""
-    try:
-        from services.database_service import get_shared_db_service
-        from services.settings_service import SettingsService
-        tz_name = SettingsService(get_shared_db_service()).get("user_timezone")
-        if tz_name:
-            from zoneinfo import ZoneInfo
-            return ZoneInfo(tz_name)
-    except Exception:
-        pass
-    return None
+    """Return user's ZoneInfo timezone or None.
+
+    Delegates to the centralised ``get_user_tz()`` in time_utils.
+    Returns None when the result is plain UTC (no user timezone detected).
+    """
+    from zoneinfo import ZoneInfo
+    tz = get_user_tz()
+    if tz.key == "UTC":
+        return None
+    return tz
 
 
 def _next_morning_8am() -> _dt_module.datetime:

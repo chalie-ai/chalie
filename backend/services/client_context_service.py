@@ -165,6 +165,10 @@ class ClientContextService:
         # Session re-entry detection
         self._check_session_reentry(cached_ctx)
 
+        # Persist timezone to settings (survives restarts, enables CalDAV/scheduler)
+        if tz_name := ctx.get("timezone"):
+            self._persist_timezone(tz_name, cached_ctx.get("timezone"))
+
         # Save primary context
         ctx["saved_at"] = time.time()
         self._store.set(STORE_KEY, json.dumps(ctx), ex=TTL)
@@ -380,6 +384,31 @@ class ClientContextService:
             ))
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Event bridge emission failed: {e}")
+
+    def _persist_timezone(self, tz_name: str, previous_tz: str | None):
+        """Write user_timezone to settings if it changed.
+
+        Only writes on actual change to avoid unnecessary DB churn on every
+        heartbeat (sent every 5 minutes).
+        """
+        if tz_name == previous_tz:
+            return
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz_name)  # validate IANA name
+        except (KeyError, Exception):
+            logging.debug(f"[CLIENT CONTEXT] Invalid timezone '{tz_name}', not persisting")
+            return
+        try:
+            from services.database_service import get_shared_db_service
+            from services.settings_service import SettingsService
+            SettingsService(get_shared_db_service()).set(
+                "user_timezone", tz_name, "string",
+                "User IANA timezone (auto-detected from client heartbeat)"
+            )
+            logging.debug(f"[CLIENT CONTEXT] Persisted user_timezone={tz_name}")
+        except Exception as e:
+            logging.debug(f"[CLIENT CONTEXT] Failed to persist timezone: {e}")
 
     def is_session_reentry(self) -> bool:
         """Check if the user just returned from an extended absence."""
