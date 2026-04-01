@@ -627,9 +627,10 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks(document_id);
 
--- FTS5 for chunk search
+-- FTS5 for chunk search (porter stemming: "temperatures" matches "temperature")
 CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
-    content, section_title, content='document_chunks', content_rowid='id'
+    content, section_title, content='document_chunks', content_rowid='id',
+    tokenize='porter unicode61'
 );
 
 -- ────────────────────────────────────────────────────────────────

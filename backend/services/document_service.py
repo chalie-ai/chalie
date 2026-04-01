@@ -806,7 +806,7 @@ class DocumentService:
         query_embedding: list,
         query_text: str,
         limit: int = 5,
-        distance_threshold: float = 0.65,
+        distance_threshold: float = 1.5,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid 3-signal search across document chunks:

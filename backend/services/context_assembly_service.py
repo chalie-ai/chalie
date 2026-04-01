@@ -40,7 +40,6 @@ class ContextAssemblyService:
         'working_memory': 1.0,
         'moments': 0.95,
         'episodes': 0.7,
-        'procedural': 0.65,
         'concepts': 0.6
     }
 
@@ -99,7 +98,6 @@ class ContextAssemblyService:
         sections['working_memory'] = self._get_working_memory(wm_identifier, topic, context=context)
         sections['moments'] = self._get_moments(prompt, context=context)
         sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding, context=context)
-        sections['procedural'] = self._get_procedural_hints(topic, context=context)
         sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding, context=context)
 
         # Inject recent visible context from previous session (visual continuity bridge)
@@ -401,7 +399,7 @@ class ContextAssemblyService:
 
             db = get_shared_db_service()
             ks = KnowledgeService(db)
-            concepts = ks.recall(prompt, kinds=['concept'], limit=5)
+            concepts = ks.recall(prompt, kinds=['concept', 'trait'], limit=5)
 
             if not concepts:
                 return ""
@@ -428,58 +426,6 @@ class ContextAssemblyService:
             logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
             if context is not None:
                 context.record_failure('concepts', e)
-            return ""
-
-    def _get_procedural_hints(self, topic: str = None, context: 'TopicContext' = None) -> str:
-        """
-        Retrieve learned action reliability from procedural memory.
-
-        Only surfaces skills with sufficient experience (>=8 attempts) to avoid
-        biasing the model with noisy early data. Uses softened language for
-        borderline performance ("less consistent results so far") to avoid
-        discouraging exploration of potentially useful skills.
-        """
-        try:
-            from services.knowledge_service import KnowledgeService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            ks = KnowledgeService(db_service)
-
-            ranked = ks.get_ranked_procedures(topic=topic)
-            if not ranked:
-                return ""
-
-            lines = ["## Learned Action Reliability"]
-            shown = 0
-            for skill in ranked:
-                if shown >= 3:
-                    break
-
-                name = skill.get('name', '')
-                sr = skill.get('success_rate', 0)
-                attempts = skill.get('attempts', 0)
-
-                # Require sufficient experience before surfacing
-                if attempts < 8:
-                    continue
-
-                if sr > 0.85:
-                    label = "reliable"
-                elif sr >= 0.70:
-                    label = "moderate"
-                else:
-                    label = "less consistent results so far"
-
-                lines.append(f"- {name}: {label} ({int(sr * 100)}% over {attempts} uses)")
-                shown += 1
-
-            return "\n".join(lines) if len(lines) > 1 else ""
-
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Procedural memory unavailable: {e}")
-            if context is not None:
-                context.record_failure('procedural', e)
             return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
@@ -526,7 +472,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'moments', 'episodes', 'procedural', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'episodes', 'concepts', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))

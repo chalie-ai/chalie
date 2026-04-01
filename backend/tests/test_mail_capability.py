@@ -585,8 +585,8 @@ class TestEnsureSyncRegistration:
                     cap._ensure_sync_registration()
                     cap._ensure_sync_registration()  # second call should be a no-op
 
-        # INSERT should only be called once
-        assert mock_cursor.execute.call_count == 2  # SELECT + INSERT on first call only
+        # UPDATE (backfill) + SELECT + INSERT on first call only; second call is no-op
+        assert mock_cursor.execute.call_count == 3
 
     def test_registration_sets_flag(self):
         cap, vault, tcs = _make_capability()

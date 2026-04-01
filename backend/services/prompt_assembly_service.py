@@ -383,11 +383,11 @@ class PromptAssemblyService:
             tool_names = self._get_registered_tool_names()
             result = result.replace('{{registered_tool_names}}', tool_names)
 
-        # Strategy hints from procedural memory (learned action reliability)
-        strategy_hints = ''
+        # Methodology guidance from learned goal-cluster patterns
+        methodology_guidance = ''
         if _include('strategy_hints'):
-            strategy_hints = self._get_strategy_hints(topic)
-        result = result.replace('{{strategy_hints}}', strategy_hints)
+            methodology_guidance = self._get_methodology_guidance(original_prompt)
+        result = result.replace('{{strategy_hints}}', methodology_guidance)
 
         # Constraint context — gate rejection patterns visible to LLM
         constraint_context = ''
@@ -903,44 +903,82 @@ class PromptAssemblyService:
             logging.debug(f"[FRONTAL CORTEX] Failed to fetch tool names: {e}")
             return '(none registered)'
 
-    def _get_strategy_hints(self, topic: str) -> str:
-        """Build compact strategy hints from procedural memory for the ACT prompt.
+    def _get_methodology_guidance(self, request_text: str) -> str:
+        """Retrieve methodology guidance from learned methodology records via KNN.
 
-        Args:
-            topic: Current conversation topic (used for topic-affinity ranking).
+        Each methodology record was written by PostLoopReflectionService and already
+        passed the outcome_quality >= 0.35 gate at write time — no further filtering
+        needed. Among records within 0.05 of the best match distance, prefer the
+        most recently created (it has the most compounded knowledge).
 
-        Returns:
-            str: Formatted ``## Strategy Hints`` section string listing up to 8
-            action-reliability signals, or empty string when no data is available.
+        Returns top-2 guidance paragraphs as a formatted section, or '' if none found.
         """
         try:
-            from services.knowledge_service import KnowledgeService
+            from services.embedding_service import get_embedding_service
+            from services.embedding_utils import pack_embedding
             from services.database_service import get_shared_db_service
 
             db = get_shared_db_service()
-            ks = KnowledgeService(db)
-            ranked = ks.get_ranked_procedures(topic=topic, limit=20)
+            emb_service = get_embedding_service()
 
-            hints = []  # (extremity_score, hint_text) tuples
-            for proc in ranked:
-                attempts = proc.get('attempts', 0)
-                if attempts < 5:
-                    continue
-                sr = proc.get('success_rate', 0)
-                name = proc.get('name', '')
-                reliability = (sr * attempts + 1) / (attempts + 2)
-                extremity = abs(reliability - 0.5)
-                if reliability < 0.4:
-                    hints.append((extremity, f"{name}: low reliability ({int(reliability*100)}% over {attempts} uses)"))
-                elif reliability > 0.85:
-                    hints.append((extremity, f"{name}: reliable ({int(reliability*100)}% over {attempts} uses)"))
-
-            if not hints:
+            query_embedding = emb_service.generate_embedding(request_text)
+            if query_embedding is None:
                 return ''
-            # Sort by extremity (strongest signals first) for cognitive prioritization
-            hints.sort(key=lambda h: h[0], reverse=True)
-            lines = [h[1] for h in hints[:8]]
-            return "## Strategy Hints (from experience)\n" + "\n".join(f"- {l}" for l in lines)
+
+            blob = pack_embedding(query_embedding)
+            if not blob:
+                return ''
+
+            matches = []
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.rowid, v.distance
+                    FROM knowledge_vec v
+                    WHERE v.embedding MATCH ? AND k = ?
+                    ORDER BY v.distance
+                """, (blob, 8))
+                vec_results = cursor.fetchall()
+
+                candidates = []  # (distance, created_at, value)
+                for rid, distance in vec_results:
+                    cursor.execute("""
+                        SELECT value, created_at
+                        FROM knowledge
+                        WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
+                          AND deleted_at IS NULL AND value != ''
+                    """, (rid,))
+                    row = cursor.fetchone()
+                    if row:
+                        candidates.append((distance, row[1] or '', row[0]))
+
+                # Deduplicate into top-2: for each group of records within 0.05 of
+                # each other, keep only the most recent. Then take the top-2 groups.
+                selected = []
+                for dist, created_at, value in candidates:
+                    if not selected:
+                        selected.append((dist, created_at, value))
+                        continue
+                    last_dist = selected[0][0]
+                    if dist <= last_dist + 0.05:
+                        # Same cluster — replace with this one if it's newer
+                        if created_at > selected[-1][1]:
+                            selected[-1] = (dist, created_at, value)
+                    else:
+                        selected.append((dist, created_at, value))
+                    if len(selected) >= 2:
+                        break
+
+                matches = [v for _, _, v in selected]
+                cursor.close()
+
+            if not matches:
+                return ''
+
+            parts = ["## Methodology Guidance"]
+            parts.extend(matches)
+            return '\n\n'.join(parts)
+
         except Exception:
             return ''
 

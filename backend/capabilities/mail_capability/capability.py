@@ -588,6 +588,12 @@ class MailCapability(AbstractCapability):
             now = utc_now()
             with db.connection() as conn:
                 cursor = conn.cursor()
+                # Backfill: any mail/caldav records created before `hidden` column
+                # will have hidden=NULL; treat them as hidden.
+                cursor.execute(
+                    "UPDATE scheduled_items SET hidden = 1"
+                    " WHERE source = 'mail' AND COALESCE(hidden, 0) != 1"
+                )
                 cursor.execute(
                     "SELECT id FROM scheduled_items WHERE external_uid = ?",
                     ("system:mail:sync",),

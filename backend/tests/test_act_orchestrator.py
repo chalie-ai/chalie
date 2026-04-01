@@ -16,7 +16,6 @@ from services.act_orchestrator_service import (
     ACTResult,
     _action_fingerprint,
     _action_types,
-    _maybe_auto_reflect,
 )
 
 
@@ -339,27 +338,26 @@ class TestCallbackTermination:
         assert result.termination_reason == 'cancelled'
 
 
-# ── Orchestrator: critic (post-loop reflection) ─────────────────────
+# ── Orchestrator: methodology learning ─────────────────────────────
 
 @pytest.mark.unit
-class TestCriticEnabled:
+class TestMethodologyLearning:
+    @patch('services.act_orchestrator_service.threading')
     @patch('services.act_orchestrator_service.ActLoopService')
-    @patch('services.act_orchestrator_service.ACTOrchestrator._post_loop_reflection')
-    def test_post_loop_reflection_called(self, mock_reflect, MockActLoop):
-        """_post_loop_reflection is called after the loop exits."""
-        mock_reflect.return_value = None
+    def test_methodology_thread_started_after_multi_iteration_loop(self, MockActLoop, mock_threading):
+        """Methodology learning daemon thread starts when loop runs >= 2 iterations."""
+        mock_thread = MagicMock()
+        mock_threading.Thread.return_value = mock_thread
 
         mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.get_history_context.return_value = 'recall -> success: found data'
         mock_loop.act_history = [_make_action_result('recall', 'success', 'found')]
         mock_loop.iteration_logs = []
         mock_loop.iteration_number = 2
-        mock_loop.fatigue = 0.0
-        mock_loop._critic = None
+        mock_loop.loop_id = 'test-loop-id'
         mock_loop._escalation_hint_injected = False
         mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.side_effect = [
             (True, None),
             (False, 'max_iterations'),
@@ -373,54 +371,71 @@ class TestCriticEnabled:
             _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
         ])
 
-        orchestrator = ACTOrchestrator(
-            config={}, max_iterations=5, smart_repetition=False,
-        )
+        orchestrator = ACTOrchestrator(config={}, max_iterations=5, smart_repetition=False)
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
 
-        assert mock_reflect.called
+        mock_threading.Thread.assert_called_once()
+        call_kwargs = mock_threading.Thread.call_args[1]
+        assert call_kwargs.get('daemon') is True
+        mock_thread.start.assert_called_once()
 
     @patch('services.act_orchestrator_service.ActLoopService')
-    @patch('services.act_orchestrator_service.ACTOrchestrator._post_loop_reflection')
-    def test_reflection_stored_in_result(self, mock_reflect, MockActLoop):
-        """Reflection returned by _post_loop_reflection is stored in ACTResult."""
-        fake_reflection = {
-            'outcome_quality': 0.8,
-            'what_worked': 'recall was accurate',
-            'what_failed': None,
-            'lesson': 'use recall before schedule',
-            'confidence': 0.9,
-        }
-        mock_reflect.return_value = fake_reflection
+    def test_methodology_thread_not_started_for_single_iteration(self, MockActLoop):
+        """Methodology learning thread is NOT started for loops with < 2 iterations.
 
+        The mock loop starts at iteration_number=0. The orchestrator increments it
+        once via += 1 when no_actions exits. Final value = 1, which is < 2 so no
+        methodology thread is started.
+        """
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
         mock_loop.iteration_logs = []
         mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
-        mock_loop._critic = None
+        mock_loop.loop_id = 'test-id'
         mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         MockActLoop.return_value = mock_loop
 
         cortex = _make_cortex_service([_make_response(actions=[])])
 
+        with patch('services.act_orchestrator_service.threading') as mock_threading:
+            orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
+            orchestrator.run(
+                topic='test', text='hello', cortex_service=cortex,
+                act_prompt='test', classification={'topic': 't', 'confidence': 10},
+                chat_history=[],
+            )
+            mock_threading.Thread.assert_not_called()
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_reflection_is_none_in_result(self, MockActLoop):
+        """ACTResult.reflection is always None (methodology learning is async)."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([_make_response(actions=[])])
         orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
-
-        assert result.reflection == fake_reflection
-
+        assert result.reflection is None
 
 
 # ── Orchestrator: constructor parameters ───────────────────────────
@@ -1055,96 +1070,6 @@ class TestGetCautionaryLessons:
         assert result == ''
 
 
-# ── Orchestrator: _record_failure_lesson ───────────────────────────
-
-@pytest.mark.unit
-class TestRecordFailureLesson:
-    """Direct unit tests for :meth:`ACTOrchestrator._record_failure_lesson`."""
-
-    def _mock_record_modules(self, analyze_return=None, db_raises=False):
-        """Build sys.modules patches for FailureAnalysisService and DB used in _record_failure_lesson.
-
-        Args:
-            analyze_return: Value returned by ``fas.analyze()``.
-            db_raises: When True, the DB service raises instead of returning a mock.
-
-        Returns:
-            tuple: (mock_fas_instance, sys_modules_dict) where sys_modules_dict is suitable
-                for ``patch.dict('sys.modules', ...)``.
-        """
-        mock_fas_instance = MagicMock()
-        mock_fas_instance.analyze.return_value = analyze_return or {
-            'lesson': 'use recall carefully', 'blame': 'recall'
-        }
-        mock_fas_mod = MagicMock()
-        mock_fas_mod.FailureAnalysisService.return_value = mock_fas_instance
-
-        mock_db_mod = MagicMock()
-        if db_raises:
-            mock_db_mod.get_shared_db_service.side_effect = Exception('no db')
-        else:
-            mock_db_mod.get_shared_db_service.return_value = MagicMock()
-
-        modules = {
-            'services.failure_analysis_service': mock_fas_mod,
-            'services.database_service': mock_db_mod,
-        }
-        return mock_fas_instance, modules
-
-    def test_major_severity_calls_analyze_and_store_synchronously(self):
-        """Major severity invokes FailureAnalysisService.analyze() and store_lesson() inline."""
-        orch = ACTOrchestrator.__new__(ACTOrchestrator)
-        orch.config = {}
-
-        mock_fas_instance, modules = self._mock_record_modules()
-
-        with patch.dict('sys.modules', modules):
-            orch._record_failure_lesson(
-                action_type='recall',
-                failure_context={'original_request': 'find something'},
-                severity='major',
-            )
-
-        mock_fas_instance.analyze.assert_called_once()
-        mock_fas_instance.store_lesson.assert_called_once()
-
-    def test_minor_severity_spawns_daemon_thread(self):
-        """Minor severity creates and starts a daemon thread for async recording."""
-        orch = ACTOrchestrator.__new__(ACTOrchestrator)
-        orch.config = {}
-
-        with patch('threading.Thread') as mock_thread_class:
-            mock_thread_instance = MagicMock()
-            mock_thread_class.return_value = mock_thread_instance
-
-            orch._record_failure_lesson(
-                action_type='recall',
-                failure_context={'original_request': 'test'},
-                severity='minor',
-            )
-
-        mock_thread_class.assert_called_once()
-        call_kwargs = mock_thread_class.call_args.kwargs
-        assert call_kwargs.get('daemon') is True
-        assert 'failure-lesson' in (call_kwargs.get('name') or '')
-        mock_thread_instance.start.assert_called_once()
-
-    def test_fail_open_when_db_unavailable(self):
-        """No exception propagates when the DB service is unavailable (major severity)."""
-        orch = ACTOrchestrator.__new__(ACTOrchestrator)
-        orch.config = {}
-
-        _, modules = self._mock_record_modules(db_raises=True)
-
-        with patch.dict('sys.modules', modules):
-            # Must not raise
-            orch._record_failure_lesson(
-                action_type='recall',
-                failure_context={'original_request': 'test'},
-                severity='major',
-            )
-
-
 # ── Orchestrator: _escalate_and_wait ───────────────────────────────
 
 @pytest.mark.unit
@@ -1212,84 +1137,6 @@ class TestEscalateAndWait:
             )
 
         assert result is None
-
-
-# ── _maybe_auto_reflect (module-level function) ─────────────────────
-
-@pytest.mark.unit
-class TestMaybeAutoReflect:
-    """Tests for the module-level :func:`_maybe_auto_reflect` function."""
-
-    def test_skips_loop_below_min_iterations(self):
-        """Does nothing when iterations_used is below _AUTO_REFLECT_MIN_ITERATIONS (2)."""
-        with patch('threading.Thread') as mock_thread:
-            _maybe_auto_reflect(
-                topic='test',
-                iteration_logs=[],
-                termination_reason='no_actions',
-                iterations_used=1,
-            )
-        mock_thread.assert_not_called()
-
-    def _mock_auto_reflect_store(self):
-        """Return a sys.modules patch dict that clears the cooldown so reflection proceeds.
-
-        A real :class:`MemoryStore` instance is used so that ``store.get`` on any
-        key returns ``None`` by default, meaning no cooldown is active.
-
-        Returns:
-            dict: Suitable for ``patch.dict('sys.modules', ...)``.
-        """
-        store = MemoryStore()  # Fresh store — no cooldown key set
-        mock_mem_mod = MagicMock()
-        mock_mem_mod.MemoryClientService.create_connection.return_value = store
-        return {'services.memory_client': mock_mem_mod}
-
-    def test_triggers_on_degraded_exit(self):
-        """Fires background reflection when the termination reason is in DEGRADED_EXITS."""
-        with patch.dict('sys.modules', self._mock_auto_reflect_store()), \
-             patch('threading.Thread') as mock_thread:
-            mock_thread.return_value = MagicMock()
-            _maybe_auto_reflect(
-                topic='unique-degraded-exit-test',
-                iteration_logs=[{'net_value': 0.0}, {'net_value': 0.0}],
-                termination_reason='smart_repetition',
-                iterations_used=2,
-            )
-        mock_thread.assert_called_once()
-        call_kwargs = mock_thread.call_args.kwargs
-        assert call_kwargs.get('daemon') is True
-        mock_thread.return_value.start.assert_called_once()
-
-    def test_triggers_on_high_net_value(self):
-        """Fires background reflection when total net value exceeds HIGH_VALUE threshold (3.0)."""
-        with patch.dict('sys.modules', self._mock_auto_reflect_store()), \
-             patch('threading.Thread') as mock_thread:
-            mock_thread.return_value = MagicMock()
-            _maybe_auto_reflect(
-                topic='unique-high-value-test',
-                iteration_logs=[
-                    {'net_value': 2.0},
-                    {'net_value': 2.0},  # total = 4.0 > 3.0
-                ],
-                termination_reason='no_actions',
-                iterations_used=2,
-            )
-        mock_thread.assert_called_once()
-
-    def test_does_not_trigger_on_neutral_normal_exit(self):
-        """Does NOT fire reflection when net value is neutral and exit is normal."""
-        with patch('threading.Thread') as mock_thread:
-            _maybe_auto_reflect(
-                topic='neutral-test',
-                iteration_logs=[
-                    {'net_value': 0.5},
-                    {'net_value': 0.5},  # total = 1.0 — neither high nor low
-                ],
-                termination_reason='no_actions',
-                iterations_used=2,
-            )
-        mock_thread.assert_not_called()
 
 
 # ── Orchestrator: edge cases ────────────────────────────────────────
