@@ -29,6 +29,8 @@ Termination model (fatigue-free):
 """
 
 import json
+import re
+import threading
 import time
 import logging
 from dataclasses import dataclass, field
@@ -325,7 +327,7 @@ class ACTOrchestrator:
                     started_at=iteration_start, completed_at=time.time(),
                     chosen_mode='ACT', chosen_confidence=0.0,
                     actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
-                    termination_reason=termination_reason, decision_data={'net_value': 0.0},
+                    termination_reason=termination_reason,
                 )
                 act_loop.iteration_number += 1
                 break
@@ -399,7 +401,6 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -414,7 +415,6 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -545,7 +545,6 @@ class ACTOrchestrator:
                 actions_executed=actions_executed,
                 frontal_cortex_response=response_data,
                 termination_reason=termination_reason if termination_reason else None,
-                decision_data={'net_value': 0.0},
             )
 
             act_loop.iteration_number += 1
@@ -657,22 +656,22 @@ class ACTOrchestrator:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Loop telemetry write failed (non-fatal): {e}")
 
-        # ── Post-loop: automatic reflection (fire-and-forget) ────────
-        _maybe_auto_reflect(
-            topic=topic,
-            iteration_logs=act_loop.iteration_logs,
-            termination_reason=termination_reason,
-            iterations_used=act_loop.iteration_number,
-        )
-
-        # ── Post-loop: critic reflection → procedural memory ─────────
-        reflection = self._post_loop_reflection(
-            act_history=act_loop.act_history,
-            original_goal=text,
-            iterations_used=act_loop.iteration_number,
-            termination_reason=termination_reason or '',
-            topic=topic,
-        )
+        # ── Post-loop: methodology learning (fire-and-forget) ──────
+        reflection = None  # Async — never blocks
+        if act_loop.iteration_number >= 2:
+            _ml_thread = threading.Thread(
+                target=self._update_methodology_learning,
+                args=(
+                    text,
+                    act_loop.get_history_context(),
+                    termination_reason or '',
+                    act_loop.loop_id or '',
+                    act_loop.iteration_number,
+                ),
+                daemon=True,
+                name=f"methodology-{(act_loop.loop_id or 'x')[:8]}",
+            )
+            _ml_thread.start()
 
         return ACTResult(
             act_history=act_loop.act_history,
@@ -760,107 +759,173 @@ class ACTOrchestrator:
         )
         return pruned
 
-    def _post_loop_reflection(
+    def _update_methodology_learning(
         self,
-        act_history: list,
-        original_goal: str,
-        iterations_used: int,
+        exchange_text: str,
+        act_history_text: str,
         termination_reason: str,
-        topic: str,
-    ) -> Optional[dict]:
-        """Run post-loop critic reflection and store the lesson in procedural memory.
+        loop_id: str,
+        iterations_used: int,
+    ) -> None:
+        """Post-loop methodology learning. Always runs in a daemon thread.
 
-        This is the only critic call in the ACT loop. It runs once, after the loop
-        exits, and feeds the result into procedural memory. It never blocks the
-        response — failures are caught and logged.
-
-        Returns:
-            Reflection dict {outcome_quality, what_worked, what_failed, lesson,
-            confidence} or None if reflection failed or was skipped.
+        1. Embed exchange_text to find the closest methodology cluster
+        2. KNN search knowledge for entity='methodology', kind='procedure'
+        3. If best match distance < 0.6: use existing goal_guidance paragraph
+           else: existing_goal_guidance = '' (create new record)
+        4. Call PostLoopReflectionService.reflect(...)
+        5. If outcome_quality < 0.35: store observation only
+        6. Store/update knowledge record
         """
-        # Skip trivial single-action loops — not enough signal
-        if iterations_used < 2:
-            return None
-
         try:
-            from services.critic_service import CriticService
+            import json as _json
+            from services.embedding_utils import pack_embedding
+            from services.knowledge_service import KnowledgeService
+            from services.database_service import get_shared_db_service
+            from services.embedding_service import get_embedding_service
+            from services.post_loop_reflection_service import PostLoopReflectionService
+            from services.time_utils import utc_now
 
-            # Extract actions and results from act_history
-            actions_taken = []
-            results = []
-            for entry in act_history:
-                if isinstance(entry, dict):
-                    atype = entry.get('action_type', '')
-                    if atype and atype != 'system':
-                        actions_taken.append({'type': atype})
-                        results.append(entry)
+            db = get_shared_db_service()
+            ks = KnowledgeService(db)
+            emb_service = get_embedding_service()
 
-            if not results:
-                return None
+            # Step 1: Embed exchange_text
+            query_embedding = emb_service.generate_embedding(exchange_text)
+            if query_embedding is None:
+                logger.debug(f"{LOG_PREFIX} Methodology learning: embedding failed, skipping")
+                return
 
-            critic = CriticService()
-            reflection = critic.reflect_on_execution(
-                actions_taken=actions_taken,
-                results=results,
-                original_goal=original_goal,
-                iterations=iterations_used,
+            # Step 2: KNN search for existing methodology records
+            existing_goal_guidance = ''
+            matched_key = None
+            matched_record = None
+
+            blob = pack_embedding(query_embedding)
+            if blob:
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT v.rowid, v.distance
+                        FROM knowledge_vec v
+                        WHERE v.embedding MATCH ? AND k = ?
+                        ORDER BY v.distance
+                    """, (blob, 5))
+                    vec_results = cursor.fetchall()
+
+                    for rid, distance in vec_results:
+                        # distance threshold: 0.6 corresponds roughly to cosine similarity >= 0.72
+                        # for L2-normalized embeddings (cosine = 1 - L2²/2)
+                        if distance >= 0.6:
+                            continue
+
+                        cursor.execute("""
+                            SELECT key, value, data
+                            FROM knowledge
+                            WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
+                              AND deleted_at IS NULL
+                        """, (rid,))
+                        row = cursor.fetchone()
+                        if row:
+                            matched_key = row[0]
+                            existing_goal_guidance = row[1] or ''
+                            raw_data = row[2]
+                            if raw_data and isinstance(raw_data, str):
+                                try:
+                                    matched_record = _json.loads(raw_data)
+                                except (_json.JSONDecodeError, TypeError):
+                                    matched_record = {}
+                            elif isinstance(raw_data, dict):
+                                matched_record = raw_data
+                            else:
+                                matched_record = {}
+                            break  # Use the best match only
+
+                    cursor.close()
+
+            # Step 3: Call PostLoopReflectionService
+            reflection_service = PostLoopReflectionService()
+            reflection = reflection_service.reflect(
+                exchange_text=exchange_text,
+                act_history_text=act_history_text,
                 termination_reason=termination_reason,
+                existing_goal_guidance=existing_goal_guidance,
+                loop_id=loop_id,
+                iterations_used=iterations_used,
             )
 
-            if reflection is None:
-                return None
+            if not reflection:
+                logger.debug(f"{LOG_PREFIX} Methodology learning: reflection empty, skipping")
+                return
 
-            # Store lesson in procedural memory for each unique action type used
-            lesson = reflection.get('lesson')
             outcome_quality = reflection.get('outcome_quality', 0.5)
-            if lesson:
-                try:
-                    from services.database_service import get_shared_db_service
-                    from services.knowledge_service import KnowledgeService
-                    db = get_shared_db_service()
-                    ks = KnowledgeService(db)
+            goal_guidance = reflection.get('goal_guidance', '')
+            lesson = reflection.get('lesson')
 
-                    # Record outcome for each action type used in the loop
-                    seen_types = set()
-                    for entry in results:
-                        atype = entry.get('action_type', '')
-                        if not atype or atype in ('system', 'critic_escalation') or atype in seen_types:
-                            continue
-                        seen_types.add(atype)
-                        success = outcome_quality >= 0.5
-                        reward = (outcome_quality - 0.5) * 2.0  # map [0,1] → [-1,1]
-                        ks.record_procedure_outcome(
-                            action_name=atype,
-                            success=success,
-                            reward=reward,
-                            topic=topic,
-                        )
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Procedural memory write failed (non-fatal): {e}")
+            # Step 4: Build observation
+            observation = {
+                'ts': utc_now().isoformat(),
+                'outcome_quality': outcome_quality,
+                'lesson': lesson or '',
+                'loop_id': loop_id or '',
+            }
 
-            # Record failure lessons when outcome is poor
-            if outcome_quality < 0.4 and reflection.get('what_failed'):
-                for atype in seen_types:
-                    self._record_failure_lesson(
-                        action_type=atype,
-                        failure_context={
-                            'original_request': original_goal,
-                            'action_type': atype,
-                            'action_intent': {},
-                            'action_result': {'status': 'poor_outcome', 'quality': outcome_quality},
-                            'error_signals': {
-                                'what_failed': reflection['what_failed'],
-                                'termination_reason': termination_reason,
-                            },
-                        },
-                        severity='minor',
+            # Step 5: Determine key for new records
+            if matched_key is None:
+                matched_record = {'observations': [], 'total_count': 0}
+                slug_words = re.sub(r'[^a-z0-9\s]', '', exchange_text.lower()).split()[:6]
+                slug = '_'.join(slug_words)[:60]
+                if not slug:
+                    slug = f"goal_{loop_id[:8]}" if loop_id else 'goal_unknown'
+                matched_key = slug
+
+            # Step 6: Update observations list (cap at 50)
+            observations = matched_record.get('observations', [])
+            observations.append(observation)
+            if len(observations) > 50:
+                observations = observations[-50:]
+            total_count = matched_record.get('total_count', 0) + 1
+            new_data = {'observations': observations, 'total_count': total_count}
+
+            # Step 7: Store — quality gate: poor outcomes don't overwrite paragraph
+            existing = ks.get('methodology', matched_key)
+            if outcome_quality < 0.35:
+                logger.info(
+                    f"{LOG_PREFIX} Methodology learning: poor outcome ({outcome_quality:.2f}), "
+                    f"observation only for '{matched_key}'"
+                )
+                if existing:
+                    ks.update('methodology', matched_key, data=new_data)
+                else:
+                    ks.store(
+                        kind='procedure', entity='methodology', key=matched_key,
+                        value='', data=new_data, decay_class='slow',
+                        confidence=0.3, source='post_loop_reflection',
+                        embedding=query_embedding,
+                    )
+            else:
+                new_value = goal_guidance if goal_guidance else existing_goal_guidance
+                new_confidence = min(0.9, 0.3 + total_count * 0.05)
+                if existing:
+                    ks.update(
+                        'methodology', matched_key,
+                        value=new_value, data=new_data, confidence=new_confidence,
+                    )
+                else:
+                    ks.store(
+                        kind='procedure', entity='methodology', key=matched_key,
+                        value=new_value, data=new_data, decay_class='slow',
+                        confidence=0.3, source='post_loop_reflection',
+                        embedding=query_embedding,
                     )
 
-            return reflection
+            logger.info(
+                f"{LOG_PREFIX} Methodology learning: stored '{matched_key}' "
+                f"(quality={outcome_quality:.2f}, total={total_count})"
+            )
 
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _post_loop_reflection failed (non-fatal): {e}")
-            return None
+            logger.debug(f"{LOG_PREFIX} _update_methodology_learning failed (non-fatal): {e}")
 
     def _get_cautionary_lessons(self, recent_history: list) -> str:
         """Retrieve failure lessons relevant to recently executed action types."""
@@ -888,33 +953,6 @@ class ACTOrchestrator:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} _get_cautionary_lessons failed (non-fatal): {e}")
             return ''
-
-    def _record_failure_lesson(
-        self, action_type: str, failure_context: dict, severity: str = 'minor'
-    ) -> None:
-        """Analyse a failed action and store a lesson. Major = sync, minor = async."""
-        def _do_record():
-            try:
-                from services.failure_analysis_service import FailureAnalysisService
-                from services.database_service import get_shared_db_service
-                db = get_shared_db_service()
-                fas = FailureAnalysisService(db)
-                analysis = fas.analyze(failure_context)
-                if analysis:
-                    fas.store_lesson(analysis, action_type)
-            except Exception as exc:
-                logger.warning(f"{LOG_PREFIX} Failure lesson recording failed: {exc}")
-
-        if severity == 'major':
-            _do_record()
-        else:
-            import threading
-            t = threading.Thread(
-                target=_do_record,
-                daemon=True,
-                name=f"failure-lesson-{action_type[:20]}",
-            )
-            t.start()
 
     def _escalate_and_wait(
         self,
@@ -1002,87 +1040,6 @@ class ACTOrchestrator:
             logger.debug(f"{LOG_PREFIX} _check_smart_repetition failed (non-fatal): {e}")
         return None
 
-
-
-# ── Auto-reflection (post-loop, fire-and-forget) ────────────────────
-
-# Thresholds for triggering automatic reflection
-_AUTO_REFLECT_HIGH_VALUE = 3.0    # Total net value above this → "what worked"
-_AUTO_REFLECT_LOW_VALUE = -1.0    # Total net value below this → "what didn't"
-_AUTO_REFLECT_COOLDOWN_S = 1800   # 30 min cooldown per topic
-_AUTO_REFLECT_MIN_ITERATIONS = 2  # Skip trivial 1-iteration loops
-
-# Termination reasons that indicate degraded exits worth reflecting on
-_DEGRADED_EXITS = frozenset({
-    'repetition_detected', 'smart_repetition', 'tool_exhausted',
-})
-
-
-def _maybe_auto_reflect(
-    topic: str,
-    iteration_logs: list,
-    termination_reason: str | None,
-    iterations_used: int,
-) -> None:
-    """
-    Fire background reflection after significant ACT loops.
-
-    Triggers on: high-value loops, negative-value loops, or degraded exits.
-    Uses MemoryStore cooldown to prevent spam (1 per topic per 30 min).
-    Never blocks — runs in a daemon thread.
-    """
-    import threading
-
-    if iterations_used < _AUTO_REFLECT_MIN_ITERATIONS:
-        return
-
-    # Aggregate net value from iteration logs
-    total_net_value = sum(
-        log.get('net_value', 0.0) for log in iteration_logs
-    )
-
-    should_reflect = (
-        total_net_value >= _AUTO_REFLECT_HIGH_VALUE
-        or total_net_value <= _AUTO_REFLECT_LOW_VALUE
-        or (termination_reason or '') in _DEGRADED_EXITS
-    )
-
-    if not should_reflect:
-        return
-
-    # Check cooldown
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        cooldown_key = f"auto_reflect_cooldown:{topic}"
-        if store.get(cooldown_key):
-            logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown active for {topic}")
-            return
-        store.setex(cooldown_key, _AUTO_REFLECT_COOLDOWN_S, '1')
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown check failed, proceeding: {e}")
-
-    reason = (
-        f"high_value({total_net_value:.1f})" if total_net_value >= _AUTO_REFLECT_HIGH_VALUE
-        else f"low_value({total_net_value:.1f})" if total_net_value <= _AUTO_REFLECT_LOW_VALUE
-        else f"degraded_exit({termination_reason})"
-    )
-    logger.info(f"{LOG_PREFIX} Triggering auto-reflect: {reason}")
-
-    def _run_reflect():
-        try:
-            from services.innate_skills.reflect_skill import handle_reflect
-            handle_reflect(topic, {
-                'query': f'automatic reflection triggered by: {reason}',
-                'scope': 'recent',
-                'store': True,
-            })
-            logger.info(f"{LOG_PREFIX} Auto-reflect completed for {topic}")
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Auto-reflect failed: {e}")
-
-    t = threading.Thread(target=_run_reflect, daemon=True, name=f"auto-reflect-{topic[:20]}")
-    t.start()
 
 
 # ── Fingerprinting utilities (shared across all loop callers) ───────

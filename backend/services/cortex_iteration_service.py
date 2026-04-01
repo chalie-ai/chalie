@@ -156,7 +156,7 @@ class CortexIterationService:
                             chosen_mode, chosen_confidence, alternative_paths,
                             iteration_cost, diminishing_cost, uncertainty_cost,
                             action_base_cost, total_cost, cumulative_cost,
-                            efficiency_score, expected_confidence_gain, task_value, future_leverage, effort_estimate, effort_multiplier, iteration_penalty, exploration_bonus, net_value,
+                            efficiency_score, expected_confidence_gain, task_value, future_leverage, effort_estimate, effort_multiplier, iteration_penalty, exploration_bonus,
                             decision_override, overridden_mode, termination_reason,
                             actions_executed, action_count, action_success_count,
                             frontal_cortex_response, config_snapshot
@@ -164,7 +164,7 @@ class CortexIterationService:
                             ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?
                         )
                     """, (
@@ -194,7 +194,6 @@ class CortexIterationService:
                         iteration.get('effort_multiplier', 1.2),
                         iteration.get('iteration_penalty', 1.0),
                         iteration.get('exploration_bonus', 0.0),
-                        iteration.get('net_value', 0.0),
                         iteration.get('decision_override', False),
                         iteration.get('overridden_mode'),
                         iteration.get('termination_reason'),

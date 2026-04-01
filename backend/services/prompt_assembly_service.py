@@ -383,11 +383,11 @@ class PromptAssemblyService:
             tool_names = self._get_registered_tool_names()
             result = result.replace('{{registered_tool_names}}', tool_names)
 
-        # Strategy hints from procedural memory (learned action reliability)
-        strategy_hints = ''
+        # Methodology guidance from learned goal-cluster patterns
+        methodology_guidance = ''
         if _include('strategy_hints'):
-            strategy_hints = self._get_strategy_hints(topic)
-        result = result.replace('{{strategy_hints}}', strategy_hints)
+            methodology_guidance = self._get_methodology_guidance(original_prompt)
+        result = result.replace('{{strategy_hints}}', methodology_guidance)
 
         # Constraint context — gate rejection patterns visible to LLM
         constraint_context = ''
@@ -928,44 +928,78 @@ class PromptAssemblyService:
             logging.debug(f"[FRONTAL CORTEX] Failed to fetch tool names: {e}")
             return '(none registered)'
 
-    def _get_strategy_hints(self, topic: str) -> str:
-        """Build compact strategy hints from procedural memory for the ACT prompt.
+    def _get_methodology_guidance(self, request_text: str) -> str:
+        """Retrieve methodology guidance from learned methodology records via KNN.
 
-        Args:
-            topic: Current conversation topic (used for topic-affinity ranking).
-
-        Returns:
-            str: Formatted ``## Strategy Hints`` section string listing up to 8
-            action-reliability signals, or empty string when no data is available.
+        Returns formatted guidance section, or empty string if no sufficiently
+        observed matches exist above the similarity threshold.
         """
         try:
-            from services.knowledge_service import KnowledgeService
+            import json as _json
+            from services.embedding_service import get_embedding_service
+            from services.embedding_utils import pack_embedding
             from services.database_service import get_shared_db_service
 
             db = get_shared_db_service()
-            ks = KnowledgeService(db)
-            ranked = ks.get_ranked_procedures(topic=topic, limit=20)
+            emb_service = get_embedding_service()
 
-            hints = []  # (extremity_score, hint_text) tuples
-            for proc in ranked:
-                attempts = proc.get('attempts', 0)
-                if attempts < 5:
-                    continue
-                sr = proc.get('success_rate', 0)
-                name = proc.get('name', '')
-                reliability = (sr * attempts + 1) / (attempts + 2)
-                extremity = abs(reliability - 0.5)
-                if reliability < 0.4:
-                    hints.append((extremity, f"{name}: low reliability ({int(reliability*100)}% over {attempts} uses)"))
-                elif reliability > 0.85:
-                    hints.append((extremity, f"{name}: reliable ({int(reliability*100)}% over {attempts} uses)"))
-
-            if not hints:
+            query_embedding = emb_service.generate_embedding(request_text)
+            if query_embedding is None:
                 return ''
-            # Sort by extremity (strongest signals first) for cognitive prioritization
-            hints.sort(key=lambda h: h[0], reverse=True)
-            lines = [h[1] for h in hints[:8]]
-            return "## Strategy Hints (from experience)\n" + "\n".join(f"- {l}" for l in lines)
+
+            blob = pack_embedding(query_embedding)
+            if not blob:
+                return ''
+
+            matches = []
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.rowid, v.distance
+                    FROM knowledge_vec v
+                    WHERE v.embedding MATCH ? AND k = ?
+                    ORDER BY v.distance
+                """, (blob, 6))
+                vec_results = cursor.fetchall()
+
+                for rid, distance in vec_results:
+                    if distance >= 0.6:
+                        continue
+
+                    cursor.execute("""
+                        SELECT value, data
+                        FROM knowledge
+                        WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
+                          AND deleted_at IS NULL
+                    """, (rid,))
+                    row = cursor.fetchone()
+                    if not row or not row[0]:
+                        continue
+
+                    value, raw_data = row[0], row[1]
+                    data = {}
+                    if raw_data and isinstance(raw_data, str):
+                        try:
+                            data = _json.loads(raw_data)
+                        except (_json.JSONDecodeError, TypeError):
+                            pass
+
+                    if data.get('total_count', 0) < 3:
+                        continue  # Suppress under-observed guidance
+
+                    matches.append(value)
+                    if len(matches) >= 2:
+                        break
+
+                cursor.close()
+
+            if not matches:
+                return ''
+
+            parts = ["## Methodology Guidance"]
+            parts.extend(matches)
+            return '\n\n'.join(parts)
+
         except Exception:
             return ''
 

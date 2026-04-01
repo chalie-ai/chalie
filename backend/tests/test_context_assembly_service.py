@@ -22,14 +22,13 @@ class TestContextAssemblyService:
         with patch.object(svc, '_get_working_memory', return_value='wm'), \
              patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value='eps'), \
-             patch.object(svc, '_get_procedural_hints', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hello', topic='test')
 
         expected_keys = {
             'working_memory', 'moments',
-            'episodes', 'procedural', 'concepts', 'previous_session', 'total_tokens_est',
+            'episodes', 'concepts', 'previous_session', 'total_tokens_est',
             'self_awareness',
         }
         assert expected_keys == set(result.keys())
@@ -324,163 +323,3 @@ class TestContextAssemblyService:
         assert call_args[0][0] == 'ctx-thread-77'
 
 
-# ── Plan 09: Procedural Memory in Context Assembly ────────────────────────────
-
-
-@pytest.mark.unit
-class TestDefaultWeightsWithProcedural:
-
-    def test_procedural_in_default_weights(self):
-        assert 'procedural' in ContextAssemblyService.DEFAULT_WEIGHTS
-
-    def test_procedural_weight_between_episodes_and_concepts(self):
-        w = ContextAssemblyService.DEFAULT_WEIGHTS
-        assert w['episodes'] > w['procedural'] > w['concepts']
-
-    def test_procedural_weight_is_065(self):
-        assert ContextAssemblyService.DEFAULT_WEIGHTS['procedural'] == 0.65
-
-
-@pytest.mark.unit
-class TestGetProceduralHints:
-
-    def _make_service(self):
-        return ContextAssemblyService({'max_context_tokens': 8000})
-
-    def _make_skill(self, name, success_rate, attempts):
-        return {'name': name, 'success_rate': success_rate, 'attempts': attempts}
-
-    def test_returns_empty_when_no_ranked_skills(self, db):
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = []
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('research')
-
-        assert result == ""
-
-    def test_excludes_skills_below_8_attempts(self, db):
-        svc = self._make_service()
-        skills = [self._make_skill('search', 0.90, 5)]  # < 8 attempts
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = skills
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('research')
-
-        assert result == ""
-
-    def test_includes_skills_with_exactly_8_attempts(self, db):
-        svc = self._make_service()
-        skills = [self._make_skill('search', 0.90, 8)]
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = skills
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('research')
-
-        assert 'search' in result
-
-    def test_reliable_label_above_85_percent(self, db):
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.92, 20)]
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        assert 'reliable' in result
-
-    def test_moderate_label_between_70_and_85_percent(self, db):
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('calendar_check', 0.75, 15)]
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        assert 'moderate' in result
-
-    def test_less_consistent_label_below_70_percent(self, db):
-        """Soft language avoids discouraging use of borderline skills."""
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('email_search', 0.55, 12)]
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        assert 'less consistent' in result
-        assert 'unreliable' not in result
-
-    def test_limits_to_top_3_skills(self, db):
-        svc = self._make_service()
-        skills = [self._make_skill(f'skill_{i}', 0.90, 10) for i in range(6)]
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = skills
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        skill_lines = [l for l in result.split('\n') if l.startswith('- ')]
-        assert len(skill_lines) == 3
-
-    def test_includes_percentage_and_attempt_count(self, db):
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('search', 0.88, 25)]
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        assert '88%' in result
-        assert '25' in result
-
-    def test_error_returns_empty_string(self):
-        svc = self._make_service()
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception("db down")):
-            result = svc._get_procedural_hints('test')
-
-        assert result == ""
-
-    def test_header_present_when_skills_surfaced(self, db):
-        svc = self._make_service()
-        mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.90, 10)]
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = svc._get_procedural_hints('test')
-
-        assert '## Learned Action Reliability' in result
-
-
-@pytest.mark.unit
-class TestProceduralInAssemble:
-
-    def test_procedural_key_in_assemble_output(self):
-        config = {'max_context_tokens': 8000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value=""), \
-             patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_episodes', return_value=""), \
-             patch.object(svc, '_get_procedural_hints', return_value=""), \
-             patch.object(svc, '_get_concepts', return_value=""):
-            result = svc.assemble(prompt="test", topic="test_topic")
-
-        assert 'procedural' in result
-
-    def test_procedural_content_flows_through_assemble(self):
-        config = {'max_context_tokens': 8000}
-        svc = ContextAssemblyService(config)
-        hints = "## Learned Action Reliability\n- recall: reliable (92% over 20 uses)"
-
-        with patch.object(svc, '_get_working_memory', return_value=""), \
-             patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_episodes', return_value=""), \
-             patch.object(svc, '_get_procedural_hints', return_value=hints), \
-             patch.object(svc, '_get_concepts', return_value=""):
-            result = svc.assemble(prompt="which tool works best?", topic="tools")
-
-        assert result['procedural'] == hints

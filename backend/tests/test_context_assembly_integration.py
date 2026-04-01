@@ -56,8 +56,7 @@ class TestFullAssembly:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='next?', topic='cooking', context=ctx)
 
@@ -91,8 +90,7 @@ class TestFullAssembly:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='more?', topic='travel', context=ctx)
 
@@ -120,8 +118,7 @@ class TestTopicIsolation:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='more?', topic='topic-B', context=ctx)
 
@@ -137,8 +134,7 @@ class TestTopicIsolation:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hello', topic='never-discussed', context=ctx)
 
@@ -160,8 +156,7 @@ class TestFailureTracking:
         # Episodes will fail, everything else works
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', side_effect=Exception('episode DB crash')), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             # Need to handle the exception at the assemble level
             # Actually, _get_episodes is called directly and its except catches it
@@ -171,8 +166,7 @@ class TestFailureTracking:
         with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep down')), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hi', topic='test', context=ctx)
 
@@ -193,7 +187,7 @@ class TestFailureTracking:
              patch('services.episodic_service.EpisodicService', side_effect=Exception('ep down')), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
              patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks down')), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hi', topic='broken-topic', context=ctx)
 
@@ -222,8 +216,7 @@ class TestBudgetConstraint:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value='Some episode' * 50), \
-             patch.object(svc, '_get_concepts', return_value='Some concept' * 50), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value='Some concept' * 50):
 
             result = svc.assemble(prompt='hi', topic='verbose', context=ctx)
 
@@ -248,8 +241,7 @@ class TestTopicContextIdentifier:
 
         with patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch.object(svc, '_get_procedural_hints', return_value=''):
+             patch.object(svc, '_get_concepts', return_value=''):
 
             result = svc.assemble(prompt='hi', topic='general', context=ctx)
 
