@@ -16,6 +16,8 @@ TOOL_SCHEMA = {
         "Create, view, track, and manage user goals. Use when the user states an "
         "intention, ambition, resolution, or target they want to achieve — including "
         "learning goals, fitness goals, career goals, habits, or any aspiration. "
+        "Also catch casual intent: 'I was thinking about...', 'it would be nice to...', "
+        "plans or interests mentioned in passing. "
         "Also use to list, complete, dismiss, or get a narrative of existing goals."
     ),
     "input_schema": {

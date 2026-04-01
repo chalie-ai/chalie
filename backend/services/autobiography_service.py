@@ -419,14 +419,6 @@ class AutobiographyService:
                 except Exception as de:
                     logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
 
-                try:
-                    from services.goal_autobiography_bridge import refresh_all_goals
-                    refreshed = refresh_all_goals()
-                    if refreshed:
-                        logger.info(f"[AUTOBIOGRAPHY] Refreshed alignment for {refreshed} goals")
-                except Exception as ge:
-                    logger.debug(f"[AUTOBIOGRAPHY] Goal alignment refresh non-fatal: {ge}")
-
                 return True
 
         except Exception as e:

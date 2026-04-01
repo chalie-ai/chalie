@@ -343,17 +343,6 @@ class ReasoningLoopService:
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Domain confidence cache invalidation failed: {e}", exc_info=True)
 
-        # Track signal topic for goal inference pattern detection
-        if signal.topic and signal.signal_type != 'user_message':
-            try:
-                self.store.zadd('goal_inference:signal_topics', {signal.topic: time.time()})
-                # Prune topics older than lookback window (14 days)
-                self.store.zremrangebyscore(
-                    'goal_inference:signal_topics', '-inf', time.time() - 86400 * 14
-                )
-            except Exception as e:
-                logger.debug(f"{LOG_PREFIX} Goal inference topic tracking failed: {e}", exc_info=True)
-
     def _handle_reasoning_signal(self, signal: ReasoningSignal) -> None:
         """Full reasoning path: gates → seed → spreading activation → synthesis → action."""
         # Gate 1: Fatigue
@@ -701,11 +690,6 @@ class ReasoningLoopService:
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} World model refresh failed: {e}", exc_info=True)
 
-        # Goal inference: check for latent goals (cooldown-gated)
-        if self._should_run_goal_inference():
-            self._run_goal_inference()
-            # Don't return — still run normal idle discovery after goal check
-
         # Pick strategy: 60% salient, 40% insight
         seed = None
         if random.random() < 0.6:
@@ -732,45 +716,6 @@ class ReasoningLoopService:
         )
         self._reason_from_seed(seed, idle_signal)
 
-    def _should_run_goal_inference(self) -> bool:
-        """Check if goal inference cooldown has expired."""
-        try:
-            last_run = self.store.get('goal_inference:last_run')
-            if last_run:
-                elapsed = time.time() - float(last_run)
-                cooldown = self.config.get('goal_inference', {}).get('cooldown_hours', 6) * 3600
-                if elapsed < cooldown:
-                    return False
-            return True
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Goal inference cooldown check failed: {e}", exc_info=True)
-            return False
-
-    def _run_goal_inference(self) -> None:
-        """Run the goal inference pipeline during idle time."""
-        try:
-            from services.goal_inference_service import GoalInferenceService
-            service = GoalInferenceService(self.db_service)
-            proposed = service.detect_and_propose()
-
-            if proposed:
-                logger.info(
-                    f"{LOG_PREFIX} Goal inference proposed {len(proposed)} goal(s): "
-                    f"{[g['goal'][:50] for g in proposed]}"
-                )
-            else:
-                logger.debug(f"{LOG_PREFIX} Goal inference: no goals detected this cycle")
-
-            # Reset cooldown regardless of result
-            self.store.set('goal_inference:last_run', str(time.time()))
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Goal inference failed: {e}")
-            # Set cooldown even on failure to prevent retry storms
-            try:
-                self.store.set('goal_inference:last_run', str(time.time()))
-            except Exception as e:
-                logger.debug(f"{LOG_PREFIX} Failed to set goal inference cooldown after failure: {e}", exc_info=True)
-
     # -- Goal ecology idle cycle ------------------------------------------------
 
     def _run_goal_ecology_cycle(self):
@@ -787,10 +732,7 @@ class ReasoningLoopService:
             # 1. Decay unreinforced goals
             decayed = ecology.decay_unreinforced()
 
-            # 2. Detect patterns from unmatched signals -> create new goals
-            new_goals = ecology.detect_patterns_from_unmatched()
-
-            # 3. Check for actionable goals -> trigger proactive actions
+            # 2. Check for actionable goals -> trigger proactive actions
             actionable = ecology.get_actionable_goals()
             if actionable:
                 from services.goal_proactive_service import check_and_execute
@@ -806,18 +748,8 @@ class ReasoningLoopService:
             self.store.incrby("goal_ecology:cycles_total", 1)
             if decayed:
                 self.store.incrby("goal_ecology:goals_decayed_total", decayed)
-            if new_goals:
-                self.store.incrby("goal_ecology:goals_created_total", len(new_goals))
             if actionable:
                 self.store.incrby("goal_ecology:proactive_attempts_total", 1)
-
-            # Periodic autobiography alignment refresh (~10% of cycles ≈ every 50min)
-            if random.random() < 0.1:
-                try:
-                    from services.goal_autobiography_bridge import refresh_all_goals
-                    refresh_all_goals()
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Autobiography alignment refresh failed: {e}", exc_info=True)
 
             # Cross-goal inference (~1% of cycles ≈ every 8 hours)
             if random.random() < 0.01:

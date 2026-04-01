@@ -16,7 +16,6 @@ but the plan explicitly defers that until there is evidence that per-user
 tuning is worth the complexity.
 
 Integration points (Stage 6a):
-  - GoalInferenceService: PROPOSED vs auto-accept for inferred goals
   - PlanAction: block Tier-3 tasks from autonomous creation
   - ActDispatcherService: gate external actions by tier before execution
   - PersistentTaskWorker: verify tier before each background cycle

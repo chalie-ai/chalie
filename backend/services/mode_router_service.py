@@ -48,7 +48,7 @@ NEGATIVE_FEEDBACK = re.compile(
     re.IGNORECASE
 )
 
-def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
+def compute_nlp_signals(text: str) -> Dict[str, Any]:
     """
     Compute regex-only NLP signals from user text (<1ms).
 
@@ -57,7 +57,6 @@ def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
 
     Args:
         text: User's raw prompt text
-        intent: Optional intent classification dict
 
     Returns:
         Dict of NLP-derived signals
@@ -88,17 +87,7 @@ def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
         'explicit_feedback': explicit_feedback,
         'information_density': information_density,
         'implicit_reference': implicit_reference,
-
-        # Intent signals (from IntentClassifierService, if available)
-        'intent_complexity': 'simple',
-        'intent_type': None,
-        'intent_confidence': 0.0,
     }
-
-    if intent:
-        signals['intent_complexity'] = intent.get('complexity', 'simple')
-        signals['intent_type'] = intent.get('intent_type')
-        signals['intent_confidence'] = intent.get('confidence', 0.0)
 
     return signals
 
@@ -111,7 +100,6 @@ def collect_routing_signals(
     world_state_service,
     classification_result: dict,
     session_service,
-    intent: dict = None,
 ) -> Dict[str, Any]:
     """
     Collect all routing signals from existing services and NLP analysis.
@@ -126,8 +114,6 @@ def collect_routing_signals(
         world_state_service: WorldStateService instance
         classification_result: Dict from topic classifier
         session_service: SessionService instance
-        intent: Optional intent classification dict from IntentClassifierService
-            (tool selection handled by unified generation path)
 
     Returns:
         Dict of routing signals
@@ -166,7 +152,7 @@ def collect_routing_signals(
     memory_confidence = round(memory_confidence, 3)
 
     # NLP signals via standalone function
-    nlp = compute_nlp_signals(text, intent)
+    nlp = compute_nlp_signals(text)
 
     signals = {
         # Context signals
@@ -394,9 +380,6 @@ class ModeRouterService:
         # Tool relevance weights removed — unified generation path handles tool dispatch
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
-        # Action intent — user wants Chalie to DO something (set reminder, manage list, etc.)
-        if signals.get('intent_type') == 'action':
-            act += w.get('act.action_intent', 0.40)
         # Graduated memory confidence: low recall confidence → lean toward ACT
         # Only for genuinely memory-seeking questions, not general knowledge
         mem_conf = signals.get('memory_confidence', 1.0)
@@ -610,7 +593,6 @@ class ModeRouterService:
             f"explicit_feedback: {signals['explicit_feedback'] or 'null'}",
             f"information_density: {signals['information_density']:.2f}",
             f"implicit_reference: {_bool(signals['implicit_reference'])}",
-            f"intent_type: {signals.get('intent_type') or 'null'}",
             f"memory_confidence: {signals.get('memory_confidence', 0.5):.2f}",
             "",
             f"A: {mode_a} — {self.MODE_DESCRIPTIONS.get(mode_a, '')}",

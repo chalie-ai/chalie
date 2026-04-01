@@ -165,18 +165,6 @@ class ImapHandler:
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
                 index_person(item["from_addr"], item.get("from_name"), source="imap")
-        try:
-            from capabilities.signal_bridge import emit_capability_signal
-            for item in items:
-                if item.get("triage") == "actionable":
-                    sender = item.get("from_name") or item.get("from_addr", "")
-                    emit_capability_signal(
-                        "mail", "new_knowledge",
-                        f"Actionable email from {sender}: {item.get('subject', '')}",
-                        source="mail:triage",
-                    )
-        except Exception as exc:
-            logger.debug("[imap_handler] signal bridge: %s", exc)
         return items
 
     # ------------------------------------------------------------------

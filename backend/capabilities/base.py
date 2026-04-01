@@ -293,16 +293,6 @@ class AbstractCapability(ABC):
             f" Last error: {err}"
         )
         try:
-            from capabilities.signal_bridge import (
-                emit_capability_signal,
-            )
-            emit_capability_signal(
-                cap_id, "capability_failure", msg,
-                source=f"{cap_id}:health",
-            )
-        except Exception as exc:
-            logger.debug("failure signal emit: %s", exc)
-        try:
             import json
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
