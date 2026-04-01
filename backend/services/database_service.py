@@ -561,6 +561,7 @@ class DatabaseService:
                   "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid)"]),
                 ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
                 ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
+                ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

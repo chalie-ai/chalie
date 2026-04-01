@@ -226,7 +226,7 @@ def run_signal_loop(self):
 | **PersistentTaskService** | `task_state_changed` | Request/timer | 973 |
 | **SchedulerService** | `schedule_fired` | 60s timer | 974 |
 | **ThreadExpiryService** | `thread_expired` | 5min timer | 975 |
-| **GoalInferenceService** | `goal_inferred` | Idle-time check (6h cooldown) | — |
+| **EpisodicMemoryWorker** | `goal_emerged` | Post-episode clustering + LLM | — |
 
 ### Phase 2 Complete (Signal-Driven, No Timer)
 

@@ -30,7 +30,6 @@ is logged on startup if the model directory is absent.
 Integration points (Stage 6a):
   - ActDispatcherService: gate external actions by tier before execution
   - PlanAction: block Tier 3 tasks from autonomous creation
-  - GoalInferenceService: decide PROPOSED vs auto-accept for inferred goals
   - PersistentTaskWorker: verify tier before each background cycle
 """
 

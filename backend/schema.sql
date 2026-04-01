@@ -706,7 +706,8 @@ CREATE TABLE IF NOT EXISTS goals (
     last_reinforced_at TEXT,                  -- when goal last received evidence
     last_acted_at TEXT,                       -- when goal was last acted upon
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    derived_from TEXT DEFAULT '[]'         -- JSON array of episode IDs that formed this goal
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);

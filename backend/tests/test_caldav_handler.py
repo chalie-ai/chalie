@@ -374,8 +374,7 @@ class TestUpsertEvents:
             _make_event("uid-y", dtstart=_dt(2026, 4, 1, 10, 30), dtend=_dt(2026, 4, 1, 11, 30)),
         ]
 
-        with patch("capabilities.signal_bridge.emit_capability_signal"):
-            handler.upsert_events(events, now)
+        handler.upsert_events(events, now)
 
         canon = ":".join(sorted(["uid-x", "uid-y"]))
         row = db.execute(

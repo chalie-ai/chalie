@@ -77,47 +77,12 @@ SALIENCE_DECAY_RATE = 0.05
 # Below this salience threshold, unreinforced goals are marked decayed
 DECAY_THRESHOLD = 0.05
 
-# MemoryStore key prefix for unmatched signals
-UNMATCHED_SIGNAL_PREFIX = "goal:unmatched:"
-UNMATCHED_SIGNAL_TTL = 14 * 24 * 3600  # 14 days
-
 # Bounded pool for background strategy generation.  max_workers=2 keeps
 # concurrent LLM calls predictable; excess submissions queue internally
 # and run when a slot frees up.
 _strategy_pool = concurrent.futures.ThreadPoolExecutor(
     max_workers=2, thread_name_prefix="strategy-gen"
 )
-
-
-def _infer_timescale_from_signals(signals: list) -> str:
-    """
-    Infer appropriate timescale for an emergent goal based on signal ambient context.
-
-    Signals from deep_focus + routine contexts suggest longer-term developmental goals.
-    Default is medium_term if no strong ambient signal.
-    """
-    deep_focus_count = sum(
-        1 for s in signals
-        if 'deep_focus' in str(s.get('ambient_context', ''))
-    )
-    routine_count = sum(
-        1 for s in signals
-        if 'routine' in str(s.get('ambient_context', ''))
-    )
-
-    total = len(signals)
-    if total == 0:
-        return 'medium_term'
-
-    # If majority of signals came during deep focus + routine, likely long-term
-    if deep_focus_count / total > 0.5 and routine_count / total > 0.3:
-        return 'long_term'
-
-    # If majority are from deep focus, suggest medium-to-long
-    if deep_focus_count / total > 0.5:
-        return 'medium_term'
-
-    return 'medium_term'
 
 
 def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
@@ -240,6 +205,7 @@ class GoalEcologyService:
         parent_motives: Optional[List[str]] = None,
         identity_links: Optional[List[str]] = None,
         timescale: str = 'medium_term',
+        derived_from: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Create a new goal.
@@ -292,12 +258,13 @@ class GoalEcologyService:
 
         motives_json = json.dumps(parent_motives or [])
         links_json = json.dumps(identity_links or [])
+        derived_from_json = json.dumps(derived_from or [])
 
         _insert_params = (
             goal_id, type, status, description, motives_json, links_json,
             confidence, salience, 0.0, urgency, timescale,
             None, None, 0,
-            now, '[]', now, now,
+            now, '[]', now, now, derived_from_json,
         )
 
         def _insert_goal(params=_insert_params, db=self.db):
@@ -309,8 +276,9 @@ class GoalEcologyService:
                            id, type, status, description, parent_motives, identity_links,
                            confidence, salience, commitment, urgency, timescale,
                            strategy, lineage_parent_id, evidence_count,
-                           last_reinforced_at, outcome_feedback, created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           last_reinforced_at, outcome_feedback, created_at, updated_at,
+                           derived_from
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     params,
                 )
                 cursor.close()
@@ -321,37 +289,6 @@ class GoalEcologyService:
             f"{LOG_PREFIX} Created goal '{description[:60]}' "
             f"(type={type}, status={status}, salience={salience:.2f})"
         )
-
-        # Post-creation: compute autobiography alignment (non-blocking, non-fatal)
-        # Merge with any caller-provided motives/links rather than replacing.
-        try:
-            from services.goal_autobiography_bridge import compute_goal_alignment
-            alignment = compute_goal_alignment(description)
-            merged_motives = list(dict.fromkeys((parent_motives or []) + alignment['parent_motives']))
-            merged_links = list(dict.fromkeys((identity_links or []) + alignment['identity_links']))
-            if merged_motives or merged_links:
-                _align_params = (
-                    json.dumps(merged_motives),
-                    json.dumps(merged_links),
-                    utc_now().isoformat(),
-                    goal_id,
-                )
-
-                def _update_alignment(params=_align_params, db=self.db):
-                    """Persist autobiography alignment data on the write-queue thread."""
-                    with db.connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """UPDATE goals SET parent_motives = ?, identity_links = ?,
-                               updated_at = ? WHERE id = ?""",
-                            params,
-                        )
-                        cursor.close()
-
-                self._write_queue.submit_sync(_update_alignment)
-                self.recalculate_salience(goal_id)
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Alignment computation skipped: {e}")
 
         # Post-creation: find parent goal (non-blocking, non-fatal)
         try:
@@ -541,6 +478,105 @@ class GoalEcologyService:
                     LOG_PREFIX,
                     _tel_err,
                 )
+
+        # Graduate candidate goals with enough evidence (3+)
+        try:
+            goal = self.get_goal(goal_id)
+            if goal and goal.get('status') == 'candidate' and (goal.get('evidence_count', 0)) >= 3:
+                _grad_now = utc_now().isoformat()
+
+                def _graduate(gid=goal_id, ts=_grad_now, db=self.db):
+                    with db.connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """UPDATE goals
+                               SET status = 'active', confidence = MAX(confidence, 0.5),
+                                   updated_at = ?
+                               WHERE id = ? AND status = 'candidate'""",
+                            (ts, gid),
+                        )
+                        cursor.close()
+
+                self._write_queue.submit_sync(_graduate)
+                logger.info(
+                    f"{LOG_PREFIX} Candidate goal {goal_id[:8]} graduated to active "
+                    f"({goal['evidence_count']} evidence entries)"
+                )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Candidate graduation check failed: {e}")
+
+    def find_goals_by_episode_ids(self, episode_ids: List[str]) -> List[Dict[str, Any]]:
+        """Find active goals whose derived_from contains any of the given episode IDs."""
+        if not episode_ids:
+            return []
+
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, description, type, status, salience, confidence, derived_from
+                    FROM goals
+                    WHERE status NOT IN ('completed', 'decayed')
+                      AND derived_from != '[]'
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+            matches = []
+            episode_set = set(episode_ids)
+            for row in rows:
+                try:
+                    derived = json.loads(row[6] or '[]')
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if episode_set.intersection(derived):
+                    matches.append({
+                        'id': row[0],
+                        'description': row[1],
+                        'type': row[2],
+                        'status': row[3],
+                        'salience': row[4],
+                        'confidence': row[5],
+                        'derived_from': derived,
+                    })
+
+            return matches
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} find_goals_by_episode_ids failed: {e}")
+            return []
+
+    def append_derived_from(self, goal_id: str, episode_id: str) -> None:
+        """Append an episode ID to a goal's derived_from JSON array."""
+        try:
+            now_iso = utc_now().isoformat()
+
+            def _append(gid=goal_id, eid=episode_id, ts=now_iso, db=self.db):
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT derived_from FROM goals WHERE id = ?", (gid,)
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        cursor.close()
+                        return
+                    try:
+                        current = json.loads(row[0] or '[]')
+                    except (json.JSONDecodeError, TypeError):
+                        current = []
+                    if eid not in current:
+                        current.append(eid)
+                        cursor.execute(
+                            "UPDATE goals SET derived_from = ?, updated_at = ? WHERE id = ?",
+                            (json.dumps(current), ts, gid),
+                        )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_append)
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} append_derived_from failed: {e}")
 
     def find_matching_goals(self, text: str, threshold: float = 0.6, k: int = 10) -> List[Dict[str, Any]]:
         """Find active goals matching text using KNN embedding search over goals_vec."""
@@ -1146,113 +1182,6 @@ class GoalEcologyService:
             'description': new_description,
             'lineage_parent_id': goal_id,
         }
-
-    def detect_patterns_from_unmatched(self) -> List[Dict[str, Any]]:
-        """
-        Cluster unmatched signals from MemoryStore into candidate goals.
-
-        Looks for 3+ signals with similar content (embedding cosine > 0.7)
-        and creates a new emergent goal from the cluster.
-        """
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-
-            # Get all unmatched signal keys
-            keys = store.keys(f"{UNMATCHED_SIGNAL_PREFIX}*")
-            if not keys or len(keys) < 3:
-                return []
-
-            # Load signal data
-            signals = []
-            for key in keys:
-                raw = store.get(key)
-                if raw:
-                    try:
-                        data = json.loads(raw)
-                        signals.append({'key': key, **data})
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-
-            if len(signals) < 3:
-                return []
-
-            # Simple clustering: group by embedding similarity
-            from services.embedding_service import get_embedding_service
-            import numpy as np
-
-            embedding_service = get_embedding_service()
-            embeddings = []
-            for s in signals:
-                emb = embedding_service.generate_embedding_np(s.get('content', ''))
-                embeddings.append(emb)
-
-            # Find clusters (greedy: pick first signal, find all similar)
-            used = set()
-            clusters = []
-
-            for i in range(len(signals)):
-                if i in used:
-                    continue
-
-                cluster = [i]
-                used.add(i)
-
-                for j in range(i + 1, len(signals)):
-                    if j in used:
-                        continue
-                    sim = float(np.dot(embeddings[i], embeddings[j]))
-                    if sim > 0.7:
-                        cluster.append(j)
-                        used.add(j)
-
-                if len(cluster) >= 3:
-                    clusters.append(cluster)
-
-            # Create goals from clusters
-            created = []
-            for cluster_indices in clusters:
-                cluster_signals = [signals[i] for i in cluster_indices]
-                # Use the most common content as description
-                contents = [s.get('content', '') for s in cluster_signals]
-                description = max(contents, key=len) if contents else 'Unnamed goal'
-
-                # Infer timescale from ambient context in signals
-                timescale = _infer_timescale_from_signals(cluster_signals)
-
-                goal = self.create_goal(
-                    description=description,
-                    type='emergent',
-                    timescale=timescale,
-                )
-
-                # Add all cluster signals as evidence
-                for s in cluster_signals:
-                    self.add_evidence(
-                        goal_id=goal['id'],
-                        signal_type=s.get('signal_type', 'topic_recurrence'),
-                        content=s.get('content', ''),
-                        source=s.get('source'),
-                        strength=s.get('strength', 1.0),
-                    )
-
-                # Clean up consumed signals from MemoryStore
-                for s in cluster_signals:
-                    try:
-                        store.delete(s['key'])
-                    except Exception as e:
-                        logger.debug(f"{LOG_PREFIX} Failed to delete consumed signal key {s['key']}: {e}")
-
-                created.append(goal)
-
-            if created:
-                logger.info(f"{LOG_PREFIX} Pattern detection created {len(created)} emergent goals")
-
-            return created
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Pattern detection failed: {e}")
-            return []
 
     def complete_goal(self, goal_id: str) -> bool:
         """Mark goal as completed.

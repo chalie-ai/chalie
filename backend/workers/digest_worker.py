@@ -35,7 +35,6 @@ from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
 from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
-from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
@@ -47,9 +46,6 @@ _session_service = None
 
 # Global mode router instance (shared across invocations)
 _mode_router = None
-
-# Global intent classifier instance
-_intent_classifier = None
 
 # Global orchestrator instance
 _orchestrator = None
@@ -154,14 +150,6 @@ def get_session_service():
         inactivity_timeout = episodic_config.get('inactivity_timeout', 600)
         _session_service = SessionService(inactivity_timeout=inactivity_timeout)
     return _session_service
-
-
-def get_intent_classifier():
-    """Get or create global intent classifier instance."""
-    global _intent_classifier
-    if _intent_classifier is None:
-        _intent_classifier = IntentClassifierService()
-    return _intent_classifier
 
 
 def get_mode_router():
@@ -2058,27 +2046,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Get working memory turn count
     working_memory_turns = len(wm_turns) if wm_turns else 0
 
-    # Step 9d: Intent classification (~5ms, deterministic, no LLM)
-    intent_classifier = get_intent_classifier()
-    intent = intent_classifier.classify(
-        text=text,
-        topic=topic,
-        context_warmth=context_warmth,
-        memory_confidence=memory_confidence,
-        working_memory_turns=working_memory_turns,
-    )
-    logging.info(
-        f"[DIGEST] Intent: type={intent['intent_type']}, "
-        f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
-    )
-
     # Step 9e: Enqueue trait extraction (fire-and-forget, daemon thread)
     enqueue_trait_extraction(text, metadata=metadata, thread_id=thread_id)
 
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
     try:
-        _nlp = compute_nlp_signals(text, intent)
+        _nlp = compute_nlp_signals(text)
         _signals = {
             'context_warmth': context_warmth,
             'working_memory_turns': working_memory_turns,
@@ -2272,15 +2246,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             )
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
-
-    # ── Phase D Step 11f: Goal signal extraction ──
-    try:
-        from services.goal_signal_service import extract_and_route_signals
-        _goal_classification = dict(classification or {})
-        _goal_classification['intent_type'] = (intent or {}).get('intent_type', '')
-        extract_and_route_signals(topic, text, _goal_classification)
-    except Exception as e:
-        logging.debug(f"[DIGEST] Goal signal extraction non-fatal: {e}")
 
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP

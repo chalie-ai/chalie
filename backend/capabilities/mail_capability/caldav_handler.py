@@ -404,15 +404,6 @@ class CaldavHandler:
                         (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
                          f"caldav:conflict:{canon_key}", now.isoformat()),
                     )
-                    try:
-                        from capabilities.signal_bridge import emit_capability_signal
-                        emit_capability_signal(
-                            "mail", "novel_observation", conflict_msg,
-                            source="caldav:conflict",
-                        )
-                    except Exception as exc:
-                        logger.debug("[caldav_handler] signal emit failed: %s", exc)
-
                 # Back-to-back warnings (< 5 min gap)
                 for ev_a, ev_b, gap_min, canon_key in _find_back_to_back_pairs(events, now):
                     b2b_msg = (

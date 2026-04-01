@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS goals (
     last_acted_at TEXT,
     outcome_feedback TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    derived_from TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS goal_evidence (
@@ -1517,9 +1518,7 @@ class TestFindMatchingGoals:
 class TestMotiveAlignment:
 
     @patch('services.goal_ecology_service.GoalEcologyService._store_goal_embedding')
-    @patch('services.goal_autobiography_bridge.compute_goal_alignment',
-           return_value={'parent_motives': [], 'identity_links': []})
-    def test_motive_alignment_increases_salience(self, mock_bridge, mock_embed):
+    def test_motive_alignment_increases_salience(self, mock_embed):
         """Goals with core motive alignment should have higher salience."""
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
@@ -1673,39 +1672,6 @@ class TestStrategyEvolution:
         feedback = goal['outcome_feedback']
         assert len(feedback) >= 1
         assert 'strategy_hash' in feedback[0]
-
-
-@pytest.mark.unit
-class TestTimescaleInference:
-    """Test _infer_timescale_from_signals helper."""
-
-    def test_default_is_medium_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [{'content': 'test'}, {'content': 'test2'}, {'content': 'test3'}]
-        assert _infer_timescale_from_signals(signals) == 'medium_term'
-
-    def test_deep_focus_routine_signals_long_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [
-            {'content': 'a', 'ambient_context': 'deep_focus:routine'},
-            {'content': 'b', 'ambient_context': 'deep_focus:routine'},
-            {'content': 'c', 'ambient_context': 'deep_focus'},
-        ]
-        assert _infer_timescale_from_signals(signals) == 'long_term'
-
-    def test_empty_signals_medium_term(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        assert _infer_timescale_from_signals([]) == 'medium_term'
-
-    def test_minority_deep_focus_stays_medium(self, mock_store):
-        from services.goal_ecology_service import _infer_timescale_from_signals
-        signals = [
-            {'content': 'a', 'ambient_context': 'deep_focus'},
-            {'content': 'b'},
-            {'content': 'c'},
-            {'content': 'd'},
-        ]
-        assert _infer_timescale_from_signals(signals) == 'medium_term'
 
 
 class TestCrossGoalInference:
