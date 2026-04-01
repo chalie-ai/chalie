@@ -769,16 +769,20 @@ class ACTOrchestrator:
     ) -> None:
         """Post-loop methodology learning. Always runs in a daemon thread.
 
-        1. Embed exchange_text to find the closest methodology cluster
-        2. KNN search knowledge for entity='methodology', kind='procedure'
-        3. If best match distance < 0.6: use existing goal_guidance paragraph
-           else: existing_goal_guidance = '' (create new record)
-        4. Call PostLoopReflectionService.reflect(...)
-        5. If outcome_quality < 0.35: store observation only
-        6. Store/update knowledge record
+        Each execution creates a NEW knowledge record keyed to this specific goal,
+        preserving the original goal embedding forever. Prior records are never
+        mutated — they serve as context for synthesising the new paragraph via
+        existing_goal_guidance, so knowledge compounds naturally across similar goals.
+
+        1. Embed exchange_text
+        2. KNN search for existing methodology records to load as context.
+           Among records within 0.05 distance of the best match, prefer the
+           most recently created one (it has the most compounded knowledge).
+        3. Call PostLoopReflectionService.reflect(...)
+        4. Quality gate: outcome_quality < 0.35 → skip (don't store noise)
+        5. Always store a NEW record with the current goal's embedding
         """
         try:
-            import json as _json
             from services.embedding_utils import pack_embedding
             from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
@@ -793,14 +797,13 @@ class ACTOrchestrator:
             # Step 1: Embed exchange_text
             query_embedding = emb_service.generate_embedding(exchange_text)
             if query_embedding is None:
-                logger.debug(f"{LOG_PREFIX} Methodology learning: embedding failed, skipping")
+                logger.warning(f"{LOG_PREFIX} Methodology learning: embedding failed, skipping")
                 return
 
-            # Step 2: KNN search for existing methodology records
+            # Step 2: KNN — load most relevant prior record as context
+            # Among records within 0.05 of the best match distance, prefer the
+            # most recently created (it has compounded knowledge from earlier goals).
             existing_goal_guidance = ''
-            matched_key = None
-            matched_record = None
-
             blob = pack_embedding(query_embedding)
             if blob:
                 with db.connection() as conn:
@@ -810,36 +813,27 @@ class ACTOrchestrator:
                         FROM knowledge_vec v
                         WHERE v.embedding MATCH ? AND k = ?
                         ORDER BY v.distance
-                    """, (blob, 5))
+                    """, (blob, 8))
                     vec_results = cursor.fetchall()
 
+                    candidates = []  # (distance, created_at, value)
                     for rid, distance in vec_results:
-                        # distance threshold: 0.6 corresponds roughly to cosine similarity >= 0.72
-                        # for L2-normalized embeddings (cosine = 1 - L2²/2)
-                        if distance >= 0.6:
-                            continue
-
                         cursor.execute("""
-                            SELECT key, value, data
+                            SELECT value, created_at
                             FROM knowledge
                             WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
-                              AND deleted_at IS NULL
+                              AND deleted_at IS NULL AND value != ''
                         """, (rid,))
                         row = cursor.fetchone()
                         if row:
-                            matched_key = row[0]
-                            existing_goal_guidance = row[1] or ''
-                            raw_data = row[2]
-                            if raw_data and isinstance(raw_data, str):
-                                try:
-                                    matched_record = _json.loads(raw_data)
-                                except (_json.JSONDecodeError, TypeError):
-                                    matched_record = {}
-                            elif isinstance(raw_data, dict):
-                                matched_record = raw_data
-                            else:
-                                matched_record = {}
-                            break  # Use the best match only
+                            candidates.append((distance, row[1] or '', row[0]))
+
+                    if candidates:
+                        best_dist = candidates[0][0]
+                        # Among records within 0.05 of best match, pick most recent
+                        close = [c for c in candidates if c[0] <= best_dist + 0.05]
+                        close.sort(key=lambda c: c[1], reverse=True)  # newest first
+                        existing_goal_guidance = close[0][2]
 
                     cursor.close()
 
@@ -855,77 +849,53 @@ class ACTOrchestrator:
             )
 
             if not reflection:
-                logger.debug(f"{LOG_PREFIX} Methodology learning: reflection empty, skipping")
+                logger.warning(f"{LOG_PREFIX} Methodology learning: reflection empty, skipping")
                 return
 
             outcome_quality = reflection.get('outcome_quality', 0.5)
             goal_guidance = reflection.get('goal_guidance', '')
-            lesson = reflection.get('lesson')
 
-            # Step 4: Build observation
+            # Step 4: Quality gate — don't store noise
+            if outcome_quality < 0.35:
+                logger.info(
+                    f"{LOG_PREFIX} Methodology learning: poor outcome "
+                    f"({outcome_quality:.2f}), skipping storage"
+                )
+                return
+
+            # Step 5: Always create a new record keyed to this specific goal.
+            # The goal's embedding is stored as-is and never regenerated, so
+            # future KNN searches always match on goal-text similarity.
+            slug_words = re.sub(r'[^a-z0-9\s]', '', exchange_text.lower()).split()[:6]
+            slug = '_'.join(slug_words)[:60]
+            if not slug:
+                slug = f"goal_{loop_id[:8]}" if loop_id else 'goal_unknown'
+
             observation = {
                 'ts': utc_now().isoformat(),
                 'outcome_quality': outcome_quality,
-                'lesson': lesson or '',
+                'lesson': reflection.get('lesson') or '',
                 'loop_id': loop_id or '',
             }
 
-            # Step 5: Determine key for new records
-            if matched_key is None:
-                matched_record = {'observations': [], 'total_count': 0}
-                slug_words = re.sub(r'[^a-z0-9\s]', '', exchange_text.lower()).split()[:6]
-                slug = '_'.join(slug_words)[:60]
-                if not slug:
-                    slug = f"goal_{loop_id[:8]}" if loop_id else 'goal_unknown'
-                matched_key = slug
-
-            # Step 6: Update observations list (cap at 50)
-            observations = matched_record.get('observations', [])
-            observations.append(observation)
-            if len(observations) > 50:
-                observations = observations[-50:]
-            total_count = matched_record.get('total_count', 0) + 1
-            new_data = {'observations': observations, 'total_count': total_count}
-
-            # Step 7: Store — quality gate: poor outcomes don't overwrite paragraph
-            existing = ks.get('methodology', matched_key)
-            if outcome_quality < 0.35:
-                logger.info(
-                    f"{LOG_PREFIX} Methodology learning: poor outcome ({outcome_quality:.2f}), "
-                    f"observation only for '{matched_key}'"
-                )
-                if existing:
-                    ks.update('methodology', matched_key, data=new_data)
-                else:
-                    ks.store(
-                        kind='procedure', entity='methodology', key=matched_key,
-                        value='', data=new_data, decay_class='slow',
-                        confidence=0.3, source='post_loop_reflection',
-                        embedding=query_embedding,
-                    )
-            else:
-                new_value = goal_guidance if goal_guidance else existing_goal_guidance
-                new_confidence = min(0.9, 0.3 + total_count * 0.05)
-                if existing:
-                    ks.update(
-                        'methodology', matched_key,
-                        value=new_value, data=new_data, confidence=new_confidence,
-                    )
-                else:
-                    ks.store(
-                        kind='procedure', entity='methodology', key=matched_key,
-                        value=new_value, data=new_data, decay_class='slow',
-                        confidence=0.3, source='post_loop_reflection',
-                        embedding=query_embedding,
-                    )
+            ks.store(
+                kind='procedure', entity='methodology', key=slug,
+                value=goal_guidance or existing_goal_guidance,
+                data={'total_count': 1, 'observations': [observation]},
+                decay_class='very_slow',
+                confidence=0.3,
+                source='post_loop_reflection',
+                embedding=query_embedding,
+            )
 
             logger.info(
-                f"{LOG_PREFIX} Methodology learning: stored '{matched_key}' "
-                f"(quality={outcome_quality:.2f}, total={total_count})"
+                f"{LOG_PREFIX} Methodology learning: stored '{slug}' "
+                f"(quality={outcome_quality:.2f}, "
+                f"guidance_from={'prior' if not goal_guidance else 'reflection'})"
             )
 
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _update_methodology_learning failed (non-fatal): {e}")
+            logger.warning(f"{LOG_PREFIX} _update_methodology_learning failed: {e}")
 
     def _get_cautionary_lessons(self, recent_history: list) -> str:
         """Retrieve failure lessons relevant to recently executed action types."""

@@ -931,11 +931,14 @@ class PromptAssemblyService:
     def _get_methodology_guidance(self, request_text: str) -> str:
         """Retrieve methodology guidance from learned methodology records via KNN.
 
-        Returns formatted guidance section, or empty string if no sufficiently
-        observed matches exist above the similarity threshold.
+        Each methodology record was written by PostLoopReflectionService and already
+        passed the outcome_quality >= 0.35 gate at write time — no further filtering
+        needed. Among records within 0.05 of the best match distance, prefer the
+        most recently created (it has the most compounded knowledge).
+
+        Returns top-2 guidance paragraphs as a formatted section, or '' if none found.
         """
         try:
-            import json as _json
             from services.embedding_service import get_embedding_service
             from services.embedding_utils import pack_embedding
             from services.database_service import get_shared_db_service
@@ -959,38 +962,39 @@ class PromptAssemblyService:
                     FROM knowledge_vec v
                     WHERE v.embedding MATCH ? AND k = ?
                     ORDER BY v.distance
-                """, (blob, 6))
+                """, (blob, 8))
                 vec_results = cursor.fetchall()
 
+                candidates = []  # (distance, created_at, value)
                 for rid, distance in vec_results:
-                    if distance >= 0.6:
-                        continue
-
                     cursor.execute("""
-                        SELECT value, data
+                        SELECT value, created_at
                         FROM knowledge
                         WHERE rowid = ? AND entity = 'methodology' AND kind = 'procedure'
-                          AND deleted_at IS NULL
+                          AND deleted_at IS NULL AND value != ''
                     """, (rid,))
                     row = cursor.fetchone()
-                    if not row or not row[0]:
+                    if row:
+                        candidates.append((distance, row[1] or '', row[0]))
+
+                # Deduplicate into top-2: for each group of records within 0.05 of
+                # each other, keep only the most recent. Then take the top-2 groups.
+                selected = []
+                for dist, created_at, value in candidates:
+                    if not selected:
+                        selected.append((dist, created_at, value))
                         continue
-
-                    value, raw_data = row[0], row[1]
-                    data = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data = _json.loads(raw_data)
-                        except (_json.JSONDecodeError, TypeError):
-                            pass
-
-                    if data.get('total_count', 0) < 3:
-                        continue  # Suppress under-observed guidance
-
-                    matches.append(value)
-                    if len(matches) >= 2:
+                    last_dist = selected[0][0]
+                    if dist <= last_dist + 0.05:
+                        # Same cluster — replace with this one if it's newer
+                        if created_at > selected[-1][1]:
+                            selected[-1] = (dist, created_at, value)
+                    else:
+                        selected.append((dist, created_at, value))
+                    if len(selected) >= 2:
                         break
 
+                matches = [v for _, _, v in selected]
                 cursor.close()
 
             if not matches:

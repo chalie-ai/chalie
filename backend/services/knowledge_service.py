@@ -133,9 +133,10 @@ class KnowledgeService:
 
     DECAY_RATES = {
         'permanent':  0.000,
-        'slow':       0.002,   # ~17 days from 0.85 → floor
-        'standard':   0.005,   # ~7 days from 0.85 → floor
-        'fast':       0.015,   # ~2.5 days from 0.85 → floor
+        'very_slow':  0.00015, # ~110 days from 0.85 → floor (methodology records)
+        'slow':       0.002,   # ~8 days from 0.85 → floor
+        'standard':   0.005,   # ~3 days from 0.85 → floor
+        'fast':       0.015,   # ~1 day from 0.85 → floor
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
@@ -147,7 +148,7 @@ class KnowledgeService:
     }
 
     VALID_KINDS = {'trait', 'concept', 'fact', 'procedure', 'preference', 'relationship', 'rule', 'metric'}
-    VALID_DECAY_CLASSES = {'permanent', 'slow', 'standard', 'fast', 'ephemeral'}
+    VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
 
     # Procedural learning constants (ported from ProceduralMemoryService)
     _LEARNING_RATE = 0.1
