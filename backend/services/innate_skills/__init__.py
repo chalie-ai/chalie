@@ -24,7 +24,6 @@ from services.innate_skills.list_skill import handle_list
 from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
-from services.innate_skills.reflect_skill import handle_reflect
 from services.innate_skills.find_tools_skill import handle_find_tools
 from services.innate_skills.goals_skill import handle_goals
 from services.innate_skills.rich_render_skill import handle_rich_render
@@ -46,7 +45,6 @@ _SKILL_HANDLERS = {
     'persistent_task': handle_persistent_task,
     'document': handle_document,
     'read': handle_read,
-    'reflect': handle_reflect,
     'find_tools': handle_find_tools,
     'goals': handle_goals,
     'rich_render': handle_rich_render,
@@ -75,7 +73,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
-    dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
     dispatcher.handlers["find_tools"] = lambda topic, action: handle_find_tools(topic, action)
     dispatcher.handlers["goals"] = lambda topic, action: handle_goals(topic, action)
     dispatcher.handlers["rich_render"] = lambda topic, action: handle_rich_render(topic, action)
