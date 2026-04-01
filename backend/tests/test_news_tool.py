@@ -53,7 +53,7 @@ class TestSearchAction:
     def test_search_returns_articles(self, mock_service):
         mock_service.search.return_value = [_make_article(), _make_article(title="Second")]
         result = execute("test", {"action": "search", "query": "test"})
-        assert result["error"] == ""
+        assert not result.get("error")
         assert "Test Article" in result["text"]
         assert "News:" in result["title"]
 
@@ -85,7 +85,7 @@ class TestDigestAction:
             "local": [_make_article(title="Local Story")],
         }
         result = execute("test", {"action": "digest"}, config={}, telemetry={"city": "London"})
-        assert result["error"] == ""
+        assert not result.get("error")
         assert "INTERNATIONAL" in result["text"]
         assert result["title"] == "News Digest"
 
@@ -113,7 +113,7 @@ class TestTrendingAction:
             {"title": "Big Story", "articles": [_make_article()], "coverage": 3},
         ]
         result = execute("test", {"action": "trending"})
-        assert result["error"] == ""
+        assert not result.get("error")
         assert "Big Story" in result["text"]
 
     def test_trending_invalid_category_defaults(self, mock_service):
@@ -138,7 +138,7 @@ class TestSourcesAction:
 
     def test_sources_returns_all(self, mock_service):
         result = execute("test", {"action": "sources"})
-        assert result["error"] == ""
+        assert not result.get("error")
         assert "INTERNATIONAL" in result["text"]
         assert "TECH" in result["text"]
 

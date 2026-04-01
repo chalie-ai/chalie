@@ -54,10 +54,11 @@ def _do_search(params: dict, config: dict) -> dict:
     articles = svc.search(query, source_ids=source_ids, limit=limit)
 
     if not articles:
-        return {"text": f"No news articles found for \"{query}\".", "title": f"News: \"{query}\"", "error": "No news articles found", "failure_class": "external"}
+        return {"text": f"No news articles found for \"{query}\".", "title": f"News: \"{query}\""}
 
     text = _format_articles(articles, limit)
-    return {"text": text, "title": f"News: \"{query}\"", "error": ""}
+    return {"text": text, "title": f"News: \"{query}\""}
+
 
 
 def _do_digest(params: dict, config: dict, telemetry: dict) -> dict:
@@ -98,8 +99,8 @@ def _do_digest(params: dict, config: dict, telemetry: dict) -> dict:
         lines.append(_format_articles(result["local"]))
 
     if not lines:
-        return {"text": "No news articles available.", "title": "News Digest", "error": "No news articles available", "failure_class": "external"}
-    return {"text": "\n".join(lines), "title": "News Digest", "error": ""}
+        return {"text": "No news articles available.", "title": "News Digest"}
+    return {"text": "\n".join(lines), "title": "News Digest"}
 
 
 def _do_trending(params: dict) -> dict:
@@ -117,10 +118,10 @@ def _do_trending(params: dict) -> dict:
     clusters = svc.cluster_trending(articles, min_sources=min_sources, limit=limit)
 
     if not clusters:
-        return {"text": f"No trending stories found in {category}.", "title": f"Trending: {category}", "error": "No trending stories found", "failure_class": "external"}
+        return {"text": f"No trending stories found in {category}.", "title": f"Trending: {category}"}
 
     text = _format_clusters(clusters)
-    return {"text": text, "title": f"Trending: {category}", "error": ""}
+    return {"text": text, "title": f"Trending: {category}"}
 
 
 def _do_sources(params: dict) -> dict:
@@ -146,7 +147,7 @@ def _do_sources(params: dict) -> dict:
     sources.sort(key=lambda s: (cat_order.get(s.category, 99), s.name))
 
     text = _format_sources(sources)
-    return {"text": text, "title": "News Sources", "error": ""}
+    return {"text": text, "title": "News Sources"}
 
 
 # ── Helpers ───────────────────────────────────────────────────
