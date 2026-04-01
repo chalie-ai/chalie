@@ -122,12 +122,13 @@ User messages go through a single unified LLM call. No mode gate, no UNIFIED/ACT
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 1: Intent Classification                   ⚡ DET  ~5ms     │
+│  LAYER 1: NLP Signal Collection                   ⚡ DET  <1ms     │
 │                                                                     │
-│  IntentClassifierService                                            │
-│  Input:  text, topic, warmth, memory_confidence, wm_turns          │
-│  Output: { intent_type, complexity, confidence }                   │
-│  No external calls — pure heuristics                                │
+│  compute_nlp_signals()                                              │
+│  Input:  text                                                       │
+│  Output: { has_question_mark, interrogative_words, greeting_pattern, │
+│            explicit_feedback, information_density, implicit_reference}│
+│  No external calls — pure regex/heuristics                          │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
