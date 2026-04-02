@@ -43,8 +43,6 @@ Registered external tools: {{registered_tool_names}}
 ## User Prompt
 {{original_prompt}}
 
-{{focus}}
-
 {{working_memory}}
 
 {{episodic_memory}}
