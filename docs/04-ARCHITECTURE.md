@@ -180,7 +180,7 @@ Built-in cognitive skills for the ACT loop:
 - **Reasoning Loop** — Signal-driven continuous reasoning (see service listing above); attention-gated
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
-- **Decay Engine** — Periodic memory decay cycle; applies reliability multipliers so unreliable memories decay faster
+- **Decay Engine** — Periodic memory decay cycle; flat rate per decay class; contradicted traits resolve via inline contradiction check at creation time
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
