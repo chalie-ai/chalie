@@ -234,3 +234,52 @@ class TestUpdateStatus:
             "SELECT status FROM documents WHERE id = 'abc123'"
         ).fetchone()
         assert row['status'] == 'processing'
+
+
+@pytest.mark.unit
+class TestSearchChunks:
+    def _store_chunk(self, db, doc_service, doc_id, chunk_index, content, section_title=''):
+        """Insert a chunk (no embedding) into document_chunks + FTS5."""
+        doc_service.store_chunks(doc_id, [
+            {'chunk_index': chunk_index, 'content': content, 'page_number': 1,
+             'section_title': section_title, 'token_count': len(content.split())}
+        ])
+
+    def test_returns_empty_when_no_documents(self, db, doc_service):
+        results = doc_service.search_chunks([], 'hello world')
+        assert results == []
+
+    def test_fts_match_returns_chunk(self, db, doc_service):
+        _insert_document(db, doc_id='doc1', status='ready')
+        self._store_chunk(db, doc_service, 'doc1', 0, 'The quick brown fox jumps')
+
+        results = doc_service.search_chunks([], 'quick brown fox')
+        assert len(results) == 1
+        assert results[0]['document_id'] == 'doc1'
+        assert 'quick brown fox' in results[0]['content']
+
+    def test_deleted_document_excluded(self, db, doc_service):
+        _insert_document(db, doc_id='doc2', status='ready')
+        self._store_chunk(db, doc_service, 'doc2', 0, 'unique phrase deleted document')
+        doc_service.soft_delete('doc2')
+
+        results = doc_service.search_chunks([], 'unique phrase deleted document')
+        assert results == []
+
+    def test_non_ready_document_excluded(self, db, doc_service):
+        _insert_document(db, doc_id='doc3', status='processing')
+        self._store_chunk(db, doc_service, 'doc3', 0, 'content from processing document')
+
+        results = doc_service.search_chunks([], 'content from processing document')
+        assert results == []
+
+    def test_returns_up_to_limit(self, db, doc_service):
+        _insert_document(db, doc_id='docA', status='ready')
+        _insert_document(db, doc_id='docB', status='ready')
+        for i in range(3):
+            self._store_chunk(db, doc_service, 'docA', i, f'alpha content chunk number {i} sample text')
+        for i in range(3):
+            self._store_chunk(db, doc_service, 'docB', i, f'alpha content chunk number {i} sample text')
+
+        results = doc_service.search_chunks([], 'alpha content sample text', limit=2)
+        assert len(results) <= 2
