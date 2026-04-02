@@ -234,7 +234,7 @@ def _handle_store(topic: str, params: dict) -> str:
 
             data = entry.get("data")
 
-            ks.store(
+            stored_entry = ks.store(
                 entity=entity,
                 key=key,
                 value=str(value),
@@ -244,6 +244,19 @@ def _handle_store(topic: str, params: dict) -> str:
                 source=f"skill:memory:store:{topic}",
             )
             stored += 1
+
+            if stored_entry and kind == 'trait':
+                try:
+                    from workers.digest_worker import _check_trait_contradiction
+                    new_id = stored_entry.get('rowid') or stored_entry.get('id')
+                    if new_id:
+                        _check_trait_contradiction(
+                            ks, new_id, key, str(value), 1.0,
+                            thread_id=topic,
+                            source='chat',
+                        )
+                except Exception as _ctc_exc:
+                    logger.debug(f"{LOG_PREFIX} Contradiction check failed: {_ctc_exc}")
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Store failed: {e}", exc_info=True)

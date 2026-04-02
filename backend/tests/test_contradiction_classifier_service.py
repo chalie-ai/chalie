@@ -4,7 +4,6 @@ Unit tests for ContradictionClassifierService.
 Tests cover:
   - check_concept_conflict (without LLM — using monkeypatching)
   - reconcile_memory_batch pairwise comparison
-  - pair_already_tracked deduplication
   - sample_memories_for_reconcile DB query
 """
 
@@ -94,52 +93,6 @@ class TestUnpackEmbedding:
         vals = [0.5, 0.6]
         assert _unpack_embedding(vals) == vals
 
-
-@pytest.mark.unit
-class TestPairAlreadyTracked:
-    def test_no_prior_uncertainty(self):
-        db = FakeDB()
-        svc = ContradictionClassifierService(db_service=db)
-        assert svc.pair_already_tracked('trait-a', 'trait-b') is False
-
-    def test_detects_existing_open_uncertainty(self):
-        db = FakeDB()
-        db.conn.execute("""
-            INSERT INTO uncertainties
-              (id, memory_a_type, memory_a_id, memory_b_type, memory_b_id,
-               uncertainty_type, severity, detection_context)
-            VALUES ('unc-1', 'trait', 'trait-a', 'trait', 'trait-b',
-                    'contradiction', 'high', 'ingestion')
-        """)
-        db.conn.commit()
-        svc = ContradictionClassifierService(db_service=db)
-        assert svc.pair_already_tracked('trait-a', 'trait-b') is True
-
-    def test_ignores_reversed_id_order(self):
-        db = FakeDB()
-        db.conn.execute("""
-            INSERT INTO uncertainties
-              (id, memory_a_type, memory_a_id, memory_b_type, memory_b_id,
-               uncertainty_type, severity, detection_context)
-            VALUES ('unc-2', 'trait', 'trait-b', 'trait', 'trait-a',
-                    'contradiction', 'high', 'ingestion')
-        """)
-        db.conn.commit()
-        svc = ContradictionClassifierService(db_service=db)
-        assert svc.pair_already_tracked('trait-a', 'trait-b') is True
-
-    def test_resolved_uncertainty_not_counted(self):
-        db = FakeDB()
-        db.conn.execute("""
-            INSERT INTO uncertainties
-              (id, memory_a_type, memory_a_id, memory_b_type, memory_b_id,
-               uncertainty_type, severity, detection_context, state)
-            VALUES ('unc-3', 'trait', 'trait-a', 'trait', 'trait-b',
-                    'contradiction', 'high', 'ingestion', 'resolved')
-        """)
-        db.conn.commit()
-        svc = ContradictionClassifierService(db_service=db)
-        assert svc.pair_already_tracked('trait-a', 'trait-b') is False
 
 
 @pytest.mark.unit
@@ -236,7 +189,7 @@ class TestSampleMemoriesForReconcile:
     def test_returns_empty_without_data(self):
         db = FakeDB()
         svc = ContradictionClassifierService(db_service=db)
-        result = svc.sample_memories_for_reconcile(n_traits=5, n_concepts=5)
+        result = svc.sample_memories_for_reconcile(n_traits=5)
         # May return empty list — no error
         assert isinstance(result, list)
 

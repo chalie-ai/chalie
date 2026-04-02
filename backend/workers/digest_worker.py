@@ -273,13 +273,19 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                     confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
                     decay_class = 'permanent' if is_permanent else 'standard'
 
-                    ks.store(
+                    stored_entry = ks.store(
                         kind='trait', entity='user', key=key, value=value,
                         data={'category': 'core' if is_permanent else 'preference'},
                         decay_class=decay_class,
                         confidence=confidence, source='llm_extraction',
                     )
                     stored_count += 1
+
+                    # Inline contradiction check — uses rowid from returned dict
+                    if stored_entry:
+                        new_id = stored_entry.get('rowid') or stored_entry.get('id')
+                        if new_id:
+                            _check_trait_contradiction(ks, new_id, key, value, confidence, thread_id, source='chat')
 
                 if stored_count > 0:
                     _synthesize_user_sentence(db, provider_config)
@@ -353,6 +359,71 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
 
     except Exception as e:
         logging.debug(f"[TRAIT_EXTRACT] Enqueue failed: {e}")
+
+
+def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, thread_id: str, source: str = 'chat'):
+    """
+    Runs synchronously after a trait is stored.
+    - temporal_change + source=chat → hard-delete old trait
+    - true_contradiction OR source=ambient → reduce confidences, create pending record, push question
+    """
+    try:
+        from services.embedding_service import get_embedding_service
+        from services.contradiction_classifier_service import ContradictionClassifierService
+        from services.pending_contradiction_service import PendingContradictionService
+        from services.database_service import get_shared_db_service
+        from services.output_service import OutputService
+
+        emb_svc = get_embedding_service()
+        new_text = f"{key}: {value}"
+        embedding = emb_svc.generate_embedding(new_text)
+        if embedding is None:
+            return
+
+        similar = ks.find_similar_traits(embedding, exclude_id=new_id)
+        if not similar:
+            return
+
+        existing = similar[0]  # top candidate only
+        existing_text = f"{existing['key']}: {existing['value']}"
+
+        classifier = ContradictionClassifierService()
+        result = classifier.check_new_trait(new_text, existing_text, source=source)
+        if result is None:
+            return
+
+        classification = result.get('classification', 'compatible')
+
+        if classification == 'temporal_change' and source == 'chat':
+            # Auto-overwrite: hard-delete old trait
+            ks.hard_delete_by_id(existing['id'])
+            logging.info(f"[CONTRADICTION] temporal_change: deleted old trait id={existing['id']} key={existing['key']}")
+
+        elif classification in ('true_contradiction', 'ambiguous') or source == 'ambient':
+            # Ask user: reduce confidences, create pending record, push message
+            ks.update_confidence(existing['id'], existing['confidence'] * 0.75)
+            ks.update_confidence(new_id, 0.5)
+
+            question = (
+                f"I'm seeing two conflicting things about {key}: "
+                f"'{existing['value']}' (existing) and '{value}' (just mentioned). "
+                f"Which is correct? Just tell me and I'll update."
+            )
+
+            db = get_shared_db_service()
+            pending_svc = PendingContradictionService(db)
+            pending_svc.create(new_id, existing['id'], question, source)
+
+            if thread_id:
+                OutputService().enqueue_proactive(
+                    topic=thread_id,
+                    response=question,
+                    source='contradiction',
+                )
+                logging.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
+
+    except Exception as e:
+        logging.debug(f"[CONTRADICTION] Check failed: {e}")
 
 
 def load_configs():
@@ -457,57 +528,6 @@ def unified_generate(topic, text, classification, thread_conv_service,
             )
     except Exception as e:
         logging.warning(f"[UNIFIED] Context assembly failed: {e}")
-
-    # Contradiction detection — always run for unified (every message may be conversational)
-    if assembled_context is not None:
-        try:
-            from services.contradiction_classifier_service import ContradictionClassifierService
-            from services.uncertainty_service import UncertaintyService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            classifier = ContradictionClassifierService(db_service=db)
-            conflict = classifier.check_ingestion(text)
-            if conflict:
-                conflict_type = conflict.get('classification')
-                mem_a = conflict.get('memory_a', {})
-                mem_b = conflict.get('memory_b', {})
-                unc_svc = UncertaintyService(db)
-
-                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_id = unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=True,
-                        )
-                        unc_svc.resolve_uncertainty(
-                            uncertainty_id=unc_id,
-                            strategy='temporal_supersede',
-                            detail=conflict.get('reasoning', ''),
-                        )
-                elif conflict_type in ('true_contradiction', 'context_dependent'):
-                    assembled_context['contradiction_context'] = {
-                        'classification': conflict_type,
-                        'memory_a_text': mem_a.get('text', ''),
-                        'memory_b_text': mem_b.get('text', ''),
-                        'reasoning': conflict.get('reasoning', ''),
-                        'surface_context': conflict.get('surface_context', ''),
-                    }
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=False,
-                            surface_context=conflict.get('surface_context'),
-                        )
-        except Exception as e:
-            logging.debug(f"[UNIFIED] Ingestion contradiction check skipped: {e}")
 
     # Inject visual context from attached images
     image_contexts = (metadata or {}).get('image_contexts', [])

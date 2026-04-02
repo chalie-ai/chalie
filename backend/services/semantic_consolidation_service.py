@@ -197,66 +197,6 @@ class SemanticConsolidationService:
             )
 
             if existing_concept:
-                # Before strengthening, check if the new extraction contradicts the existing concept
-                try:
-                    from services.contradiction_classifier_service import ContradictionClassifierService
-                    from services.uncertainty_service import UncertaintyService
-                    db_svc = getattr(self.storage, 'db', None) or getattr(self.storage, 'db_service', None)
-                    classifier = ContradictionClassifierService(db_service=db_svc)
-                    # Adapt existing_concept dict to what contradiction classifier expects
-                    compat_existing = {
-                        'id': existing_concept.get('id'),
-                        'concept_name': existing_concept.get('key', concept_name),
-                        'definition': existing_concept.get('value', ''),
-                    }
-                    conflict = classifier.check_concept_conflict(
-                        concept_name=concept_name,
-                        concept_definition=definition,
-                        existing=compat_existing,
-                    )
-                    if conflict:
-                        unc_svc = UncertaintyService(db_svc)
-                        existing_uncs = unc_svc.get_uncertainties_for_memory(
-                            'concept', existing_concept.get('id')
-                        )
-                        already_tracked = any(
-                            u.get('uncertainty_type') == 'contradiction'
-                            and u.get('state') == 'open'
-                            for u in existing_uncs
-                        )
-                        if not already_tracked:
-                            unc_svc.create_uncertainty(
-                                memory_a_type='concept',
-                                memory_a_id=existing_concept.get('id'),
-                                memory_b_type=None,
-                                memory_b_id=None,
-                                uncertainty_type='contradiction',
-                                detection_context='consolidation',
-                                reasoning=conflict.get('reasoning'),
-                                temporal_signal=conflict.get('temporal_signal', False),
-                                surface_context=conflict.get('surface_context'),
-                            )
-                            logging.info(
-                                f"[CONSOLIDATION] Contradiction detected on concept "
-                                f"'{concept_name}': {conflict.get('reasoning', '')[:80]}"
-                            )
-
-                            try:
-                                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                                emit_reasoning_signal(ReasoningSignal(
-                                    signal_type='memory_pressure',
-                                    source='semantic_consolidation',
-                                    concept_name=concept_name,
-                                    topic=concept.get('domain') or 'general',
-                                    content=f"Contradiction detected: {conflict.get('reasoning', '')[:150]}",
-                                    activation_energy=0.7,
-                                ))
-                            except Exception:
-                                pass
-
-                except Exception as ue:
-                    logging.debug(f"[CONSOLIDATION] Contradiction check skipped: {ue}")
-
                 # Strengthen existing concept via KnowledgeService
                 ks.strengthen(entity='chalie', key=concept_name, episode_id=episode_id)
                 logging.info(f"Strengthened existing concept: {concept_name}")

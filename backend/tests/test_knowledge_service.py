@@ -570,29 +570,6 @@ class TestDecayCycle:
         assert ephem is not None
         assert ephem['confidence'] < 0.5  # ephemeral: decayed
 
-    def test_decay_cycle_reliability_multiplier(self, svc, db_service):
-        """Contradicted entries decay faster than reliable ones."""
-        self._insert_entry(
-            db_service,
-            key='reliable_entry', decay_class='standard',
-            confidence=0.5, reliability='reliable',
-        )
-        self._insert_entry(
-            db_service,
-            key='contradicted_entry', decay_class='standard',
-            confidence=0.5, reliability='contradicted',
-        )
-
-        svc.decay_cycle()
-
-        reliable = _raw_get(db_service, 'user', 'reliable_entry')
-        contradicted = _raw_get(db_service, 'user', 'contradicted_entry')
-
-        # Both should decay, but contradicted should decay more
-        assert reliable['confidence'] < 0.5
-        assert contradicted['confidence'] < 0.5
-        assert contradicted['confidence'] < reliable['confidence']
-
     def test_decay_cycle_soft_deletes_at_floor(self, svc, db_service):
         """Entries at confidence 0.05 get soft-deleted."""
         self._insert_entry(

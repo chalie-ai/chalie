@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     data        TEXT,
     decay_class TEXT NOT NULL DEFAULT 'standard',
     confidence  REAL NOT NULL DEFAULT 0.5,
-    reliability TEXT NOT NULL DEFAULT 'reliable',
+    reliability TEXT NOT NULL DEFAULT 'reliable',  -- dropped by migration 026; kept here for migration compat
     source      TEXT,
     evidence_count INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -653,22 +653,23 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 -- ────────────────────────────────────────────────────────────────
--- UNCERTAINTIES — epistemic confidence tracking
+-- UNCERTAINTIES — kept for migration compatibility (migration 009 references it)
+-- Dropped by migration 025. Do not add new columns or use in application code.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS uncertainties (
     id TEXT PRIMARY KEY,
-    memory_a_type TEXT NOT NULL,              -- 'trait' | 'episode' | 'concept'
+    memory_a_type TEXT NOT NULL,
     memory_a_id TEXT NOT NULL,
-    memory_b_type TEXT,                       -- NULL for solo uncertainties
+    memory_b_type TEXT,
     memory_b_id TEXT,
-    uncertainty_type TEXT NOT NULL,           -- 'contradiction' | 'unverified' | 'stale' | 'ambiguous'
-    severity TEXT NOT NULL,                   -- 'critical' | 'high' | 'medium' | 'low'
-    detection_context TEXT NOT NULL,          -- which service detected it
+    uncertainty_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    detection_context TEXT NOT NULL,
     reasoning TEXT,
-    temporal_signal INTEGER DEFAULT 0,        -- BOOLEAN: 1 if uncertainty is time-sensitive
-    surface_context TEXT,                     -- optional text to surface alongside the uncertainty
-    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'resolved'
-    resolution_strategy TEXT,                 -- 'accepted' | 'rejected' | 'merged' | 'superseded'
+    temporal_signal INTEGER DEFAULT 0,
+    surface_context TEXT,
+    state TEXT NOT NULL DEFAULT 'open',
+    resolution_strategy TEXT,
     resolution_detail TEXT,
     resolved_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
@@ -678,6 +679,19 @@ CREATE INDEX IF NOT EXISTS idx_uncertainties_state ON uncertainties(state);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_a ON uncertainties(memory_a_type, memory_a_id);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_b ON uncertainties(memory_b_type, memory_b_id);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity, state);
+
+-- ────────────────────────────────────────────────────────────────
+-- PENDING CONTRADICTIONS — trait contradictions awaiting user resolution
+-- (Replaces uncertainties — migration 025 drops the uncertainties table)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS pending_contradictions (
+    id TEXT PRIMARY KEY,
+    trait_a_id INTEGER NOT NULL,
+    trait_b_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    surfaced_at TEXT NOT NULL,
+    source TEXT NOT NULL  -- 'chat' | 'ambient'
+);
 
 -- ────────────────────────────────────────────────────────────────
 -- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)

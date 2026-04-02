@@ -23,15 +23,6 @@ except Exception as e:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
     logging.debug(f"Telemetry service import unavailable: {e}")
 
-RELIABILITY_WEIGHT = {
-    'reliable':    1.0,
-    'uncertain':   0.6,
-    'contradicted': 0.4,
-    'superseded':  0.2,
-}
-RELIABILITY_FLOOR = 0.3
-
-
 class ContextAssemblyService:
     """Orchestrates context retrieval from all memory systems."""
 
@@ -309,8 +300,6 @@ class ContextAssemblyService:
     def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant episodic memories via semantic search.
 
-        Downweights unreliable or contradicted episodes before returning results.
-
         Args:
             prompt: Current user prompt used as the semantic query.
             topic: Conversation topic for additional scoping.
@@ -359,13 +348,6 @@ class ContextAssemblyService:
                         _tel_err,
                     )
 
-            # Downweight unreliable episodes so they rank lower in caller scoring
-            for ep in episodes:
-                if isinstance(ep, dict) and 'activation_score' in ep:
-                    reliability = ep.get('reliability', 'reliable')
-                    r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
-                    ep['activation_score'] = ep['activation_score'] * r_weight
-
             lines = ["\n## Relevant Past Experiences"]
             for i, ep in enumerate(episodes, 1):
                 lines.append(f"{i}. {ep['gist']}")
@@ -381,8 +363,6 @@ class ContextAssemblyService:
 
     def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant semantic concepts for context injection.
-
-        Downweights unreliable or contradicted concepts before applying the confidence filter.
 
         Args:
             prompt: Current user prompt used as the semantic query.
@@ -403,13 +383,6 @@ class ContextAssemblyService:
 
             if not concepts:
                 return ""
-
-            # Downweight unreliable concepts before the confidence filter
-            for c in concepts:
-                if isinstance(c, dict) and 'confidence' in c:
-                    reliability = c.get('reliability', 'reliable')
-                    r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
-                    c['confidence'] = c['confidence'] * r_weight
 
             lines = ["## Relevant Concepts"]
             for c in concepts:

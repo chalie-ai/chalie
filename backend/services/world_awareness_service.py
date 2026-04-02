@@ -84,7 +84,7 @@ class WorldAwarenessService:
                      AND deleted_at IS NULL
                      AND confidence >= ?
                      AND evidence_count >= ?
-                     AND reliability = 'reliable'
+
                      AND json_extract(data, '$.category') IN ('preference', 'core')
                    ORDER BY confidence DESC""",
                 (TRAIT_MIN_CONFIDENCE, TRAIT_MIN_REINFORCEMENTS),

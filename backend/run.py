@@ -335,6 +335,24 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Search cache warmup start failed: {e}")
 
+    # Hourly cleanup for stale pending contradictions
+    def _pending_contradiction_cleanup_loop():
+        import time
+        from services.pending_contradiction_service import PendingContradictionService
+        from services.database_service import get_shared_db_service
+        while True:
+            try:
+                db = get_shared_db_service()
+                svc = PendingContradictionService(db)
+                count = svc.cleanup_stale()
+                if count > 0:
+                    logging.info(f"[PENDING_CONTRADICTION] Cleanup: processed {count} stale records")
+            except Exception as e:
+                logging.warning(f"[PENDING_CONTRADICTION] Cleanup error: {e}")
+            time.sleep(3600)
+
+    threading.Thread(target=_pending_contradiction_cleanup_loop, daemon=True, name="pending-contradiction-cleanup").start()
+
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):
         from api import create_app
