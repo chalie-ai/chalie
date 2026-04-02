@@ -1,8 +1,10 @@
 # Chalie
 
-**A local-first cognitive runtime that remembers, reasons, and acts — running entirely on your machine.**
+**Your AI that actually knows you.**
 
-> Alpha software. Expect rough edges. [Issues welcome.](https://github.com/chalie-ai/chalie/issues)
+Other AI tools forget you the moment you close the tab. Chalie remembers. It learns what you care about, figures out what you need, and handles things before you ask — all running locally on your machine.
+
+> Alpha software. Rough edges ahead. [Feedback welcome.](https://github.com/chalie-ai/chalie/issues)
 
 ```bash
 curl -fsSL https://chalie.ai/install | bash
@@ -10,39 +12,40 @@ chalie
 # → http://localhost:8081
 ```
 
-Pick an LLM provider during onboarding (Ollama, OpenAI, Anthropic, Gemini) and start talking. That's it.
+---
+
+## What makes it different
+
+**It remembers you.** Not just your last message — your preferences, your projects, your patterns. Mention something in passing today, and it connects the dots three months from now.
+
+**It figures out your goals.** Talk about wanting to learn piano across a few conversations. Chalie notices, forms the goal on its own, and starts helping — no explicit instructions needed.
+
+**It handles your life.** Email, calendar, contacts, web research, reminders, notes, code execution — Chalie picks the right tool and uses it. You say what you want done; it handles the how.
+
+**It thinks when you're not looking.** Background reasoning runs continuously — surfacing insights, tracking your goals, noticing when something needs your attention.
+
+**Nothing leaves your machine.** One SQLite file. Zero telemetry. Zero analytics. Your data stays yours. Period.
 
 ---
 
-## What this actually is
+## Try it now
 
-Chalie is not a chatbot wrapper. It's a **persistent reasoning engine** that runs as a single Python process on your hardware.
-
-**Memory that compounds.** Every conversation feeds a multi-layer memory pipeline — raw transcripts compress into episodes, episodes distill into concepts, concepts decay based on relevance. Context from three months ago surfaces when it matters today.
-
-**Autonomous goal formation.** Mention something casually across a few conversations — Chalie notices the pattern, forms a goal, builds a plan, and starts executing. No explicit instruction needed.
-
-**Background cognition.** A continuous reasoning loop runs during idle time — decaying stale goals, clustering signals, generating insights, and triggering proactive actions. It thinks when you're not talking to it.
-
-**Tool use with judgment.** Web search, code execution, documentation lookup, email, calendar, contacts — Chalie picks and uses tools on its own. External apps can pair via a bluetooth-style interface protocol and expose their own capabilities.
-
-**Single SQLite database.** No Redis, no Postgres, no message queue. One file. Encrypted API keys (AES-256-GCM). Zero telemetry. Zero analytics. Nothing leaves your machine unless you configure an external LLM.
-
----
-
-## For the fully private setup
-
+**With a cloud provider** (fastest start):
 ```bash
-ollama pull qwen3:8b
-# During onboarding → select Ollama → http://localhost:11434
+curl -fsSL https://chalie.ai/install | bash
+chalie
+# Pick OpenAI, Anthropic, or Gemini during onboarding
 ```
 
-Everything runs local. No API keys, no cloud, no data leaving your network.
+**Fully local and private** (no data leaves your network):
+```bash
+ollama pull qwen3:8b
+curl -fsSL https://chalie.ai/install | bash
+chalie
+# Select Ollama during onboarding → http://localhost:11434
+```
 
----
-
-## Build from source
-
+**From source** (for tinkerers):
 ```bash
 git clone https://github.com/chalie-ai/chalie.git
 cd chalie
@@ -52,67 +55,48 @@ python backend/run.py
 # → http://localhost:8081/on-boarding/
 ```
 
-```bash
-cd backend && pytest -m unit    # run tests
-```
+---
 
-### CLI
+## What it can do
+
+| | |
+|---|---|
+| **Memory** | Learns and remembers across every conversation — with built-in forgetting so only what matters sticks |
+| **Goals** | Detects what you're trying to achieve and tracks progress across sessions |
+| **Email & Calendar** | Reads, drafts, schedules — connects to your existing accounts (IMAP, CalDAV, CardDAV) |
+| **Web search** | Finds answers when it needs them (DuckDuckGo, no tracking) |
+| **Background tasks** | Long-running work that continues across sessions |
+| **Notes & lists** | Persistent, searchable, always available in conversation |
+| **Code execution** | Runs Python in a sandbox when you need computation |
+| **Voice** | Talk to it — local STT and TTS, no cloud transcription |
+| **Browser** | Navigates the web when search isn't enough |
+| **App integrations** | External apps can pair and expose their own capabilities |
+
+---
+
+## How it's built
+
+Single Python process. No Redis, no Postgres, no message queue, no microservices. One SQLite database with encrypted API keys (AES-256-GCM). Works with Ollama, OpenAI, Anthropic, and Gemini — or all of them at once.
+
+Curious about the internals? → [Architecture](docs/04-ARCHITECTURE.md) · [Schema](backend/schema.sql)
+
+---
+
+## CLI
 
 ```bash
-chalie                  # start (default :8081)
+chalie                  # start
 chalie --port=9000      # custom port
 chalie stop             # stop
-chalie update           # pull latest
+chalie update           # update to latest
 chalie logs             # tail logs
 ```
 
 ---
 
-## Under the hood
+## Docs
 
-Single process, multi-threaded. No microservices, no containers required (Docker available for deployment).
-
-- **Memory hierarchy** — transcript → compaction → episodes → knowledge (hybrid search: exact + FTS5 + vector KNN via sqlite-vec)
-- **Cognitive drift engine** — idle-loop goal ecology: decay, clustering, proactive triggers, attention gating
-- **Unified LLM path** — one call handles response generation + skill invocation + tool dispatch. No routing gate.
-- **Model-agnostic** — different cognitive functions can use different providers/models simultaneously
-- **ONNX classifiers** — lightweight specialized models (mode tiebreaker, contradiction detection, trait extraction) run locally
-- **Voice** — Moonshine STT + Kokoro TTS, both ONNX, both local
-- **Block protocol** — all content is structured JSON blocks, never raw HTML
-
-Architecture docs: [`docs/04-ARCHITECTURE.md`](docs/04-ARCHITECTURE.md) · Schema: [`backend/schema.sql`](backend/schema.sql)
-
----
-
-## Built-in capabilities
-
-| Capability | Details |
-|---|---|
-| Persistent memory | Multi-layer pipeline with decay, semantic search, knowledge extraction |
-| Goal tracking | Emergent goals from conversation signals, autonomous execution |
-| Scheduling | Reminders, recurring tasks, calendar-aware timing |
-| Email & contacts | IMAP, CalDAV, CardDAV — multiple provider support |
-| Web search | Privacy-focused via DuckDuckGo |
-| Code execution | Sandboxed Python eval |
-| Doc search | 12 languages, 11 frameworks |
-| Notes & lists | Persistent, searchable, structured |
-| Browser | Headless Playwright for web interaction |
-| Background tasks | Multi-session execution with plan-aware step DAGs |
-
-Tools are self-declaring via manifests. No tool-specific logic in core infrastructure.
-
----
-
-## Documentation
-
-- [Quick Start](docs/01-QUICK-START.md) — install, configure, deploy
-- [Providers](docs/02-PROVIDERS-SETUP.md) — LLM provider setup
-- [Architecture](docs/04-ARCHITECTURE.md) — full system design
-- [Tools](docs/09-TOOLS.md) — tool system and authoring
-- [Interfaces](docs/15-INTERFACES.md) — external app integration
-- [FAQ](docs/FAQ.md)
-
----
+[Quick Start](docs/01-QUICK-START.md) · [Providers](docs/02-PROVIDERS-SETUP.md) · [Architecture](docs/04-ARCHITECTURE.md) · [Tools](docs/09-TOOLS.md) · [Interfaces](docs/15-INTERFACES.md) · [FAQ](docs/FAQ.md)
 
 ## Contributing
 
