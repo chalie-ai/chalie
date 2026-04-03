@@ -56,15 +56,15 @@ jobs:
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
         run: node scripts/update-build-log.js
 
-      - name: Commit and push
+      - name: Commit state
         working-directory: chalie-web
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/build-log/ src/build-log/.state.json
+          git add src/build-log/.state.json
           if ! git diff --cached --quiet; then
-            git commit -m "chore(build-log): update $(date -u +%Y-%m-%d)"
+            git commit -m "chore(build-log): update state $(date -u +%Y-%m-%d)"
             git push origin main
           else
-            echo "No changes to commit"
+            echo "No state changes to commit"
           fi
