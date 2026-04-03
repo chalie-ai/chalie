@@ -131,7 +131,8 @@ async function callN8n(systemPrompt, userPrompt) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': payloadBuffer.length
+        'Content-Length': payloadBuffer.length,
+        ...(process.env.N8N_WEBHOOK_SECRET ? { 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET } : {})
       }
     }, (res) => {
       let data = '';

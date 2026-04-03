@@ -23,4 +23,5 @@ jobs:
         env:
           RELEASE_VERSION:          ${{ github.ref_name }}
           N8N_ANNOUNCE_WEBHOOK_URL: ${{ secrets.N8N_ANNOUNCE_WEBHOOK_URL }}
+          N8N_WEBHOOK_SECRET: ${{ secrets.N8N_WEBHOOK_SECRET }}
         run: node scripts/announce-release.js
