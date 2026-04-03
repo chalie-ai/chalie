@@ -429,10 +429,18 @@ class KnowledgeService:
           3. Vector KNN (requires embedding the query)
 
         Returns rows sorted by fused RRF score descending.
+        
+        When FTS and exact-key both return zero results, vector-only scores are
+        boosted 2.5x to ensure semantic matches are properly ranked.
         """
         rrf_k = 60
         scores = {}  # rowid -> float
         row_cache = {}  # rowid -> dict
+        
+        # Track which signals returned results for vector-only boost
+        exact_count = 0
+        fts_count = 0
+        vec_count = 0
 
         try:
             with self.db.connection() as conn:
@@ -462,7 +470,9 @@ class KnowledgeService:
                     ORDER BY k.confidence DESC
                     LIMIT 5
                 """, exact_params)
-                for rank, row in enumerate(cursor.fetchall()):
+                exact_rows = cursor.fetchall()
+                exact_count = len(exact_rows)
+                for rank, row in enumerate(exact_rows):
                     rid = row[0]
                     row_cache[rid] = self._row_to_dict(row)
                     scores[rid] = scores.get(rid, 0.0) + 1.0 / (rrf_k + rank)
@@ -483,6 +493,7 @@ class KnowledgeService:
                                 LIMIT 30
                             """, (fts_terms,))
                             fts_rowids = [(r[0], r[1]) for r in cursor.fetchall()]
+                            fts_count = len(fts_rowids)
 
                             # Filter by kind/entity/confidence via join
                             for rank, (rid, _fts_rank) in enumerate(fts_rowids):
@@ -515,6 +526,7 @@ class KnowledgeService:
                                 ORDER BY distance
                             """, (blob, vec_k))
                             vec_results = cursor.fetchall()
+                            vec_count = len(vec_results)
 
                             for rank, (rid, _dist) in enumerate(vec_results):
                                 if rid in row_cache:
@@ -533,6 +545,19 @@ class KnowledgeService:
                     logger.debug(f"[KNOWLEDGE] Vector search failed (non-fatal): {e}")
 
                 cursor.close()
+
+                # ── Vector-only boost ──────────────────────────────────
+                # When FTS and exact-key both return zero results, boost vector-only
+                # scores to ensure semantic matches are properly ranked.
+                # Example: "sister named Elena" vs stored "siblings" - zero word overlap
+                # means only vector search fires, but should still rank highly.
+                if exact_count == 0 and fts_count == 0 and vec_count > 0:
+                    vector_only_boost = 2.5
+                    logger.debug(
+                        f"[KNOWLEDGE] Vector-only recall (exact={exact_count}, fts={fts_count}, vec={vec_count}), "
+                        f"applying {vector_only_boost}x boost"
+                    )
+                    scores = {rid: score * vector_only_boost for rid, score in scores.items()}
 
                 # Sort by RRF score and return top results
                 ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
