@@ -28,43 +28,14 @@ jobs:
             echo "Skipping: ${{ github.actor }} has '$PERM' permission (need maintain or admin)"
           fi
 
-  update-build-log:
+  trigger-build-log:
     needs: check-permission
     if: needs.check-permission.outputs.is_maintainer == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 2
     steps:
-      - name: Checkout Chalie
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # need full history for git log
-
-      - name: Checkout chalie-web
-        uses: actions/checkout@v4
-        with:
-          repository: chalie-ai/chalie-web
-          token: ${{ secrets.CHALIE_WEB_TOKEN }}
-          path: chalie-web
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Run build log updater
+      - name: Trigger n8n build log workflow
         env:
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-        run: node scripts/update-build-log.js
-
-      - name: Commit state
-        working-directory: chalie-web
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/build-log/.state.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(build-log): update state $(date -u +%Y-%m-%d)"
-            git push origin main
-          else
-            echo "No state changes to commit"
-          fi
+          curl -s -o /dev/null -w "%{http_code}\n" -X POST "$N8N_WEBHOOK_URL"
