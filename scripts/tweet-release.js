@@ -35,7 +35,7 @@ function getCommitsSince(ref) {
   }
 }
 
-async function callGemini(systemPrompt, userPrompt) {
+function callGeminiOnce(systemPrompt, userPrompt) {
   return new Promise((resolve, reject) => {
     const apiKey = process.env.GEMINI_API_KEY;
     const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
@@ -68,7 +68,9 @@ async function callGemini(systemPrompt, userPrompt) {
             reject(new Error(`Parse error: ${e.message}`));
           }
         } else {
-          reject(new Error(`Gemini API ${res.statusCode}: ${data}`));
+          const err = new Error(`Gemini API ${res.statusCode}: ${data}`);
+          err.statusCode = res.statusCode;
+          reject(err);
         }
       });
     });
@@ -76,6 +78,23 @@ async function callGemini(systemPrompt, userPrompt) {
     req.write(buf);
     req.end();
   });
+}
+
+async function callGemini(systemPrompt, userPrompt) {
+  const delays = [3000, 10000, 30000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await callGeminiOnce(systemPrompt, userPrompt);
+    } catch (err) {
+      const retryable = err.statusCode >= 500 || err.statusCode === 429;
+      if (retryable && attempt < delays.length) {
+        console.log(`Gemini ${err.statusCode}, retrying in ${delays[attempt] / 1000}s... (attempt ${attempt + 1}/${delays.length})`);
+        await new Promise(r => setTimeout(r, delays[attempt]));
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 // Twitter API v2 OAuth 1.0a — no external dependencies
