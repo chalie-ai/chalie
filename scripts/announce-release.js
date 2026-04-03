@@ -49,11 +49,7 @@ async function fireWebhook(payload) {
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname + url.search,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': buf.length,
-        ...(process.env.N8N_WEBHOOK_SECRET ? { 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET } : {})
-      }
+      headers: { 'Content-Type': 'application/json', 'Content-Length': buf.length }
     }, (res) => {
       res.resume();
       res.on('end', () => resolve(res.statusCode));

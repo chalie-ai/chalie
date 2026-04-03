@@ -54,7 +54,6 @@ jobs:
       - name: Run build log updater
         env:
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-          N8N_WEBHOOK_SECRET: ${{ secrets.N8N_WEBHOOK_SECRET }}
         run: node scripts/update-build-log.js
 
       - name: Commit and push
