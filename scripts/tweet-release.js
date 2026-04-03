@@ -2,7 +2,7 @@
 
 const { execSync } = require('child_process');
 const https = require('https');
-const crypto = require('crypto');
+const fs = require('fs');
 
 const VERSION = process.env.RELEASE_VERSION; // e.g. "v0.3.1"
 
@@ -15,7 +15,6 @@ function getPreviousTag() {
   try {
     const tags = execSync('git tag --sort=-v:refname', { encoding: 'utf8' })
       .trim().split('\n').filter(Boolean);
-    // tags[0] is the current tag, tags[1] is the previous
     return tags[1] || null;
   } catch (e) {
     return null;
@@ -38,7 +37,6 @@ function getCommitsSince(ref) {
 function callGeminiOnce(systemPrompt, userPrompt, model) {
   return new Promise((resolve, reject) => {
     const apiKey = process.env.GEMINI_API_KEY;
-
     if (!apiKey) return reject(new Error('GEMINI_API_KEY not set'));
 
     const payload = JSON.stringify({
@@ -108,72 +106,26 @@ async function callGemini(systemPrompt, userPrompt) {
   }
 }
 
-// Twitter API v2 OAuth 1.0a — no external dependencies
-function percentEncode(str) {
-  return encodeURIComponent(String(str))
-    .replace(/!/g, '%21').replace(/'/g, '%27')
-    .replace(/\(/g, '%28').replace(/\)/g, '%29')
-    .replace(/\*/g, '%2A');
-}
-
-function buildOAuthHeader(method, url, bodyParams) {
-  const oauthParams = {
-    oauth_consumer_key:     process.env.TWITTER_API_KEY,
-    oauth_nonce:            crypto.randomBytes(16).toString('hex'),
-    oauth_signature_method: 'HMAC-SHA1',
-    oauth_timestamp:        Math.floor(Date.now() / 1000).toString(),
-    oauth_token:            process.env.TWITTER_ACCESS_TOKEN,
-    oauth_version:          '1.0',
-  };
-
-  const allParams = { ...oauthParams, ...bodyParams };
-  const sortedParams = Object.keys(allParams).sort()
-    .map(k => `${percentEncode(k)}=${percentEncode(allParams[k])}`)
-    .join('&');
-
-  const sigBase = [
-    method.toUpperCase(),
-    percentEncode(url),
-    percentEncode(sortedParams)
-  ].join('&');
-
-  const sigKey = `${percentEncode(process.env.TWITTER_API_SECRET)}&${percentEncode(process.env.TWITTER_ACCESS_TOKEN_SECRET)}`;
-  const signature = crypto.createHmac('sha1', sigKey).update(sigBase).digest('base64');
-
-  oauthParams.oauth_signature = signature;
-
-  const headerValue = 'OAuth ' + Object.keys(oauthParams).sort()
-    .map(k => `${percentEncode(k)}="${percentEncode(oauthParams[k])}"`)
-    .join(', ');
-
-  return headerValue;
-}
-
-async function postTweet(text) {
+async function postToZapier(webhookUrl, tweet) {
   return new Promise((resolve, reject) => {
-    const url = 'https://api.twitter.com/2/tweets';
-    const body = JSON.stringify({ text });
+    const body = JSON.stringify({ version: VERSION, text: tweet });
     const buf = Buffer.from(body, 'utf8');
-    const auth = buildOAuthHeader('POST', url, {});
+    const url = new URL(webhookUrl);
 
     const req = https.request({
-      hostname: 'api.twitter.com',
+      hostname: url.hostname,
       port: 443,
-      path: '/2/tweets',
+      path: url.pathname + url.search,
       method: 'POST',
-      headers: {
-        'Authorization': auth,
-        'Content-Type': 'application/json',
-        'Content-Length': buf.length
-      }
+      headers: { 'Content-Type': 'application/json', 'Content-Length': buf.length }
     }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(JSON.parse(data));
+          resolve();
         } else {
-          reject(new Error(`Twitter API ${res.statusCode}: ${data}`));
+          reject(new Error(`Zapier webhook ${res.statusCode}: ${data}`));
         }
       });
     });
@@ -183,20 +135,26 @@ async function postTweet(text) {
   });
 }
 
+function writeSummary(tweet) {
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryFile) return;
+  fs.appendFileSync(summaryFile, `## 🚀 ${VERSION} release post\n\n> ${tweet}\n`);
+}
+
 async function main() {
   const prevTag = getPreviousTag();
   const commits = getCommitsSince(prevTag);
 
-  console.log(`Generating tweet for ${VERSION} (since ${prevTag || 'beginning'})`);
+  console.log(`Generating release post for ${VERSION} (since ${prevTag || 'beginning'})`);
 
   const systemPrompt = `You are the voice of Chalie — a personal AI assistant with a dry, confident personality.
-Write a single tweet announcing a new release. Rules:
+Write a single social media post announcing a new release. Rules:
 - First person ("I", "my", not "we")
 - Max 240 characters
 - Include the version number (${VERSION})
 - 1–3 relevant emojis, placed naturally (not as a trailing dump)
 - Punchy and sassy but still descriptive of what actually changed
-- No hashtags, no links, no quotes around the tweet
+- No hashtags, no links, no quotes around the post
 - Vary the structure — don't always lead with the version number
 
 Good examples:
@@ -209,15 +167,23 @@ ${VERSION} — contacts are live if you've plugged me into Gmail 📇`;
     ? `Commits in this release:\n${commits.slice(0, 3000)}`
     : `Version ${VERSION} was just released.`;
 
-  const tweet = await callGemini(systemPrompt, userPrompt);
-  console.log(`Tweet (${tweet.length} chars): ${tweet}`);
+  const post = await callGemini(systemPrompt, userPrompt);
+  console.log(`Post (${post.length} chars): ${post}`);
 
-  if (tweet.length > 280) {
-    throw new Error(`Tweet too long: ${tweet.length} chars`);
+  if (post.length > 280) {
+    throw new Error(`Post too long: ${post.length} chars`);
   }
 
-  const result = await postTweet(tweet);
-  console.log(`Posted: https://twitter.com/i/web/status/${result.data.id}`);
+  writeSummary(post);
+
+  const webhookUrl = process.env.ZAPIER_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.log('ZAPIER_WEBHOOK_URL not set — skipping webhook. Post written to summary.');
+    return;
+  }
+
+  await postToZapier(webhookUrl, post);
+  console.log('Zapier webhook fired successfully.');
 }
 
 main().catch(err => {
