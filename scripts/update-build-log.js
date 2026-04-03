@@ -236,6 +236,6 @@ ${diffsText}`;
 }
 
 main().catch(err => {
-  console.error('Error updating build log:', err.message);
+  console.error('Error updating build log:', err.stack || err.message);
   process.exit(1);
 });
