@@ -292,80 +292,71 @@ layout: build-log-post.njk
 ${entry.body}`;
 }
 
-function getExistingBuildLogDates() {
+const STATE_FILE = `${BUILD_LOG_DIR}/.state.json`;
+
+// State schema: { "2026-04-01": ["abc123", "def456"], ... }
+function loadState() {
   try {
-    const files = fs.readdirSync(BUILD_LOG_DIR)
-      .filter(f => f.match(/^\d{4}-\d{2}-\d{2}\.md$/));
-    return new Set(files.map(f => f.slice(0, 10)));
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
   } catch (e) {
-    return new Set();
+    return {};
   }
 }
 
-function getCommitCountFromFile(filePath) {
-  // Extract the commit count from an existing build log's frontmatter
-  // We embed it as `commits: N` so we can detect when new commits land on an old date
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const match = content.match(/^commits:\s*(\d+)/m);
-    return match ? parseInt(match[1], 10) : -1;
-  } catch (e) {
-    return -1;
-  }
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-function getCommitCountsByDate() {
-  // Get commit counts per date across all branches (last 30 days) in one pass
+function getCommitHashesByDate() {
+  // Returns { date: [hash, ...] } for last 30 days across all branches
   try {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
     const sinceDate = thirtyDaysAgo.toISOString().slice(0, 10);
     const output = execSync(
-      `git log --all --since="${sinceDate}" --format="%ad" --date=short`,
+      `git log --all --since="${sinceDate}" --format="%H %ad" --date=short`,
       { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
     );
-    const counts = {};
-    for (const date of output.trim().split('\n').filter(Boolean)) {
-      counts[date] = (counts[date] || 0) + 1;
+    const result = {};
+    for (const line of output.trim().split('\n').filter(Boolean)) {
+      const [hash, date] = line.split(' ');
+      if (!result[date]) result[date] = [];
+      result[date].push(hash);
     }
-    return counts;
+    return result;
   } catch (e) {
-    console.error('Error scanning commit dates:', e.message);
+    console.error('Error scanning commit hashes:', e.message);
     return {};
   }
 }
 
 function getDatesToProcess() {
-  const existingDates = getExistingBuildLogDates();
-  const commitCounts = getCommitCountsByDate();
+  const state = loadState();
+  const hashesByDate = getCommitHashesByDate();
   const dates = [];
 
-  for (const [date, count] of Object.entries(commitCounts)) {
-    if (!existingDates.has(date)) {
-      // Missing build log — needs generation
+  for (const [date, hashes] of Object.entries(hashesByDate)) {
+    const storedHashes = new Set(state[date] || []);
+    const hasNew = hashes.some(h => !storedHashes.has(h));
+    if (hasNew) {
       dates.push(date);
-    } else {
-      // Build log exists — regenerate if commit count changed
-      const filePath = `${BUILD_LOG_DIR}/${date}.md`;
-      const storedCount = getCommitCountFromFile(filePath);
-      if (count !== storedCount) {
-        dates.push(date);
-      }
     }
   }
 
   dates.sort();
-  return { lastProcessed: existingDates.size > 0 ? [...existingDates].sort().pop() : 'none', dates };
+  const processed = Object.keys(state).sort();
+  const lastProcessed = processed.length > 0 ? processed[processed.length - 1] : 'none';
+  return { lastProcessed, dates, hashesByDate, state };
 }
 
 async function main() {
   try {
-    const { lastProcessed, dates } = getDatesToProcess();
-    console.log(`Last build log: ${lastProcessed}. Days to process: ${dates.length} (${dates[0] || 'none'} → ${dates[dates.length - 1] || 'none'})`);
-
     if (!fs.existsSync(BUILD_LOG_DIR)) {
       fs.mkdirSync(BUILD_LOG_DIR, { recursive: true });
     }
+
+    const { lastProcessed, dates, hashesByDate, state } = getDatesToProcess();
+    console.log(`Last build log: ${lastProcessed}. Days to process: ${dates.length} (${dates[0] || 'none'} → ${dates[dates.length - 1] || 'none'})`);
 
     let totalWritten = 0;
     for (const date of dates) {
@@ -382,7 +373,12 @@ async function main() {
       const fileContent = formatFrontmatter(entry, date, commits.length);
       const filePath = `${BUILD_LOG_DIR}/${date}.md`;
       fs.writeFileSync(filePath, fileContent);
-      console.log(`  ${date}: written to ${filePath}`);
+
+      // Record the full set of hashes seen for this date so future runs skip it
+      state[date] = hashesByDate[date];
+      saveState(state);
+
+      console.log(`  ${date}: written (${hashesByDate[date].length} hashes recorded)`);
       totalWritten++;
     }
 
