@@ -32,7 +32,7 @@ jobs:
     needs: check-permission
     if: needs.check-permission.outputs.is_maintainer == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout Chalie
         uses: actions/checkout@v4
@@ -53,8 +53,7 @@ jobs:
 
       - name: Run build log updater
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
         run: node scripts/update-build-log.js
 
       - name: Commit and push

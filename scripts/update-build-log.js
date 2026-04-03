@@ -109,77 +109,50 @@ function formatCommitsForPrompt(commits) {
     .join('\n\n');
 }
 
-async function callGemini(systemPrompt, userPrompt) {
+async function callN8n(systemPrompt, userPrompt) {
   const https = require('https');
+  const http = require('http');
 
   return new Promise((resolve, reject) => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-
-    if (!apiKey) {
-      return reject(new Error('GEMINI_API_KEY environment variable not set'));
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!webhookUrl) {
+      return reject(new Error('N8N_WEBHOOK_URL environment variable not set'));
     }
 
-    const payload = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: userPrompt
-            }
-          ]
-        }
-      ],
-      system_instruction: {
-        parts: [
-          {
-            text: systemPrompt
-          }
-        ]
-      }
-    });
-
+    const payload = JSON.stringify({ systemPrompt, userPrompt });
     const payloadBuffer = Buffer.from(payload, 'utf8');
+    const url = new URL(webhookUrl);
+    const lib = url.protocol === 'https:' ? https : http;
 
-    const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      port: 443,
-      path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    const req = lib.request({
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname + url.search,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': payloadBuffer.length
       }
-    };
-
-    const req = https.request(options, (res) => {
+    }, (res) => {
       let data = '';
-
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
+      res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           try {
-            const response = JSON.parse(data);
-            let text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            if (!text) {
-              return reject(new Error('No text in Gemini response'));
-            }
-            // Strip markdown code fences if present
-            text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-            const parsed = JSON.parse(text);
-            resolve(parsed);
+            resolve(JSON.parse(data));
           } catch (e) {
-            reject(new Error(`Failed to parse response: ${e.message}`));
+            reject(new Error(`Failed to parse n8n response: ${e.message}\nRaw: ${data.slice(0, 200)}`));
           }
         } else {
-          reject(new Error(`API error ${res.statusCode}: ${data}`));
+          reject(new Error(`n8n webhook ${res.statusCode}: ${data}`));
         }
       });
     });
 
+    req.setTimeout(300000, () => {
+      req.destroy();
+      reject(new Error('n8n request timed out after 5 minutes'));
+    });
     req.on('error', reject);
     req.write(payloadBuffer);
     req.end();
@@ -253,21 +226,7 @@ ${commitsText}
 Full diffs:
 ${diffsText}`;
 
-  // Retry once on failure
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await callGemini(systemPrompt, userPrompt);
-      return response;
-    } catch (error) {
-      if (attempt === 0) {
-        console.log('Gemini API call failed, retrying...');
-        // Wait a bit before retry
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } else {
-        throw error;
-      }
-    }
-  }
+  return await callN8n(systemPrompt, userPrompt);
 }
 
 function normalizeTags(tags) {
