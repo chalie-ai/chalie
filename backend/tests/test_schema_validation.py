@@ -86,53 +86,24 @@ class TestSchemaValidation:
 
     # ── Scenario 200 ─────────────────────────────────────────────────────────
 
-    def test_uncertainty_tables_and_columns(self, schema_db):
-        """Absorbs scenario 200: uncertainties table and reliability columns exist.
+    def test_reliability_columns_on_memory_tables(self, schema_db):
+        """Absorbs scenario 200: reliability columns exist on memory tables.
 
-        Verifies:
-        - uncertainties table has all required columns
-        - reliability column is present on user_traits, episodes, semantic_concepts
-        - required indexes on uncertainties are created
+        uncertainties table was removed from schema.sql (dropped by migration
+        025, replaced by pending_contradictions). Reliability columns are still
+        present on knowledge (for migration 026 compat) and episodes.
         """
-        tables = _get_tables(schema_db)
-        assert 'uncertainties' in tables, "uncertainties table missing from schema"
-
-        uncertainty_columns = _get_columns(schema_db, 'uncertainties')
-        required_cols = {
-            'id',
-            'memory_a_type',
-            'memory_a_id',
-            'memory_b_type',
-            'memory_b_id',
-            'uncertainty_type',
-            'severity',
-            'state',
-            'resolution_strategy',
-            'created_at',
-        }
-        missing_cols = required_cols - uncertainty_columns
-        assert not missing_cols, (
-            f"uncertainties table missing columns: {missing_cols}"
-        )
-
-        # reliability must be on memory tables (knowledge replaced user_traits + semantic_concepts)
         for table in ('knowledge', 'episodes'):
             cols = _get_columns(schema_db, table)
             assert 'reliability' in cols, (
                 f"reliability column missing from {table}"
             )
 
-        # Required indexes
-        uncertainty_indexes = _get_indexes(schema_db, 'uncertainties')
-        required_indexes = {
-            'idx_uncertainties_state',
-            'idx_uncertainties_memory_a',
-            'idx_uncertainties_memory_b',
-            'idx_uncertainties_severity',
-        }
-        missing_indexes = required_indexes - uncertainty_indexes
-        assert not missing_indexes, (
-            f"uncertainties table missing indexes: {missing_indexes}"
+        # uncertainties should NOT be in schema.sql (removed; migration 025 drops it)
+        tables = _get_tables(schema_db)
+        assert 'uncertainties' not in tables, (
+            "uncertainties table should not exist in schema.sql "
+            "(dropped by migration 025)"
         )
 
     # ── Scenario 201 ─────────────────────────────────────────────────────────

@@ -563,7 +563,7 @@ class ContradictionClassifierService:
                 # Sample top traits by confidence
                 cursor.execute("""
                     SELECT k.id, k.key, k.value, k.confidence,
-                           k.evidence_count, k.reliability,
+                           k.evidence_count,
                            v.embedding, k.created_at
                     FROM knowledge k
                     LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
@@ -578,15 +578,14 @@ class ContradictionClassifierService:
                     meta = {
                         'confidence': row[3],
                         'reinforcement_count': row[4],
-                        'reliability': row[5] or 'reliable',
-                        'created_at': row[7],
+                        'created_at': row[6],
                     }
                     meta['established'] = _is_established('trait', meta)
                     memories.append({
                         'id': row[0],
                         'type': 'trait',
                         'text': f"{row[1]}: {row[2]}",
-                        'embedding': _unpack_embedding(row[6]),
+                        'embedding': _unpack_embedding(row[5]),
                         'meta': meta,
                     })
 
