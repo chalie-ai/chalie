@@ -3,6 +3,11 @@ name: Tweet release
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tweet (e.g. v0.3.1)'
+        required: true
 
 jobs:
   tweet:
@@ -21,7 +26,7 @@ jobs:
 
       - name: Post release tweet
         env:
-          RELEASE_VERSION:             ${{ github.ref_name }}
+          RELEASE_VERSION:             ${{ github.event.inputs.version || github.ref_name }}
           GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL:                ${{ secrets.GEMINI_MODEL }}
           TWITTER_API_KEY:             ${{ secrets.TWITTER_API_KEY }}
