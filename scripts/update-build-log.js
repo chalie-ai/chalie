@@ -230,6 +230,10 @@ ${diffsText}`;
     const status = await fireWebhook({ date, systemPrompt, userPrompt, commitCount: commits.length });
     console.log(`  ${date}: webhook fired (${stats.totalCommits} commits, status ${status})`);
     fired++;
+    // Give Ollama time to process before firing the next one
+    if (dates.indexOf(date) < dates.length - 1) {
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
 
   console.log(`Done: ${fired} webhook(s) fired — n8n will write MDX files to chalie-web`);
