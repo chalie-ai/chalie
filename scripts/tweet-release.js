@@ -35,10 +35,9 @@ function getCommitsSince(ref) {
   }
 }
 
-function callGeminiOnce(systemPrompt, userPrompt) {
+function callGeminiOnce(systemPrompt, userPrompt, model) {
   return new Promise((resolve, reject) => {
     const apiKey = process.env.GEMINI_API_KEY;
-    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
     if (!apiKey) return reject(new Error('GEMINI_API_KEY not set'));
 
@@ -81,18 +80,30 @@ function callGeminiOnce(systemPrompt, userPrompt) {
 }
 
 async function callGemini(systemPrompt, userPrompt) {
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const fallbackModel = 'gemini-2.5-pro';
   const delays = [3000, 10000, 30000];
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      return await callGeminiOnce(systemPrompt, userPrompt);
-    } catch (err) {
-      const retryable = err.statusCode >= 500 || err.statusCode === 429;
-      if (retryable && attempt < delays.length) {
-        console.log(`Gemini ${err.statusCode}, retrying in ${delays[attempt] / 1000}s... (attempt ${attempt + 1}/${delays.length})`);
-        await new Promise(r => setTimeout(r, delays[attempt]));
-      } else {
-        throw err;
+
+  for (const model of [primaryModel, fallbackModel]) {
+    let lastErr;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        return await callGeminiOnce(systemPrompt, userPrompt, model);
+      } catch (err) {
+        lastErr = err;
+        const retryable = err.statusCode >= 500 || err.statusCode === 429;
+        if (retryable && attempt < delays.length) {
+          console.log(`Gemini ${err.statusCode} (${model}), retrying in ${delays[attempt] / 1000}s... (attempt ${attempt + 1}/${delays.length})`);
+          await new Promise(r => setTimeout(r, delays[attempt]));
+        } else {
+          break;
+        }
       }
+    }
+    if (model === primaryModel) {
+      console.log(`Primary model ${primaryModel} failed, trying fallback ${fallbackModel}...`);
+    } else {
+      throw lastErr;
     }
   }
 }
