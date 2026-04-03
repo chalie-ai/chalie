@@ -200,15 +200,15 @@ class TestStore:
         assert result['confidence'] == 0.9
 
     def test_store_value_conflict_no_overwrite(self, svc):
-        """Different value with similar confidence does NOT overwrite."""
+        """Different value with very low confidence does NOT overwrite."""
         svc.store(
             kind='fact', entity='user', key='hometown',
             value='Valletta', confidence=0.5,
         )
-        # 0.6 is NOT > 0.5 * 2 = 1.0, so no overwrite
+        # 0.3 is NOT >= 0.5 * 0.8 = 0.4, so no overwrite
         result = svc.store(
             kind='fact', entity='user', key='hometown',
-            value='Mosta', confidence=0.6,
+            value='Mosta', confidence=0.3,
         )
         assert result is not None
         assert result['value'] == 'Valletta'  # old value preserved
