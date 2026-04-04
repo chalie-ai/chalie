@@ -223,19 +223,6 @@ class KnowledgeService:
         except Exception as e:
             logger.debug(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
 
-    def _emit_signal(self, signal_type: str, content: str, topic: str = 'general', energy: float = 0.5):
-        """Fire-and-forget reasoning signal emission."""
-        try:
-            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-            emit_reasoning_signal(ReasoningSignal(
-                signal_type=signal_type,
-                source='knowledge_service',
-                topic=topic,
-                content=content,
-                activation_energy=energy,
-            ))
-        except Exception:
-            pass
 
     # ── Core: store ────────────────────────────────────────────────────
 
@@ -346,20 +333,6 @@ class KnowledgeService:
 
                     cursor.close()
 
-                    # Emit signal
-                    if kind == 'trait':
-                        self._emit_signal(
-                            'trait_changed',
-                            f"Reinforced '{key}' = '{update_value}' (confidence={new_confidence:.2f})",
-                            energy=0.3 if not value_changed else 0.6,
-                        )
-                    elif kind == 'concept':
-                        self._emit_signal(
-                            'new_knowledge',
-                            f"Reinforced concept '{key}' (confidence={new_confidence:.2f})",
-                            energy=0.3,
-                        )
-
                     return self.get(entity, key)
 
                 else:
@@ -388,20 +361,6 @@ class KnowledgeService:
                         f"[KNOWLEDGE] Stored new {kind} '{key}' = '{(value or '')[:60]}' "
                         f"(confidence={confidence:.2f}, decay={decay_class}, entity={entity})"
                     )
-
-                    # Emit signal
-                    if kind == 'trait':
-                        self._emit_signal(
-                            'trait_changed',
-                            f"New trait '{key}' = '{value}' (confidence={confidence:.2f})",
-                            energy=0.5,
-                        )
-                    elif kind == 'concept':
-                        self._emit_signal(
-                            'new_knowledge',
-                            f"New concept '{key}': {(value or '')[:80]}",
-                            energy=0.5,
-                        )
 
                     return self.get(entity, key)
 
@@ -833,14 +792,6 @@ class KnowledgeService:
                 pressure_rows = cursor.fetchall()
 
                 cursor.close()
-
-            # Emit signals outside the connection context
-            for row in pressure_rows:
-                self._emit_signal(
-                    'memory_pressure',
-                    f"Knowledge '{row[0]}' ({row[1]}) approaching decay threshold (confidence={row[3]:.2f})",
-                    energy=0.2,
-                )
 
             if total_updated > 0 or deleted_count > 0:
                 logger.info(

@@ -15,14 +15,9 @@ The thresholds are constants here.  They may become configurable later,
 but the plan explicitly defers that until there is evidence that per-user
 tuning is worth the complexity.
 
-Integration points (Stage 6a):
-  - PlanAction: block Tier-3 tasks from autonomous creation
+Integration points:
   - ActDispatcherService: gate external actions by tier before execution
   - PersistentTaskWorker: verify tier before each background cycle
-
-Both dependency services are lazy-imported inside methods to avoid circular
-import issues — the same pattern used by FailureAnalysisService._get_llm()
-and other services in this codebase.
 """
 
 import logging

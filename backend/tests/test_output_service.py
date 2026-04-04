@@ -88,7 +88,7 @@ class TestOutputService:
 
     def test_enqueue_text_without_sse_uuid_publishes_to_output_events(self, service, mock_store):
         """Background text (no SSE channel) is published to output:events."""
-        metadata = {"source": "proactive_drift"}
+        metadata = {"source": "proactive"}
         service.enqueue_text("topic-1", "Drift thought", "UNIFIED", 0.8, 0.3, metadata)
 
         channels = [ch for ch, _ in mock_store._published]
@@ -96,7 +96,7 @@ class TestOutputService:
 
     def test_enqueue_text_without_sse_uuid_buffers_to_notifications(self, service, mock_store):
         """Background text is pushed to notifications:recent for catch-up."""
-        metadata = {"source": "proactive_drift"}
+        metadata = {"source": "proactive"}
 
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("topic-1", "Drift", "UNIFIED", 0.8, 0.3, metadata)
@@ -252,7 +252,7 @@ class TestOutputService:
 
     def test_notifications_list_trimmed_to_200(self, service, mock_store):
         """After rpush to notifications:recent, ltrim keeps only the last 200."""
-        metadata = {"source": "proactive_drift"}
+        metadata = {"source": "proactive"}
 
         # Pre-populate with 250 items so the trim is verifiable by state
         for i in range(250):

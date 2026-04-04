@@ -441,7 +441,7 @@ def _execute_via_proactive_push(goal: Dict[str, Any], style: str) -> Dict[str, A
         store.rpush('prompt-queue', json.dumps({
             'prompt': prompt,
             'metadata': {
-                'type': 'proactive_drift',
+                'type': 'proactive',
                 'source': 'goal_ecology',
                 'goal_id': goal_id,
                 'style': style,

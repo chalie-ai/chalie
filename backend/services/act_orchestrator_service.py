@@ -89,6 +89,7 @@ class ACTOrchestrator:
         escalation_hints: bool = False,  # Deprecated — type-based repetition removed
         persistent_task_exit: bool = False,
         execution_gate: bool = True,
+        proactive: bool = False,
     ):
         """
         Args:
@@ -116,6 +117,7 @@ class ACTOrchestrator:
         self.escalation_hints = escalation_hints
         self.persistent_task_exit = persistent_task_exit
         self.execution_gate = execution_gate
+        self.proactive = proactive
 
         # Repetition similarity threshold (configurable)
         self.repetition_sim_threshold = config.get(
@@ -569,34 +571,37 @@ class ACTOrchestrator:
         # Make one last call WITHOUT tools so it can synthesize from the
         # accumulated tool results in _messages.
         if not _final_response and termination_reason and termination_reason != 'generation_error':
-            logger.info(
-                f"{LOG_PREFIX} Forced exit ({termination_reason}) with no final response "
-                f"— running synthesis call"
-            )
-            _messages.append({
-                "role": "user",
-                "content": (
-                    "SYSTEM: The action loop has ended. Based on the results above, "
-                    "respond to the user now. Do NOT call any tools."
-                ),
-            })
-            try:
-                _synth = cortex_service.generate_response_appended(
-                    system_prompt=_system_prompt,
-                    messages=self._prune_messages(_messages, _context_budget),
-                    cache_prefix=True,
+            if self.proactive:
+                logger.info(f"{LOG_PREFIX} Proactive turn — silent exit (no forced synthesis)")
+            else:
+                logger.info(
+                    f"{LOG_PREFIX} Forced exit ({termination_reason}) with no final response "
+                    f"— running synthesis call"
                 )
-                _final_response = (
-                    _synth.get('response', '') or _synth.get('narration', '')
-                )
-                if _final_response:
-                    logger.info(
-                        f"{LOG_PREFIX} Synthesis produced {len(_final_response)} chars"
+                _messages.append({
+                    "role": "user",
+                    "content": (
+                        "SYSTEM: The action loop has ended. Based on the results above, "
+                        "respond to the user now. Do NOT call any tools."
+                    ),
+                })
+                try:
+                    _synth = cortex_service.generate_response_appended(
+                        system_prompt=_system_prompt,
+                        messages=self._prune_messages(_messages, _context_budget),
+                        cache_prefix=True,
                     )
-            except Exception as _synth_err:
-                logger.warning(
-                    f"{LOG_PREFIX} Synthesis call failed: {_synth_err}"
-                )
+                    _final_response = (
+                        _synth.get('response', '') or _synth.get('narration', '')
+                    )
+                    if _final_response:
+                        logger.info(
+                            f"{LOG_PREFIX} Synthesis produced {len(_final_response)} chars"
+                        )
+                except Exception as _synth_err:
+                    logger.warning(
+                        f"{LOG_PREFIX} Synthesis call failed: {_synth_err}"
+                    )
 
         # ── Post-loop: batch write iterations ───────────────────────────
         if act_loop.iteration_logs:

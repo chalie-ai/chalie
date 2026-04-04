@@ -6,7 +6,6 @@ Output: classification enum + confidence + recommended resolution.
 
 Used by:
   - Ingestion detection subprocess (digest_worker) via check_new_trait
-  - Drift RECONCILE action (ReconcileAction)
 
 Classifications (STATIC — changing these requires retraining the ONNX model):
   A: temporal_change   — old belief replaced by new one (job switch, relocation, etc.)

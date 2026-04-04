@@ -37,22 +37,10 @@
       "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
     },
     {
-      "id": "cognitive-drift",
-      "name": "Cognitive Drift (DMN)",
-      "desc": "Generates spontaneous thoughts during idle windows (Default Mode Network).",
-      "caps": { "reasoning": "medium", "structured": "low", "creativity": "high", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "episodic-memory",
       "name": "Episodic Memory",
       "desc": "Synthesises sessions into episodic narratives for long-term recall.",
       "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "frontal-cortex-proactive",
-      "name": "Proactive Mode",
-      "desc": "Translates spontaneous thoughts into outreach messages.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
     },
     {
       "id": "semantic-memory",

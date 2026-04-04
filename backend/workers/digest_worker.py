@@ -56,7 +56,6 @@ from workers.post_exchange_hooks import (         # noqa: F401
     _run_iip_hook,
     _run_belief_correction_hook,
     _classify_engagement,
-    _try_proactive_engagement_correlation,
     _detect_fork_response,
     _store_adaptive_signals,
 )
@@ -387,7 +386,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
                      cortex_config, cortex_prompt_map, signals,
                      metadata=None, thread_id=None,
                      returning_from_silence=False, message_embedding=None,
-                     topic_context=None):
+                     topic_context=None, proactive: bool = False):
     """
     Unified generation — single LLM call with all innate skills available.
 
@@ -555,6 +554,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
         escalation_hints=True,
         persistent_task_exit=True,
         execution_gate=False,  # User explicitly requested this action — skip autonomous gate
+        proactive=proactive,
     )
 
     # Narration callback: stream progress to user via WebSocket
@@ -659,7 +659,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
         terminal_response = {
             'mode': 'UNIFIED',
             'modifiers': [],
-            'response': result.final_response or "I understand. Let me think about that.",
+            'response': result.final_response if proactive else (result.final_response or "I understand. Let me think about that."),
             'generation_time': 0.0,
             'actions': None,
             'confidence': 0.8,
@@ -1066,174 +1066,6 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         return f"Tool '{tool_name}' | ERROR: cron_tool - {e}"
 
 
-def _handle_proactive_drift(text: str, metadata: dict) -> str:
-    """
-    Pipeline for proactive drift messages (system-initiated outreach).
-
-    Goes through full mode routing (router as final judge) but skips:
-    - User input logging (no user input)
-    - Topic classification (topic provided in metadata)
-    - Reward evaluation (no previous exchange to evaluate)
-
-    The mode router may select IGNORE for a weak thought -- that's a feature.
-    """
-    configs = load_configs()
-    cortex_config = configs['cortex']['config']
-
-    topic = metadata.get('related_topic', 'general')
-    drift_gist = metadata.get('drift_gist', text)
-    drift_type = metadata.get('drift_type', 'reflection')
-    proactive_id = metadata.get('proactive_id', '')
-    destination = metadata.get('destination', 'web')
-
-    # Resolve thread for proactive drift
-    thread_id = metadata.get('thread_id')
-    if not thread_id:
-        platform = metadata.get('source', 'unknown')
-        resolution = get_thread_service().resolve_thread('default',platform)
-        thread_id = resolution.thread_id
-
-    working_memory = WorkingMemoryService(
-        max_turns=cortex_config.get('max_working_memory_turns', 10)
-    )
-    world_state_service = WorldStateService()
-
-    # Build classification stub (topic is pre-determined)
-    classification = {
-        'topic': topic,
-        'confidence': 10,
-        'similar_topic': '',
-        'topic_update': '',
-    }
-
-    # Collect routing signals for the mode router (full router run)
-    mode_router = get_mode_router()
-    context_warmth = 0.0
-    try:
-        wm_turns = working_memory.get_recent_turns(thread_id or topic)
-        world_state = world_state_service.get_world_state(
-            topic, thread_id=thread_id, message_embedding=None
-        )
-        context_warmth = calculate_context_warmth(
-            working_memory_len=len(wm_turns),
-            world_state_nonempty=bool(world_state)
-        )
-    except Exception as e:
-        logger.debug(f"[PROACTIVE] Context warmth calculation failed: {e}", exc_info=True)
-
-    # Collect signals for mode routing
-    try:
-        session_service = get_session_service()
-        classification_result = {'confidence': 1.0, 'is_new_topic': False}
-
-        signals = collect_routing_signals(
-            text=drift_gist,
-            topic=topic,
-            context_warmth=context_warmth,
-            working_memory=working_memory,
-            world_state_service=world_state_service,
-            classification_result=classification_result,
-            session_service=session_service,
-        )
-    except Exception as e:
-        logging.warning(f"[PROACTIVE] Signal collection failed: {e}")
-        signals = {}
-
-    # Route through mode router (unbiased -- doesn't know this is proactive)
-    try:
-        routing_result = mode_router.route(signals, drift_gist)
-        selected_mode = routing_result['mode']
-        logging.info(
-            f"[PROACTIVE] Router selected: {selected_mode} "
-            f"(confidence={routing_result.get('router_confidence', 0):.3f})"
-        )
-    except Exception as e:
-        logging.warning(f"[PROACTIVE] Routing failed, defaulting to UNIFIED: {e}")
-        selected_mode = 'UNIFIED'
-        routing_result = {'mode': 'UNIFIED', 'router_confidence': 0.5, 'routing_time_ms': 0.0}
-
-    # If router says IGNORE, respect it -- the thought wasn't worth sharing
-    if selected_mode == 'IGNORE':
-        logging.info("[PROACTIVE] Router selected IGNORE -- thought filtered")
-        try:
-            from services.autonomous_actions.engagement_tracker import EngagementTracker
-            tracker = EngagementTracker()
-            tracker._update_engagement_state(proactive_id, 'router_ignored', -0.3)
-        except Exception as e:
-            logger.debug(f"[PROACTIVE] Failed to record router_ignored engagement state: {e}", exc_info=True)
-        return f"Topic '{topic}' | Mode: PROACTIVE_IGNORED | Router filtered thought"
-
-    # ACT mode doesn't make sense for proactive thoughts -- fall back to UNIFIED
-    if selected_mode == 'ACT':
-        selected_mode = 'UNIFIED'
-
-    # Generate proactive outreach using dedicated prompt template
-    try:
-        from services.config_service import ConfigService
-
-        proactive_template = ConfigService.get_agent_prompt("frontal-cortex-proactive")
-        try:
-            proactive_config = ConfigService.resolve_agent_config("frontal-cortex-proactive")
-        except Exception as e:
-            logging.warning(f"[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config: {e}")
-            proactive_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-        response_data, is_empty = _run_response_pipeline(
-            text=drift_gist,
-            topic=topic,
-            classification=classification,
-            thread_id=thread_id,
-            metadata=metadata,
-            cortex_config=cortex_config,
-            prompt_template=proactive_template,
-            generation_config=proactive_config,
-            destination=destination,
-            trait_extraction_meta=None,  # proactive drift does not enqueue trait extraction
-            log_event_type='proactive_sent',
-            log_payload={
-                'mode': selected_mode,
-                'drift_type': drift_type,
-                'proactive_id': proactive_id,
-                'router_confidence': routing_result.get('router_confidence', 0),
-            },
-            log_source='proactive_drift',
-            log_tag='PROACTIVE',
-            working_memory=working_memory,
-            wm_key=thread_id or topic,
-        )
-
-        if is_empty:
-            return f"Topic '{topic}' | Mode: PROACTIVE_EMPTY | No response generated"
-
-        # Proactive messages always deliver as UNIFIED
-        selected_mode = 'UNIFIED'
-
-        # Store goal_id in MemoryStore for engagement correlation
-        goal_id = metadata.get('goal_id') or proactive_id
-        if goal_id:
-            try:
-                from services.memory_client import MemoryClientService
-                store = MemoryClientService.create_connection()
-                store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
-            except Exception as e:
-                logger.debug(f"[PROACTIVE] Failed to store response tag in MemoryStore: {e}", exc_info=True)
-
-        logging.info(
-            f"[PROACTIVE] Delivered: [{drift_type}] -> {selected_mode} "
-            f"(proactive_id={proactive_id[:8] if proactive_id else '?'})"
-        )
-
-        return (
-            f"Topic '{topic}' | Mode: PROACTIVE_{selected_mode} | "
-            f"Response generated in {response_data.get('generation_time', 0):.2f}s"
-        )
-
-    except Exception as e:
-        logging.error(f"[PROACTIVE] Failed: {e}")
-        return f"Topic '{topic}' | ERROR: proactive - {e}"
-
-
-
 def digest_worker(text: str, metadata: dict = None) -> str:
     """
     Main worker function that processes prompts through classification and response generation.
@@ -1244,10 +1076,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     Proactive drift messages go through full routing but skip user input logging.
     """
     metadata = metadata or {}
-
-    # Proactive drift shortcut: system-initiated outreach from cognitive drift engine
-    if metadata.get('type') == 'proactive_drift':
-        return _handle_proactive_drift(text, metadata)
 
     # Cron tool shortcut: background scheduled tool result (not a conversational turn)
     if metadata.get('source', '').startswith('cron_tool:'):
@@ -1390,6 +1218,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as e:
         logger.debug(f"[DIGEST] Message pace tracking failed: {e}", exc_info=True)
 
+    # Step 3b.1: Reset DMN idle timer
+    try:
+        from services.dmn_service import get_dmn_service
+        get_dmn_service().on_turn()
+    except Exception as _e:
+        logging.debug(f"[DIGEST] DMN on_turn failed: {_e}")
+
     # Step 3b.1: Check for save trigger (completion/deferral signal)
     try:
         from services.save_suggestion_service import SaveSuggestionService
@@ -1406,18 +1241,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 _save_svc.clear_flag(thread_id)
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Save trigger check skipped: {_save_e}")
-
-    # Step 3d: Proactive engagement correlation
-    if context_topic:
-        _try_proactive_engagement_correlation(text, context_topic)
-
-    # Step 3e: Record user interaction timestamp (embedding stored after classification in Phase C)
-    try:
-        from services.autonomous_actions.communicate_action import CommunicateAction
-        communicate = CommunicateAction()
-        communicate.record_user_interaction()
-    except Exception as e:
-        logger.debug(f"[DIGEST] User interaction timestamp recording failed: {e}", exc_info=True)
 
     # Step 3f: Detect fork responses and store adaptive signals
     _detect_fork_response(text, thread_id)
@@ -1454,12 +1277,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services.embedding_service import EmbeddingService
         msg_embedding = EmbeddingService().generate_embedding(text)
-        try:
-            from services.autonomous_actions.communicate_action import CommunicateAction
-            communicate = CommunicateAction()
-            communicate.record_user_interaction(message_embedding=msg_embedding)
-        except Exception as e:
-            logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
     except Exception as e:
         logging.debug(f"[DIGEST] Embedding computation failed: {e}")
     embedding_time = time.time() - _embed_start

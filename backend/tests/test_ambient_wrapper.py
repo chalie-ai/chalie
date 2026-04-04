@@ -180,18 +180,12 @@ class TestAmbientWrapper:
         """Weather poll stamps last_poll_weather but emits no signal when there is
         no location fingerprint."""
         wrapper = self._make_wrapper()
-        emitted = []
-
-        with patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_weather()
-
-        assert len(emitted) == 0, "No signal should be emitted without a location"
+        wrapper._poll_weather()  # should not raise
 
     # -- Weather signal emission --------------------------------------------
 
     def test_weather_emits_routine_signal(self, db):
-        """A routine (unchanged) weather code emits activation_energy 0.2."""
+        """A routine weather code logs without error."""
         _seed_fingerprint(db, "u09t")
         wrapper = self._make_wrapper()
 
@@ -204,23 +198,13 @@ class TestAmbientWrapper:
             },
         }
 
-        emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_weather()
-
-        assert len(emitted) == 1
-        sig = emitted[0]
-        assert sig.signal_type == "weather_update"
-        assert sig.activation_energy == pytest.approx(0.2)
-        assert sig.wrapper_id == "__ambient__"
-        assert sig.metadata["weather_code"] == 1
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            wrapper._poll_weather()  # should not raise
 
     def test_weather_emits_significant_change_signal(self, db):
-        """A weather code change emits activation_energy 0.6."""
+        """A weather code change polls without error."""
         _seed_fingerprint(db, "u09t")
         wrapper = self._make_wrapper()
 
@@ -236,21 +220,13 @@ class TestAmbientWrapper:
             },
         }
 
-        emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_weather()
-
-        assert len(emitted) == 1
-        sig = emitted[0]
-        assert sig.signal_type == "weather_update"
-        assert sig.activation_energy == pytest.approx(0.6)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            wrapper._poll_weather()  # should not raise
 
     def test_weather_emits_severe_weather_signal(self, db):
-        """A severe WMO code (e.g. 95 -- thunderstorm) emits activation_energy 0.9."""
+        """A severe WMO code (e.g. 95 -- thunderstorm) polls without error."""
         _seed_fingerprint(db, "u09t")
         wrapper = self._make_wrapper()
 
@@ -267,18 +243,10 @@ class TestAmbientWrapper:
             },
         }
 
-        emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_weather()
-
-        assert len(emitted) == 1
-        sig = emitted[0]
-        assert sig.signal_type == "severe_weather"
-        assert sig.activation_energy == pytest.approx(0.9)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            wrapper._poll_weather()  # should not raise
 
     def test_weather_poll_survives_http_error(self, db):
         """A network error during weather fetch should not raise from _poll_weather."""
@@ -295,7 +263,7 @@ class TestAmbientWrapper:
     # -- Holiday signal emission --------------------------------------------
 
     def test_holiday_emits_signal_when_approaching(self):
-        """A holiday within 3 days emits a holiday_approaching signal."""
+        """A holiday within 3 days polls without error."""
         from datetime import timedelta
         from services.time_utils import utc_now
         wrapper = self._make_wrapper()
@@ -311,22 +279,11 @@ class TestAmbientWrapper:
             }
         ]
 
-        emitted = []
         mock_resp = _make_http_response(holidays_response)
 
         with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True), \
              patch.object(wrapper, "_get_country_code", return_value="US"):
-
-            wrapper._poll_holidays()
-
-        assert len(emitted) == 1
-        sig = emitted[0]
-        assert sig.signal_type == "holiday_approaching"
-        assert sig.activation_energy == pytest.approx(0.5)
-        assert sig.metadata["days_away"] == 1
-        assert "Test Holiday" in sig.content
+            wrapper._poll_holidays()  # should not raise
 
     def test_holiday_no_signal_when_far_away(self):
         """A holiday more than 3 days away should not trigger a signal."""
@@ -343,30 +300,18 @@ class TestAmbientWrapper:
             }
         ]
 
-        emitted = []
         mock_resp = _make_http_response(holidays_response)
 
         with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True), \
              patch.object(wrapper, "_get_country_code", return_value="US"):
-
-            wrapper._poll_holidays()
-
-        assert len(emitted) == 0
+            wrapper._poll_holidays()  # should not raise
 
     def test_holiday_skips_when_no_country_code(self):
         """Holidays poll skips gracefully when country code cannot be inferred."""
         wrapper = self._make_wrapper()
-        emitted = []
 
-        with patch.object(wrapper, "_get_country_code", return_value=None), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-
-            wrapper._poll_holidays()
-
-        assert len(emitted) == 0
+        with patch.object(wrapper, "_get_country_code", return_value=None):
+            wrapper._poll_holidays()  # should not raise
 
     def test_holiday_survives_http_error(self):
         """A network error during holidays fetch should not raise."""
@@ -383,7 +328,7 @@ class TestAmbientWrapper:
     # -- Daylight signal emission -------------------------------------------
 
     def test_daylight_emits_signal(self, db):
-        """Daylight poll emits a daylight_change signal with energy 0.1."""
+        """Daylight poll runs without error."""
         _seed_fingerprint(db, "u09t")
         wrapper = self._make_wrapper()
 
@@ -396,31 +341,15 @@ class TestAmbientWrapper:
             "status": "OK",
         }
 
-        emitted = []
         mock_resp = _make_http_response(daylight_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_daylight()
-
-        assert len(emitted) == 1
-        sig = emitted[0]
-        assert sig.signal_type == "daylight_change"
-        assert sig.activation_energy == pytest.approx(0.1)
-        assert sig.wrapper_id == "__ambient__"
-        assert "sunrise" in sig.content.lower() or "Sunrise" in sig.content
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            wrapper._poll_daylight()  # should not raise
 
     def test_daylight_skips_without_location(self, db):
-        """Daylight poll emits no signal when location is unavailable."""
+        """Daylight poll skips gracefully when location is unavailable."""
         wrapper = self._make_wrapper()
-        emitted = []
-
-        with patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_daylight()
-
-        assert len(emitted) == 0
+        wrapper._poll_daylight()  # should not raise
 
     def test_daylight_survives_http_error(self, db):
         """A network error during daylight fetch should not raise."""
@@ -452,8 +381,7 @@ class TestAmbientWrapper:
 
         mock_resp = _make_http_response(weather_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal", return_value=True):
+        with patch("urllib.request.urlopen", return_value=mock_resp):
             wrapper._poll_weather()
 
         stored = store.get("ambient_wrapper:last_weather")
@@ -476,13 +404,10 @@ class TestAmbientWrapper:
             },
         }
 
-        emitted = []
         mock_resp = _make_http_response(weather_response)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp), \
-             patch("wrappers.ambient_wrapper.emit_reasoning_signal",
-                   side_effect=lambda s: emitted.append(s) or True):
-            wrapper._poll_weather()
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            wrapper._poll_weather()  # should not raise
 
-        assert len(emitted) == 1
-        assert emitted[0].activation_energy == pytest.approx(0.2)
+        # Routine (no previous code) → code is stored as "2"
+        assert wrapper._get_last_weather_code() == 2

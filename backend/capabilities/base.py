@@ -299,7 +299,7 @@ class AbstractCapability(ABC):
                     "reconnecting via settings."
                 ),
                 "metadata": {
-                    "type": "proactive_drift",
+                    "type": "proactive",
                     "source": f"capability_health:{cap_id}",
                     "topic": "proactive",
                 },
@@ -321,7 +321,7 @@ class AbstractCapability(ABC):
                     "online. Sync has resumed normally."
                 ),
                 "metadata": {
-                    "type": "proactive_drift",
+                    "type": "proactive",
                     "source": f"capability_health:{cap_id}",
                     "topic": "proactive",
                 },

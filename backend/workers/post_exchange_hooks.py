@@ -240,45 +240,6 @@ def _classify_engagement(text: str) -> str:
     return 'acknowledged'
 
 
-def _try_proactive_engagement_correlation(text: str, topic: str):
-    """
-    Check if user is responding to a proactive message and classify engagement.
-    Uses proactive_response_tag stored in MemoryStore (4h TTL).
-    """
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-
-        tag_key = f"proactive_response_tag:{topic}"
-        goal_id = store.get(tag_key)
-        if not goal_id:
-            return
-
-        # Consume the tag (one-shot correlation)
-        store.delete(tag_key)
-
-        response_type = _classify_engagement(text)
-
-        from services.goal_ecology_service import GoalEcologyService
-        ecology = GoalEcologyService()
-        ecology.record_outcome(goal_id, response_type)
-
-        # Track ignored count for social cost calculation
-        if response_type == 'ignored':
-            ignored_key = 'goal:recent_ignored_count'
-            current = int(store.get(ignored_key) or 0)
-            store.setex(ignored_key, 86400, str(current + 1))
-        elif response_type in ('engaged', 'acknowledged'):
-            store.delete('goal:recent_ignored_count')
-
-        logging.info(
-            f"[DIGEST] Proactive engagement: {response_type} "
-            f"for goal {goal_id[:8]}"
-        )
-    except Exception as e:
-        logging.debug(f"[DIGEST] Proactive engagement correlation failed: {e}")
-
-
 _FORK_RESPONSE_PATTERNS = {
     'prefers_concise': [r'\b(quick|short|brief|summary|tldr|just.{0,10}(main|key|quick))\b'],
     'prefers_depth': [r'\b(deep|deeper|detail|more|elaborate|explore|full|thorough)\b'],

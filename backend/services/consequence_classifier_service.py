@@ -27,9 +27,8 @@ Fallback: deterministic keyword-matching rule engine (zero dependencies).
 The ONNX model is optional — the service works fully without it. A warning
 is logged on startup if the model directory is absent.
 
-Integration points (Stage 6a):
+Integration points:
   - ActDispatcherService: gate external actions by tier before execution
-  - PlanAction: block Tier 3 tasks from autonomous creation
   - PersistentTaskWorker: verify tier before each background cycle
 """
 

@@ -208,17 +208,6 @@ class PersistentTaskService:
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Failed to push execute signal: {e}")
 
-        try:
-            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-            emit_reasoning_signal(ReasoningSignal(
-                signal_type='task_state_changed',
-                source='persistent_task_service',
-                topic=task.get('scope', 'general') if isinstance(task, dict) else 'general',
-                content=f"Task {task_id} transitioned: {current} → {new_status}",
-                activation_energy=0.5,
-            ))
-        except Exception:
-            pass
         return True, f"Task transitioned to {new_status}"
 
     def accept_task(self, task_id: int, scope: Optional[str] = None) -> Tuple[bool, str]:
@@ -355,27 +344,6 @@ class PersistentTaskService:
             """, (result, json.dumps(artifact) if artifact else None, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id} completed")
-
-        # Notify PlanAction for system-originated tasks (priority 7)
-        if task and task.get('priority') == 7:
-            try:
-                from services.autonomous_actions.plan_action import PlanAction
-                action = PlanAction()
-                action.on_outcome('completed', task_id=task_id)
-            except Exception:
-                pass
-
-        try:
-            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-            emit_reasoning_signal(ReasoningSignal(
-                signal_type='task_state_changed',
-                source='persistent_task_service',
-                topic='general',
-                content=f"Task {task_id} completed",
-                activation_energy=0.6,
-            ))
-        except Exception:
-            pass
         return True
 
     def stall_task(self, task_id: int, reason: str) -> bool:
@@ -394,14 +362,6 @@ class PersistentTaskService:
                 "UPDATE persistent_tasks SET status = 'stalled', progress = ?, updated_at = datetime('now') WHERE id = ?",
                 (json.dumps(progress), task_id))
         logger.info(f"{LOG_PREFIX} Task {task_id} stalled: {reason}")
-        try:
-            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-            emit_reasoning_signal(ReasoningSignal(
-                signal_type='task_state_changed', source='persistent_task_service',
-                topic='general', content=f"Task {task_id} stalled: {reason}",
-                activation_energy=0.6))
-        except Exception:
-            pass
         return True
 
     def set_next_run(self, task_id: int, delay_seconds: int):

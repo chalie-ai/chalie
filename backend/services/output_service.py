@@ -84,7 +84,6 @@ class OutputService:
 
         # Map source to event type
         source_type_map = {
-            'proactive_drift': 'drift',
             'tool_result': 'response',
             'reminder': 'reminder',
             'task': 'task',
@@ -140,7 +139,7 @@ class OutputService:
                 logger.warning(f"Notification buffer push failed: {e}")
 
         # Notification tools (Telegram etc.) for drift and all background events
-        if source == 'proactive_drift' or source in ('reminder', 'task') or source.startswith('cron_tool:'):
+        if source in ('reminder', 'task') or source.startswith('cron_tool:'):
             self._send_to_notification_tools(response)
 
         logger.info(

@@ -1,12 +1,9 @@
 """
-Ambient Wrapper — first external wrapper for Chalie's reasoning loop.
+Ambient Wrapper — polls free public APIs and surfaces ambient context.
 
 A daemon thread that polls free public APIs (weather, holidays, daylight) and
-pushes signals directly into the reasoning loop via emit_reasoning_signal().
-
-Since this wrapper runs in-process, it calls emit_reasoning_signal() directly
-rather than going through HTTP.  It auto-registers itself with WrapperAuthService
-on startup using the stable ID ``__ambient__``.
+logs observations for ambient context.  It auto-registers itself with
+WrapperAuthService on startup using the stable ID ``__ambient__``.
 
 Poll schedule:
   - Open-Meteo (weather + UV):   every 30 minutes
@@ -28,7 +25,6 @@ from typing import Optional, Tuple
 from services.config_service import ConfigService
 from services.database_service import get_shared_db_service
 from services.memory_client import MemoryClientService
-from services.reasoning_loop_service import ReasoningSignal, emit_reasoning_signal
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -475,24 +471,11 @@ class AmbientWrapper(threading.Thread):
                 "lon": round(lon, 2),
             }
 
-            signal = ReasoningSignal(
-                signal_type=signal_type,
-                source=self.wrapper_id,
-                topic="weather",
-                content=summary,
-                activation_energy=activation_energy,
-                metadata=metadata,
-                wrapper_id=self.wrapper_id,
+            self._store_last_weather_code(int(weather_code))
+            logger.info(
+                "[AmbientWrapper] Processed %s (code=%s, energy=%.1f)",
+                signal_type, weather_code, activation_energy
             )
-
-            if emit_reasoning_signal(signal):
-                logger.info(
-                    "[AmbientWrapper] Emitted %s (code=%s, energy=%.1f)",
-                    signal_type, weather_code, activation_energy
-                )
-                self._store_last_weather_code(int(weather_code))
-            else:
-                logger.debug("[AmbientWrapper] Signal queue full — weather signal dropped")
 
         except Exception as exc:
             logger.warning("[AmbientWrapper] Weather signal construction failed: %s", exc)
@@ -571,28 +554,11 @@ class AmbientWrapper(threading.Thread):
                     else:
                         summary = f"{name} is in {days_away} days ({date_str})"
 
-                    signal = ReasoningSignal(
-                        signal_type="holiday_approaching",
-                        source=self.wrapper_id,
-                        topic="holidays",
-                        content=summary,
-                        activation_energy=0.5,
-                        metadata={
-                            "holiday_name": name,
-                            "local_name": local_name,
-                            "date": date_str,
-                            "days_away": days_away,
-                            "country_code": country_code,
-                        },
-                        wrapper_id=self.wrapper_id,
+                    logger.info(
+                        "[AmbientWrapper] Holiday noted: %s in %d day(s)",
+                        name, days_away
                     )
-
-                    if emit_reasoning_signal(signal):
-                        logger.info(
-                            "[AmbientWrapper] Emitted holiday_approaching: %s in %d day(s)",
-                            name, days_away
-                        )
-                    break  # emit at most one holiday signal per daily poll
+                    break  # process at most one holiday per daily poll
 
         except Exception as exc:
             logger.warning("[AmbientWrapper] Holiday signal construction failed: %s", exc)
@@ -643,26 +609,7 @@ class AmbientWrapper(threading.Thread):
             if day_hours is not None:
                 summary += f" ({day_hours}h daylight)"
 
-            signal = ReasoningSignal(
-                signal_type="daylight_change",
-                source=self.wrapper_id,
-                topic="daylight",
-                content=summary,
-                activation_energy=0.1,
-                metadata={
-                    "sunrise": sunrise,
-                    "sunset": sunset,
-                    "day_length_seconds": day_length,
-                    "lat": round(lat, 2),
-                    "lon": round(lon, 2),
-                },
-                wrapper_id=self.wrapper_id,
-            )
-
-            if emit_reasoning_signal(signal):
-                logger.info("[AmbientWrapper] Emitted daylight_change: %s", summary)
-            else:
-                logger.debug("[AmbientWrapper] Signal queue full — daylight signal dropped")
+            logger.info("[AmbientWrapper] Daylight: %s", summary)
 
         except Exception as exc:
             logger.warning("[AmbientWrapper] Daylight signal construction failed: %s", exc)

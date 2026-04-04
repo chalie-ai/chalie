@@ -251,8 +251,6 @@ def delete_all():
             "reasoning_loop:identity_shifts",
             "reasoning_loop:expired_threads",
             "reasoning_loop:last_task_event",
-            "reasoning:priority",
-            "reasoning:signals",
             "reasoning:last_processed",
             "world_model:items",
             "drift:*",

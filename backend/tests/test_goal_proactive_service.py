@@ -325,7 +325,7 @@ class TestProactiveExecution:
         assert '78%' in prompt                      # confidence
 
     def test_prompt_queue_payload_metadata_structure(self):
-        """Prompt-queue payload must have type='proactive_drift' and goal_id."""
+        """Prompt-queue payload must have type='proactive' and goal_id."""
         goal = {
             'id': 'meta-check-id',
             'description': 'Track fitness progress',
@@ -345,7 +345,7 @@ class TestProactiveExecution:
         pushed_payload = json.loads(items[0])
         metadata = pushed_payload['metadata']
 
-        assert metadata['type'] == 'proactive_drift'
+        assert metadata['type'] == 'proactive'
         assert metadata['goal_id'] == 'meta-check-id'
         assert metadata['source'] == 'goal_ecology'
         assert metadata['style'] == 'suggest'

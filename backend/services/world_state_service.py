@@ -875,8 +875,7 @@ class WorldStateService:
         outside the unremarkable band.
 
         Delegates to :class:`~services.engagement_signal_service.EngagementSignalService`
-        which reads ``proactive:engagement_score`` from MemoryStore (written by
-        :class:`~services.autonomous_actions.engagement_tracker.EngagementTracker`).
+        which reads ``proactive:engagement_score`` from MemoryStore.
 
         This method is fail-open: any import error or runtime exception is caught,
         logged at debug level, and an empty list is returned so that the rest of

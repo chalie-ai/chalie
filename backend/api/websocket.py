@@ -341,34 +341,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         finally:
             bg_done.set()
 
-    # M3: Emit user_message signal to reasoning loop priority queue.
-    # The reasoning loop enriches the message with its cognitive context
-    # (active topics, recent discoveries, identity shifts) then dispatches
-    # to digest_worker. Fail-open: if signal emission fails, fall back to
-    # direct thread spawn (pre-M3 behavior).
-    try:
-        from services.reasoning_loop_service import ReasoningSignal
-        signal = ReasoningSignal(
-            signal_type='user_message',
-            source='websocket',
-            content=text,
-            activation_energy=1.0,
-            metadata={
-                'uuid': request_id,
-                'source': source,
-                'image_ids': image_ids,
-            },
-            wrapper_id='__chat_ui__',
-        )
-        store.rpush('reasoning:priority', signal.to_json())
-        # bg_done is never set via signal path — the reasoning loop spawns
-        # its own thread which publishes to sse:{request_id} on completion.
-        # The WebSocket wait loop below listens on that pub/sub channel
-        # regardless of how digest_worker was invoked.
-    except Exception as e:
-        logger.warning(f"[WS] Signal emission failed, falling back to direct dispatch: {e}")
-        thread = threading.Thread(target=run_digest_fallback, daemon=True)
-        thread.start()
+    thread = threading.Thread(target=run_digest_fallback, daemon=True)
+    thread.start()
 
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "thinking", "seq": seq})
