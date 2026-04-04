@@ -98,6 +98,7 @@ def auth_db(tmp_path):
 def _make_vault_mock(
     *,
     unlocked: bool = True,
+    state: str | None = None,
     initialize_raises=None,
     unlock_returns=True,
 ):
@@ -105,6 +106,8 @@ def _make_vault_mock(
 
     Args:
         unlocked:          Value returned by ``is_unlocked()``.
+        state:             Explicit vault state override. When ``None``,
+                           derived from *unlocked* (``"unlocked"`` / ``"uninitialized"``).
         initialize_raises: If set, ``initialize()`` raises this.
         unlock_returns:    Return value of ``unlock()``.
     """
@@ -112,7 +115,8 @@ def _make_vault_mock(
     mock_vault.is_unlocked.return_value = unlocked
     mock_vault.unlock.return_value = unlock_returns
     mock_vault.lock.return_value = None
-    state = "unlocked" if unlocked else "uninitialized"
+    if state is None:
+        state = "unlocked" if unlocked else "uninitialized"
     mock_vault.get_state.return_value = state
 
     if initialize_raises is not None:
@@ -198,6 +202,26 @@ class TestAuthAPI:
             resp = client.get('/auth/status')
             assert resp.status_code == 200
             assert resp.get_json()["vault_state"] == "unlocked"
+
+    def test_status_session_forced_false_when_vault_locked(
+        self, client, auth_db,
+    ):
+        """Session valid + vault locked → has_session must be False.
+
+        After a server restart the session cookie survives but the
+        in-memory DEK is gone.  The status endpoint must force a
+        re-login so the vault can be unlocked with the password.
+        """
+        _seed_account(auth_db)
+        mv = _make_vault_mock(unlocked=False, state="locked")
+        with patch(_P_VALIDATE, return_value=True), \
+             patch(_P_VAULT, return_value=mv):
+            resp = client.get('/auth/status')
+
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["has_session"] is False
+            assert data["vault_state"] == "locked"
 
     def test_status_vault_state_uninitialized_when_no_config_row(
         self, client, auth_db,

@@ -45,6 +45,7 @@ TOOL_SCHEMA = {
             },
             "items": {
                 "type": "array",
+                "items": {},
                 "description": (
                     "add/remove: string array e.g. [\"milk\", \"eggs\"]. "
                     "check: object array e.g. [{\"content\": \"milk\", \"checked\": true}]. "
