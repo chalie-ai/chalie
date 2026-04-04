@@ -22,7 +22,11 @@ jobs:
 
       - name: Sync docs folder
         run: |
-          rsync -av --delete docs/ chalie-web/src/docs/
+          rsync -av --delete \
+            --exclude='index.njk' \
+            --exclude='docs.json' \
+            --exclude='docs.11tydata.js' \
+            docs/ chalie-web/src/docs/
 
       - name: Commit and push
         working-directory: chalie-web
