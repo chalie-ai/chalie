@@ -1,0 +1,53 @@
+name: Sync release notes to chalie-web
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout chalie-web
+        uses: actions/checkout@v4
+        with:
+          repository: chalie-ai/chalie-web
+          token: ${{ secrets.CHALIE_WEB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch release body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --json body -q .body > /tmp/release-body.md
+
+      - name: Format release date
+        id: date
+        run: |
+          # published_at is ISO 8601 — convert to "Month D, YYYY"
+          echo "formatted=$(date -d '${{ github.event.release.published_at }}' +'%B %-d, %Y')" >> "$GITHUB_OUTPUT"
+
+      - name: Update releases.json
+        run: |
+          node scripts/update-release.js \
+            "${{ github.event.release.tag_name }}" \
+            "${{ steps.date.outputs.formatted }}" \
+            /tmp/release-body.md
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/_data/releases.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: add ${{ github.event.release.tag_name }} release notes"
+            git push origin main
+          else
+            echo "No changes to commit"
+          fi
