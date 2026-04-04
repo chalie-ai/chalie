@@ -38,7 +38,8 @@ MIN_SCENARIO_DISTANCE = 0.12  # cosine distance for deduplication
 
 # Bump to force all profile embeddings to regenerate.
 # v2: embed short_summary + keywords only (not full_profile).
-_EMBEDDING_VERSION = 2
+# v3: force re-seed to write keywords column.
+_EMBEDDING_VERSION = 3
 
 
 def _compute_manifest_hash(manifest: dict) -> str:
