@@ -45,7 +45,6 @@ def _mock_providers_assigned():
     mock_provider.get_all_job_assignments.return_value = [
         {"job_name": "frontal-cortex", "provider_id": 1},
         {"job_name": "cognitive-triage", "provider_id": 1},
-        {"job_name": "cognitive-drift", "provider_id": 1},
     ]
     return mock_provider
 
@@ -187,7 +186,7 @@ class TestNoteworthy:
         """Dead worker threads produce a signal with severity 0.6."""
         mock_store.setex("self_model:thread_health", 60, json.dumps({
             "alive": ["rest-api"],
-            "dead": ["cognitive-drift-engine", "scheduler-service"],
+            "dead": ["dmn-service", "scheduler-service"],
             "total": 3,
         }))
 
@@ -197,7 +196,7 @@ class TestNoteworthy:
 
         assert len(dead_signals) == 1
         assert dead_signals[0]["severity"] == 0.6
-        assert "cognitive-drift-engine" in dead_signals[0]["signal"]
+        assert "dmn-service" in dead_signals[0]["signal"]
 
     def test_queue_congestion_triggers_noteworthy(self, mock_store):
         """Queue depth >15 fires a congestion signal with severity 0.4."""

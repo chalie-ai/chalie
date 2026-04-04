@@ -116,7 +116,7 @@ def svc(db_service):
 
     # Mock embedding generation — return None so vec operations are skipped
     service._generate_embedding = MagicMock(return_value=None)
-    # Mock signal emission — no cognitive_drift_engine in tests
+    # Mock signal emission
     service._emit_signal = MagicMock()
 
     return service

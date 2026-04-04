@@ -114,8 +114,8 @@ class TestSystemAPI:
         for _ in range(5):
             store.rpush('prompt-queue', 'x')
             store.rpush('output-queue', 'x')
-        # Seed the last-run timestamp so get() returns a non-None value.
-        store.set('cognitive_drift:last_run', '2026-02-26T10:00:00')
+        # Seed DMN delivery ZSET with a recent entry.
+        store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/system/status')

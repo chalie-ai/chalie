@@ -169,13 +169,6 @@ def system_status():
                 logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
                 result["queues"][queue_name] = -1
 
-        # Last proactive drift run
-        try:
-            last_run = store.get("cognitive_drift:last_run")
-            result["last_proactive_run"] = last_run if last_run else None
-        except Exception as e:
-            logger.warning(f"[SYSTEM] Failed to read cognitive_drift:last_run: {e}")
-
         return jsonify(result), 200
 
     except Exception as e:

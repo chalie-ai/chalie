@@ -317,7 +317,7 @@ class TestProvidersAPI:
         """GET /providers/jobs returns all job assignments."""
         mock_service.get_all_job_assignments.return_value = [
             {"job_name": "frontal-cortex", "provider_id": 1},
-            {"job_name": "cognitive-drift", "provider_id": 2},
+            {"job_name": "cognitive-triage", "provider_id": 2},
         ]
 
         response = client.get('/providers/jobs')

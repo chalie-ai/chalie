@@ -108,13 +108,7 @@ class WorldStateService:
             db_items.extend(self._get_salient_lists(message_embedding))
             items.extend(self._collapse_items(db_items))
 
-        # 5. Active conversation topics
-        items.extend(self._get_active_topics())
-
-        # 6. Reasoning focus (what Chalie is currently thinking about)
-        items.extend(self._get_reasoning_focus())
-
-        # 7. External signals (from paired interfaces — zero LLM)
+        # 5. External signals (from paired interfaces — zero LLM)
         items.extend(self._get_external_signals(message_embedding))
 
         # 8. Engagement signal (low/high engagement from proactive response scoring)
@@ -811,63 +805,7 @@ class WorldStateService:
 
         return list(buckets.values())
 
-    # ── Ambient / Loop Context Collectors ────────────────────────────────────
-
-    def _get_active_topics(self) -> list:
-        """
-        Surface currently active conversation topics from the reasoning loop's
-        topic set (scored sorted set with timestamps as scores).
-
-        Returns:
-            list: Zero or one item of type 'topics' if recent topics found.
-        """
-        try:
-            store = self._get_store()
-            cutoff = time.time() - 3600  # Last hour
-            topics = store.zrangebyscore(
-                'reasoning_loop:active_topics', cutoff, '+inf'
-            )
-            if not topics:
-                return []
-
-            topic_list = list(topics)
-            label = "[TOPICS] Currently discussing: " + ", ".join(topic_list[:5])
-            return [{
-                'type': 'topics',
-                'label': label,
-                'salience': 0.25,  # Moderate salience — recent context
-            }]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _get_active_topics failed (non-fatal): {e}")
-            return []
-
-    def _get_reasoning_focus(self) -> list:
-        """
-        Surface what the reasoning loop is currently thinking about, drawn from
-        the reasoning_loop:state hash (populated by _update_state()).
-
-        Returns:
-            list: Zero or one item of type 'reasoning' if state is present.
-        """
-        try:
-            store = self._get_store()
-            state = store.hgetall('reasoning_loop:state')
-            if not state:
-                return []
-
-            concept = state.get('last_seed_concept', '')
-            if not concept:
-                return []
-
-            label = f"[THINKING ABOUT] {concept}"
-            return [{
-                'type': 'reasoning',
-                'label': label,
-                'salience': 0.2,  # Informational — doesn't compete with task items
-            }]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _get_reasoning_focus failed (non-fatal): {e}")
-            return []
+    # ── Ambient Context Collectors ────────────────────────────────────────────
 
     def _get_engagement_signal(self) -> list:
         """

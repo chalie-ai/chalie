@@ -239,19 +239,8 @@ def delete_all():
             "reflection:*",
             "plan:*",
 
-            # Cognitive systems (legacy + current keys)
-            "cognitive_drift_state",
-            "cognitive_drift_concept_cooldowns",
-            "cognitive_drift_activations",
-            "cognitive_drift:*",
-            "reasoning_loop:state",
-            "reasoning_loop:cooldowns",
-            "reasoning_loop:activations",
-            "reasoning_loop:active_topics",
-            "reasoning_loop:identity_shifts",
-            "reasoning_loop:expired_threads",
-            "reasoning_loop:last_task_event",
-            "reasoning:last_processed",
+            # DMN (proactive intelligence)
+            "dmn:*",
             "world_model:items",
             "drift:*",
             "experience_assimilation_state",

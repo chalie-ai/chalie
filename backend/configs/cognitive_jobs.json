@@ -55,12 +55,6 @@
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "autonomous-ambient-tool",
-      "name": "Ambient Tool Query",
-      "desc": "Generates search queries for proactive tool use triggered by cognitive drift.",
-      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "frontal-cortex-scheduled-tool",
       "name": "Scheduled Tool Mode",
       "desc": "Generates responses after scheduled tool/reminder execution.",

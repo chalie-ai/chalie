@@ -102,6 +102,8 @@ class DMNService:
         """Return True if MAX_PROACTIVE_PER_DAY deliveries occurred in the last 24 h."""
         try:
             cutoff = utc_now().timestamp() - _24H_S
+            # Prune stale entries on every check (not just on delivery)
+            self._store.zremrangebyscore(_DELIVERY_ZSET, float('-inf'), cutoff)
             count = len(self._store.zrangebyscore(_DELIVERY_ZSET, cutoff, float('inf')))
             return count >= MAX_PROACTIVE_PER_DAY
         except Exception as exc:

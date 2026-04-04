@@ -94,8 +94,7 @@ frontend/
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs
 
 #### Autonomous Behavior
-- **`reasoning_loop_service.py`** — Signal-driven continuous reasoning; dispatches signal types through handlers; falls back to salient/insight discovery on idle; attention-gated
-- **`autonomous_actions/`** — Decision routing by priority: CommunicateAction (10), PlanAction (7), AmbientToolAction (6), ReflectAction (5), ReconcileAction (4), NothingAction (-1)
+- **`dmn_service.py`** — Default Mode Network: timer-based proactive intelligence. Fires after 60min idle (recent context — last 50 episodes) and every 6h (salience context — top concepts + active goals + pending tasks). Calls `unified_generate` with `proactive=True` so ACT loop exits silently when LLM decides nothing is worthwhile. Quiet hours (23:00–08:00 local), rate limit (4/24h rolling). Configurable via `CHALIE_DMN_FIRST_IDLE_S` and `CHALIE_DMN_REPEAT_S`.
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Ambient Awareness
@@ -177,7 +176,7 @@ Built-in cognitive skills for the ACT loop:
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
-- **Reasoning Loop** — Signal-driven continuous reasoning (see service listing above); attention-gated
+- **DMN Service** — Timer-based proactive intelligence (60min idle → recent, 6h cadence → salience); see service listing above
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle; flat rate per decay class; contradicted traits resolve via inline contradiction check at creation time
@@ -223,10 +222,10 @@ Built-in cognitive skills for the ACT loop:
     ├─ Semantic decay (strength-weighted)
     └─ User trait decay (category-specific)
 
-[Cognitive Drift Engine] → during worker idle
-    ├─ Seed selection (weighted random)
-    ├─ Spreading activation (depth 2, decay 0.7/level)
-    └─ LLM synthesis → stores as drift gist
+[DMN Service] → timer-based proactive intelligence
+    ├─ 60min idle → "recent" (last 50 episodes)
+    ├─ 6h cadence → "salience" (top concepts + goals + tasks)
+    └─ unified_generate with proactive=True → ACT loop decides
 ```
 
 ## Key Architectural Decisions
@@ -434,7 +433,7 @@ A daemon thread pings all paired interfaces every 30 seconds. After 3 consecutiv
 - **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
 - **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
-- **Drift Gist**: Spontaneous thought stored during idle periods (DMN)
+- **DMN (Default Mode Network)**: Timer-based proactive intelligence; fires during idle periods to generate useful actions or messages
 - **Episode**: Narrative memory unit with intent, context, action, emotion, outcome, salience
 - **Concept**: Knowledge node with strength decay and spreading activation
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment

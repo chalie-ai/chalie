@@ -88,7 +88,7 @@ class TestDeleteAll:
         for pattern in [
             'working_memory:*',
             'auth_session:*', 'proactive:*',
-            'identity_state:*', 'cognitive_drift_state',
+            'identity_state:*', 'dmn:*',
             'tool_state:*', 'metrics:timing:*',
         ]:
             assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in delete_all"
