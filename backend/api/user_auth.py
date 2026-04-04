@@ -91,14 +91,19 @@ def auth_status():
                 text("SELECT COUNT(*) FROM providers WHERE is_active = 1")
             ).fetchone()[0]
 
-        # Check session
+        # Check session — if the vault is sealed (server restarted while
+        # session cookie survived), treat the session as invalid so every
+        # frontend redirects to the login page, which re-unlocks the vault.
         has_session = validate_session(request)
+        vault_state = _get_vault_state()
+        if has_session and vault_state == "locked":
+            has_session = False
 
         return jsonify({
             "has_master_account": account_count > 0,
             "has_providers": provider_count > 0,
             "has_session": has_session,
-            "vault_state": _get_vault_state(),
+            "vault_state": vault_state,
         }), 200
     except Exception as e:
         logger.error(f"[REST API] Auth status error: {e}")
