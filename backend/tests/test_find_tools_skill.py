@@ -87,8 +87,8 @@ class TestHandleFindTools:
 class TestFilterAvailable:
 
     def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
-                  domain='Other', effort='moderate', distance=0.5):
-        return (name, tool_type, summary, profile, domain, effort, distance)
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
 
     @patch(_REGISTRY)
     def test_filters_out_skills(self, mock_registry_cls):
@@ -100,7 +100,7 @@ class TestFilterAvailable:
             self._make_row('recall', 'skill'),
             self._make_row('weather', 'tool'),
         ]
-        result = _filter_available(rows)
+        result = _filter_available(rows, query='weather')
         assert len(result) == 1
         assert result[0]['tool_name'] == 'weather'
 
@@ -111,7 +111,7 @@ class TestFilterAvailable:
         mock_registry_cls.return_value = mock_reg
 
         rows = [self._make_row('broken')]
-        result = _filter_available(rows)
+        result = _filter_available(rows, query='broken')
         assert len(result) == 0
 
     @patch(_REGISTRY)
@@ -121,19 +121,32 @@ class TestFilterAvailable:
         mock_registry_cls.return_value = mock_reg
 
         rows = [self._make_row('offline')]
-        result = _filter_available(rows)
+        result = _filter_available(rows, query='offline')
         assert len(result) == 0
 
     @patch(_REGISTRY)
-    def test_similarity_calculation(self, mock_registry_cls):
-        """L2 distance should be converted to similarity score."""
+    def test_score_calculation(self, mock_registry_cls):
+        """Score = distance * 10 - keyword_match_count. Lower = better."""
         mock_reg = _mock_registry(tools={'tool_a': {'manifest': {}}})
         mock_registry_cls.return_value = mock_reg
 
-        rows = [self._make_row('tool_a', distance=0.4)]
-        result = _filter_available(rows)
+        # distance=0.4, no keyword match -> score = 0.4 * 10 - 0 = 4.0
+        rows = [self._make_row('tool_a', distance=0.4, keywords='')]
+        result = _filter_available(rows, query='something')
         assert len(result) == 1
-        assert result[0]['similarity'] == pytest.approx(0.8, abs=0.01)
+        assert result[0]['score'] == pytest.approx(4.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_keyword_match_lowers_score(self, mock_registry_cls):
+        """Each keyword match in query reduces score by 1."""
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        # distance=0.5, 2 keyword matches -> score = 0.5 * 10 - 2 = 3.0
+        rows = [self._make_row('weather', distance=0.5, keywords='weather,forecast,temperature')]
+        result = _filter_available(rows, query='what is the weather forecast today')
+        assert len(result) == 1
+        assert result[0]['score'] == pytest.approx(3.0, abs=0.01)
 
     @patch(_REGISTRY)
     def test_unregistered_tool_excluded(self, mock_registry_cls):
@@ -142,7 +155,7 @@ class TestFilterAvailable:
         mock_registry_cls.return_value = mock_reg
 
         rows = [self._make_row('ghost_tool')]
-        result = _filter_available(rows)
+        result = _filter_available(rows, query='ghost')
         assert len(result) == 0
 
 
@@ -157,11 +170,11 @@ class TestFormatSearchResults:
             'full_profile': 'Full web search description',
             'domain': 'Research',
             'effort': 'light',
-            'similarity': 0.92,
+            'score': 3.5,
         }]
         result = _format_search_results("search the internet", tools)
         assert 'search' in result
-        assert '92%' in result
+        assert 'match=' in result
         assert 'directly' in result.lower()
 
     @patch('services.innate_skills.find_tools_skill._get_param_summary')
@@ -169,9 +182,9 @@ class TestFormatSearchResults:
         mock_params.return_value = ""
         tools = [
             {'tool_name': 'a', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'light', 'similarity': 0.9},
+             'domain': 'D', 'effort': 'light', 'score': 2.0},
             {'tool_name': 'b', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'moderate', 'similarity': 0.7},
+             'domain': 'D', 'effort': 'moderate', 'score': 4.5},
         ]
         result = _format_search_results("query", tools)
         assert 'Found 2 tool(s)' in result
@@ -399,3 +412,216 @@ class TestEdgeCases:
         assert 'built-in skills' in result['text'].lower() or 'no tools found' in result['text'].lower()
         assert 'recall' in result['text']  # Should name the matching skill
         assert result['_discovered_tools'] == []
+
+
+class TestKeywordScoring:
+    """Tests for two-axis scoring: (distance * 10) - kw_match_count."""
+
+    def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
+
+    @patch(_REGISTRY)
+    def test_case_insensitive_keyword_matching(self, mock_registry_cls):
+        """Keyword matching must be case-insensitive: 'WEATHER' matches keyword 'weather'."""
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [self._make_row('weather', distance=0.3, keywords='weather,forecast')]
+        result = _filter_available(rows, query='WEATHER FORECAST TODAY')
+        assert len(result) == 1
+        # distance=0.3, 2 matches -> score = 3.0 - 2 = 1.0
+        assert result[0]['score'] == pytest.approx(1.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_multiple_keyword_matches_stack(self, mock_registry_cls):
+        """Each matching keyword subtracts exactly 1 from the score."""
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        # distance=0.5 -> base score 5.0; keywords 'weather','forecast','temperature' all in query
+        rows = [self._make_row('weather', distance=0.5, keywords='weather,forecast,temperature')]
+        result = _filter_available(rows, query='weather forecast temperature today')
+        assert len(result) == 1
+        assert result[0]['score'] == pytest.approx(2.0, abs=0.01)  # 5.0 - 3 = 2.0
+
+    @patch(_REGISTRY)
+    def test_empty_keywords_score_is_distance_times_ten(self, mock_registry_cls):
+        """When keywords is empty string, score = distance * 10 with no bonus."""
+        mock_reg = _mock_registry(tools={'tool_a': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [self._make_row('tool_a', distance=0.7, keywords='')]
+        result = _filter_available(rows, query='something unrelated')
+        assert len(result) == 1
+        assert result[0]['score'] == pytest.approx(7.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_null_keywords_treated_as_empty(self, mock_registry_cls):
+        """None keywords (old DB rows before migration) should not crash scoring."""
+        mock_reg = _mock_registry(tools={'old_tool': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        # Simulate a row where keywords column is NULL (None)
+        row = ('old_tool', 'tool', 'desc', 'full desc', 'Other', 'moderate', 0.6, None)
+        result = _filter_available([row], query='some query')
+        assert len(result) == 1
+        assert result[0]['score'] == pytest.approx(6.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_keywords_not_in_query_no_bonus(self, mock_registry_cls):
+        """Keywords present on tool but absent from query give no score reduction."""
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [self._make_row('weather', distance=0.4, keywords='weather,forecast,temperature')]
+        result = _filter_available(rows, query='show me something completely different')
+        assert len(result) == 1
+        # None of the keywords appear in the query
+        assert result[0]['score'] == pytest.approx(4.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_tools_sorted_ascending_by_score(self, mock_registry_cls):
+        """Results must be sorted ascending by score (lower = better match)."""
+        mock_reg = _mock_registry(tools={
+            'tool_high': {'manifest': {}},
+            'tool_mid': {'manifest': {}},
+            'tool_low': {'manifest': {}},
+        })
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [
+            # tool_high: score = 0.8*10 - 0 = 8.0
+            self._make_row('tool_high', distance=0.8, keywords=''),
+            # tool_mid: score = 0.5*10 - 1 = 4.0
+            self._make_row('tool_mid', distance=0.5, keywords='forecast'),
+            # tool_low: score = 0.3*10 - 2 = 1.0
+            self._make_row('tool_low', distance=0.3, keywords='weather,forecast'),
+        ]
+        result = _filter_available(rows, query='weather forecast')
+        assert len(result) == 3
+        scores = [t['score'] for t in result]
+        assert scores == sorted(scores), "Results not sorted ascending by score"
+        assert result[0]['tool_name'] == 'tool_low'
+        assert result[-1]['tool_name'] == 'tool_high'
+
+    @patch(_REGISTRY)
+    def test_query_words_must_contain_full_keyword(self, mock_registry_cls):
+        """Keyword 'forecast' should NOT match query containing only 'fore'."""
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [self._make_row('weather', distance=0.5, keywords='forecast')]
+        result = _filter_available(rows, query='fore cast today')
+        assert len(result) == 1
+        # 'forecast' not in 'fore cast today' -> no match bonus
+        assert result[0]['score'] == pytest.approx(5.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_multi_tool_query_matches_correct_keywords(self, mock_registry_cls):
+        """Query matching keywords of one tool should not affect another tool's score."""
+        mock_reg = _mock_registry(tools={
+            'weather': {'manifest': {}},
+            'search': {'manifest': {}},
+        })
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [
+            # 'weather' keyword in query -> score = 5.0 - 1 = 4.0
+            self._make_row('weather', distance=0.5, keywords='weather,temperature'),
+            # no keyword overlap -> score = 0.5*10 - 0 = 5.0
+            self._make_row('search', distance=0.5, keywords='search,google,lookup'),
+        ]
+        result = _filter_available(rows, query='what is the weather')
+        assert len(result) == 2
+        weather_result = next(t for t in result if t['tool_name'] == 'weather')
+        search_result = next(t for t in result if t['tool_name'] == 'search')
+        assert weather_result['score'] == pytest.approx(4.0, abs=0.01)
+        assert search_result['score'] == pytest.approx(5.0, abs=0.01)
+
+    @patch(_REGISTRY)
+    def test_score_exposed_in_result_dict(self, mock_registry_cls):
+        """Each result dict must include a 'score' key."""
+        mock_reg = _mock_registry(tools={'tool_a': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [self._make_row('tool_a', distance=0.3, keywords='alpha,beta')]
+        result = _filter_available(rows, query='alpha')
+        assert 'score' in result[0]
+
+
+class TestFormatSearchResultsScore:
+    """Verify score is correctly formatted in find_tools output."""
+
+    @patch('services.innate_skills.find_tools_skill._get_param_summary')
+    def test_score_formatted_to_two_decimal_places(self, mock_params):
+        """Score in output must be formatted with two decimal places."""
+        mock_params.return_value = "(query)"
+        tools = [{
+            'tool_name': 'weather',
+            'short_summary': 'Get weather',
+            'full_profile': 'Full weather description',
+            'domain': 'Context',
+            'effort': 'trivial',
+            'score': 2.5,
+        }]
+        result = _format_search_results("weather today", tools)
+        assert 'match=good' in result
+
+    @patch('services.innate_skills.find_tools_skill._get_param_summary')
+    def test_format_shows_found_count(self, mock_params):
+        """Output must include the number of tools found."""
+        mock_params.return_value = ""
+        tools = [
+            {'tool_name': 'a', 'short_summary': 's', 'full_profile': 'p',
+             'domain': 'D', 'effort': 'light', 'score': 1.0},
+            {'tool_name': 'b', 'short_summary': 's', 'full_profile': 'p',
+             'domain': 'D', 'effort': 'moderate', 'score': 3.0},
+            {'tool_name': 'c', 'short_summary': 's', 'full_profile': 'p',
+             'domain': 'D', 'effort': 'heavy', 'score': 5.0},
+        ]
+        result = _format_search_results("query", tools)
+        assert 'Found 3 tool(s)' in result
+
+
+class TestFilterAvailableQueryPassthrough:
+    """Verify that query text is forwarded to _filter_available for keyword matching."""
+
+    def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
+
+    @patch(_REGISTRY)
+    @patch(_EMB)
+    def test_query_reaches_keyword_scoring(self, mock_emb_cls, mock_registry_cls, db):
+        """End-to-end: keyword in query lowers score relative to tool without match."""
+        embedding = [0.1] * 256
+        mock_emb_cls.return_value.generate_embedding.return_value = embedding
+
+        # Seed two tools with identical embeddings; only 'weather' has matching keywords
+        _seed_tool_profile(
+            db, 'weather', summary='Weather tool', profile='Full',
+            domain='Context', effort='trivial', embedding=embedding,
+        )
+        _seed_tool_profile(
+            db, 'news', summary='News tool', profile='Full',
+            domain='Research', effort='light', embedding=embedding,
+        )
+
+        # Insert keywords for weather tool directly
+        db.execute(
+            "UPDATE tool_capability_profiles SET keywords = ? WHERE tool_name = ?",
+            ('weather,forecast', 'weather')
+        )
+        db.commit()
+
+        mock_reg = _mock_registry(tools={
+            'weather': {'manifest': {'parameters': {}}},
+            'news': {'manifest': {'parameters': {}}},
+        })
+        mock_registry_cls.return_value = mock_reg
+
+        result = handle_find_tools("topic", {"query": "weather forecast"})
+        assert isinstance(result, dict)
+        # Both tools should appear; weather should rank first (lower score)
+        assert 'weather' in result['_discovered_tools']

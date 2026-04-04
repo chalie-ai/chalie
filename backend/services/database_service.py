@@ -562,6 +562,8 @@ class DatabaseService:
                 ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
                 ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
                 ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
+                # Migration 029 — keyword scoring for find_tools 2-axis search
+                ("tool_capability_profiles", "keywords", "TEXT DEFAULT ''", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

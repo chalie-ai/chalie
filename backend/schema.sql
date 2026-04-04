@@ -467,6 +467,7 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     effort TEXT DEFAULT 'moderate',
     skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
     descriptor TEXT,                                -- compact discovery label: 'name (synonym1, synonym2, ...)'
+    keywords TEXT DEFAULT '',                       -- comma-separated search keywords for 2-axis scoring
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

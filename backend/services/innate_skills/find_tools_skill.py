@@ -24,18 +24,13 @@ LOG_PREFIX = "[FIND_TOOLS]"
 
 TOOL_SCHEMA = {
     "name": "find_tools",
-    "description": (
-        "When a task requires actions you cannot perform with your built-in skills "
-        "— such as calling external APIs, fetching web content, or running specialized "
-        "processing — use this to discover available tools. Describe what you need; "
-        "matched tools become directly callable."
-    ),
+    "description": "Find tools for tasks your built-in skills can't handle. Returns usable tools.",
     "input_schema": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Describe the capability you need in natural language.",
+                "description": "Describe what you need.",
             },
             "limit": {
                 "type": "integer",
@@ -56,6 +51,7 @@ def handle_find_tools(topic: str, params: dict) -> dict:
         '_discovered_tools' (tool names for the orchestrator to inject).
     """
     query = params.get("query", "").strip()
+    logger.info(f"{LOG_PREFIX} query='{query}' limit={params.get('limit', 5)}")
     if not query:
         return {"text": f"{LOG_PREFIX} Error: 'query' is required.", "_discovered_tools": []}
 
@@ -83,7 +79,7 @@ def handle_find_tools(topic: str, params: dict) -> dict:
                 """
                 SELECT tcp.tool_name, tcp.tool_type, tcp.short_summary,
                        tcp.full_profile, tcp.domain, tcp.effort,
-                       v.distance
+                       v.distance, tcp.keywords
                 FROM tool_capability_profiles_vec v
                 JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
                 WHERE v.embedding MATCH ? AND k = ?
@@ -104,8 +100,14 @@ def handle_find_tools(topic: str, params: dict) -> dict:
             "_discovered_tools": [],
         }
 
+    # Debug: log raw k-NN results with distances
+    for row in rows:
+        name = row[0] if not isinstance(row, dict) else row['tool_name']
+        dist = row[6] if not isinstance(row, dict) else row['distance']
+        logger.info(f"{LOG_PREFIX} k-NN: {name} distance={dist:.4f}")
+
     # Filter to only registered tools (not innate skills) and check availability
-    available_tools = _filter_available(rows)
+    available_tools = _filter_available(rows, query)
 
     if not available_tools:
         # Collect matching innate skill names so the model knows what to use
@@ -144,14 +146,15 @@ def handle_find_tools(topic: str, params: dict) -> dict:
 # -- Search helpers --------------------------------------------------------
 
 
-def _filter_available(rows: list) -> List[Dict]:
-    """Filter vec search results to available, ready tools."""
+def _filter_available(rows: list, query: str = "") -> List[Dict]:
+    """Filter vec search results to available, ready tools. Score by distance + keyword match."""
     try:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
     except Exception:
         registry = None
 
+    query_lower = query.lower()
     results = []
     for row in rows:
         tool_name = row[0] if not isinstance(row, dict) else row['tool_name']
@@ -161,6 +164,7 @@ def _filter_available(rows: list) -> List[Dict]:
         domain = row[4] if not isinstance(row, dict) else row['domain']
         effort = row[5] if not isinstance(row, dict) else row['effort']
         distance = row[6] if not isinstance(row, dict) else row['distance']
+        keywords = row[7] if not isinstance(row, dict) else row.get('keywords', '')
 
         # Skip innate skills — they're already injected
         if tool_type == 'skill':
@@ -176,8 +180,14 @@ def _filter_available(rows: list) -> List[Dict]:
             if not registry._is_interface_online(tool_data):
                 continue
 
-        # Convert L2 distance to similarity for normalized vectors
-        similarity = max(0.0, 1.0 - distance / 2.0)
+        # 2-axis scoring: semantic distance + keyword match bonus
+        kw_list = [k.strip().lower() for k in (keywords or '').split(',') if k.strip()]
+        query_words = set(query_lower.split())
+        kw_match_count = sum(
+            1 for kw in kw_list
+            if (' ' not in kw and kw in query_words) or (' ' in kw and kw in query_lower)
+        )
+        score = (distance * 10) - kw_match_count
 
         results.append({
             'tool_name': tool_name,
@@ -185,9 +195,11 @@ def _filter_available(rows: list) -> List[Dict]:
             'full_profile': full_profile,
             'domain': domain,
             'effort': effort,
-            'similarity': similarity,
+            'score': score,
         })
 
+    # Lower score = better (closer semantically + more keyword matches)
+    results.sort(key=lambda t: t['score'])
     return results
 
 
@@ -197,9 +209,18 @@ def _format_search_results(query: str, tools: List[Dict]) -> str:
 
     for t in tools:
         param_str = _get_param_summary(t['tool_name'])
-        sim_pct = int(t['similarity'] * 100)
+        # Translate internal score to match quality (lower score = better)
+        score = t['score']
+        if score <= 2.0:
+            quality = "excellent"
+        elif score <= 4.0:
+            quality = "good"
+        elif score <= 6.0:
+            quality = "fair"
+        else:
+            quality = "weak"
 
-        lines.append(f"- **{t['tool_name']}** ({sim_pct}% match, {t['effort']}): {t['short_summary']}")
+        lines.append(f"- **{t['tool_name']}** (match={quality}, {t['effort']}): {t['short_summary']}")
         if param_str:
             lines.append(f"  Parameters: {param_str}")
 

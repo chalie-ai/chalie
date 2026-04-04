@@ -594,3 +594,355 @@ class TestSeedBuiltinProfiles:
             assert builtin_name not in called_tools, (
                 f"bootstrap_all() called build_profile for already-seeded tool: {builtin_name}"
             )
+
+
+class TestTruncateKeywords:
+    """Tests for _truncate_keywords() helper."""
+
+    def test_within_limit_returns_unchanged(self):
+        """Keywords shorter than the limit pass through unmodified."""
+        from services.tool_profile_service import _truncate_keywords
+        kw = "search,web,lookup,find"
+        assert _truncate_keywords(kw, max_len=256) == kw
+
+    def test_at_exactly_limit_returns_unchanged(self):
+        """Keywords exactly at the limit should pass through unmodified."""
+        from services.tool_profile_service import _truncate_keywords
+        kw = "a" * 256
+        assert _truncate_keywords(kw, max_len=256) == kw
+
+    def test_over_limit_truncates_at_last_complete_keyword(self):
+        """Over-limit string should be cut at the last comma before max_len."""
+        from services.tool_profile_service import _truncate_keywords
+        # 'weather,forecast' is 16 chars; 'temperature' would push it over 20
+        kw = "weather,forecast,temperature"
+        result = _truncate_keywords(kw, max_len=20)
+        # 'weather,forecast' = 16 chars — fits; adding ',temperature' would be 28 -> truncated
+        assert result == "weather,forecast"
+        assert len(result) <= 20
+        assert ',' not in result or not result.endswith(',')
+
+    def test_empty_string_returns_empty(self):
+        """Empty keywords string returns empty string."""
+        from services.tool_profile_service import _truncate_keywords
+        assert _truncate_keywords("", max_len=256) == ""
+
+    def test_single_keyword_over_limit_returns_empty(self):
+        """A single keyword longer than max_len cannot be truncated cleanly, returns empty."""
+        from services.tool_profile_service import _truncate_keywords
+        long_kw = "a" * 300
+        result = _truncate_keywords(long_kw, max_len=256)
+        # Can't fit even the first keyword — result must be empty
+        assert result == ""
+
+    def test_no_partial_keywords_in_result(self):
+        """Result must never end mid-keyword — only complete comma-delimited terms."""
+        from services.tool_profile_service import _truncate_keywords
+        kw = "alpha,bravo,charlie,delta,echo"
+        result = _truncate_keywords(kw, max_len=15)
+        # Each term in result must be a full keyword from the original list
+        if result:
+            for term in result.split(','):
+                assert term in kw.split(','), f"Partial keyword found: {term!r}"
+
+    def test_multiple_keywords_all_fit(self):
+        """When all keywords fit, the full string is returned unchanged."""
+        from services.tool_profile_service import _truncate_keywords
+        kw = "a,b,c,d,e"
+        assert _truncate_keywords(kw, max_len=50) == kw
+
+    def test_default_max_len_is_256(self):
+        """Default max_len must be 256 (matches DB column constraint)."""
+        from services.tool_profile_service import _truncate_keywords
+        # Just over 256 chars worth of keywords
+        parts = ["keyword" + str(i) for i in range(40)]  # ~320 chars when joined
+        kw = ",".join(parts)
+        result = _truncate_keywords(kw)
+        assert len(result) <= 256
+
+
+class TestProfileNeedsRebuild:
+    """Tests for ToolProfileService._profile_needs_rebuild()."""
+
+    def _full_profile(self, **overrides):
+        """Return a minimal valid profile dict that passes all rebuild checks."""
+        base = {
+            'tool_type': 'tool',
+            'domain': 'Research',
+            'triage_triggers': ['some trigger'],
+            'usage_scenarios': ['some scenario'],
+            'descriptor': 'my_tool',
+            'keywords': 'search,web',
+        }
+        base.update(overrides)
+        return base
+
+    def test_returns_false_when_all_fields_present(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile()
+        assert svc._profile_needs_rebuild(profile) is False
+
+    def test_returns_true_when_keywords_empty_string(self, db):
+        """Empty keywords string triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(keywords='')
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_keywords_none(self, db):
+        """NULL keywords (missing key) triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(keywords=None)
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_keywords_key_absent(self, db):
+        """Profile dict with no 'keywords' key at all triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile()
+        del profile['keywords']
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_descriptor_missing(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(descriptor='')
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_usage_scenarios_empty(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(usage_scenarios=[])
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_triage_triggers_empty(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(triage_triggers=[])
+        assert svc._profile_needs_rebuild(profile) is True
+
+
+class TestSeedBuiltinProfilesKeywords:
+    """Tests for keywords handling in seed_builtin_profiles()."""
+
+    def test_seed_writes_keywords_to_db(self, db):
+        """seed_builtin_profiles() must write keywords column for each seeded tool."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name, profile in BUILTIN_TOOL_PROFILES.items():
+            if not profile.get('keywords'):
+                continue
+            row = db.execute(
+                "SELECT keywords FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            assert row is not None, f"{tool_name} not seeded"
+            assert row['keywords'], f"{tool_name}: keywords column is empty after seeding"
+
+    def test_seed_reseeds_when_existing_profile_has_empty_keywords(self, db):
+        """If a seeded tool row has empty keywords, bootstrap_all triggers a rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        # Pick a tool known to have keywords in BUILTIN_TOOL_PROFILES
+        tool_name = 'weather'
+        assert BUILTIN_TOOL_PROFILES[tool_name].get('keywords'), \
+            "Test assumption: 'weather' must have keywords defined"
+
+        # Seed normally first
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        # Wipe the keywords column to simulate a pre-migration row
+        db.execute(
+            "UPDATE tool_capability_profiles SET keywords = '' WHERE tool_name = ?",
+            (tool_name,)
+        )
+        db.commit()
+
+        # _profile_needs_rebuild should now return True for this tool
+        profile = svc.get_full_profile(tool_name)
+        assert svc._profile_needs_rebuild(profile) is True, \
+            "Profile with empty keywords should need rebuild"
+
+    def test_seed_keywords_are_truncated_to_256(self, db):
+        """Keywords written to DB must not exceed 256 characters."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            row = db.execute(
+                "SELECT keywords FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            if row and row['keywords']:
+                assert len(row['keywords']) <= 256, \
+                    f"{tool_name}: keywords exceeds 256 chars ({len(row['keywords'])})"
+
+
+class TestEmbeddingTextFormula:
+    """Verify embedding text uses short_summary + keywords, not full_profile."""
+
+    def test_build_profile_embeds_summary_plus_keywords(self, db):
+        """build_profile() must embed 'short_summary keywords', not full_profile."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        profile_data = {
+            'short_summary': 'Search the web',
+            'full_profile': 'This is a very long full profile that should NOT be embedded.',
+            'usage_scenarios': ['web search'],
+            'anti_scenarios': [],
+            'complementary_skills': [],
+            'triage_triggers': ['search for'],
+            'domain': 'Research',
+            'effort_tier': 'light',
+            'descriptor': 'search',
+            'keywords': 'search,web,lookup',
+        }
+
+        with patch.object(svc, '_get_llm') as mock_get_llm, \
+             patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_get_related_episodes', return_value=""), \
+             patch.object(svc, 'check_staleness', return_value=True), \
+             patch.object(svc, '_invalidate_cache'), \
+             patch.object(svc, '_load_prompt', return_value="{{manifest}}{{episodes}}{{source_code}}"):
+
+            import json
+            from services.llm_service import LLMResponse
+            mock_llm = MagicMock()
+            mock_llm.send_message.return_value = LLMResponse(
+                text=json.dumps(profile_data),
+                model='test',
+                provider='mock',
+            )
+            mock_get_llm.return_value = mock_llm
+
+            mock_emb = MagicMock()
+            mock_emb.generate_embedding.return_value = [0.1] * 256
+            mock_get_emb.return_value = mock_emb
+
+            svc.build_profile("search", {"name": "search", "description": "Web search tool"})
+
+        # Verify the embedding was called with "short_summary keywords" not full_profile
+        assert mock_emb.generate_embedding.called
+        call_arg = mock_emb.generate_embedding.call_args[0][0]
+        assert 'Search the web' in call_arg
+        assert 'search,web,lookup' in call_arg or 'search' in call_arg
+        assert 'very long full profile' not in call_arg
+
+    def test_seed_builtin_profiles_embeds_summary_plus_keywords(self, db):
+        """seed_builtin_profiles() must embed 'short_summary keywords' not full_profile."""
+        svc = ToolProfileService(get_shared_db_service())
+        embedded_texts = []
+
+        def capture_embed(text):
+            embedded_texts.append(text)
+            return [0.1] * 256
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_emb = MagicMock()
+            mock_emb.generate_embedding.side_effect = capture_embed
+            mock_get_emb.return_value = mock_emb
+            svc.seed_builtin_profiles()
+
+        assert embedded_texts, "No embeddings were generated"
+
+        # For each generated embedding, it should be short_summary (+ keywords),
+        # never a long multi-line full_profile string
+        for text in embedded_texts:
+            # full_profile values are very long (hundreds of chars with newlines)
+            # embedding text must be compact
+            assert '\n' not in text, f"Embedding text contains newline (looks like full_profile): {text[:100]!r}"
+            # Must not contain the literal full_profile marker used in builtin profiles
+            assert 'Wikipedia:' not in text, \
+                "Embedding text contains full_profile content ('Wikipedia:' marker)"
+
+
+class TestBootstrapTOCInjection:
+    """Tests for dynamic TOC injection into find_tools TOOL_SCHEMA."""
+
+    def test_bootstrap_injects_toc_when_tools_have_keywords(self, db):
+        """After bootstrap_all(), TOOL_SCHEMA query description includes keywords as TOC."""
+        import services.innate_skills.find_tools_skill as fts_mod
+
+        svc = ToolProfileService(get_shared_db_service())
+
+        # Save the original description to restore after test
+        original_description = fts_mod.TOOL_SCHEMA["input_schema"]["properties"]["query"]["description"]
+
+        # Include 'toc_tool' in registry.tools so the purge logic does not delete its profile.
+        # The profile is seeded via seed_builtin_profiles mock (it will be inserted after).
+        with patch.object(svc, 'seed_builtin_profiles'), \
+             patch('services.tool_registry_service.ToolRegistryService') as mock_reg_cls, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_registry = MagicMock()
+            mock_registry.tools = {
+                'toc_tool': {
+                    'manifest': {
+                        'name': 'toc_tool',
+                        'description': 'A tool for TOC injection testing',
+                    }
+                }
+            }
+            mock_registry.get_on_demand_tools.return_value = []
+
+            # Intercept check_staleness to prevent build_profile for toc_tool
+            original_check = svc.check_staleness
+            def _fake_staleness(name, h=None):
+                if name == 'toc_tool':
+                    return False  # Already profiled
+                return original_check(name, h)
+
+            with patch.object(svc, 'check_staleness', side_effect=_fake_staleness), \
+                 patch.object(svc, 'get_full_profile', side_effect=lambda n: {'keywords': 'alpha,beta'} if n == 'toc_tool' else None), \
+                 patch.object(svc, '_profile_needs_rebuild', return_value=False):
+                mock_reg_cls.return_value = mock_registry
+
+                # Insert the profile row with keywords before bootstrap reads it
+                db.execute(
+                    """INSERT INTO tool_capability_profiles
+                       (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                        anti_scenarios, complementary_skills, manifest_hash, domain,
+                        triage_triggers, effort, descriptor, keywords, updated_at)
+                       VALUES ('toc_tool', 'tool', 'Test', 'Full', '[]', '[]', '[]',
+                               'hash1', 'Research', '[]', 'light', 'toc_tool',
+                               'alpha,beta', datetime('now'))"""
+                )
+                db.commit()
+
+                svc.bootstrap_all()
+
+        try:
+            query_description = fts_mod.TOOL_SCHEMA["input_schema"]["properties"]["query"]["description"]
+            # TOC should include at least one keyword from our seeded tool
+            assert 'alpha' in query_description or 'beta' in query_description, \
+                "TOC not injected into find_tools TOOL_SCHEMA after bootstrap"
+        finally:
+            # Restore original description so other tests are not affected
+            fts_mod.TOOL_SCHEMA["input_schema"]["properties"]["query"]["description"] = original_description
+
+    def test_bootstrap_toc_not_injected_when_no_tools_with_keywords(self, db):
+        """When no tools have keywords, the original query description is preserved."""
+        import services.innate_skills.find_tools_skill as fts_mod
+
+        svc = ToolProfileService(get_shared_db_service())
+        original_description = fts_mod.TOOL_SCHEMA["input_schema"]["properties"]["query"]["description"]
+
+        with patch.object(svc, 'seed_builtin_profiles'), \
+             patch('services.tool_registry_service.ToolRegistryService') as mock_reg_cls, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_registry = MagicMock()
+            mock_registry.tools = {}
+            mock_registry.get_on_demand_tools.return_value = []
+            mock_reg_cls.return_value = mock_registry
+            svc.bootstrap_all()
+
+        # Description should not have been mutated when there are no tools with keywords
+        current_description = fts_mod.TOOL_SCHEMA["input_schema"]["properties"]["query"]["description"]
+        assert current_description == original_description

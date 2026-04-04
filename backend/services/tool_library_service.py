@@ -532,6 +532,7 @@ if _BROWSER_AVAILABLE:
 
 BUILTIN_TOOL_PROFILES: dict = {
     "search": {
+        "keywords": "search,web,google,lookup,find,internet,online,research",
         "short_summary": "Search the web — plain natural language queries, curated results from multiple online sources.",
         "full_profile": (
             "Search using natural language across multiple providers.\n\n"
@@ -556,6 +557,7 @@ BUILTIN_TOOL_PROFILES: dict = {
     },
 
     "weather": {
+        "keywords": "weather,forecast,temperature,rain,wind,humidity,climate",
         "short_summary": "Get current weather conditions for any location — temperature, wind, rain, humidity, UV.",
         "full_profile": (
             "Current weather conditions for any location worldwide.\n\n"
@@ -570,6 +572,7 @@ BUILTIN_TOOL_PROFILES: dict = {
     },
 
     "news": {
+        "keywords": "news,headlines,rss,current events,articles,press",
         "short_summary": "Search and browse news from 56 global RSS sources across 8 categories.",
         "full_profile": (
             "News search and browsing from 56 global RSS sources in 8 categories: international, US, UK, tech, business, science, sports, entertainment.\n\n"
@@ -584,6 +587,7 @@ BUILTIN_TOOL_PROFILES: dict = {
     },
 
     "code_eval": {
+        "keywords": "code,python,eval,execute,run,compute,calculate,script",
         "short_summary": "Run Python code to compute, verify formulas, or test logic. Use print() for output.",
         "full_profile": (
             "Python sandbox for precise computation. Available modules: math, statistics, json, decimal, fractions, itertools, functools, collections.\n\n"
@@ -597,6 +601,7 @@ BUILTIN_TOOL_PROFILES: dict = {
     },
 
     "programming_docs_search": {
+        "keywords": "docs,documentation,api,reference,php,python,javascript,go,rust,java,ruby,typescript,react,vue,angular,django,flask,laravel",
         "short_summary": "Search official documentation for PHP, Python, JavaScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL and frameworks Laravel, Django, Flask, NumPy, Pandas, Node.js, React, Vue, Spring, Rails, Flutter.",
         "full_profile": (
             "Official documentation lookup for programming languages and frameworks. Returns extracted content from the canonical documentation source.\n\n"
@@ -614,6 +619,7 @@ BUILTIN_TOOL_PROFILES: dict = {
 
 if _BROWSER_AVAILABLE:
     BUILTIN_TOOL_PROFILES["browser"] = {
+        "keywords": "browser,webpage,screenshot,scrape,render,javascript,html,click,form",
         "short_summary": "Open web pages with full JavaScript rendering, take screenshots, fill forms, and monitor pages for changes.",
         "full_profile": (
             "Headless browser for JavaScript-heavy web pages. Use when the read skill returns empty or broken content from single-page apps, dynamic sites, or Cloudflare-protected pages. The read skill is faster for static pages — try it first.\n\n"
