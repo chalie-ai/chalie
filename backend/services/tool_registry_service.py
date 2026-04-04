@@ -424,8 +424,11 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
-        # Kick off profile enrichment in background
+        # Kick off profile enrichment in background (skip built-in tools — they are seeded at startup)
+        from services.tool_library_service import BUILTIN_TOOL_PROFILES
         for name in list(self.tools.keys()):
+            if name in BUILTIN_TOOL_PROFILES:
+                continue
             _name = name
             _metadata = dict(self.tools[name]["manifest"])
 
@@ -535,7 +538,12 @@ class ToolRegistryService:
             return self._invoke_interface_tool(tool_name, tool, params)
 
         manifest = tool["manifest"]
-        validated_params = self._validate_params(params, manifest.get("parameters", {}))
+        if "input_schema" in manifest:
+            schema_props = manifest["input_schema"].get("properties", {})
+            schema_required = manifest["input_schema"].get("required", [])
+            validated_params = self._validate_params_from_schema(params, schema_props, schema_required)
+        else:
+            validated_params = self._validate_params(params, manifest.get("parameters", {}))
 
         # Fetch DB-stored config
         try:
@@ -659,6 +667,42 @@ class ToolRegistryService:
                     logger.debug(f"[TOOL REGISTRY] Param coercion failed for '{param_name}': {e}", exc_info=True)
                 validated[param_name] = value
             elif required:
+                raise ValueError(f"Missing required parameter: {param_name}")
+            elif default is not None:
+                validated[param_name] = default
+
+        return validated
+
+    def _validate_params_from_schema(self, params: dict, properties: dict, required: list) -> dict:
+        """Validate and coerce parameters against an input_schema properties dict."""
+        validated = {}
+        for param_name, param_def in properties.items():
+            is_required = param_name in required
+            default = param_def.get("default")
+            param_type = param_def.get("type", "string")
+
+            if param_name in params:
+                value = params[param_name]
+                try:
+                    if param_type == "integer":
+                        value = int(value)
+                    elif param_type == "float":
+                        value = float(value)
+                    elif param_type == "boolean":
+                        if isinstance(value, str):
+                            value = value.lower() in ("true", "1", "yes")
+                        else:
+                            value = bool(value)
+                    elif param_type == "string":
+                        value = str(value)
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[TOOL REGISTRY] Param coercion failed for '{param_name}': {e}", exc_info=True)
+                # Enforce enum constraints
+                allowed = param_def.get("enum")
+                if allowed is not None and value not in allowed:
+                    raise ValueError(f"Parameter '{param_name}': value {value!r} not in allowed values {allowed}")
+                validated[param_name] = value
+            elif is_required:
                 raise ValueError(f"Missing required parameter: {param_name}")
             elif default is not None:
                 validated[param_name] = default
@@ -965,12 +1009,18 @@ class ToolRegistryService:
                 continue
 
             desc = manifest.get("description", "")
-            params = manifest.get("parameters", {})
 
             param_parts = []
-            for pname, pdef in params.items():
-                required = pdef.get("required", False)
-                param_parts.append(pname if required else f"{pname}?")
+            if "input_schema" in manifest:
+                schema_props = manifest["input_schema"].get("properties", {})
+                schema_required = manifest["input_schema"].get("required", [])
+                for pname in schema_props:
+                    param_parts.append(pname if pname in schema_required else f"{pname}?")
+            else:
+                params = manifest.get("parameters", {})
+                for pname, pdef in params.items():
+                    required = pdef.get("required", False)
+                    param_parts.append(pname if required else f"{pname}?")
             param_str = ", ".join(param_parts)
 
             lines.append(f"- `{name}({param_str})` — {desc}")

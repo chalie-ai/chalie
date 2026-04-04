@@ -205,6 +205,65 @@ class TestGetParamSummary:
         result = _get_param_summary('nonexistent')
         assert result == ''
 
+    @patch(_REGISTRY)
+    def test_input_schema_format_required_and_optional(self, mock_registry_cls):
+        """input_schema format: required params have no ?, optional params get ?."""
+        mock_reg = _mock_registry(tools={
+            'search': {'manifest': {
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {'type': 'string'},
+                        'provider': {'type': 'string'},
+                        'limit': {'type': 'integer', 'default': 5},
+                    },
+                    'required': ['query'],
+                }
+            }}
+        })
+        mock_registry_cls.return_value = mock_reg
+        result = _get_param_summary('search')
+        assert 'query' in result
+        assert 'provider?' in result
+        assert 'limit?' in result
+        assert 'query?' not in result  # query is required, no ?
+
+    @patch(_REGISTRY)
+    def test_input_schema_empty_properties(self, mock_registry_cls):
+        """input_schema with empty properties returns '(no parameters)'."""
+        mock_reg = _mock_registry(tools={
+            'noop': {'manifest': {
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': [],
+                }
+            }}
+        })
+        mock_registry_cls.return_value = mock_reg
+        result = _get_param_summary('noop')
+        assert result == '(no parameters)'
+
+    @patch(_REGISTRY)
+    def test_input_schema_takes_priority_over_parameters(self, mock_registry_cls):
+        """When manifest has both input_schema and parameters, input_schema is used."""
+        mock_reg = _mock_registry(tools={
+            'dual': {'manifest': {
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {'new_param': {'type': 'string'}},
+                    'required': ['new_param'],
+                },
+                'parameters': {
+                    'old_param': {'required': True},
+                },
+            }}
+        })
+        mock_registry_cls.return_value = mock_reg
+        result = _get_param_summary('dual')
+        assert 'new_param' in result
+        assert 'old_param' not in result
+
 
 class TestSearchIntegration:
     """Integration-style tests that use the real DB with seeded tool profiles."""
@@ -224,7 +283,13 @@ class TestSearchIntegration:
         )
 
         mock_reg = _mock_registry(
-            tools={'search': {'manifest': {'parameters': {'query': {'required': True}}}}}
+            tools={'search': {'manifest': {
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {'query': {'type': 'string'}},
+                    'required': ['query'],
+                }
+            }}}
         )
         mock_registry_cls.return_value = mock_reg
 

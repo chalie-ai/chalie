@@ -147,3 +147,150 @@ class TestGetExternalToolSchemas:
 
         schemas = get_external_tool_schemas(['broken'])
         assert schemas == []
+
+
+class TestInputSchemaFastPath:
+    """Tests for the input_schema fast path in _manifest_to_schema."""
+
+    def test_input_schema_passthrough(self):
+        """Manifest with input_schema returns it unchanged without conversion."""
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        }
+        manifest = {
+            "name": "search",
+            "description": "Search the web",
+            "input_schema": input_schema,
+        }
+        schema = _manifest_to_schema(manifest)
+
+        assert schema is not None
+        assert schema["name"] == "search"
+        assert schema["description"] == "Search the web"
+        assert schema["input_schema"] is input_schema
+
+    def test_input_schema_takes_precedence_over_parameters(self):
+        """When both input_schema and parameters are present, input_schema wins."""
+        input_schema = {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+        }
+        manifest = {
+            "name": "dual_format",
+            "description": "Has both formats",
+            "input_schema": input_schema,
+            "parameters": {
+                "legacy_param": {"type": "string", "required": True},
+            },
+        }
+        schema = _manifest_to_schema(manifest)
+
+        # input_schema wins: legacy_param should NOT appear
+        assert "q" in schema["input_schema"]["properties"]
+        assert "legacy_param" not in schema["input_schema"]["properties"]
+        # The required list is from input_schema, not derived from parameters
+        assert schema["input_schema"]["required"] == ["q"]
+
+    def test_legacy_parameters_still_works(self):
+        """Interface tools using the legacy parameters format still convert correctly."""
+        manifest = {
+            "name": "interface_tool",
+            "description": "An interface tool",
+            "parameters": {
+                "action": {"type": "string", "required": True, "description": "What to do"},
+                "value": {"type": "string", "required": False, "default": "default_val"},
+            },
+        }
+        schema = _manifest_to_schema(manifest)
+
+        assert schema is not None
+        assert schema["name"] == "interface_tool"
+        assert schema["input_schema"]["type"] == "object"
+        assert "action" in schema["input_schema"]["properties"]
+        assert "value" in schema["input_schema"]["properties"]
+        assert "action" in schema["input_schema"]["required"]
+        assert "value" not in schema["input_schema"]["required"]
+        assert schema["input_schema"]["properties"]["value"]["default"] == "default_val"
+
+    def test_input_schema_with_nested_items(self):
+        """input_schema with array items passthrough preserves nested structure."""
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"action": {"type": "string"}},
+                        "required": ["action"],
+                    },
+                },
+            },
+            "required": ["steps"],
+        }
+        manifest = {"name": "multi_step", "description": "Multi-step tool", "input_schema": input_schema}
+        schema = _manifest_to_schema(manifest)
+
+        assert schema["input_schema"]["properties"]["steps"]["items"]["required"] == ["action"]
+
+
+class TestAllToolMetadataInputSchema:
+    """Schema validation tests covering every entry in TOOL_METADATA."""
+
+    def test_all_tool_metadata_has_input_schema(self):
+        """Every TOOL_METADATA entry must have input_schema with type, properties, required."""
+        from services.tool_library_service import TOOL_METADATA
+        for name, meta in TOOL_METADATA.items():
+            schema = meta.get("input_schema")
+            assert schema is not None, f"{name}: missing input_schema"
+            assert schema.get("type") == "object", f"{name}: input_schema.type must be 'object'"
+            assert "properties" in schema, f"{name}: input_schema missing 'properties'"
+            assert "required" in schema, f"{name}: input_schema missing 'required'"
+
+    def test_all_input_schemas_use_valid_json_schema_types(self):
+        """No property should use type 'enum' — enums are a keyword, not a type."""
+        from services.tool_library_service import TOOL_METADATA
+
+        valid_types = {"string", "integer", "number", "boolean", "array", "object", "null"}
+        for name, meta in TOOL_METADATA.items():
+            schema = meta.get("input_schema", {})
+            for prop_name, prop_def in schema.get("properties", {}).items():
+                prop_type = prop_def.get("type")
+                if prop_type is not None:
+                    assert prop_type in valid_types, (
+                        f"{name}.{prop_name}: type '{prop_type}' is not a valid JSON Schema type"
+                    )
+                # Items inside arrays must also use valid types
+                for item_prop_name, item_prop_def in prop_def.get("items", {}).get("properties", {}).items():
+                    item_type = item_prop_def.get("type")
+                    if item_type is not None:
+                        assert item_type in valid_types, (
+                            f"{name}.{prop_name}.items.{item_prop_name}: "
+                            f"type '{item_type}' is not a valid JSON Schema type"
+                        )
+
+    def test_all_required_params_exist_in_properties(self):
+        """Every name in required[] must exist in properties."""
+        from services.tool_library_service import TOOL_METADATA
+        for name, meta in TOOL_METADATA.items():
+            schema = meta.get("input_schema", {})
+            properties = set(schema.get("properties", {}).keys())
+            required = schema.get("required", [])
+            for req_param in required:
+                assert req_param in properties, (
+                    f"{name}: required param '{req_param}' not in properties {properties}"
+                )
+
+    def test_builtin_profiles_match_tool_metadata(self):
+        """Every key in BUILTIN_TOOL_PROFILES must have a corresponding TOOL_METADATA entry."""
+        from services.tool_library_service import BUILTIN_TOOL_PROFILES, TOOL_METADATA
+        for name in BUILTIN_TOOL_PROFILES:
+            assert name in TOOL_METADATA, (
+                f"BUILTIN_TOOL_PROFILES has '{name}' but TOOL_METADATA does not"
+            )

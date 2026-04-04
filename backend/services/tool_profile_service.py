@@ -607,12 +607,131 @@ class ToolProfileService:
             logger.warning(f"{LOG_PREFIX} rebuild_if_stale failed for {tool_name}: {e}")
             return False
 
+    def seed_builtin_profiles(self) -> None:
+        """
+        Seed hardcoded profiles for first-party built-in tools.
+
+        Reads BUILTIN_TOOL_PROFILES from tool_library_service and upserts each
+        entry into tool_capability_profiles + tool_capability_profiles_vec using
+        the same manifest_hash as build_profile() computes. The existing staleness
+        gate in bootstrap_all() will therefore naturally skip these tools — their
+        hash matches so check_staleness() returns False.
+        """
+        from services.tool_library_service import BUILTIN_TOOL_PROFILES, TOOL_METADATA
+
+        seeded = 0
+        for tool_name, profile in BUILTIN_TOOL_PROFILES.items():
+            try:
+                manifest = TOOL_METADATA.get(tool_name)
+                if not manifest:
+                    logger.debug(f"{LOG_PREFIX} seed_builtin_profiles: no TOOL_METADATA for {tool_name}, skipping")
+                    continue
+
+                manifest_hash = _compute_manifest_hash(manifest)
+
+                # Skip if already seeded with current hash
+                if not self.check_staleness(tool_name, manifest_hash):
+                    logger.debug(f"{LOG_PREFIX} seed_builtin_profiles: {tool_name} is current, skipping")
+                    continue
+
+                short_summary = profile["short_summary"]
+                full_profile = profile["full_profile"]
+                effort = profile.get("effort", "moderate")
+                domain = profile.get("domain", "Other")
+                descriptor = profile.get("descriptor", tool_name)
+                usage_scenarios = profile.get("usage_scenarios", ["see full_profile"])
+                triage_triggers = profile.get("triage_triggers", ["see full_profile"])
+
+                # Build embedding
+                embedding = None
+                try:
+                    emb_service = self._get_embedding_service()
+                    embedding_text = f"{short_summary}\n{full_profile}"
+                    embedding = emb_service.generate_embedding(embedding_text)
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} seed_builtin_profiles: embedding failed for {tool_name}: {e}")
+
+                # Upsert profile
+                db = None
+                db = self._get_db()
+                try:
+                    with db.connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            INSERT INTO tool_capability_profiles
+                                (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                                 anti_scenarios, complementary_skills, manifest_hash, domain,
+                                 triage_triggers, effort, descriptor, updated_at)
+                            VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                            ON CONFLICT (tool_name) DO UPDATE SET
+                                tool_type = 'tool',
+                                short_summary = EXCLUDED.short_summary,
+                                full_profile = EXCLUDED.full_profile,
+                                usage_scenarios = EXCLUDED.usage_scenarios,
+                                anti_scenarios = EXCLUDED.anti_scenarios,
+                                complementary_skills = EXCLUDED.complementary_skills,
+                                manifest_hash = EXCLUDED.manifest_hash,
+                                domain = EXCLUDED.domain,
+                                triage_triggers = EXCLUDED.triage_triggers,
+                                effort = EXCLUDED.effort,
+                                descriptor = EXCLUDED.descriptor,
+                                updated_at = datetime('now')
+                            """,
+                            (
+                                tool_name,
+                                short_summary[:200],
+                                full_profile,
+                                json.dumps(usage_scenarios),
+                                json.dumps([]),
+                                json.dumps([]),
+                                manifest_hash,
+                                domain,
+                                json.dumps(triage_triggers),
+                                effort,
+                                descriptor,
+                            )
+                        )
+
+                        if embedding is not None:
+                            row = cursor.execute(
+                                "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                                (tool_name,)
+                            ).fetchone()
+                            if row:
+                                blob = _pack_embedding(embedding)
+                                cursor.execute(
+                                    "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                                    (row[0],)
+                                )
+                                cursor.execute(
+                                    "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                                    (row[0], blob)
+                                )
+
+                        cursor.close()
+                    seeded += 1
+                    logger.info(f"{LOG_PREFIX} seed_builtin_profiles: seeded {tool_name}")
+                except Exception as e:
+                    logger.error(f"{LOG_PREFIX} seed_builtin_profiles: DB upsert failed for {tool_name}: {e}")
+                finally:
+                    if db and not self._db:
+                        db.close_pool()
+
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} seed_builtin_profiles: failed for {tool_name}: {e}")
+
+        if seeded:
+            self._invalidate_cache()
+            logger.info(f"{LOG_PREFIX} seed_builtin_profiles: seeded {seeded} profile(s)")
+
     def bootstrap_all(self) -> None:
         """
         Called on startup. Build profiles for any tool/skill that lacks one.
         Uses documentation field (or description fallback) + LLM profile builder.
         """
         logger.info(f"{LOG_PREFIX} Bootstrap: checking all tool/skill profiles...")
+        self.seed_builtin_profiles()
 
         # Innate skills no longer profiled — documentation lives in TOOL_SCHEMA
         # dicts on each handler module. Procedural memory (strategy hints) is

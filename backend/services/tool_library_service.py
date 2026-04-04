@@ -77,11 +77,7 @@ def get_handler(name: str):
 TOOL_METADATA: dict = {
     "weather": {
         "name": "weather",
-        "description": (
-            "Get current weather conditions for a location. Use when the user "
-            "asks about weather, temperature, outdoor conditions, or when "
-            "environmental context would add warmth."
-        ),
+        "description": "Get current weather conditions for any location — temperature, wind, rain, humidity, UV.",
         "documentation": (
             "Fetches current weather conditions for a given location or the user's "
             "automatically detected location, returning temperature, feels-like, "
@@ -100,18 +96,18 @@ TOOL_METADATA: dict = {
         "category": "context",
         "icon": "fa-cloud",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "location": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "City or place name (e.g. 'Malta', 'London'). Omit entirely to "
-                    "use the user's current location automatically. IMPORTANT: If "
-                    "the user names any place — even in a short follow-up like "
-                    "'what about London?' or 'how about Paris?' — extract that place "
-                    "name and set it here."
-                ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": (
+                        "City or place name (e.g. 'Malta', 'London'). Omit to "
+                        "use the user's current location automatically."
+                    ),
+                },
             },
+            "required": [],
         },
         "returns": {
             "location": {"type": "string"},
@@ -152,45 +148,37 @@ TOOL_METADATA: dict = {
     "search": {
         "name": "search",
         "description": (
-            "Search across multiple sources including Wikipedia, academic databases, "
-            "code repositories, Reddit, news, books, music, and more. Automatically "
-            "routes your query to the most relevant source(s). Falls back to general "
-            "web search if needed. Use provider parameter to force a specific source."
+            "Search Wikipedia, GitHub, Reddit, arXiv, news, books, and more using "
+            "plain natural language. Automatically routes to the best source(s)."
         ),
         "documentation": (
-            "Multi-provider search tool with semantic routing. Automatically selects "
-            "the best source(s) for each query from 12 providers: Wikipedia, Wikidata, "
-            "ArXiv, GitHub, Hacker News, Reddit, Google News, Stack Overflow, Open "
-            "Library, MusicBrainz, iTunes, and Nominatim. Falls back to DuckDuckGo "
-            "web search when no provider matches or when all selected providers return "
-            "empty. Use the provider parameter to force a specific source (e.g. "
-            "'wikipedia', 'reddit', 'arxiv', 'ddg'). Results include the source "
-            "provider for each item. Pair with read skill to fetch full content from "
-            "promising URLs."
+            "Multi-provider search with semantic routing across 12 sources. Write "
+            "queries as plain natural language — the router selects the best "
+            "provider(s) automatically. Pair with read skill to fetch full content "
+            "from promising URLs."
         ),
         "category": "research",
         "icon": "fa-magnifying-glass",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "query": {
-                "type": "string",
-                "required": True,
-                "description": "What to search for.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Plain natural language search query.",
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": ["wikipedia", "wikidata", "arxiv", "github", "hackernews", "reddit", "google_news", "stackoverflow", "open_library", "musicbrainz", "itunes", "nominatim", "ddg"],
+                    "description": "Limit your search to one provider. Only use this if the user asks you to use 1 specific provider.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results per provider (default 5, max 10).",
+                    "default": 5,
+                },
             },
-            "provider": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "Force a specific provider. Use 'ddg' for general web search. "
-                    "Omit to let the system auto-route to the best source(s)."
-                ),
-            },
-            "limit": {
-                "type": "integer",
-                "required": False,
-                "default": 5,
-                "description": "Max results per provider (default 5, max 10).",
-            },
+            "required": ["query"],
         },
         "returns": {
             "results": {"type": "array", "description": "List of {title, snippet, url, provider, date}"},
@@ -206,21 +194,14 @@ TOOL_METADATA: dict = {
                      "accent_color": "#1a8fff", "background_color": "rgba(26,143,255,0.06)"},
         },
         "tips": [
-            "Omit provider to let semantic routing pick the best source(s)",
-            "Use provider='ddg' when you specifically need general web search",
-            "Use provider='reddit' for opinions, recommendations, community advice",
-            "Use provider='arxiv' for academic papers in physics, CS, math",
+            "Omit provider to let semantic routing pick the best source(s) automatically",
             "Pair with read skill to fetch full content from the most relevant result",
         ],
     },
 
     "code_eval": {
         "name": "code_eval",
-        "description": (
-            "Execute a Python snippet to verify formulas, test algorithms, or "
-            "compute results precisely. Use instead of mental arithmetic for any "
-            "multi-step or nested calculation."
-        ),
+        "description": "Run Python code to compute, verify formulas, or test logic. Use print() for output.",
         "documentation": (
             "Runs Python code in a restricted sandbox. Use this as a scratchpad "
             "when holding a computation in working memory would be unreliable.\n\n"
@@ -234,17 +215,15 @@ TOOL_METADATA: dict = {
         "category": "productivity",
         "icon": "fa-solid fa-code",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "code": {
-                "type": "string",
-                "required": True,
-                "description": "Python code to execute. Use print() to emit results.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute. Use print() to emit results.",
+                },
             },
-            "label": {
-                "type": "string",
-                "required": False,
-                "description": "Short description of what this snippet is computing.",
-            },
+            "required": ["code"],
         },
         "returns": {
             "text": {"type": "string", "description": "Captured print() output"},
@@ -261,40 +240,32 @@ TOOL_METADATA: dict = {
     "programming_docs_search": {
         "name": "programming_docs_search",
         "description": (
-            "Look up official programming language and framework documentation. "
-            "Searches the canonical documentation site and returns the relevant "
-            "page content. Supports 12 languages (PHP, Python, JavaScript/TypeScript, "
-            "Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL) and 11 major "
-            "frameworks (Laravel, Django, Flask, NumPy, Pandas, Node.js, React, "
-            "Vue, Spring, Rails, Flutter)."
+            "Search official documentation for PHP, Python, JavaScript, Go, Rust, "
+            "Java, Ruby, C#, Dart, C/C++, Bash, SQL and frameworks Laravel, Django, "
+            "Flask, NumPy, Pandas, Node.js, React, Vue, Spring, Rails, Flutter."
         ),
         "documentation": (
             "Use this tool when you need to look up a function, class, method, "
             "module, or concept in a programming language or framework's official "
-            "documentation. Pass the language/framework name (or alias like 'py', "
-            "'js', 'django', 'react', 'rails') and the query. Returns extracted "
-            "documentation text from the official source."
+            "documentation. Pass the language/framework name and the query. Returns "
+            "extracted documentation text from the official source."
         ),
         "icon": "fa-solid fa-book-open",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "language": {
-                "type": "string",
-                "required": True,
-                "description": (
-                    "Programming language or framework name (e.g. 'python', 'django', "
-                    "'javascript', 'react', 'php', 'go', 'rust', 'java', 'spring', "
-                    "'ruby', 'rails', 'csharp', 'dart', 'flutter', 'c', 'cpp', 'bash', 'sql')"
-                ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": ["php", "python", "javascript", "typescript", "go", "rust", "java", "ruby", "csharp", "dart", "c", "cpp", "bash", "sql", "laravel", "django", "flask", "numpy", "pandas", "node", "react", "vue", "spring", "rails", "flutter"],
+                    "description": "Programming language or framework to search documentation for.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "What to look up — function name, class, method, module, or concept in plain language.",
+                },
             },
-            "query": {
-                "type": "string",
-                "required": True,
-                "description": (
-                    "Function, class, method, module, or concept to look up "
-                    "(e.g. 'array_map', 'asyncio.gather', 'Vec::push')"
-                ),
-            },
+            "required": ["language", "query"],
         },
         "returns": {
             "text": {"type": "string"},
@@ -312,11 +283,7 @@ TOOL_METADATA: dict = {
 
     "news": {
         "name": "news",
-        "description": (
-            "Search and browse news from 56 global RSS sources across 8 categories. "
-            "Get real-time headlines, search for specific topics, discover trending "
-            "stories, and explore available sources."
-        ),
+        "description": "Search and browse news from 56 global RSS sources across 8 categories.",
         "documentation": (
             "News search and browsing tool with 4 actions:\n\n"
             "**search** — Find news articles matching a query. Optionally filter by source.\n"
@@ -333,42 +300,39 @@ TOOL_METADATA: dict = {
         "category": "research",
         "icon": "fa-solid fa-newspaper",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "action": {
-                "type": "string",
-                "required": True,
-                "description": "Action to perform: search, digest, trending, or sources",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "digest", "trending", "sources"],
+                    "description": "search: find articles by query. digest: curated headlines. trending: multi-source stories. sources: list available feeds.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query (required for search action).",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["international", "us", "uk", "tech", "business", "science", "sports", "entertainment"],
+                    "description": "Filter by news category.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Filter by source ID or name.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results (default 10, max 20).",
+                    "default": 10,
+                },
+                "min_sources": {
+                    "type": "integer",
+                    "description": "Minimum sources for a trending cluster (default 2).",
+                    "default": 2,
+                },
             },
-            "query": {
-                "type": "string",
-                "required": False,
-                "description": "Search query (required for search action)",
-            },
-            "category": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "News category: international, us, uk, tech, business, "
-                    "science, sports, entertainment"
-                ),
-            },
-            "source": {
-                "type": "string",
-                "required": False,
-                "description": "Source ID or name to filter by",
-            },
-            "limit": {
-                "type": "integer",
-                "required": False,
-                "description": "Maximum number of results (default 10, max 20)",
-                "default": 10,
-            },
-            "min_sources": {
-                "type": "integer",
-                "required": False,
-                "description": "Minimum sources for a trending cluster (default 2)",
-                "default": 2,
-            },
+            "required": ["action"],
         },
         "returns": {
             "text": {"type": "string", "description": "Formatted news results"},
@@ -439,121 +403,82 @@ if _BROWSER_AVAILABLE:
         "category": "research",
         "icon": "fa-globe",
         "trigger": {"type": "on_demand"},
-        "parameters": {
-            "action": {
-                "type": "string",
-                "required": True,
-                "description": "Action: render, screenshot, interact, monitor",
-            },
-            "url": {
-                "type": "string",
-                "required": True,
-                "description": "URL to load",
-            },
-            "wait_for": {
-                "type": "string",
-                "required": False,
-                "default": "networkidle",
-                "description": (
-                    "Wait strategy: 'networkidle' (default), 'domcontentloaded', "
-                    "'selector:<css>' (wait for element to appear), "
-                    "'timeout:<ms>' (fixed additional wait)"
-                ),
-            },
-            "selector": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "CSS selector to scope extraction or screenshot to a specific "
-                    "element (e.g. 'main', 'article', '#content', '.price-display')"
-                ),
-            },
-            "extract": {
-                "type": "string",
-                "required": False,
-                "default": "text",
-                "description": "Extraction format for render action: 'text' or 'html'",
-            },
-            "max_chars": {
-                "type": "integer",
-                "required": False,
-                "default": 8000,
-                "description": "Maximum characters to extract",
-            },
-            "steps": {
-                "type": "array",
-                "required": False,
-                "description": (
-                    "Interaction steps for interact action. Each step: "
-                    "{action: click|fill|select|check|wait|scroll|press|hover|type, "
-                    "selector: 'css', value: 'text', timeout: ms}"
-                ),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "action": {"type": "string", "description": "click|fill|select|check|wait|scroll|press|hover|type"},
-                        "selector": {"type": "string", "description": "CSS selector for target element"},
-                        "value": {"type": "string", "description": "Value for fill/select/type/press actions"},
-                        "timeout": {"type": "integer", "description": "Step timeout in ms (default 5000)"},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["render", "screenshot", "interact", "monitor"],
+                    "description": "render: load page with JS and extract text. screenshot: capture page as PNG. interact: fill forms, click buttons, navigate flows. monitor: track page changes over time.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "URL to load.",
+                },
+                "wait_for": {
+                    "type": "string",
+                    "description": "Wait strategy: 'networkidle' (default), 'domcontentloaded', 'selector:<css>' (wait for element), 'timeout:<ms>' (fixed wait).",
+                    "default": "networkidle",
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to scope extraction or screenshot to a specific element.",
+                },
+                "extract": {
+                    "type": "string",
+                    "enum": ["text", "html"],
+                    "description": "Extraction format for render action.",
+                    "default": "text",
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Maximum characters to extract.",
+                    "default": 8000,
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "Interaction steps for interact action. Each step: {action: click|fill|select|check|wait|scroll|press|hover|type, selector: 'css', value: 'text', timeout: ms}.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string"},
+                            "selector": {"type": "string"},
+                            "value": {"type": "string"},
+                            "timeout": {"type": "integer"},
+                        },
+                        "required": ["action"],
                     },
-                    "required": ["action"],
+                },
+                "snapshot_key": {
+                    "type": "string",
+                    "description": "Unique key for monitor action snapshots (e.g. 'price-watch-amazon-xyz').",
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "description": "Capture full scrollable page in screenshot.",
+                    "default": False,
+                },
+                "screenshot_after": {
+                    "type": "boolean",
+                    "description": "Take screenshot after interaction steps complete.",
+                    "default": False,
+                },
+                "ocr": {
+                    "type": "boolean",
+                    "description": "Run OCR on screenshot to extract text from image.",
+                    "default": False,
+                },
+                "save_session": {
+                    "type": "boolean",
+                    "description": "Save session cookies after interaction for future visits.",
+                    "default": False,
+                },
+                "credential_label": {
+                    "type": "string",
+                    "description": "Load stored credentials for this label.",
                 },
             },
-            "snapshot_key": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "Unique identifier for monitor action snapshots. Use a descriptive "
-                    "key like 'price-watch-amazon-xyz' or 'flight-lhr-mla-jun15'"
-                ),
-            },
-            "viewport_width": {
-                "type": "integer",
-                "required": False,
-                "default": 1280,
-                "description": "Browser viewport width in pixels",
-            },
-            "viewport_height": {
-                "type": "integer",
-                "required": False,
-                "default": 720,
-                "description": "Browser viewport height in pixels",
-            },
-            "full_page": {
-                "type": "boolean",
-                "required": False,
-                "default": False,
-                "description": "Capture full scrollable page (screenshot action)",
-            },
-            "screenshot_after": {
-                "type": "boolean",
-                "required": False,
-                "default": False,
-                "description": "Take screenshot after interaction steps complete",
-            },
-            "ocr": {
-                "type": "boolean",
-                "required": False,
-                "default": False,
-                "description": "Run OCR on screenshot to extract text from image",
-            },
-            "save_session": {
-                "type": "boolean",
-                "required": False,
-                "default": False,
-                "description": (
-                    "Save session cookies after successful interaction (encrypted). "
-                    "Enables cookie replay on future visits to the same domain."
-                ),
-            },
-            "credential_label": {
-                "type": "string",
-                "required": False,
-                "description": (
-                    "Load stored credentials for this label. Injects saved cookies "
-                    "for the URL's domain into the browser context."
-                ),
-            },
+            "required": ["action", "url"],
         },
         "returns": {
             "text": {"type": "string", "description": "Extracted page text"},
@@ -595,6 +520,111 @@ if _BROWSER_AVAILABLE:
             "For flight search: interact to set dates/routes, wait for results, extract and compare",
             "Use save_session=true after login to persist cookies for future visits",
         ],
+    }
+
+
+# -- Built-in tool profiles ---------------------------------------------------
+# Hardcoded capability profiles for first-party tools.
+# seed_builtin_profiles() in tool_profile_service.py reads this dict and upserts
+# into tool_capability_profiles + vec table at startup, bypassing the LLM profiler.
+# The manifest_hash is computed from TOOL_METADATA[name] so the existing staleness
+# gate in bootstrap_all() naturally skips these tools after seeding.
+
+BUILTIN_TOOL_PROFILES: dict = {
+    "search": {
+        "short_summary": "Search the web — plain natural language queries, curated results from multiple online sources.",
+        "full_profile": (
+            "Search using natural language across multiple providers.\n\n"
+            "Wikipedia: history of the roman empire, what is quantum entanglement, biography of Ada Lovelace, how do vaccines work, the french revolution causes and timeline, what is a black hole, photosynthesis process explained, who invented the printing press, overview of the united nations, difference between mitosis and meiosis, how does the internet work, history of the olympic games, what is cryptocurrency, the water cycle explained, who was Nikola Tesla, how does DNA replication work, what caused World War 1, the theory of relativity explained, history of ancient Egypt, how do airplanes fly, what is the greenhouse effect, biography of Marie Curie, what is democracy, how does the stock market work, the history of jazz music, what are human rights, how does a computer processor work, what is natural selection, the silk road trade route history, how do earthquakes happen\n"
+            "Wikidata: population of Malta, capital of Japan, date of birth of Einstein, official languages of Switzerland, GDP of Brazil, area of Australia in square kilometers, founding date of NASA, height of Mount Everest, currency of South Korea, Nobel Prize winners in physics, ISO country code for Germany, mayor of London, number of UNESCO world heritage sites, timezone of Tokyo, national anthem of France\n"
+            "ArXiv: transformer architecture attention mechanism, reinforcement learning from human feedback, quantum error correction, diffusion models for image generation, large language model alignment techniques, neural radiance fields 3D reconstruction, federated learning privacy guarantees, graph neural networks for molecular property prediction, sparse mixture of experts scaling laws, contrastive learning self-supervised representations, protein structure prediction deep learning, adversarial robustness in neural networks\n"
+            "GitHub: react state management libraries, python async http client, rust web framework, go database migration tools, typescript orm comparison, open source video editor, self-hosted analytics platform, kubernetes deployment tools, machine learning model serving frameworks, static site generators, command line productivity tools, open source password manager, real-time collaboration library, browser extension development kit\n"
+            "Hacker News: startup funding trends, new programming languages, self-hosting alternatives, tech layoffs discussion, indie hacker revenue milestones, YC batch reviews, developer tool launches, remote work productivity debates, open source sustainability models, AI product launches and demos, side project show and tell, silicon valley culture critiques\n"
+            "Reddit: best mechanical keyboards under 100, experiences with intermittent fasting, home lab setup advice, recommended sci-fi books 2025, moving to a new country tips, best budgeting apps, beginner weightlifting programs, sourdough bread troubleshooting, vintage audio equipment recommendations, travel itinerary for Japan two weeks, best online courses for data science, apartment decorating on a budget\n"
+            "Google News: latest EU tech regulation, SpaceX launch update, central bank interest rate decision, election results, climate summit outcomes, tech company earnings report, natural disaster updates, sports championship results, pharmaceutical drug approval, diplomatic negotiations update, stock market crash analysis, new trade agreement signed\n"
+            "Stack Overflow: python multiprocessing vs threading, docker compose networking, git rebase vs merge, nginx reverse proxy configuration, react useEffect cleanup, postgresql index optimization, CSS grid vs flexbox layout, kubernetes pod restart policy, redis cache invalidation strategies, typescript generic type constraints, JWT token refresh pattern, elasticsearch query performance tuning\n"
+            "Open Library: books by Isaac Asimov, history of computing literature, science fiction classics, philosophy introductory texts, cookbooks by Ottolenghi, children's books about space, graphic novels about war, best translations of Homer, biographies of women in science, poetry collections from the Beat generation, mystery novels set in Venice, economics textbooks for beginners\n"
+            "MusicBrainz: albums by Radiohead, jazz recordings from 1960s, film soundtrack composers, discography of Miles Davis, classical piano recordings of Chopin, electronic music labels from Berlin, live albums recorded at Fillmore, collaborations between David Bowie and Brian Eno, Portuguese fado recordings, West African highlife compilations\n"
+            "iTunes: top podcast episodes about AI, audiobook versions of Dune, new music releases, true crime podcast series, meditation and mindfulness apps, language learning podcasts in Spanish, indie rock new releases this month, history podcast series about Rome, comedy specials on Apple TV, business and entrepreneurship audiobooks\n"
+            "Nominatim: where is Valletta Malta, coordinates of Times Square, location of Mount Fuji, address of the Eiffel Tower, nearest city to Lake Bled, latitude longitude of Sydney Opera House, where is Machu Picchu, postal code for central Amsterdam, geographic center of the United States, location of the Colosseum in Rome"
+        ),
+        "effort": "light",
+        "domain": "Research",
+        "descriptor": "search",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
+    },
+
+    "weather": {
+        "short_summary": "Get current weather conditions for any location — temperature, wind, rain, humidity, UV.",
+        "full_profile": (
+            "Current weather conditions for any location worldwide.\n\n"
+            "Returns temperature in Celsius and Fahrenheit, feels-like temperature, humidity percentage, wind speed and direction, UV index, precipitation, visibility, and condition flags: is_raining, is_hot, is_cold, is_windy, is_clear, is_daylight.\n\n"
+            "what is the weather like, should I bring an umbrella, is it raining outside, how hot is it today, what is the temperature in London, weather in New York, is it cold in Moscow, will I need a jacket, how windy is it, what is the UV index today, weather conditions in Tokyo, is it sunny outside, how humid is it, outdoor conditions for a picnic, should I wear sunscreen today, what is the weather like in Paris, is it safe to go running outside, beach weather today, weather for cycling, current conditions in Sydney, temperature in Dubai, is it snowing in Oslo, weather report for Malta, how is the weather in Berlin, rain forecast for today, wind conditions for sailing"
+        ),
+        "effort": "trivial",
+        "domain": "Context",
+        "descriptor": "weather",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
+    },
+
+    "news": {
+        "short_summary": "Search and browse news from 56 global RSS sources across 8 categories.",
+        "full_profile": (
+            "News search and browsing from 56 global RSS sources in 8 categories: international, US, UK, tech, business, science, sports, entertainment.\n\n"
+            "Four actions: search (find articles by query), digest (curated headlines overview), trending (stories covered by multiple outlets), sources (list available feeds).\n\n"
+            "latest news today, what happened in the world today, tech industry news, business headlines, sports results, science discoveries this week, entertainment news, political news update, breaking news, current events summary, what is trending right now, news about artificial intelligence, climate change latest, stock market news, election updates, new product launches, company earnings reports, startup funding news, cryptocurrency market update, space exploration news, medical research breakthroughs, trade deal negotiations, natural disaster updates, film and movie news, music industry headlines, European politics, Middle East situation, Asian markets update, sports transfer rumours, Olympic games coverage, UN general assembly news, central bank decisions, tech regulation updates, cybersecurity incidents, automotive industry news, real estate market trends, education policy changes, food and agriculture news, energy sector developments, aviation industry updates"
+        ),
+        "effort": "light",
+        "domain": "Research",
+        "descriptor": "news",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
+    },
+
+    "code_eval": {
+        "short_summary": "Run Python code to compute, verify formulas, or test logic. Use print() for output.",
+        "full_profile": (
+            "Python sandbox for precise computation. Available modules: math, statistics, json, decimal, fractions, itertools, functools, collections.\n\n"
+            "calculate compound interest over 10 years, convert celsius to fahrenheit, verify a quadratic formula, compute standard deviation of a dataset, test a sorting algorithm, generate fibonacci sequence, validate a regex pattern, compute factorial of large numbers, convert between number bases, calculate BMI from height and weight, solve simultaneous equations, compute permutations and combinations, verify matrix multiplication, calculate loan amortization schedule, convert unix timestamp to date, compute running average of a series, validate checksum algorithm, calculate distance between coordinates, compute percentage change between values, test string parsing logic, verify binary search implementation, calculate moving average, compute hash of a string, test date arithmetic, validate JSON structure, compute statistical median and mode, test list comprehension output, calculate area of geometric shapes, verify prime number checker, compute currency conversion rates"
+        ),
+        "effort": "trivial",
+        "domain": "Productivity",
+        "descriptor": "code_eval",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
+    },
+
+    "programming_docs_search": {
+        "short_summary": "Search official documentation for PHP, Python, JavaScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL and frameworks Laravel, Django, Flask, NumPy, Pandas, Node.js, React, Vue, Spring, Rails, Flutter.",
+        "full_profile": (
+            "Official documentation lookup for programming languages and frameworks. Returns extracted content from the canonical documentation source.\n\n"
+            "Supported languages: PHP, Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, C#, Dart, C, C++, Bash, SQL.\n"
+            "Supported frameworks: Laravel, Django, Flask, NumPy, Pandas, Node.js, React, Vue, Spring, Rails, Flutter.\n\n"
+            "php array_map function, python asyncio gather, javascript promise.all, typescript generics, go goroutines and channels, rust ownership and borrowing, java streams api, ruby blocks and procs, csharp linq queries, dart futures and async, c pointer arithmetic, cpp smart pointers, bash array manipulation, sql window functions, laravel eloquent relationships, django queryset filtering, flask blueprint registration, numpy array broadcasting, pandas dataframe merge, nodejs event loop, react useEffect hook, vue computed properties, spring dependency injection, rails active record associations, flutter stateful widget lifecycle, python list comprehension, php pdo prepared statements, javascript fetch api, go error handling patterns, rust pattern matching, java optional class, ruby enumerable methods, django middleware, laravel queue workers, react context api, vue router navigation guards, flask request handling, numpy matrix operations, pandas groupby aggregation, spring boot configuration, rails migrations, flutter provider state management, python decorators, php composer autoloading, typescript utility types, go interfaces, rust traits and implementations, java collections framework, sql joins and subqueries, nodejs stream processing, react hooks custom implementation"
+        ),
+        "effort": "light",
+        "domain": "Productivity",
+        "descriptor": "programming_docs_search",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
+    },
+}
+
+if _BROWSER_AVAILABLE:
+    BUILTIN_TOOL_PROFILES["browser"] = {
+        "short_summary": "Open web pages with full JavaScript rendering, take screenshots, fill forms, and monitor pages for changes.",
+        "full_profile": (
+            "Headless browser for JavaScript-heavy web pages. Use when the read skill returns empty or broken content from single-page apps, dynamic sites, or Cloudflare-protected pages. The read skill is faster for static pages — try it first.\n\n"
+            "Four actions: render (load page with JS, extract text), screenshot (capture page as PNG with optional OCR), interact (fill forms, click buttons, navigate multi-step flows), monitor (track page changes over time with snapshots).\n\n"
+            "render a single page application, extract content from a cloudflare protected site, load a react or angular web app, get text from a dynamically loaded page, render a dashboard with live data, extract content behind javascript rendering, load a page that requires cookies, render an e-commerce product page, extract pricing from a dynamic listing, load a web app login page, render a documentation site built with javascript, extract content from a news paywall preview, load a social media profile page, render a job listing site, extract flight prices from a booking site, take a screenshot of a web dashboard, capture visual state of a monitoring page, screenshot a chart or graph for analysis, capture a web page design for reference, screenshot an error page for debugging, take a full page screenshot of a long article, capture a responsive design at specific viewport, fill out a contact form, submit a search form and extract results, log in to a web application, navigate a multi-step checkout process, apply filters on a product listing, fill out a registration form, select options from dropdown menus, click through a setup wizard, monitor a product page for price drops, track stock availability changes, watch a job listing page for new postings, monitor a status page for outages, track shipping status updates, watch for appointment availability, monitor auction prices, track concert ticket availability"
+        ),
+        "effort": "moderate",
+        "domain": "Research",
+        "descriptor": "browser",
+        "usage_scenarios": ["see full_profile"],
+        "triage_triggers": ["see full_profile"],
     }
 
 

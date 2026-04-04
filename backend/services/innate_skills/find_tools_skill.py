@@ -216,7 +216,19 @@ def _get_param_summary(tool_name: str) -> str:
         if not tool_data:
             return ""
 
-        params = tool_data['manifest'].get('parameters', {})
+        manifest = tool_data['manifest']
+
+        if 'input_schema' in manifest:
+            schema_props = manifest['input_schema'].get('properties', {})
+            schema_required = manifest['input_schema'].get('required', [])
+            if not schema_props:
+                return "(no parameters)"
+            parts = []
+            for pname in schema_props:
+                parts.append(pname if pname in schema_required else f"{pname}?")
+            return f"({', '.join(parts)})"
+
+        params = manifest.get('parameters', {})
         if not params:
             return "(no parameters)"
 

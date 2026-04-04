@@ -122,7 +122,7 @@ frontend/
 - **`tool_registry_service.py`** — Tool discovery, metadata management; loads first-party tools from ToolLibraryService, registers interface tools via HTTP; invokes first-party tools directly in-process
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
-- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `short_summary`, `full_profile`, `triage_triggers`, and `usage_scenarios`; profiles power the `find_tools` innate skill (semantic search against capability embeddings in `tool_capability_profiles_vec`)
+- **`tool_profile_service.py`** — Tool capability profiles powering the `find_tools` innate skill (semantic search against capability embeddings in `tool_capability_profiles_vec`). Built-in tools use hardcoded profiles from `BUILTIN_TOOL_PROFILES` in `tool_library_service.py`, seeded at startup via `seed_builtin_profiles()` — bypasses the LLM profiler entirely. Interface tools still go through the LLM profiler. Staleness detection uses `manifest_hash` so re-seeding is skipped when nothing changed.
 - **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
