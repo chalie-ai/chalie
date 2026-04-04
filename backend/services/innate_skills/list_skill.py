@@ -13,13 +13,8 @@ logger = logging.getLogger(__name__)
 TOOL_SCHEMA = {
     "name": "list",
     "description": (
-        "Deterministic list management — create and manage structured lists "
-        "(shopping, to-do, chores, etc.) with perfect recall and history tracking. "
-        "Always prefer this over memorize for list-like data. "
-        "'add' auto-creates the list if it does not exist — pass items=[] to create empty. "
-        "If no lists exist and user says 'add milk', auto-create 'Shopping List' as default. "
-        "When name is omitted for add/remove/check/view, resolves to the most recently used list. "
-        "This manages shopping/to-do lists, NOT scheduler reminders — use schedule.cancel for reminders."
+        "Create and manage named lists (shopping, to-do, chores). "
+        "Prefer over memory for any list-like data. Not for reminders — use schedule for those."
     ),
     "input_schema": {
         "type": "object",
@@ -30,32 +25,39 @@ TOOL_SCHEMA = {
                     "add", "remove", "check",
                     "view", "list_all", "clear", "rename", "history",
                 ],
-                "description": "The list action to perform.",
+                "description": (
+                    "add: add items to a list (auto-creates it; items=[] for empty list). "
+                    "remove: remove specific items; omit items to delete the whole list. "
+                    "check: set checked/unchecked state per item. "
+                    "view: show full list. "
+                    "list_all: show all lists. "
+                    "clear: remove all items, keep the list. "
+                    "rename: rename a list. "
+                    "history: show change log."
+                ),
             },
             "name": {
                 "type": "string",
                 "description": (
-                    "List name (e.g. 'Shopping List', 'To Do'). Required for clear, rename. "
-                    "Optional for add/remove/check/view/history — resolves to most recently used list when omitted."
+                    "List name. Required for clear and rename. "
+                    "Omit for add/remove/check/view — auto-resolves to most recently used list."
                 ),
             },
             "items": {
                 "type": "array",
                 "description": (
-                    "For add/remove: array of item strings e.g. [\"milk\", \"eggs\"]. "
-                    "For add: pass [] to create an empty list. "
-                    "For remove: omit or pass [] to delete the entire list. "
-                    "For check: array of objects e.g. [{\"content\": \"milk\", \"checked\": true}, ...] to set checked state per item. "
-                    "IMPORTANT: always pass a real JSON array, never a serialised string."
+                    "add/remove: string array e.g. [\"milk\", \"eggs\"]. "
+                    "check: object array e.g. [{\"content\": \"milk\", \"checked\": true}]. "
+                    "Always a real JSON array, never a serialised string."
                 ),
             },
             "new_name": {
                 "type": "string",
-                "description": "Required for rename: the new name for the list.",
+                "description": "rename only: the new list name.",
             },
             "since": {
                 "type": "string",
-                "description": "Optional for history: ISO 8601 timestamp to filter history from.",
+                "description": "history only: ISO 8601 start date filter.",
             },
         },
         "required": ["action"],
