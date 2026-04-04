@@ -1,6 +1,5 @@
 """Unit tests for CortexIterationService — id column in INSERT regression."""
 
-import json
 import sqlite3
 import pytest
 from unittest.mock import MagicMock

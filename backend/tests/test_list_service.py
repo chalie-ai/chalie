@@ -4,10 +4,8 @@ Unit tests for ListService.
 Uses real SQLite via the shared `db` fixture -- no mocked database connections.
 """
 
-import json
-import time
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 
 

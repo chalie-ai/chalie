@@ -263,8 +263,10 @@ class SelfModelService:
             import json as _json
             data = entry.get('data', {}) if entry else {}
             if isinstance(data, str):
-                try: data = _json.loads(data)
-                except Exception: data = {}
+                try:
+                    data = _json.loads(data)
+                except Exception:
+                    data = {}
             context_stats = data.get("context_stats") or {}
             if topic in context_stats:
                 topic_stats = context_stats[topic]
@@ -289,8 +291,10 @@ class SelfModelService:
             for proc in procedures:
                 data = proc.get('data', {})
                 if isinstance(data, str):
-                    try: data = _json.loads(data)
-                    except Exception: data = {}
+                    try:
+                        data = _json.loads(data)
+                    except Exception:
+                        data = {}
                 attempts = data.get("total_attempts", 0)
                 if attempts < 5:
                     continue

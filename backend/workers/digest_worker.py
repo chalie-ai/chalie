@@ -22,10 +22,10 @@ and a lazy singleton accessor for the shared ``ContextAssemblyService``
 """
 
 import json
+import os
 import time
 import logging
 
-logger = logging.getLogger(__name__)
 from services import FrontalCortexService
 from services.llm_service import create_llm_service
 from services.world_state_service import WorldStateService
@@ -61,7 +61,7 @@ from workers.post_exchange_hooks import (         # noqa: F401
     _store_adaptive_signals,
 )
 
-import os
+logger = logging.getLogger(__name__)
 _LOG_PROMPTS = os.environ.get('CHALIE_LOG_PROMPTS') == '1'
 
 
@@ -274,6 +274,8 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 if not sentence:
                     return
 
+                from services.knowledge_service import KnowledgeService
+                ks = KnowledgeService(db)
                 ks.store(
                     kind='fact', entity='system', key='user_summary',
                     value=sentence, decay_class='permanent',

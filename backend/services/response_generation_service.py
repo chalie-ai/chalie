@@ -441,11 +441,14 @@ class ResponseGenerationService:
                     buf, in_str, esc = [], False, False
                     for ch in src:
                         if esc:
-                            buf.append(ch); esc = False
+                            buf.append(ch)
+                            esc = False
                         elif ch == '\\':
-                            buf.append(ch); esc = True
+                            buf.append(ch)
+                            esc = True
                         elif ch == '"':
-                            in_str = not in_str; buf.append(ch)
+                            in_str = not in_str
+                            buf.append(ch)
                         elif in_str and ch == '\n':
                             buf.append('\\n')
                         elif in_str and ch == '\r':

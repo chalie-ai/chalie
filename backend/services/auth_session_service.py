@@ -24,7 +24,7 @@ def _persist_session_to_sqlite(token: str):
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
-        expires_at = utc_now().isoformat()
+        utc_now().isoformat()
         db.execute(
             """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
                VALUES (?, ?, datetime('now', '+30 days'))""",

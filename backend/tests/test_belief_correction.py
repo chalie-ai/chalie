@@ -1,7 +1,7 @@
 """Tests for conversational belief correction — digest_worker hook using KnowledgeService."""
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 pytestmark = pytest.mark.unit
 

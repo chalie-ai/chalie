@@ -5,7 +5,6 @@ All endpoints require auth.  Tests patch ``validate_session`` to simulate
 a cookie-authenticated chat-UI caller (wrapper_id = '__chat_ui__').
 """
 
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask

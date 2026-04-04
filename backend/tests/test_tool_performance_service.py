@@ -1,6 +1,5 @@
 """Unit tests for ToolPerformanceService."""
 import pytest
-from unittest.mock import MagicMock, patch
 
 from services.tool_performance_service import ToolPerformanceService
 from services.database_service import get_shared_db_service

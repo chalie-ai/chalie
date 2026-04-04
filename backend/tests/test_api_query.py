@@ -18,7 +18,7 @@ Fixtures:
 import json
 import pytest
 from contextlib import ExitStack
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from flask import Flask
 
 from api.query import query_bp

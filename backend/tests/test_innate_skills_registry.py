@@ -17,7 +17,7 @@ from services.innate_skills.registry import (
 
 # Canonical skills + backward-compat aliases — action category sets may include aliases
 ALL_SKILL_NAMES_WITH_ALIASES = ALL_SKILL_NAMES | frozenset(SKILL_ALIASES.keys())
-from services.act_action_categories import (
+from services.act_action_categories import (  # noqa: E402
     READ_ACTIONS,
     DETERMINISTIC_ACTIONS,
     SAFE_ACTIONS,

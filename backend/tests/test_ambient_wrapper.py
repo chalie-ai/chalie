@@ -7,12 +7,8 @@ isolated MemoryStore so they carry no external dependencies.
 """
 
 import json
-import sqlite3
 import threading
-import time
-import unittest
-from io import BytesIO
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 

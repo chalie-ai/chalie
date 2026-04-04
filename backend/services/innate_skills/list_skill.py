@@ -1,9 +1,10 @@
 """
 List Skill — Manage deterministic lists via the ACT loop.
 
-Actions: create, add, remove, check, uncheck, view, list_all, clear, delete, rename, history
+Actions: add, check, remove, view, list_all, clear, rename, history
 """
 
+import json
 import logging
 from typing import Optional
 
@@ -15,9 +16,9 @@ TOOL_SCHEMA = {
         "Deterministic list management — create and manage structured lists "
         "(shopping, to-do, chores, etc.) with perfect recall and history tracking. "
         "Always prefer this over memorize for list-like data. "
-        "'add' auto-creates the list if it does not exist. "
+        "'add' auto-creates the list if it does not exist — pass items=[] to create empty. "
         "If no lists exist and user says 'add milk', auto-create 'Shopping List' as default. "
-        "When name is omitted for add/remove/check/uncheck, resolves to the most recently used list. "
+        "When name is omitted for add/remove/check/view, resolves to the most recently used list. "
         "This manages shopping/to-do lists, NOT scheduler reminders — use schedule.cancel for reminders."
     ),
     "input_schema": {
@@ -26,23 +27,24 @@ TOOL_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": [
-                    "create", "add", "remove", "check", "uncheck",
-                    "view", "list_all", "clear", "delete", "rename", "history",
+                    "add", "remove", "check",
+                    "view", "list_all", "clear", "rename", "history",
                 ],
                 "description": "The list action to perform.",
             },
             "name": {
                 "type": "string",
                 "description": (
-                    "List name (e.g. 'Shopping List', 'To Do'). Required for create, clear, "
-                    "delete, rename. Optional for add/remove/check/uncheck/view/history — "
-                    "resolves to most recently used list when omitted."
+                    "List name (e.g. 'Shopping List', 'To Do'). Required for clear, rename. "
+                    "Optional for add/remove/check/view/history — resolves to most recently used list when omitted."
                 ),
             },
             "items": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Required for add/remove/check/uncheck: list of item strings (e.g. ['milk', 'eggs']).",
+                "description": (
+                    "For add: array of item strings e.g. ['milk', 'eggs']. Pass [] to create an empty list. "
+                    "For remove: array of item strings to remove. Omit or pass [] to delete the entire list. "
+                    "For check: array of objects e.g. [{\"content\": \"milk\", \"checked\": true}, ...] to set checked state per item."
+                ),
             },
             "new_name": {
                 "type": "string",
@@ -65,15 +67,12 @@ def handle_list(topic: str, params: dict) -> str:
     Manage user lists.
 
     Actions:
-    - create:   Create a new named list
-    - add:      Add items to a list (auto-creates if needed)
-    - remove:   Remove items from a list
-    - check:    Check off items
-    - uncheck:  Uncheck items
+    - add:      Add items to a list (auto-creates if needed; items=[] creates empty list)
+    - remove:   Remove items from a list; omit items to delete the entire list
+    - check:    Set checked state per item [{content, checked}]
     - view:     Show full list contents
     - list_all: Show all active lists summary
     - clear:    Remove all items from a list
-    - delete:   Soft-delete an entire list
     - rename:   Rename a list
     - history:  Show change log
 
@@ -82,7 +81,7 @@ def handle_list(topic: str, params: dict) -> str:
         params: Action parameters dict
 
     Returns:
-        Formatted result string
+        JSON string for add/remove/check/view; formatted string for others
     """
     action = params.get('action', 'list_all')
 
@@ -96,36 +95,59 @@ def handle_list(topic: str, params: dict) -> str:
 
     except Exception as e:
         logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
-        return f"[LIST] Error: {e}"
+        return _fail(str(e))
 
 
 def _dispatch(service, action: str, params: dict, topic: str) -> str:
-    if action == 'create':
-        return _handle_create(service, params, topic)
-    elif action == 'add':
+    if action == 'add':
         return _handle_add(service, params, topic)
     elif action == 'remove':
         return _handle_remove(service, params, topic)
     elif action == 'check':
         return _handle_check(service, params, topic)
-    elif action == 'uncheck':
-        return _handle_uncheck(service, params, topic)
     elif action == 'view':
         return _handle_view(service, params, topic)
     elif action in ('list_all', 'list'):
         return _handle_list_all(service, topic)
     elif action == 'clear':
         return _handle_clear(service, params, topic)
-    elif action == 'delete':
-        return _handle_delete(service, params, topic)
     elif action == 'rename':
         return _handle_rename(service, params, topic)
     elif action == 'history':
         return _handle_history(service, params)
     else:
-        valid = 'create, add, remove, check, uncheck, view, list_all, clear, delete, rename, history'
-        return f"[LIST] Unknown action '{action}'. Use: {valid}"
+        valid = 'add, remove, check, view, list_all, clear, rename, history'
+        return _fail(f"Unknown action '{action}'. Use: {valid}")
 
+
+# ─────────────────────────────────────────────
+# JSON helpers
+# ─────────────────────────────────────────────
+
+def _success(list_data: Optional[dict]) -> str:
+    return json.dumps({"status": "success", "list": list_data})
+
+
+def _fail(message: str) -> str:
+    return json.dumps({"status": "fail", "message": message})
+
+
+def _list_json(service, name: str) -> Optional[dict]:
+    lst = service.get_list(name)
+    if not lst:
+        return None
+    return {
+        "name": lst["name"],
+        "items": [
+            {"content": item["content"], "checked": bool(item["checked"])}
+            for item in lst.get("items", [])
+        ],
+    }
+
+
+# ─────────────────────────────────────────────
+# Name resolution
+# ─────────────────────────────────────────────
 
 def _resolve_name(service, params: dict) -> Optional[str]:
     """
@@ -144,7 +166,6 @@ def _resolve_name(service, params: dict) -> Optional[str]:
     if len(lists) == 1:
         return lists[0]['name']
 
-    # Use most recently updated
     most_recent = service.get_most_recent_list()
     if most_recent:
         return most_recent['name']
@@ -152,35 +173,22 @@ def _resolve_name(service, params: dict) -> Optional[str]:
     return None
 
 
-def _handle_create(service, params: dict, topic: str) -> str:
-    name = params.get('name', '').strip()
-    if not name:
-        return "[LIST] 'name' is required to create a list."
-
-    try:
-        list_id = service.create_list(name)
-        return f"[LIST] Created list '{name}' (id={list_id})."
-    except ValueError as e:
-        return f"[LIST] {e}"
-
-
 def _normalize_items(params: dict) -> list:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
-    return [i for i in items if i and i.strip()]
+    return [i for i in items if isinstance(i, str) and i.strip()]
 
+
+# ─────────────────────────────────────────────
+# Handlers
+# ─────────────────────────────────────────────
 
 def _handle_add(service, params: dict, topic: str) -> str:
     items = _normalize_items(params)
 
-    if not items:
-        return "[LIST] 'items' is required to add to a list."
-
     name = params.get('name', '').strip()
-
     if not name:
-        # Auto-resolve or create default
         lists = service.get_all_lists()
         if not lists:
             name = _DEFAULT_LIST_NAME
@@ -190,84 +198,89 @@ def _handle_add(service, params: dict, topic: str) -> str:
             most_recent = service.get_most_recent_list()
             name = most_recent['name'] if most_recent else _DEFAULT_LIST_NAME
 
+    if not items:
+        # Create empty list
+        try:
+            service.create_list(name)
+        except ValueError:
+            pass  # Already exists — that's fine
+        return _success(_list_json(service, name))
+
     added = service.add_items(name, items, auto_create=True)
 
-    if added == 0:
-        return f"[LIST] All items already on '{name}' (deduped)."
-    skipped = len(items) - added
-    msg = f"[LIST] Added {added} item(s) to '{name}'."
-    if skipped > 0:
-        msg += f" {skipped} skipped (already present)."
-    return msg
+    if added == 0 and not service.get_list(name):
+        return _fail(f"Failed to add items to '{name}'.")
+
+    return _success(_list_json(service, name))
 
 
 def _handle_remove(service, params: dict, topic: str) -> str:
     items = _normalize_items(params)
 
-    if not items:
-        return "[LIST] 'items' is required to remove from a list."
-
     name = _resolve_name(service, params)
     if not name:
-        return "[LIST] Multiple lists exist. Specify 'name'."
+        return _fail("Multiple lists exist. Specify 'name'.")
 
-    removed = service.remove_items(name, items)
-    return f"[LIST] Removed {removed} item(s) from '{name}'."
+    if not items:
+        # Delete entire list
+        success = service.delete_list(name)
+        if not success:
+            return _fail(f"List '{name}' not found.")
+        return _success(None)
+
+    service.remove_items(name, items)
+    lst_data = _list_json(service, name)
+    if lst_data is None:
+        return _fail(f"List '{name}' not found.")
+
+    return _success(lst_data)
 
 
 def _handle_check(service, params: dict, topic: str) -> str:
-    items = _normalize_items(params)
-
-    if not items:
-        return "[LIST] 'items' is required to check off."
-
-    name = _resolve_name(service, params)
-    if not name:
-        return "[LIST] Multiple lists exist. Specify 'name'."
-
-    count = service.check_items(name, items)
-    return f"[LIST] Checked {count} item(s) on '{name}'."
-
-
-def _handle_uncheck(service, params: dict, topic: str) -> str:
-    items = _normalize_items(params)
-
-    if not items:
-        return "[LIST] 'items' is required to uncheck."
+    raw_items = params.get('items', [])
+    if not isinstance(raw_items, list):
+        return _fail("'items' must be an array of {content, checked} objects.")
 
     name = _resolve_name(service, params)
     if not name:
-        return "[LIST] Multiple lists exist. Specify 'name'."
+        return _fail("Multiple lists exist. Specify 'name'.")
 
-    count = service.uncheck_items(name, items)
-    return f"[LIST] Unchecked {count} item(s) on '{name}'."
+    to_check = []
+    to_uncheck = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            content = item.get('content', '').strip()
+            checked = item.get('checked', True)
+            if content:
+                (to_check if checked else to_uncheck).append(content)
+        elif isinstance(item, str) and item.strip():
+            to_check.append(item.strip())
+
+    if not to_check and not to_uncheck:
+        return _fail("No valid items provided. Each item must have 'content' and 'checked'.")
+
+    if to_check:
+        service.check_items(name, to_check)
+    if to_uncheck:
+        service.uncheck_items(name, to_uncheck)
+
+    lst_data = _list_json(service, name)
+    if lst_data is None:
+        return _fail(f"List '{name}' not found.")
+
+    return _success(lst_data)
 
 
 def _handle_view(service, params: dict, topic: str) -> str:
-    name = params.get('name', '').strip()
+    name = _resolve_name(service, params)
     if not name:
-        name = _resolve_name(service, params)
-    if not name:
-        return "[LIST] Multiple lists exist. Specify 'name'."
+        return _fail("Multiple lists exist. Specify 'name'.")
 
-    lst = service.get_list(name)
-    if not lst:
-        return f"[LIST] List '{name}' not found."
+    lst_data = _list_json(service, name)
+    if lst_data is None:
+        return _fail(f"List '{name}' not found.")
 
-    items = lst.get('items', [])
-    total = len(items)
-    checked = sum(1 for i in items if i['checked'])
-
-    if not items:
-        return f"[LIST] '{lst['name']}' is empty."
-
-    lines = [f"[LIST] {lst['name']}:"]
-    for item in items:
-        status = "✓" if item['checked'] else "·"
-        lines.append(f"  {status} {item['content']}")
-
-    lines.append(f"  ({checked}/{total} checked)")
-    return "\n".join(lines)
+    return _success(lst_data)
 
 
 def _handle_list_all(service, topic: str) -> str:
@@ -293,17 +306,6 @@ def _handle_clear(service, params: dict, topic: str) -> str:
     if count == -1:
         return f"[LIST] List '{name}' not found."
     return f"[LIST] Cleared {count} item(s) from '{name}'."
-
-
-def _handle_delete(service, params: dict, topic: str) -> str:
-    name = params.get('name', '').strip()
-    if not name:
-        return "[LIST] 'name' is required to delete a list."
-
-    success = service.delete_list(name)
-    if success:
-        return f"[LIST] Deleted list '{name}'."
-    return f"[LIST] List '{name}' not found."
 
 
 def _handle_rename(service, params: dict, topic: str) -> str:

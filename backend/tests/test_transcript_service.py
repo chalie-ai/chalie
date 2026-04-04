@@ -8,8 +8,7 @@ Tests cover:
 - prune_old()
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestAppend:
@@ -124,8 +123,8 @@ class TestGetRecent:
 
         with patch('services.transcript_service._embed_entry'):
             id1 = append('test', 'user', 'First')
-            id2 = append('test', 'assistant', 'Second')
-            id3 = append('test', 'user', 'Third')
+            append('test', 'assistant', 'Second')
+            append('test', 'user', 'Third')
 
         results = get_recent('test', since_id=id1)
         assert len(results) == 2

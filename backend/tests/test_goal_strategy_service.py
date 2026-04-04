@@ -2,7 +2,7 @@
 
 import pytest
 import threading
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +191,13 @@ class TestGenerateStrategy:
             'type': 'stated',
         }
 
-        llm_response = _make_llm_response(
+        _make_llm_response(
             "Search for beginner Rust tutorials and bookmark the top three."
         )
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value="- [explicit] Learn Rust"), \
              patch('services.goal_strategy_service._get_user_context', return_value="Values: engineering growth"), \
-             patch('services.goal_strategy_service._call_strategy_llm', return_value="Search for beginner Rust tutorials and bookmark the top three.") as mock_llm, \
+             patch('services.goal_strategy_service._call_strategy_llm', return_value="Search for beginner Rust tutorials and bookmark the top three."), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 
             from services.goal_strategy_service import generate_strategy
@@ -457,7 +457,7 @@ class TestRejectedStrategyHistory:
             MockProxy.return_value.send_message.return_value = mock_response
 
             rejected = "Previous approaches rejected:\n1. \"Research directly\" (rejected 2 times)"
-            result = _call_strategy_llm("Learn Rust", "stated", "evidence", "context", rejected)
+            _call_strategy_llm("Learn Rust", "stated", "evidence", "context", rejected)
 
         call_args = MockProxy.return_value.send_message.call_args
         assert 'Research directly' in call_args[0][1]  # user_message includes rejected history

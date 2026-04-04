@@ -26,6 +26,7 @@ and other services in this codebase.
 """
 
 import logging
+import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -248,8 +249,6 @@ class AutonomousExecutionGate:
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
-
-import threading
 
 _instance: Optional[AutonomousExecutionGate] = None
 _instance_lock = threading.Lock()

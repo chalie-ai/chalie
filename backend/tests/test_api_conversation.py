@@ -7,7 +7,6 @@ Note: The /chat endpoint was replaced by the WebSocket handler in
 api/websocket.py (Phase 4). WebSocket tests live separately.
 """
 
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask

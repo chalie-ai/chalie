@@ -6,7 +6,7 @@ failure tracking, and budget constraints.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.context_assembly_service import ContextAssemblyService
 from services.topic_context import TopicContext
@@ -243,7 +243,7 @@ class TestTopicContextIdentifier:
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
-            result = svc.assemble(prompt='hi', topic='general', context=ctx)
+            svc.assemble(prompt='hi', topic='general', context=ctx)
 
         # Should find data under the thread's topic
         # (working_memory uses effective_topic = topic or identifier)

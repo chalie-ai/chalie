@@ -19,7 +19,6 @@ Tests cover:
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 
 from services.app_update_service import AppUpdateService, CACHE_KEY, IN_PROGRESS_KEY
 from services.memory_store import MemoryStore

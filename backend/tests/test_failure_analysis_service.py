@@ -9,10 +9,7 @@ Pytest markers: @pytest.mark.unit (all tests).
 """
 
 import json
-import os
 import sqlite3
-import uuid
-from typing import List
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -21,7 +18,6 @@ import pytest
 from services.database_service import DatabaseService
 from services.failure_analysis_service import (
     CONFIDENCE_THRESHOLD,
-    DEDUP_SIMILARITY_THRESHOLD,
     MAX_LESSONS_PER_ACTION,
     FailureAnalysisService,
 )
@@ -519,7 +515,7 @@ class TestStoreLesson:
         cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         lessons = cs["__failure_lessons"]
         assert len(lessons) == 2, "Dissimilar lessons should be stored as separate entries"
-        blames = {l["blame"] for l in lessons}
+        blames = {lesson["blame"] for lesson in lessons}
         assert "tool_choice" in blames
         assert "external" in blames
 
@@ -586,7 +582,7 @@ class TestStoreLesson:
         assert len(lessons) == MAX_LESSONS_PER_ACTION, "Cap must be enforced after eviction"
 
         # The lesson with times_seen=1 (Lesson text number 0) must be gone.
-        lesson_texts = [l["lesson"] for l in lessons]
+        lesson_texts = [lesson["lesson"] for lesson in lessons]
         assert "Lesson text number 0 to fill the store." not in lesson_texts
         assert new_lesson_text in lesson_texts
 

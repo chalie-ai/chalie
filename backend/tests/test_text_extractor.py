@@ -3,7 +3,7 @@ Tests for services/text_extractor.py — shared extraction library.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, patch
 
 
 # ─── detect_mime_type ─────────────────────────────────────────────────────────
@@ -181,19 +181,19 @@ class TestExtractText:
     def test_auto_detects_mime_from_extension(self):
         with patch('services.text_extractor._extract_pdf', return_value='pdf content') as mock_pdf:
             from services.text_extractor import extract_text
-            result = extract_text('/tmp/document.pdf')
+            extract_text('/tmp/document.pdf')
         mock_pdf.assert_called_once()
 
     def test_unknown_mime_falls_back_to_plain(self):
         with patch('services.text_extractor._extract_plain', return_value='plain text') as mock_plain:
             from services.text_extractor import extract_text
-            result = extract_text('/tmp/file.xyz', 'application/unknown-binary')
+            extract_text('/tmp/file.xyz', 'application/unknown-binary')
         mock_plain.assert_called_once()
 
     def test_text_subtype_falls_back_to_plain(self):
         with patch('services.text_extractor._extract_plain', return_value='csv content') as mock_plain:
             from services.text_extractor import extract_text
-            result = extract_text('/tmp/data.csv', 'text/csv')
+            extract_text('/tmp/data.csv', 'text/csv')
         mock_plain.assert_called_once()
 
 

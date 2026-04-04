@@ -279,9 +279,9 @@ def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
                     seen.add(url)
                     snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
                     try:
-                        domain = urlparse(url).netloc.lstrip("www.")
+                        urlparse(url).netloc.lstrip("www.")
                     except Exception:
-                        domain = ""
+                        pass
                     results.append({
                         'title': (r.get('title') or '').strip(),
                         'snippet': snippet,

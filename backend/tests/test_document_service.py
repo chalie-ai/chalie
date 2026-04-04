@@ -5,8 +5,6 @@ Migrated from mock_db to real SQLite via the shared `db` fixture.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
 
 from services.document_service import DocumentService
 from services.database_service import get_shared_db_service

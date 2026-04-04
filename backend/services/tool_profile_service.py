@@ -22,11 +22,12 @@ import re
 from collections import defaultdict
 from typing import Optional
 
+from services.embedding_utils import pack_embedding as _pack_embedding
+from services.innate_skills.registry import ALL_SKILL_NAMES
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TOOL PROFILE]"
-
-from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # MemoryStore cache key and TTL
 TRIAGE_SUMMARIES_CACHE_KEY = "tool_triage_summaries"
@@ -40,9 +41,6 @@ def _compute_manifest_hash(manifest: dict) -> str:
     """MD5 hash of manifest for staleness detection."""
     content = json.dumps(manifest, sort_keys=True)
     return hashlib.md5(content.encode()).hexdigest()
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:

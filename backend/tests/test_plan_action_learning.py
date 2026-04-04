@@ -7,7 +7,7 @@ integration with backoff, time-based decay, and procedural memory recording.
 
 import time
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from services.autonomous_actions.plan_action import (
     PlanAction,
@@ -17,7 +17,6 @@ from services.autonomous_actions.plan_action import (
     COOLDOWN_TTL,
     BACKOFF_MAX,
     BACKOFF_MIN,
-    BACKOFF_DECAY_DAYS,
     BACKOFF_INCREASE_FACTOR,
     BACKOFF_DECREASE_FACTOR,
 )

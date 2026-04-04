@@ -1,7 +1,6 @@
 """Tests for news_service — fetch, cache, rank, cluster, dedup."""
 
-import json
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest

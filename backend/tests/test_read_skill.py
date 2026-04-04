@@ -289,26 +289,26 @@ class TestLinkExtraction:
         html = '<a href="https://facebook.com/post">FB</a><a href="/real">Real</a>'
         from services.innate_skills.read_skill import _extract_links
         links = _extract_links(html, 'https://example.com')
-        assert all('facebook' not in l['url'] for l in links)
+        assert all('facebook' not in link['url'] for link in links)
 
     def test_skips_navigation_paths(self):
         html = '<a href="/login">Login</a><a href="/signup">Sign up</a><a href="/article">Article</a>'
         from services.innate_skills.read_skill import _extract_links
         links = _extract_links(html, 'https://example.com')
-        assert all('/login' not in l['url'] for l in links)
-        assert all('/signup' not in l['url'] for l in links)
+        assert all('/login' not in link['url'] for link in links)
+        assert all('/signup' not in link['url'] for link in links)
 
     def test_skips_fragment_only_anchors(self):
         html = '<a href="#section">Jump</a><a href="/page">Page</a>'
         from services.innate_skills.read_skill import _extract_links
         links = _extract_links(html, 'https://example.com')
-        assert all('#' not in l['url'].split('/')[-1] for l in links)
+        assert all('#' not in link['url'].split('/')[-1] for link in links)
 
     def test_deduplicates_links(self):
         html = '<a href="/page">One</a><a href="/page">Two</a>'
         from services.innate_skills.read_skill import _extract_links
         links = _extract_links(html, 'https://example.com')
-        urls = [l['url'] for l in links]
+        urls = [link['url'] for link in links]
         assert len(urls) == len(set(urls))
 
     def test_max_15_links(self):

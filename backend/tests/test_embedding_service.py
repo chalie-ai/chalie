@@ -6,7 +6,6 @@ regressions in the ONNX pipeline end-to-end: load, tokenize, infer, normalize.
 """
 
 import numpy as np
-import pytest
 
 from services.embedding_service import (
     EmbeddingService,

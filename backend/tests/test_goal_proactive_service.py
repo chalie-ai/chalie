@@ -445,7 +445,7 @@ class TestProactiveExecution:
         mock_task_service.transition.return_value = (True, 'ok')
 
         with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
-            result = _execute_via_persistent_task(goal)
+            _execute_via_persistent_task(goal)
 
         # Verify the task goal includes both description and strategy
         call_kwargs = mock_task_service.create_task.call_args

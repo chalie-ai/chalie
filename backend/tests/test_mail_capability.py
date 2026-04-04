@@ -17,7 +17,7 @@ All tests use @pytest.mark.unit and never touch a real network or database.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -152,7 +152,6 @@ class TestMailCapabilityConfigure:
     """configure() validation and happy paths."""
 
     def test_configure_missing_email_raises(self):
-        from capabilities.mail_capability.capability import MailCapability
         cap, vault, tcs = _make_capability()
         with pytest.raises(ValueError, match="email"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:

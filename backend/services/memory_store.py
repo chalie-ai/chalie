@@ -21,10 +21,6 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple
 
-try:
-    from sortedcontainers import SortedList
-except ImportError:
-    SortedList = None  # Graceful fallback — sorted set ops will raise
 
 logger = logging.getLogger(__name__)
 
@@ -982,7 +978,7 @@ class MemoryStore:
 
     # ── PIPELINE ───────────────────────────────────────────────
 
-    def pipeline(self, transaction: bool = True) -> 'PipelineProxy':
+    def pipeline(self, _transaction: bool = True) -> 'PipelineProxy':
         """Return a ``PipelineProxy`` that queues commands for batched execution.
 
         Args:

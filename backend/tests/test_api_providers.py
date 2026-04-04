@@ -13,7 +13,7 @@ Covers all endpoints in the providers blueprint:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from flask import Flask
 from api.providers import providers_bp
 
@@ -134,7 +134,8 @@ class TestProvidersAPI:
         assert response.status_code == 201
 
         # Job list now comes from configs/cognitive_jobs.json
-        import json, os
+        import json
+        import os
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
         with open(config_path, 'r') as f:
             expected_jobs = sorted(j['id'] for j in json.load(f)['jobs'])

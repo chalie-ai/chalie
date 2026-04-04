@@ -1,9 +1,8 @@
 """Tests for privacy API endpoints — data-summary, export, delete-all."""
 
-import json
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 pytestmark = pytest.mark.unit
 
@@ -15,7 +14,7 @@ def _make_app():
     from flask import Flask
     from api.privacy import privacy_bp
     app = Flask(__name__)
-    app.register_blueprint(app_bp := privacy_bp, url_prefix='/api')
+    app.register_blueprint(privacy_bp, url_prefix='/api')
     return app
 
 
@@ -70,12 +69,11 @@ class TestDeleteAll:
         app = Flask(__name__)
         app.register_blueprint(__import__('api.privacy', fromlist=['privacy_bp']).privacy_bp)
 
-        with app.test_client() as client:
+        with app.test_client():
             with patch('api.auth.require_session', lambda f: f):
                 # Direct function test — missing header
                 from api.privacy import delete_all
                 with app.test_request_context('/api/privacy/delete-all', method='DELETE'):
-                    from flask import request as flask_request
                     # Simulate missing header
                     resp, code = delete_all.__wrapped__() if hasattr(delete_all, '__wrapped__') else (None, None)
 

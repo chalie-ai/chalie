@@ -10,7 +10,7 @@ import json
 import struct
 import zlib
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from services.memory_store import MemoryStore
 

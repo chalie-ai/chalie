@@ -9,8 +9,7 @@ No real SQLite, no real embeddings, no real LLM calls.
 """
 
 import json
-import threading
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import patch
 
 import pytest
 
@@ -21,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 # ─── Service factory ──────────────────────────────────────────────────────────
 
-def _make_service(store: MemoryStore = None) -> "sms_mod.SituationModelService":
+def _make_service(store: MemoryStore = None):
     """Return a fresh SituationModelService instance wired to a real MemoryStore.
 
     Reloads the service module each call so module-level singleton state does

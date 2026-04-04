@@ -265,7 +265,8 @@ class PromptAssemblyService:
         confidence = classification.get('confidence', 0)
 
         # Helper to check if a node should be included
-        _include = lambda node: (inclusion_map or {}).get(node, True)
+        def _include(node):
+            return (inclusion_map or {}).get(node, True)
 
         _ctx = assembled_context or {}
         episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
@@ -422,7 +423,7 @@ class PromptAssemblyService:
         if _include('user_traits'):
             user_traits = self._get_user_traits(
                 original_prompt, topic,
-                injection_threshold_override=0.2 if returning_from_silence else None,
+                _injection_threshold_override=0.2 if returning_from_silence else None,
             )
         else:
             user_traits = ''
@@ -481,7 +482,7 @@ class PromptAssemblyService:
         self,
         prompt: str,
         topic: str,
-        injection_threshold_override: Optional[float] = None,
+        _injection_threshold_override: Optional[float] = None,
     ) -> str:
         """Get the pre-synthesized user sentence for prompt injection.
 

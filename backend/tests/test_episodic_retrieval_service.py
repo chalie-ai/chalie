@@ -1,9 +1,8 @@
 """Tests for EpisodicService — episode retrieval and scoring."""
 
-import math
 import pytest
 from datetime import timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.episodic_service import EpisodicService
 from services.database_service import get_shared_db_service

@@ -629,8 +629,10 @@ class ReasoningLoopService:
                         data = concept.get('data') or {}
                         if isinstance(data, str):
                             import json as _json
-                            try: data = _json.loads(data)
-                            except Exception: data = {}
+                            try:
+                                data = _json.loads(data)
+                            except Exception:
+                                data = {}
                         return {
                             'concept_id': cid,
                             'concept_name': concept.get('key', ''),

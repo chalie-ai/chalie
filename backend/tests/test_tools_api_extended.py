@@ -1,6 +1,5 @@
 """Extended tests for api/tools.py — framework-level (tool-agnostic) endpoint tests."""
 
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask

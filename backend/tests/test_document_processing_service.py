@@ -3,7 +3,7 @@ Tests for DocumentProcessingService — text extraction, chunking, metadata extr
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from services.document_processing_service import DocumentProcessingService
 
@@ -206,7 +206,7 @@ class TestAdaptiveBatching:
         mock_embedding.generate_embeddings_batch.return_value = [[0.1] * 768] * 16
         texts = ["text"] * 100
 
-        result = service._generate_chunk_embeddings(mock_embedding, texts)
+        service._generate_chunk_embeddings(mock_embedding, texts)
         # Should split into batches of 16 (50-200 range)
         assert mock_embedding.generate_embeddings_batch.call_count > 1
 

@@ -8,7 +8,6 @@ is managed by runtime_config module, not ConfigService.
 
 import json
 import pytest
-from pathlib import Path
 from unittest.mock import patch
 
 from services.config_service import ConfigService

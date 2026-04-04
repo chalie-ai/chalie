@@ -17,7 +17,6 @@ Covers:
 - Stickiness: single signal does not flip phase (except closing keywords)
 """
 
-import json
 import threading
 from datetime import timedelta
 from unittest.mock import patch
@@ -25,7 +24,7 @@ from unittest.mock import patch
 import pytest
 
 from services.memory_store import MemoryStore
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now
 
 pytestmark = pytest.mark.unit
 
@@ -453,7 +452,6 @@ class TestMomentum:
 
     def test_momentum_ema_smoothing(self):
         """EMA with alpha=0.3 smooths changes; verify new value is between old and instant."""
-        from services.conversation_phase_service import _MOMENTUM_EMA_ALPHA
         store = _make_store()
         svc = _make_service(store)
         thread_id = "t-mom-ema"
@@ -705,7 +703,6 @@ class TestSingleton:
         """Multiple threads obtaining the singleton should all get the same object."""
         from services.conversation_phase_service import (
             get_conversation_phase_service,
-            _instance_lock,
         )
         import services.conversation_phase_service as _mod
 

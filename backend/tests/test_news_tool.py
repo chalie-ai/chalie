@@ -166,7 +166,7 @@ class TestFormatting:
     def test_format_articles_truncates_description(self):
         articles = [_make_article(description="x" * 200)]
         text = _format_articles(articles)
-        assert len([l for l in text.split("\n") if l.startswith("  x")]) == 1
+        assert len([line for line in text.split("\n") if line.startswith("  x")]) == 1
 
     def test_format_clusters(self):
         clusters = [{

@@ -105,7 +105,6 @@ def _get_user_tz():
     Delegates to the centralised ``get_user_tz()`` in time_utils.
     Returns None when the result is plain UTC (no user timezone detected).
     """
-    from zoneinfo import ZoneInfo
     tz = get_user_tz()
     if tz.key == "UTC":
         return None

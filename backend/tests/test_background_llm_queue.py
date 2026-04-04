@@ -7,7 +7,7 @@ Uses MemoryStore (production implementation) — no external dependencies.
 import json
 import time
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.background_llm_queue import (
     BackgroundLLMProxy,

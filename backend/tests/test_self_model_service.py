@@ -114,7 +114,6 @@ class TestGetSnapshot:
 
     def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
-        import json
 
         # Seed episodes (42 total, all with activation_score = 0.65)
         for i in range(42):
@@ -341,7 +340,7 @@ class TestMemoryRichness:
 
         svc = _make_service()
         # Cold snapshot
-        snap_cold = svc._refresh()
+        svc._refresh()
         richness_cold = svc.get_memory_richness()
 
         # Add working memory to raise context_warmth — seed under "general"

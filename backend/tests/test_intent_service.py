@@ -4,7 +4,6 @@ Tests for IntentService — emit, get_pending, acknowledge, resolve, expire_stal
 
 import json
 import pytest
-from unittest.mock import MagicMock, patch
 
 from services.intent_service import CognitiveIntent, IntentService, _BROADCAST_KEY
 

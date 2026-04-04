@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+from services.embedding_utils import pack_embedding as _pack_embedding
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,6 @@ PURGE_WINDOW_DAYS = 30
 # Document storage root — env var overrides for Docker; local default mirrors backend/data/
 _DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class DocumentService:

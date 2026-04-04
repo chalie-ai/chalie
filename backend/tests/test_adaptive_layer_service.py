@@ -25,7 +25,6 @@ Coverage:
   - generate_directives integration (happy path, empty-state path)
 """
 
-import json
 import sys
 import pytest
 from unittest.mock import MagicMock, patch
@@ -38,11 +37,10 @@ _mock_sms_module = MagicMock()
 _mock_sms_module.StyleMetricsService.return_value.measure.return_value = {}
 sys.modules.setdefault('services.style_metrics_service', _mock_sms_module)
 
-from services.adaptive_layer_service import (
+from services.adaptive_layer_service import (  # noqa: E402
     AdaptiveLayerService,
     DIRECTIVE_RULES,
     CHALLENGE_STYLE_TIERS,
-    LOAD_DIRECTIVES,
     PREF_LABELS,
     _MIN_OBSERVATION_COUNT,
 )

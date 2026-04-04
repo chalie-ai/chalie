@@ -36,6 +36,7 @@ Integration points (Stage 6a):
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -436,8 +437,6 @@ class ConsequenceClassifierService:
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
-
-import threading
 
 _instance: Optional[ConsequenceClassifierService] = None
 _instance_lock = threading.Lock()

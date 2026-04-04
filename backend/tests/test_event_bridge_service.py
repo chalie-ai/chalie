@@ -1,16 +1,14 @@
 """Tests for EventBridgeService — event pipeline with gating, cooldowns, and aggregation."""
 
 import time
-import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.event_bridge_service import (
     BridgeEvent,
     EventBridgeService,
     _STABILIZED_EVENTS,
     _PRIORITY_ORDER,
-    CONFIDENCE_PHRASING,
 )
 
 

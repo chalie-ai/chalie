@@ -9,7 +9,7 @@ from pathlib import Path
 from flask import Flask, send_from_directory
 from flask_cors import CORS
 
-from .auth import require_session
+from .auth import require_session as require_session
 
 
 logger = logging.getLogger(__name__)

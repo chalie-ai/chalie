@@ -1,7 +1,7 @@
 """Tests for DecayEngineService — periodic decay across all memory types."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.decay_engine_service import DecayEngineService
 

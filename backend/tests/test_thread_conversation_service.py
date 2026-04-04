@@ -181,7 +181,7 @@ class TestGetActiveSteps:
 
 class TestGetLatestExchangeId:
     def test_returns_latest_id(self, conv_service):
-        eid1 = conv_service.add_exchange(THREAD_ID, "topic", {"message": "First"})
+        conv_service.add_exchange(THREAD_ID, "topic", {"message": "First"})
         eid2 = conv_service.add_exchange(THREAD_ID, "topic", {"message": "Second"})
 
         assert conv_service.get_latest_exchange_id(THREAD_ID) == eid2
@@ -192,7 +192,7 @@ class TestGetLatestExchangeId:
 
 class TestRemoveExchanges:
     def test_removes_specific_exchanges(self, conv_service):
-        eid1 = conv_service.add_exchange(THREAD_ID, "topic", {"message": "Keep"})
+        conv_service.add_exchange(THREAD_ID, "topic", {"message": "Keep"})
         eid2 = conv_service.add_exchange(THREAD_ID, "topic", {"message": "Remove"})
 
         conv_service.remove_exchanges(THREAD_ID, [eid2])
@@ -273,7 +273,7 @@ class TestSQLitePersistence:
         svc, db, store = conv_service_with_db
 
         # Add exchange with response (written to both MemoryStore and SQLite)
-        eid = svc.add_exchange(THREAD_ID, "topic", {"message": "Hello"})
+        svc.add_exchange(THREAD_ID, "topic", {"message": "Hello"})
         svc.add_response(THREAD_ID, "Hi there!", 0.8)
 
         # Clear MemoryStore (simulates server restart)

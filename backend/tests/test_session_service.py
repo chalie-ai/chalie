@@ -2,7 +2,6 @@
 
 import time
 import pytest
-from unittest.mock import patch
 from services.session_service import SessionService
 
 

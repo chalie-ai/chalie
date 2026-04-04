@@ -1,10 +1,9 @@
 """Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
 
-import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import patch, MagicMock
 
 from flask import Flask
 from api.system import system_bp

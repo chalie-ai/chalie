@@ -7,7 +7,6 @@ Tests cover:
   - sample_memories_for_reconcile DB query
 """
 
-import json
 import struct
 import sqlite3
 import pytest
@@ -121,7 +120,7 @@ class TestReconcileMemoryBatch:
         """Near-identical embeddings should trigger LLM call."""
         called = {}
 
-        def fake_classify(self_inner, text_a, text_b, context_hint, meta_a, meta_b):
+        def fake_classify(_self_inner, text_a, text_b, context_hint, meta_a, meta_b):
             called['invoked'] = True
             return {
                 'classification': 'true_contradiction',
@@ -153,7 +152,7 @@ class TestReconcileMemoryBatch:
 @pytest.mark.unit
 class TestCheckConceptConflict:
     def test_compatible_returns_none(self, monkeypatch):
-        def fake_classify(self_inner, text_a, text_b, context_hint, meta_a, meta_b):
+        def fake_classify(_self_inner, text_a, text_b, context_hint, meta_a, meta_b):
             return {'classification': 'compatible', 'confidence': 0.8,
                     'temporal_signal': False, 'reasoning': 'ok', 'surface_context': None,
                     'recommended_resolution': 'ignore'}
@@ -168,7 +167,7 @@ class TestCheckConceptConflict:
         assert result is None
 
     def test_contradiction_returns_dict(self, monkeypatch):
-        def fake_classify(self_inner, text_a, text_b, context_hint, meta_a, meta_b):
+        def fake_classify(_self_inner, text_a, text_b, context_hint, meta_a, meta_b):
             return {'classification': 'true_contradiction', 'confidence': 0.9,
                     'temporal_signal': False, 'reasoning': 'conflict', 'surface_context': 'discussing python',
                     'recommended_resolution': 'flag_response'}

@@ -4,12 +4,10 @@ Covers store, recall, get, update, forget, strengthen, decay_cycle,
 procedural outcome recording, ranked retrieval, and traits-for-prompt.
 """
 
-import json
-import math
 import sqlite3
 import contextlib
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from services.knowledge_service import KnowledgeService, _validate_trait
 from services.database_service import DatabaseService
@@ -345,7 +343,7 @@ class TestRecall:
                   value='should be accessed later')
 
         # Verify initial state has no last_accessed_at
-        raw_before = _raw_get(db_service, 'user', 'access_test')
+        _raw_get(db_service, 'user', 'access_test')
         # Note: store calls get() which updates last_accessed_at,
         # so it may already be set. The important thing is it gets
         # updated again on recall.
