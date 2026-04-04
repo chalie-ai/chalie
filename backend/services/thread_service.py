@@ -488,7 +488,7 @@ class ThreadService:
                 """, (thread_id, channel_id, platform))
                 cursor.close()
         except Exception as e:
-            logging.debug(f"[THREAD] SQLite persist failed (non-critical): {e}")
+            logging.error(f"[THREAD] SQLite thread persist FAILED for {thread_id}: {e}", exc_info=True)
 
     def _persist_thread_expired(self, thread_id: str, thread_data: dict):
         """Update thread record in SQLite on expiry."""
@@ -513,7 +513,7 @@ class ThreadService:
                 ))
                 cursor.close()
         except Exception as e:
-            logging.debug(f"[THREAD] SQLite expire persist failed (non-critical): {e}")
+            logging.error(f"[THREAD] SQLite expire persist FAILED for {thread_id}: {e}", exc_info=True)
 
 
 # Singleton accessor

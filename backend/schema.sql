@@ -265,6 +265,17 @@ CREATE INDEX IF NOT EXISTS idx_thread_exchanges_created
     ON thread_exchanges(created_at ASC);
 
 -- ────────────────────────────────────────────────────────────────
+-- AUTH SESSIONS — durable session storage (survives restarts)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+
+-- ────────────────────────────────────────────────────────────────
 -- TOOL CONFIGS — per-tool key-value configuration
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_configs (

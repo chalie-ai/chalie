@@ -135,6 +135,13 @@ def main():
     logger.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
 
+    # Clean up expired auth sessions from SQLite
+    try:
+        from services.auth_session_service import cleanup_expired_sessions
+        cleanup_expired_sessions()
+    except Exception:
+        pass
+
     # Encryption key initialisation and capability reconnection are deferred to
     # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
     # requires an interactive password to unseal, so neither step can run at

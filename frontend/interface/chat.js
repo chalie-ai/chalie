@@ -268,8 +268,9 @@ export class Chat {
     } catch (err) {
       if (err.message === 'AUTH') {
         this._onAuthFailureCb?.();
+      } else {
+        console.error('[Chat] Failed to load conversation history:', err);
       }
-      // Otherwise silently fail — conversation history is nice-to-have
     } finally {
       if (loader) loader.style.display = 'none';
       this._historyLoading = false;

@@ -335,3 +335,276 @@ class TestSQLitePersistence:
         finally:
             mod.MAX_SQLITE_EXCHANGES = orig_max
             mod._PURGE_EVERY = orig_every
+
+    def test_durable_history_returns_exchanges_after_restart(self, conv_service_with_db):
+        """get_paginated_history_durable returns exchanges from SQLite when MemoryStore is empty."""
+        svc, db, store = conv_service_with_db
+
+        # Populate 5 exchanges with responses
+        for i in range(5):
+            svc.add_exchange(THREAD_ID, "greetings", {"message": f"Hello {i}"})
+            svc.add_response(THREAD_ID, f"Hi {i}!", 0.5)
+
+        # Clear MemoryStore (simulates server restart)
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+
+        # get_paginated_history_durable reads directly from SQLite
+        page = svc.get_paginated_history_durable(THREAD_ID, limit=12, offset=0)
+        assert page["total"] == 5
+        assert len(page["exchanges"]) == 5
+        assert page["has_more"] is False
+        # Verify chronological order (oldest first)
+        assert page["exchanges"][0]["prompt"]["message"] == "Hello 0"
+        assert page["exchanges"][4]["prompt"]["message"] == "Hello 4"
+        # Verify responses are present
+        assert page["exchanges"][0]["response"]["message"] == "Hi 0!"
+
+    def test_durable_history_pagination(self, conv_service_with_db):
+        """get_paginated_history_durable paginates correctly from the end."""
+        svc, db, store = conv_service_with_db
+
+        for i in range(10):
+            svc.add_exchange(THREAD_ID, "topic", {"message": f"Msg {i}"})
+            svc.add_response(THREAD_ID, f"Reply {i}", 0.3)
+
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+
+        # Page 1: most recent 3
+        p1 = svc.get_paginated_history_durable(THREAD_ID, limit=3, offset=0)
+        assert p1["total"] == 10
+        assert len(p1["exchanges"]) == 3
+        assert p1["has_more"] is True
+        # With ORDER BY rowid DESC OFFSET 0 LIMIT 3, we get the 3 most recent
+        assert p1["exchanges"][0]["prompt"]["message"] == "Msg 7"
+        assert p1["exchanges"][2]["prompt"]["message"] == "Msg 9"
+
+        # Page 2: next 3
+        p2 = svc.get_paginated_history_durable(THREAD_ID, limit=3, offset=3)
+        assert len(p2["exchanges"]) == 3
+        assert p2["has_more"] is True
+        assert p2["exchanges"][0]["prompt"]["message"] == "Msg 4"
+        assert p2["exchanges"][2]["prompt"]["message"] == "Msg 6"
+
+    def test_durable_history_spans_multiple_threads(self, conv_service_with_db):
+        """get_paginated_history_durable returns exchanges across all threads for the same channel."""
+        svc, db, store = conv_service_with_db
+
+        # Thread 1 — old conversation
+        thread1 = "telegram:user1:chan1:1"
+        for i in range(3):
+            svc.add_exchange(thread1, "topic", {"message": f"Thread1 Msg {i}"})
+            svc.add_response(thread1, f"Thread1 Reply {i}", 0.3)
+
+        # Thread 2 — new conversation (same channel prefix)
+        thread2 = "telegram:user1:chan1:2"
+        for i in range(2):
+            svc.add_exchange(thread2, "topic", {"message": f"Thread2 Msg {i}"})
+            svc.add_response(thread2, f"Thread2 Reply {i}", 0.3)
+
+        store.delete(svc._conv_key(thread1))
+        store.delete(svc._conv_key(thread2))
+
+        # Query from thread2 should return all 5 exchanges across both threads
+        page = svc.get_paginated_history_durable(thread2, limit=12, offset=0)
+        assert page["total"] == 5
+        assert len(page["exchanges"]) == 5
+        # Chronological: thread1 first, then thread2
+        assert page["exchanges"][0]["prompt"]["message"] == "Thread1 Msg 0"
+        assert page["exchanges"][3]["prompt"]["message"] == "Thread2 Msg 0"
+
+
+class TestRestartScenario:
+    """Full restart scenario — thread + exchanges in SQLite, empty MemoryStore."""
+
+    def test_get_most_recent_thread_id_finds_active_thread(self, conv_service_with_db):
+        """After restart, get_most_recent_thread_id finds the active thread from SQLite."""
+        svc, db, store = conv_service_with_db
+
+        # Create threads table in the same in-memory DB
+        with db.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS threads (
+                    thread_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'unknown',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    current_topic TEXT,
+                    topic_history TEXT DEFAULT '[]',
+                    exchange_count INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_activity TEXT DEFAULT (datetime('now')),
+                    expired_at TEXT,
+                    summary TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO threads (thread_id, channel_id, platform, state, last_activity)
+                VALUES (?, 'default', 'unknown', 'active', datetime('now'))
+            """, (THREAD_ID,))
+
+        # Add exchanges
+        svc.add_exchange(THREAD_ID, "test", {"message": "Hello"})
+        svc.add_response(THREAD_ID, "Hi!", 0.5)
+
+        # Clear MemoryStore
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+
+        # Patch get_shared_db_service where it's imported (locally inside the method)
+        with patch('services.database_service.get_shared_db_service', return_value=db):
+            thread_id, from_expired = svc.get_most_recent_thread_id()
+            assert thread_id == THREAD_ID
+            assert from_expired is False
+
+    def test_full_api_restart_flow(self, conv_service_with_db):
+        """Full API test: populate data, wipe MemoryStore, GET /conversation/recent returns history."""
+        svc, db, store = conv_service_with_db
+
+        # Create threads table
+        with db.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS threads (
+                    thread_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'unknown',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    current_topic TEXT,
+                    topic_history TEXT DEFAULT '[]',
+                    exchange_count INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_activity TEXT DEFAULT (datetime('now')),
+                    expired_at TEXT,
+                    summary TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO threads (thread_id, channel_id, platform, state, last_activity)
+                VALUES (?, 'default', 'unknown', 'active', datetime('now'))
+            """, (THREAD_ID,))
+
+        # Add 3 exchanges with responses
+        for i in range(3):
+            svc.add_exchange(THREAD_ID, "greetings", {"message": f"Hello {i}"})
+            svc.add_response(THREAD_ID, f"Hi {i}!", 0.5)
+
+        # === SIMULATE RESTART: wipe MemoryStore ===
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+        store.delete("active_thread:default")
+
+        # Create a fresh MemoryStore (simulates complete restart)
+        from services.memory_store import MemoryStore
+        fresh_store = MemoryStore()
+
+        # Build Flask test app
+        from flask import Flask
+        from api.conversation import conversation_bp
+        app = Flask(__name__)
+        app.register_blueprint(conversation_bp)
+        app.config['TESTING'] = True
+        client = app.test_client()
+
+        # Mock ThreadService to use fresh (empty) store
+        mock_ts = MagicMock()
+        mock_ts.get_active_thread_id.return_value = None  # MemoryStore is empty
+
+        # Patch at the module where it's looked up
+        with patch('services.auth_session_service.validate_session', return_value=True), \
+             patch('services.thread_service.get_thread_service', return_value=mock_ts), \
+             patch('services.database_service.get_shared_db_service', return_value=db):
+
+            # Create a new TCS that will use our in-memory DB
+            fresh_tcs = ThreadConversationService()
+            fresh_tcs._db_service = db
+
+            with patch('services.thread_conversation_service.ThreadConversationService', return_value=fresh_tcs), \
+                 patch('services.thread_conversation_service.MemoryClientService.create_connection', return_value=fresh_store):
+                response = client.get('/conversation/recent?limit=12&offset=0')
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # THIS is the critical assertion: after restart, we must see our history
+        assert data["thread_id"] == THREAD_ID
+        assert len(data["exchanges"]) == 3
+        assert data["total"] == 3
+        assert data["exchanges"][0]["prompt"] == "Hello 0"
+        assert data["exchanges"][2]["prompt"] == "Hello 2"
+
+    def test_fallback_to_thread_exchanges_when_threads_table_empty(self, conv_service_with_db):
+        """If threads table has no match, fall back to thread_exchanges for thread_id."""
+        svc, db, store = conv_service_with_db
+
+        # Create threads table but leave it EMPTY
+        with db.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS threads (
+                    thread_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'unknown',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    current_topic TEXT,
+                    topic_history TEXT DEFAULT '[]',
+                    exchange_count INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_activity TEXT DEFAULT (datetime('now')),
+                    expired_at TEXT,
+                    summary TEXT
+                )
+            """)
+
+        # But thread_exchanges HAS data (thread persist failed, exchange persist succeeded)
+        svc.add_exchange(THREAD_ID, "test", {"message": "Orphaned exchange"})
+        svc.add_response(THREAD_ID, "Still here!", 0.5)
+
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+
+        with patch('services.database_service.get_shared_db_service', return_value=db):
+            thread_id, from_expired = svc.get_most_recent_thread_id()
+            assert thread_id == THREAD_ID
+            # Recovered from exchanges → treated as expired
+            assert from_expired is True
+
+    def test_expired_thread_still_returns_history(self, conv_service_with_db):
+        """Even if the thread is expired, history is still returned."""
+        svc, db, store = conv_service_with_db
+
+        with db.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS threads (
+                    thread_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'unknown',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    current_topic TEXT,
+                    topic_history TEXT DEFAULT '[]',
+                    exchange_count INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_activity TEXT DEFAULT (datetime('now')),
+                    expired_at TEXT,
+                    summary TEXT
+                )
+            """)
+            # Insert as expired
+            conn.execute("""
+                INSERT INTO threads (thread_id, channel_id, platform, state, expired_at)
+                VALUES (?, 'default', 'unknown', 'expired', datetime('now'))
+            """, (THREAD_ID,))
+
+        svc.add_exchange(THREAD_ID, "topic", {"message": "Before expiry"})
+        svc.add_response(THREAD_ID, "Reply before expiry", 0.5)
+
+        store.delete(svc._conv_key(THREAD_ID))
+        store.delete(svc._index_key(THREAD_ID))
+
+        with patch('services.database_service.get_shared_db_service', return_value=db):
+            thread_id, from_expired = svc.get_most_recent_thread_id()
+            assert thread_id == THREAD_ID
+            assert from_expired is True
+
+            page = svc.get_paginated_history_durable(thread_id, limit=12, offset=0)
+            assert page["total"] == 1
+            assert page["exchanges"][0]["prompt"]["message"] == "Before expiry"
