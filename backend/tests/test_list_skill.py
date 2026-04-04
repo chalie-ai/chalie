@@ -74,6 +74,13 @@ class TestAdd:
         assert r["status"] == "success"
         assert r["list"]["name"] == "Tasks"
 
+    def test_items_as_json_string_parsed_correctly(self, db):
+        # LLM sometimes serialises items as a JSON string instead of a real array
+        r = _call({"action": "add", "name": "Groceries", "items": '["milk", "eggs", "bread"]'})
+        assert r["status"] == "success"
+        assert len(r["list"]["items"]) == 3
+        assert set(_items(r)) == {"milk", "eggs", "bread"}
+
     def test_items_checked_false_by_default(self, db):
         r = _call({"action": "add", "name": "Groceries", "items": ["Milk"]})
         assert r["list"]["items"][0]["checked"] is False

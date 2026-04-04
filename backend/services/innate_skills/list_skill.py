@@ -40,10 +40,13 @@ TOOL_SCHEMA = {
                 ),
             },
             "items": {
+                "type": "array",
                 "description": (
-                    "For add: array of item strings e.g. ['milk', 'eggs']. Pass [] to create an empty list. "
-                    "For remove: array of item strings to remove. Omit or pass [] to delete the entire list. "
-                    "For check: array of objects e.g. [{\"content\": \"milk\", \"checked\": true}, ...] to set checked state per item."
+                    "For add/remove: array of item strings e.g. [\"milk\", \"eggs\"]. "
+                    "For add: pass [] to create an empty list. "
+                    "For remove: omit or pass [] to delete the entire list. "
+                    "For check: array of objects e.g. [{\"content\": \"milk\", \"checked\": true}, ...] to set checked state per item. "
+                    "IMPORTANT: always pass a real JSON array, never a serialised string."
                 ),
             },
             "new_name": {
@@ -176,7 +179,12 @@ def _resolve_name(service, params: dict) -> Optional[str]:
 def _normalize_items(params: dict) -> list:
     items = params.get('items', [])
     if isinstance(items, str):
-        items = [items]
+        # LLM occasionally serialises the array as a JSON string — parse it back
+        try:
+            parsed = json.loads(items)
+            items = parsed if isinstance(parsed, list) else [items]
+        except (json.JSONDecodeError, ValueError):
+            items = [items]
     return [i for i in items if isinstance(i, str) and i.strip()]
 
 
