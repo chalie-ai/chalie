@@ -1,109 +1,107 @@
 # Chalie
 
-> **⚠️ ALPHA SOFTWARE — expect bugs, breaking changes, and rough edges.**
-> Your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
+**Your AI that actually knows you.**
 
-**A personal intelligence layer that remembers, reasons, and acts on your behalf — so you can think less about doing.**
+Other AI tools forget you the moment you close the tab. Chalie remembers. It learns what you care about, figures out what you need, and handles things before you ask — all running locally on your machine.
+
+> Alpha software. Rough edges ahead. [Feedback welcome.](https://github.com/chalie-ai/chalie/issues)
 
 ```bash
 curl -fsSL https://chalie.ai/install | bash
 chalie
+# → http://localhost:8081
 ```
 
-Open **http://localhost:8081**, create an account, pick an LLM provider, and start talking.
+---
+
+## What makes it different
+
+**It remembers you.** Not just your last message — your preferences, your projects, your patterns. Mention something in passing today, and it connects the dots three months from now.
+
+**It figures out your goals.** Talk about wanting to learn piano across a few conversations. Chalie notices, forms the goal on its own, and starts helping — no explicit instructions needed.
+
+**It handles your life.** Email, calendar, contacts, web research, reminders, notes, code execution — Chalie picks the right tool and uses it. You say what you want done; it handles the how.
+
+**It thinks when you're not looking.** Background reasoning runs continuously — surfacing insights, tracking your goals, noticing when something needs your attention.
+
+**Nothing leaves your machine.** One SQLite file. Zero telemetry. Zero analytics. Your data stays yours. Period.
 
 ---
 
-## Why Chalie?
+## Try it now
 
-Most AI tools are fast but forgetful. Conversations reset. Notes pile up. Automation acts without awareness.
-
-Chalie is a **persistent cognitive agent** that runs on your machine. It remembers what matters, forgets what doesn't, and builds understanding over time. Every interaction makes it smarter about *you*.
-
-- **Persistent memory** — context carries forward across sessions and surfaces when relevant
-- **Acts on your behalf** — lists, reminders, web search, code execution, external app integrations
-- **Thinks on its own** — generates insights during idle time, not just when prompted
-- **Fully private** — single local database, zero telemetry, zero analytics
-
-<img src="docs/images/memory-frontend.png" width="680" alt="Memory" />
-
----
-
-## Getting Started
-
-**CLI basics:**
+**With a cloud provider** (fastest start):
 ```bash
-chalie                 # Start → http://localhost:8081
-chalie --port=9000     # Custom port
-chalie stop            # Stop
-chalie update          # Update to latest
-chalie logs            # Follow the log
+curl -fsSL https://chalie.ai/install | bash
+chalie
+# Pick OpenAI, Anthropic, or Gemini during onboarding
 ```
 
-**Local model (free, fully private):**
+**Fully local and private** (no data leaves your network):
 ```bash
-ollama pull qwen:8b
-# During onboarding, select Ollama → http://localhost:11434
+ollama pull qwen3:8b
+curl -fsSL https://chalie.ai/install | bash
+chalie
+# Select Ollama during onboarding → http://localhost:11434
 ```
 
-Also works with **OpenAI**, **Anthropic**, and **Google Gemini**. See [Quick Start](docs/01-QUICK-START.md) for full details.
-
----
-
-## Built-in Tools
-
-Chalie picks and uses tools on its own when needed:
-
-| Tool | What it does |
-|---|---|
-| Weather | Current conditions and forecasts (no API key needed) |
-| Web Search | Privacy-focused search via DuckDuckGo |
-| Code Eval | Run Python snippets in a sandbox |
-| Docs Search | Official docs for 12 languages and 11 frameworks |
-
-External apps can also pair with Chalie and expose their own capabilities. See [Interfaces](docs/15-INTERFACES.md).
-
----
-
-## Build from Source
-
+**From source** (for tinkerers):
 ```bash
 git clone https://github.com/chalie-ai/chalie.git
 cd chalie
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
 python backend/run.py
+# → http://localhost:8081/on-boarding/
 ```
 
-Open **http://localhost:8081/on-boarding/** to get started. Run tests with `cd backend && pytest`.
-
 ---
 
-## Privacy
+## What it can do
 
-All data stays on your machine in a single SQLite database. Chalie makes zero external calls unless you configure an external LLM provider — and even then, only the current message is transmitted. API keys are encrypted at rest. No telemetry. No analytics.
-
----
-
-## Documentation
-
-| Document | Contents |
+| | |
 |---|---|
-| [Quick Start](docs/01-QUICK-START.md) | Full setup guide and deployment |
-| [Providers](docs/02-PROVIDERS-SETUP.md) | Configuring LLM providers |
-| [Architecture](docs/04-ARCHITECTURE.md) | System architecture and services |
-| [Tools](docs/09-TOOLS.md) | Tools system and how to add new ones |
-| [Interfaces](docs/15-INTERFACES.md) | External app integration protocol |
-| [FAQ](docs/FAQ.md) | Common questions |
+| **Memory** | Learns and remembers across every conversation — with built-in forgetting so only what matters sticks |
+| **Goals** | Detects what you're trying to achieve and tracks progress across sessions |
+| **Email & Calendar** | Reads, drafts, schedules — connects to your existing accounts (IMAP, CalDAV, CardDAV) |
+| **Web search** | Finds answers when it needs them (DuckDuckGo, no tracking) |
+| **Background tasks** | Long-running work that continues across sessions |
+| **Notes & lists** | Persistent, searchable, always available in conversation |
+| **Code execution** | Runs Python in a sandbox when you need computation |
+| **Voice** | Talk to it — local STT and TTS, no cloud transcription |
+| **Browser** | Navigates the web when search isn't enough |
+| **App integrations** | External apps can pair and expose their own capabilities |
 
 ---
+
+## How it's built
+
+Single Python process. No Redis, no Postgres, no message queue, no microservices. One SQLite database with encrypted API keys (AES-256-GCM). Works with Ollama, OpenAI, Anthropic, and Gemini — or all of them at once.
+
+Curious about the internals? → [Architecture](docs/04-ARCHITECTURE.md) · [Schema](backend/schema.sql)
+
+---
+
+## CLI
+
+```bash
+chalie                  # start
+chalie --port=9000      # custom port
+chalie stop             # stop
+chalie update           # update to latest
+chalie logs             # tail logs
+```
+
+---
+
+## Docs
+
+[Quick Start](docs/01-QUICK-START.md) · [Providers](docs/02-PROVIDERS-SETUP.md) · [Architecture](docs/04-ARCHITECTURE.md) · [Tools](docs/09-TOOLS.md) · [Interfaces](docs/15-INTERFACES.md) · [FAQ](docs/FAQ.md)
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, or [open an issue](https://github.com/chalie-ai/chalie/issues).
-
----
+[CONTRIBUTING.md](CONTRIBUTING.md) · [Open an issue](https://github.com/chalie-ai/chalie/issues)
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE)
+Apache 2.0 — [LICENSE](LICENSE)

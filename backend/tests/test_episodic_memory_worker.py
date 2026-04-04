@@ -1,6 +1,5 @@
 """Tests for episodic_memory_worker — JSON extraction, safe loading, session formatting, salience, backoff."""
 
-import json
 import logging
 import pytest
 

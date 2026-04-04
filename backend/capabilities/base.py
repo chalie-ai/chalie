@@ -287,11 +287,6 @@ class AbstractCapability(ABC):
         cap_id = self.get_id()
         cap_name = self.get_manifest().get("name", cap_id)
         err = self._last_error or "unknown error"
-        msg = (
-            f"{cap_name} disconnected after "
-            f"{self.MAX_CONSECUTIVE_FAILURES} failures."
-            f" Last error: {err}"
-        )
         try:
             import json
             from services.memory_client import MemoryClientService

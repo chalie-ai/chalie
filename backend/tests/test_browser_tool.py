@@ -1,7 +1,6 @@
 """Tests for the headless browser tool."""
 
 import pytest
-import json
 
 
 # =============================================================================

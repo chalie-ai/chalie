@@ -18,12 +18,11 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
+from services.embedding_utils import pack_embedding as _pack_embedding
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[MOMENTS]"
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class MomentService:

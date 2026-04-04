@@ -5,9 +5,8 @@ Core question: "Can these two memories both be true simultaneously?"
 Output: classification enum + confidence + recommended resolution.
 
 Used by:
-  - Ingestion detection subprocess (digest_worker)
+  - Ingestion detection subprocess (digest_worker) via check_new_trait
   - Drift RECONCILE action (ReconcileAction)
-  - Semantic consolidation post-check (SemanticConsolidationService)
 
 Classifications (STATIC — changing these requires retraining the ONNX model):
   A: temporal_change   — old belief replaced by new one (job switch, relocation, etc.)
@@ -39,7 +38,6 @@ import json
 import logging
 import re
 import struct
-import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -48,12 +46,6 @@ LOG_PREFIX = "[CONTRADICTION]"
 
 # Similarity threshold above which we consider two memories topically related
 _SIMILARITY_THRESHOLD = 0.75
-
-# Maximum time to spend on ingestion detection (ms). Skip if exceeded.
-_INGESTION_TIMEOUT_MS = 3000
-
-# Maximum candidate pairs to classify per ingestion call
-_MAX_PAIRS_PER_INGESTION = 3
 
 _JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
 
@@ -165,73 +157,37 @@ class ContradictionClassifierService:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def check_ingestion(self, text: str) -> Optional[dict]:
+    def check_new_trait(self, new_text: str, existing_text: str, source: str = 'chat') -> Optional[dict]:
         """
-        Run ingestion-time contradiction detection.
+        Classify whether new_text contradicts existing_text.
 
-        Embeds the user message, vector-searches traits + concepts,
-        and classifies any high-similarity divergent pairs found.
+        Caller has already found the candidate pair — no embedding or DB search here.
+        Returns dict with classification, confidence, temporal_signal, reasoning.
+        Returns None if compatible or figurative.
 
-        Returns:
-            dict with keys {classification, memory_a, memory_b, confidence,
-                            temporal_signal, surface_context, reasoning}
-            or None if no contradiction found or detection skipped.
+        source: 'chat' | 'ambient' — passed through for caller logic.
         """
-        if self.db is None:
+        result = self._classify_pair_llm(
+            new_text, existing_text,
+            context_hint=None,
+            meta_a={'source': source},
+            meta_b={'source': 'trait'},
+        )
+        if result is None:
             return None
 
-        start = time.time()
-
-        try:
-            from services.embedding_service import get_embedding_service
-            emb_service = get_embedding_service()
-            embedding = emb_service.generate_embedding(text)
-            if embedding is None:
-                return None
-        except Exception as e:
-            logger.info(f"{LOG_PREFIX} Embedding failed for ingestion check: {e}")
+        classification = result.get('classification', 'compatible')
+        if classification in ('compatible', 'figurative'):
             return None
 
-        elapsed_ms = (time.time() - start) * 1000
-        if elapsed_ms > _INGESTION_TIMEOUT_MS:
-            logger.info(f"{LOG_PREFIX} Ingestion timeout after embedding ({elapsed_ms:.0f}ms)")
-            return None
-
-        pairs = self._find_candidate_pairs_ingestion(embedding, text, start)
-        if not pairs:
-            return None
-
-        for mem_a, mem_b in pairs[:_MAX_PAIRS_PER_INGESTION]:
-            elapsed_ms = (time.time() - start) * 1000
-            if elapsed_ms > _INGESTION_TIMEOUT_MS:
-                logger.info(f"{LOG_PREFIX} Ingestion timeout before classification")
-                return None
-
-            result = self._classify_pair_llm(
-                mem_a['text'], mem_b['text'],
-                context_hint=text,
-                meta_a=mem_a.get('meta', {}),
-                meta_b=mem_b.get('meta', {}),
-            )
-            if result is None:
-                continue
-
-            classification = result.get('classification', 'compatible')
-            if classification == 'compatible' or classification == 'figurative':
-                continue
-
-            return {
-                'classification': classification,
-                'confidence': result.get('confidence', 0.5),
-                'temporal_signal': result.get('temporal_signal', False),
-                'reasoning': result.get('reasoning', ''),
-                'surface_context': result.get('surface_context'),
-                'recommended_resolution': result.get('recommended_resolution', 'background_queue'),
-                'memory_a': mem_a,
-                'memory_b': mem_b,
-            }
-
-        return None
+        return {
+            'classification': classification,
+            'confidence': result.get('confidence', 0.5),
+            'temporal_signal': result.get('temporal_signal', False),
+            'reasoning': result.get('reasoning', ''),
+            'surface_context': result.get('surface_context'),
+            'recommended_resolution': result.get('recommended_resolution', 'background_queue'),
+        }
 
     def check_concept_conflict(
         self,
@@ -245,7 +201,7 @@ class ContradictionClassifierService:
         Used by SemanticConsolidationService before storing a new concept.
 
         Returns:
-            Classification dict (same schema as check_ingestion) or None.
+            Classification dict (same schema as check_new_trait) or None.
         """
         meta_b = {
             'source': 'consolidation_existing',
@@ -287,7 +243,7 @@ class ContradictionClassifierService:
         vector search within the batch, and classifies candidate pairs.
 
         Returns:
-            list of classification dicts (same schema as check_ingestion)
+            list of classification dicts (same schema as check_new_trait)
         """
         results = []
         seen_pairs = set()
@@ -589,117 +545,9 @@ class ContradictionClassifierService:
             logger.info(f"{LOG_PREFIX} LLM classification failed: {e}")
             return None
 
-    def _find_candidate_pairs_ingestion(
-        self,
-        embedding: list,
-        text: str,
-        start_time: float,
-    ) -> list:
+    def sample_memories_for_reconcile(self, n_traits: int = 5) -> list:
         """
-        Vector-search traits and concepts for high-similarity matches to the
-        user message. Returns list of (mem_a, mem_b) pairs where mem_a is
-        the incoming statement and mem_b is the matched memory.
-        """
-        if self.db is None:
-            return []
-
-        try:
-            from services.embedding_utils import pack_embedding
-            packed = pack_embedding(embedding)
-            if packed is None:
-                return []
-        except Exception:
-            return []
-
-        pairs = []
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-
-                # Search traits
-                try:
-                    cursor.execute("""
-                        SELECT k.id, k.key, k.value, k.confidence,
-                               k.evidence_count, k.reliability,
-                               k.created_at
-                        FROM knowledge_vec v
-                        JOIN knowledge k ON k.rowid = v.rowid
-                        WHERE v.embedding MATCH ? AND k = 5
-                          AND k.kind IN ('trait', 'preference')
-                          AND k.entity = 'user'
-                          AND k.deleted_at IS NULL
-                        ORDER BY v.distance
-                    """, (packed,))
-                    trait_rows = cursor.fetchall()
-                    for row in trait_rows:
-                        mem_text = f"{row[1]}: {row[2]}"
-                        meta = {
-                            'confidence': row[3],
-                            'reinforcement_count': row[4],
-                            'reliability': row[5] or 'reliable',
-                            'created_at': row[6],
-                        }
-                        meta['established'] = _is_established('trait', meta)
-                        pairs.append((
-                            {'type': 'incoming', 'id': None, 'text': text},
-                            {
-                                'type': 'trait',
-                                'id': row[0],
-                                'text': mem_text,
-                                'meta': meta,
-                            }
-                        ))
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Trait vector search failed: {e}")
-
-                elapsed_ms = (time.time() - start_time) * 1000
-                if elapsed_ms > _INGESTION_TIMEOUT_MS:
-                    cursor.close()
-                    return pairs
-
-                # Search concepts
-                try:
-                    cursor.execute("""
-                        SELECT k.id, k.key, k.value, k.confidence,
-                               k.access_count, k.reliability, k.created_at
-                        FROM knowledge_vec v
-                        JOIN knowledge k ON k.rowid = v.rowid
-                        WHERE v.embedding MATCH ? AND k = 5
-                          AND k.kind = 'concept'
-                          AND k.deleted_at IS NULL
-                        ORDER BY v.distance
-                    """, (packed,))
-                    concept_rows = cursor.fetchall()
-                    for row in concept_rows:
-                        mem_text = f"{row[1]}: {row[2]}"
-                        meta = {
-                            'confidence': row[3],
-                            'access_count': row[4],
-                            'reliability': row[5] or 'reliable',
-                            'created_at': row[6],
-                        }
-                        meta['established'] = _is_established('concept', meta)
-                        pairs.append((
-                            {'type': 'incoming', 'id': None, 'text': text},
-                            {
-                                'type': 'concept',
-                                'id': row[0],
-                                'text': mem_text,
-                                'meta': meta,
-                            }
-                        ))
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Concept vector search failed: {e}")
-
-                cursor.close()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Candidate pair search failed: {e}")
-
-        return pairs
-
-    def sample_memories_for_reconcile(self, n_traits: int = 5, n_concepts: int = 5) -> list:
-        """
-        Sample recent high-confidence traits and concepts for drift reconciliation.
+        Sample recent high-confidence traits for drift reconciliation.
 
         Returns list of memory dicts with keys:
             {id, type, text, embedding, meta}
@@ -715,7 +563,7 @@ class ContradictionClassifierService:
                 # Sample top traits by confidence
                 cursor.execute("""
                     SELECT k.id, k.key, k.value, k.confidence,
-                           k.evidence_count, k.reliability,
+                           k.evidence_count,
                            v.embedding, k.created_at
                     FROM knowledge k
                     LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
@@ -730,45 +578,14 @@ class ContradictionClassifierService:
                     meta = {
                         'confidence': row[3],
                         'reinforcement_count': row[4],
-                        'reliability': row[5] or 'reliable',
-                        'created_at': row[7],
+                        'created_at': row[6],
                     }
                     meta['established'] = _is_established('trait', meta)
                     memories.append({
                         'id': row[0],
                         'type': 'trait',
                         'text': f"{row[1]}: {row[2]}",
-                        'embedding': _unpack_embedding(row[6]),
-                        'meta': meta,
-                    })
-
-                # Sample top concepts by strength
-                cursor.execute("""
-                    SELECT k.id, k.key, k.value, k.confidence,
-                           k.access_count, k.reliability,
-                           v.embedding, k.created_at
-                    FROM knowledge k
-                    LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
-                    WHERE k.kind = 'concept'
-                      AND k.deleted_at IS NULL
-                      AND k.confidence > 0.3
-                    ORDER BY k.access_count DESC,
-                             k.confidence DESC
-                    LIMIT ?
-                """, (n_concepts,))
-                for row in cursor.fetchall():
-                    meta = {
-                        'confidence': row[3],
-                        'access_count': row[4],
-                        'reliability': row[5] or 'reliable',
-                        'created_at': row[7],
-                    }
-                    meta['established'] = _is_established('concept', meta)
-                    memories.append({
-                        'id': row[0],
-                        'type': 'concept',
-                        'text': f"{row[1]}: {row[2]}",
-                        'embedding': _unpack_embedding(row[6]),
+                        'embedding': _unpack_embedding(row[5]),
                         'meta': meta,
                     })
 
@@ -778,25 +595,3 @@ class ContradictionClassifierService:
 
         return memories
 
-    def pair_already_tracked(self, id_a: str, id_b: str) -> bool:
-        """Return True if this pair already has an open uncertainty record."""
-        if self.db is None or not id_a or not id_b:
-            return False
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT 1 FROM uncertainties
-                    WHERE state = 'open'
-                      AND created_at > datetime('now', '-7 days')
-                      AND (
-                          (memory_a_id = ? AND memory_b_id = ?)
-                          OR (memory_a_id = ? AND memory_b_id = ?)
-                      )
-                    LIMIT 1
-                """, (id_a, id_b, id_b, id_a))
-                row = cursor.fetchone()
-                cursor.close()
-                return row is not None
-        except Exception:
-            return False

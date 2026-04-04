@@ -1,7 +1,7 @@
 """Tests for H1.0 — Goal ecology observability and metrics."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.mark.unit

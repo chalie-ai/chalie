@@ -3,7 +3,6 @@ trigger signals, rate limiting, and document creation flow."""
 
 import hashlib
 import json
-import time
 import pytest
 from unittest.mock import patch, MagicMock
 

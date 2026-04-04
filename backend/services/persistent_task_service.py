@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
 
 from services.embedding_utils import pack_embedding
+from utils.text_utils import jaccard_similarity as _jaccard_similarity
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PERSISTENT TASK]"
@@ -39,9 +40,6 @@ DEFAULT_FATIGUE_BUDGET = 15.0
 
 # Duplicate detection threshold (Jaccard similarity)
 DUPLICATE_SIMILARITY_THRESHOLD = 0.6
-
-
-from utils.text_utils import jaccard_similarity as _jaccard_similarity
 
 
 class PersistentTaskService:

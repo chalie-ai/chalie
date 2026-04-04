@@ -8,8 +8,7 @@ Tests cover:
 - Tool name formatting
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from services.context_assembly_service import ContextAssemblyService
 
 
@@ -95,7 +94,7 @@ class TestTranscriptBasedWorkingMemory:
             result = svc._get_working_memory('thread-1', 'test-topic')
 
         # Should NOT include all 20 entries — budget should cap it
-        lines = [l for l in result.split('\n') if l.startswith('User:')]
+        lines = [line for line in result.split('\n') if line.startswith('User:')]
         assert len(lines) < 20
         assert len(lines) > 0
 
@@ -137,7 +136,7 @@ class TestTopicContextWorkingMemory:
 
         with patch('services.compaction_service.get_compaction', side_effect=Exception('db locked')), \
              patch.object(svc, '_get_working_memory_legacy', return_value=''):
-            result = svc._get_working_memory('thread-1', 'test-topic', context=ctx)
+            svc._get_working_memory('thread-1', 'test-topic', context=ctx)
 
         assert len(ctx.failed_sections) == 1
         assert ctx.failed_sections[0][0] == 'working_memory'

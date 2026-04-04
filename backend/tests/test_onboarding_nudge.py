@@ -1,6 +1,5 @@
 """Unit tests for FrontalCortexService._get_onboarding_nudge."""
 
-import json
 import pytest
 from unittest.mock import MagicMock, patch
 

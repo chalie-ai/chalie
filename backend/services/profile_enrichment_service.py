@@ -14,14 +14,13 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 
+from services.embedding_utils import pack_embedding as _pack_embedding
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[PROFILE ENRICHMENT]"
 
 CYCLE_INTERVAL_SECONDS = 6 * 3600  # 6 hours
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class ProfileEnrichmentService:

@@ -914,10 +914,10 @@ class ACTOrchestrator:
                 all_lessons.extend(fas.get_relevant_lessons(at))
             if not all_lessons:
                 return ''
-            all_lessons.sort(key=lambda l: l.get('times_seen', 1), reverse=True)
+            all_lessons.sort(key=lambda lesson: lesson.get('times_seen', 1), reverse=True)
             lines = [
-                f"- [{l['blame']}] {l['lesson']} (seen {l.get('times_seen', 1)}x)"
-                for l in all_lessons[:3]
+                f"- [{lesson['blame']}] {lesson['lesson']} (seen {lesson.get('times_seen', 1)}x)"
+                for lesson in all_lessons[:3]
             ]
             return '\n'.join(lines)
         except Exception as e:

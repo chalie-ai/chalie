@@ -213,7 +213,6 @@ class ReasoningLoopService:
         from services.autonomous_actions.decision_router import ActionDecisionRouter
         from services.autonomous_actions.nothing_action import NothingAction
         from services.autonomous_actions.communicate_action import CommunicateAction
-        from services.autonomous_actions.reflect_action import ReflectAction
         router = ActionDecisionRouter()
 
         # Always register NOTHING (fallback)
@@ -241,20 +240,6 @@ class ReasoningLoopService:
             self._communicate_action = communicate
         else:
             self._communicate_action = None
-
-        # Register REFLECT if enabled
-        reflect_config = action_config.get('reflect', {})
-        if reflect_config.get('enabled', True):
-            reflect_config['total_fatigue_budget'] = self.fatigue_budget
-            reflect_config['fatigue_window_minutes'] = self.fatigue_window_minutes
-            reflect = ReflectAction(
-                config=reflect_config,
-                services={
-                    'embedding_service': self.embedding_service,
-                    'db_service': self.db_service,
-                },
-            )
-            router.register(reflect)
 
         # Register RECONCILE if enabled (priority 4, below REFLECT=5)
         from services.autonomous_actions.reconcile_action import ReconcileAction
@@ -644,8 +629,10 @@ class ReasoningLoopService:
                         data = concept.get('data') or {}
                         if isinstance(data, str):
                             import json as _json
-                            try: data = _json.loads(data)
-                            except Exception: data = {}
+                            try:
+                                data = _json.loads(data)
+                            except Exception:
+                                data = {}
                         return {
                             'concept_id': cid,
                             'concept_name': concept.get('key', ''),
@@ -1441,8 +1428,6 @@ class ReasoningLoopService:
 
                 if action_name == 'COMMUNICATE' and result.success:
                     event_type = 'proactive_sent'
-                elif action_name == 'REFLECT' and result.success:
-                    event_type = 'reflection_stored'
                 else:
                     event_type = 'proactive_candidate'
 

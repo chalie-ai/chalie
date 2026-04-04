@@ -7,7 +7,6 @@ Tests cover:
 - _run_compaction() LLM call and storage
 """
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 

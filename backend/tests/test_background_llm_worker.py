@@ -12,7 +12,6 @@ from workers.background_llm_worker import (
     STALE_THRESHOLD,
     LLM_CALL_TIMEOUT,
     MAX_RETRIES,
-    QUEUE_KEY,
     LAST_INTERACTION_KEY,
     PROMPT_QUEUE_KEY,
 )

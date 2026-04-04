@@ -7,7 +7,6 @@ Tests cover:
 - Auto-budget calculation in ACT orchestrator
 """
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 
@@ -101,7 +100,7 @@ class TestOpenAIContextLimit:
 class TestOpenAICountTokens:
     def test_falls_back_to_estimate_without_tiktoken(self):
         """Without tiktoken installed, should use estimate_tokens fallback."""
-        from services.llm_service import OpenAIService, estimate_tokens
+        from services.llm_service import OpenAIService
 
         svc = OpenAIService({'api_key': 'test', 'model': 'gpt-4o'})
         messages = [{"role": "user", "content": "hello world"}]
@@ -284,7 +283,6 @@ class TestAutoBudgetCalculation:
     def test_prune_messages_uses_estimate_tokens(self):
         """Verify _prune_messages uses estimate_tokens instead of inline heuristic."""
         from services.act_orchestrator_service import ACTOrchestrator
-        from services.llm_service import estimate_tokens
 
         orch = ACTOrchestrator(config={})
 

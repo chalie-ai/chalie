@@ -37,7 +37,6 @@ All tests are marked ``@pytest.mark.unit``.
 from __future__ import annotations
 
 import datetime
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest

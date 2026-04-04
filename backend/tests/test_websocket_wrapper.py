@@ -12,7 +12,6 @@ import json
 import sqlite3
 import contextlib
 import pytest
-from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers

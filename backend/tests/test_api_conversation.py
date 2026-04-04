@@ -7,7 +7,6 @@ Note: The /chat endpoint was replaced by the WebSocket handler in
 api/websocket.py (Phase 4). WebSocket tests live separately.
 """
 
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
@@ -46,9 +45,7 @@ class TestConversationAPI:
             mock_get_ts.return_value = mock_ts
 
             mock_tcs = MagicMock()
-            mock_tcs.store.llen.return_value = 1
-            mock_tcs._conv_key.return_value = "thread_conv:thread-123"
-            mock_tcs.get_paginated_history.return_value = {
+            mock_tcs.get_paginated_history_durable.return_value = {
                 "exchanges": [
                     {
                         "id": "ex-1",

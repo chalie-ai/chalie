@@ -3,7 +3,7 @@
 import json
 import pytest
 from unittest.mock import patch
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from services.identity_service import IdentityService
 from services.database_service import get_shared_db_service
@@ -200,7 +200,7 @@ class TestApplyInertia:
             _seed_vector(db, name, baseline_weight=0.5, current_activation=0.5,
                          inertia_rate=0.1, min_cap=0.0, max_cap=1.0)
 
-        count = identity_service.apply_inertia()
+        identity_service.apply_inertia()
         # warmth diff is 0.001, below 0.005 threshold
         # Check warmth was NOT adjusted
         row = _read_vector(db, 'warmth')

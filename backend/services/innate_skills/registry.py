@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 13 skills + backward-compat aliases).
+register_innate_skills() in __init__.py (currently 12 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'memory', 'introspect', 'associate',
     'schedule', 'autobiography', 'list',
     'persistent_task', 'document',
-    'read', 'reflect', 'find_tools', 'goals',
+    'read', 'find_tools', 'goals',
     'rich_render',
 })
 
@@ -59,7 +59,6 @@ SKILL_DESCRIPTIONS: dict = {
     'persistent_task': 'Create, manage, track, complete, and update progress on multi-session background tasks with state machine lifecycle',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
-    'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
     'goals': 'Create, view, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
     'rich_render': 'Returns block rendering reference for producing rich visual output (metrics, cards, charts, progress, timelines)',
@@ -79,7 +78,6 @@ SKILL_EFFORT: dict = {
     'persistent_task': 'deep',
     'document': 'light',
     'read': 'light',
-    'reflect': 'light',
     'find_tools': 'trivial',
     'goals': 'trivial',
     'rich_render': 'trivial',
@@ -99,7 +97,6 @@ SKILL_CATEGORIES: dict = {
     'persistent_task': 'task_management',
     'document': 'knowledge',
     'read': 'research',
-    'reflect': 'cognition',
     'find_tools': 'cognition',
     'goals': 'cognition',
     'rich_render': 'presentation',

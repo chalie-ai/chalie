@@ -7,7 +7,7 @@ loop is required.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from flask import Flask
 
 from api.signals import signals_bp
@@ -17,12 +17,12 @@ from api.signals import signals_bp
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_app(wrapper_id=None, rate_limit_allowed=True):
+def _make_app(wrapper_id=None, _rate_limit_allowed=True):
     """Build a minimal Flask test app with the signals blueprint.
 
     Args:
         wrapper_id: ``None`` for cookie auth, a string for bearer auth.
-        rate_limit_allowed: Whether the rate limiter returns True.
+        _rate_limit_allowed: Whether the rate limiter returns True.
 
     Returns:
         Configured Flask app (not a test client — callers create their own).
@@ -48,7 +48,7 @@ def bearer_app():
     return _factory
 
 
-from contextlib import contextmanager
+from contextlib import contextmanager  # noqa: E402
 
 @contextmanager
 def _cookie_patches(rate_allowed=True, capabilities_ok=True):

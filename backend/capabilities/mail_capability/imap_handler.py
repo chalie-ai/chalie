@@ -239,11 +239,16 @@ class ImapHandler:
             keyword = (params.get("keyword")   or "").strip()
             date_from = (params.get("date_from") or "").strip()
             date_to   = (params.get("date_to")   or "").strip()
-            if sender:    criteria.extend(["FROM",    sender])
-            if subject:   criteria.extend(["SUBJECT", subject])
-            if keyword:   criteria.extend(["TEXT",    keyword])
-            if date_from: criteria.extend(["SINCE",   _imap_date(date_from)])
-            if date_to:   criteria.extend(["BEFORE",  _imap_date(date_to)])
+            if sender:
+                criteria.extend(["FROM", sender])
+            if subject:
+                criteria.extend(["SUBJECT", subject])
+            if keyword:
+                criteria.extend(["TEXT", keyword])
+            if date_from:
+                criteria.extend(["SINCE", _imap_date(date_from)])
+            if date_to:
+                criteria.extend(["BEFORE", _imap_date(date_to)])
             if params.get("unanswered"):
                 criteria.append("UNANSWERED")
             if not criteria:

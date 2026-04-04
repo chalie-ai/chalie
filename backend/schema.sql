@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     data        TEXT,
     decay_class TEXT NOT NULL DEFAULT 'standard',
     confidence  REAL NOT NULL DEFAULT 0.5,
-    reliability TEXT NOT NULL DEFAULT 'reliable',
+    reliability TEXT NOT NULL DEFAULT 'reliable',  -- dropped by migration 026; kept here for migration compat
     source      TEXT,
     evidence_count INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -147,6 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge(key);
 CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_decay_class ON knowledge(decay_class);
 CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_kind_entity_active ON knowledge(kind, entity) WHERE deleted_at IS NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
     key, value, kind, entity, content='knowledge', content_rowid='rowid'
@@ -262,6 +263,17 @@ CREATE INDEX IF NOT EXISTS idx_thread_exchanges_thread
 
 CREATE INDEX IF NOT EXISTS idx_thread_exchanges_created
     ON thread_exchanges(created_at ASC);
+
+-- ────────────────────────────────────────────────────────────────
+-- AUTH SESSIONS — durable session storage (survives restarts)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOOL CONFIGS — per-tool key-value configuration
@@ -609,6 +621,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE 
 CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_purge ON documents(purge_after) WHERE purge_after IS NOT NULL;
 -- idx_documents_watched_folder created by migration 001_watched_folders.sql
+CREATE INDEX IF NOT EXISTS idx_documents_folder_pending ON documents(watched_folder_id, status) WHERE deleted_at IS NULL AND watched_folder_id IS NOT NULL;
 
 -- FTS5 for document search
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -652,32 +665,21 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TEXT DEFAULT (datetime('now'))
 );
 
--- ────────────────────────────────────────────────────────────────
--- UNCERTAINTIES — epistemic confidence tracking
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS uncertainties (
-    id TEXT PRIMARY KEY,
-    memory_a_type TEXT NOT NULL,              -- 'trait' | 'episode' | 'concept'
-    memory_a_id TEXT NOT NULL,
-    memory_b_type TEXT,                       -- NULL for solo uncertainties
-    memory_b_id TEXT,
-    uncertainty_type TEXT NOT NULL,           -- 'contradiction' | 'unverified' | 'stale' | 'ambiguous'
-    severity TEXT NOT NULL,                   -- 'critical' | 'high' | 'medium' | 'low'
-    detection_context TEXT NOT NULL,          -- which service detected it
-    reasoning TEXT,
-    temporal_signal INTEGER DEFAULT 0,        -- BOOLEAN: 1 if uncertainty is time-sensitive
-    surface_context TEXT,                     -- optional text to surface alongside the uncertainty
-    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'resolved'
-    resolution_strategy TEXT,                 -- 'accepted' | 'rejected' | 'merged' | 'superseded'
-    resolution_detail TEXT,
-    resolved_at TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
+-- uncertainties table removed — dropped by migration 025, replaced by
+-- pending_contradictions. Migration 009 is now a no-op so this table
+-- no longer needs to exist in schema.sql for the migration chain.
 
-CREATE INDEX IF NOT EXISTS idx_uncertainties_state ON uncertainties(state);
-CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_a ON uncertainties(memory_a_type, memory_a_id);
-CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_b ON uncertainties(memory_b_type, memory_b_id);
-CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity, state);
+-- ────────────────────────────────────────────────────────────────
+-- PENDING CONTRADICTIONS — trait contradictions awaiting user resolution
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS pending_contradictions (
+    id TEXT PRIMARY KEY,
+    trait_a_id INTEGER NOT NULL,
+    trait_b_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    surfaced_at TEXT NOT NULL,
+    source TEXT NOT NULL  -- 'chat' | 'ambient'
+);
 
 -- ────────────────────────────────────────────────────────────────
 -- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)
@@ -713,6 +715,7 @@ CREATE TABLE IF NOT EXISTS goals (
 CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
 CREATE INDEX IF NOT EXISTS idx_goals_salience ON goals(salience, status);
 CREATE INDEX IF NOT EXISTS idx_goals_type ON goals(type, status);
+CREATE INDEX IF NOT EXISTS idx_goals_active_salience ON goals(salience DESC) WHERE status IN ('candidate', 'strengthening', 'actionable');
 
 -- ────────────────────────────────────────────────────────────────
 -- GOAL EVIDENCE — accumulated signals supporting goals
@@ -790,6 +793,7 @@ CREATE TABLE IF NOT EXISTS topic_transcript (
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_topic ON topic_transcript(topic, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_topic_created_desc ON topic_transcript(topic, created_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS topic_transcript_vec USING vec0(
     embedding float[768]

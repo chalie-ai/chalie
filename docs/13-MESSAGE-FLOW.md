@@ -426,8 +426,6 @@ Key Pattern                        TTL        Read    Written by
 ─────────────────────────────────────────────────────────────────────
 fok:{topic}                        —          A,B     FOK update service
 world_model:items                  —          A       WorldStateService
-topic_streak:{thread_id}           2h         A       Phase A (focus tracking)
-focus:{thread_id}                  variable   A,E     FocusSessionService
 reasoning_loop:activations         —          E       Reasoning loop
 reasoning_loop:cooldowns           —          E       Reasoning loop
 output:{request_id}                short      /ws     digest_worker

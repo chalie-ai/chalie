@@ -234,7 +234,7 @@ class SelfModelService:
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
-            "focus_active": self._get_focus_active(topic),
+            "focus_active": False,
             "skill_reliability": self._get_skill_reliability(),
         }
 
@@ -263,8 +263,10 @@ class SelfModelService:
             import json as _json
             data = entry.get('data', {}) if entry else {}
             if isinstance(data, str):
-                try: data = _json.loads(data)
-                except Exception: data = {}
+                try:
+                    data = _json.loads(data)
+                except Exception:
+                    data = {}
             context_stats = data.get("context_stats") or {}
             if topic in context_stats:
                 topic_stats = context_stats[topic]
@@ -276,9 +278,6 @@ class SelfModelService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
             return 0.0
-
-    def _get_focus_active(self, topic: str) -> bool:
-        return False
 
     def _get_skill_reliability(self) -> dict:
         """Condensed skill reliability: only skills with >= 5 attempts."""
@@ -292,8 +291,10 @@ class SelfModelService:
             for proc in procedures:
                 data = proc.get('data', {})
                 if isinstance(data, str):
-                    try: data = _json.loads(data)
-                    except Exception: data = {}
+                    try:
+                        data = _json.loads(data)
+                    except Exception:
+                        data = {}
                 attempts = data.get("total_attempts", 0)
                 if attempts < 5:
                     continue
@@ -517,19 +518,26 @@ class SelfModelService:
         try:
             db = self._get_db()
             with db.connection() as conn:
-                # 1. Compaction stale: topic with 50+ entries and no compaction
+                # 1. Compaction stale: topic with uncompacted content exceeding
+                # the fallback token threshold (chars/4 ≈ tokens, 36K token fallback).
+                # Uses the same fallback threshold as compaction_service so this
+                # warning fires iff compaction would actually trigger.
+                _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
-                    SELECT tt.topic, COUNT(tt.id) as entries
+                    SELECT tt.topic,
+                           COUNT(tt.id) as entries,
+                           SUM(LENGTH(tt.content)) as total_chars
                     FROM topic_transcript tt
                     LEFT JOIN topic_compactions tc ON tc.topic = tt.topic
                     WHERE tc.topic IS NULL
                     GROUP BY tt.topic
-                    HAVING entries >= 50
-                    ORDER BY entries DESC LIMIT 1
-                """).fetchone()
+                    HAVING total_chars >= ?
+                    ORDER BY total_chars DESC LIMIT 1
+                """, (_COMPACTION_WARN_CHARS,)).fetchone()
                 if row:
+                    estimated_tokens = (row[2] or 0) // 4
                     checks.append({
-                        'signal': f"Compaction stale: topic has {row[1]} entries, no compaction",
+                        'signal': f"Compaction stale: topic has {row[1]} entries (~{estimated_tokens:,} tokens), no compaction",
                         'severity': 0.7,
                     })
 

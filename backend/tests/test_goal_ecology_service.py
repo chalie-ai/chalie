@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from services.goal_ecology_service import (
     GoalEcologyService, CORE_MOTIVES, ACTIONABLE_THRESHOLDS,
-    SALIENCE_DECAY_RATE, DECAY_THRESHOLD, TIMESCALE_WINDOWS,
+    DECAY_THRESHOLD, TIMESCALE_WINDOWS,
 )
 from services.time_utils import utc_now
 
@@ -279,7 +279,7 @@ class TestSalienceDecay:
         """, (old_time, goal['id']))
         conn.commit()
 
-        decayed = ecology.decay_unreinforced()
+        ecology.decay_unreinforced()
 
         saved = ecology.get_goal(goal['id'])
         assert saved['salience'] < 0.3
@@ -394,7 +394,7 @@ class TestActionableThresholds:
         ecology = GoalEcologyService(db_service=db)
 
         # Create a stated goal WITHOUT strategy
-        goal = ecology.create_goal(description="Do Y", type='stated')
+        ecology.create_goal(description="Do Y", type='stated')
 
         actionable = ecology.get_actionable_goals()
         assert len(actionable) == 0
@@ -491,7 +491,7 @@ class TestActiveStack:
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
 
-        g1 = ecology.create_goal(description="Low priority", type='emergent')
+        ecology.create_goal(description="Low priority", type='emergent')
         g2 = ecology.create_goal(description="High priority", type='stated')
 
         stack = ecology.get_active_stack(limit=3)
@@ -702,7 +702,7 @@ class TestGoalHierarchy:
         ecology = GoalEcologyService(db_service=db)
 
         # Create a long-term goal
-        parent = ecology.create_goal(
+        ecology.create_goal(
             description="Build reputation as exceptional host",
             type='developmental',
             timescale='long_term',
@@ -840,7 +840,7 @@ class TestGoalHierarchy:
         # Add evidence so child has non-zero base salience
         ecology.add_evidence(child['id'], 'explicit_statement', 'I need to plan a dinner', strength=1.0)
 
-        salience_without_boost = ecology.recalculate_salience(parent['id'])  # doesn't change child
+        ecology.recalculate_salience(parent['id'])  # doesn't change child
 
         # The child's salience should now include the lineage boost
         saved_child = ecology.get_goal(child['id'])
@@ -976,7 +976,7 @@ class TestGoalHierarchy:
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
 
-        goal = ecology.create_goal(description="Some goal", type='stated')
+        ecology.create_goal(description="Some goal", type='stated')
         stack = ecology.get_active_stack()
 
         assert len(stack) == 1

@@ -233,7 +233,7 @@ class FailureAnalysisService:
                 # Enforce cap: evict lowest times_seen, then oldest created_at.
                 if len(lessons) > MAX_LESSONS_PER_ACTION:
                     lessons.sort(
-                        key=lambda l: (l.get("times_seen", 1), l.get("created_at", "")),
+                        key=lambda lesson: (lesson.get("times_seen", 1), lesson.get("created_at", "")),
                         reverse=False,
                     )
                     evicted = lessons.pop(0)
@@ -300,21 +300,21 @@ class FailureAnalysisService:
 
             # Filter: major severity OR seen at least twice.
             qualifying = [
-                l for l in lessons
-                if l.get("severity") == "major" or l.get("times_seen", 1) >= 2
+                lesson for lesson in lessons
+                if lesson.get("severity") == "major" or lesson.get("times_seen", 1) >= 2
             ]
 
             # Sort: times_seen DESC, updated_at DESC.
             qualifying.sort(
-                key=lambda l: (l.get("times_seen", 1), l.get("updated_at", "")),
+                key=lambda lesson: (lesson.get("times_seen", 1), lesson.get("updated_at", "")),
                 reverse=True,
             )
 
             # Return top 3, stripping internal fields.
             _internal = {"lesson_hash"}
             return [
-                {k: v for k, v in l.items() if k not in _internal}
-                for l in qualifying[:3]
+                {k: v for k, v in lesson.items() if k not in _internal}
+                for lesson in qualifying[:3]
             ]
 
         except Exception as e:
@@ -391,8 +391,8 @@ class FailureAnalysisService:
             return {
                 "blame_distribution": blame_dist,
                 "lesson_counts_by_action": lessons_by_action,
-                "top_lessons_by_frequency": [_strip(l) for l in top_lessons],
-                "recent_lessons": [_strip(l) for l in recent_lessons],
+                "top_lessons_by_frequency": [_strip(lesson) for lesson in top_lessons],
+                "recent_lessons": [_strip(lesson) for lesson in recent_lessons],
                 "total_lessons": len(all_lessons),
             }
 

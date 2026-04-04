@@ -456,3 +456,109 @@ class TestAuthAPI:
             assert resp.status_code == 200
             assert resp.get_json()["ok"] is True
             mock_destroy.assert_called_once()
+
+
+@pytest.mark.unit
+class TestSessionPersistence:
+    """Sessions must survive MemoryStore wipes (container restart)."""
+
+    @pytest.fixture
+    def session_db(self, tmp_path):
+        """Provide a SQLite DB with the auth_sessions table."""
+        db_path = str(tmp_path / "session_test.db")
+        db_service = DatabaseService(db_path)
+        with db_service.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    token TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+            """)
+
+        _db_mod._local.conn = None
+        _db_mod._local.db_path = None
+
+        original = _db_mod._shared_db_service
+        _db_mod._shared_db_service = db_service
+        try:
+            yield db_service
+        finally:
+            db_service.close_pool()
+            _db_mod._shared_db_service = original
+            _db_mod._local.conn = None
+            _db_mod._local.db_path = None
+
+    def test_create_session_persists_to_sqlite(self, session_db):
+        """create_session writes token to both MemoryStore and SQLite."""
+        from services.auth_session_service import create_session
+        from services.memory_store import MemoryStore
+
+        store = MemoryStore()
+        response = MagicMock()
+
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+            token = create_session(response)
+
+        # MemoryStore has it
+        assert store.exists(f"auth_session:{token}")
+
+        # SQLite has it
+        rows = session_db.fetch_all(
+            "SELECT token FROM auth_sessions WHERE token = ?", (token,)
+        )
+        assert len(rows) == 1
+        assert rows[0]["token"] == token
+
+    def test_validate_session_survives_memorystore_wipe(self, session_db):
+        """After MemoryStore is wiped, validate_session falls back to SQLite."""
+        from services.auth_session_service import create_session, validate_session
+        from services.memory_store import MemoryStore
+
+        # Phase 1: create session with one store
+        store1 = MemoryStore()
+        response = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store1):
+            token = create_session(response)
+
+        # Phase 2: simulate restart — fresh empty MemoryStore
+        store2 = MemoryStore()
+
+        # Build a request mock with the session cookie
+        request_mock = MagicMock()
+        request_mock.cookies.get.return_value = token
+
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store2):
+            # First validate: MemoryStore misses, SQLite hits, rehydrates
+            assert validate_session(request_mock) is True
+
+            # MemoryStore should now have the session (rehydrated)
+            assert store2.exists(f"auth_session:{token}")
+
+            # Second validate: MemoryStore hits directly (fast path)
+            assert validate_session(request_mock) is True
+
+    def test_destroy_session_removes_from_sqlite(self, session_db):
+        """destroy_session removes from both MemoryStore and SQLite."""
+        from services.auth_session_service import create_session, destroy_session
+        from services.memory_store import MemoryStore
+
+        store = MemoryStore()
+        create_response = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+            token = create_session(create_response)
+
+        # Confirm it exists
+        rows = session_db.fetch_all("SELECT token FROM auth_sessions WHERE token = ?", (token,))
+        assert len(rows) == 1
+
+        # Destroy
+        request_mock = MagicMock()
+        request_mock.cookies.get.return_value = token
+        destroy_response = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+            destroy_session(request_mock, destroy_response)
+
+        # Gone from SQLite
+        rows = session_db.fetch_all("SELECT token FROM auth_sessions WHERE token = ?", (token,))
+        assert len(rows) == 0

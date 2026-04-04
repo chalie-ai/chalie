@@ -10,7 +10,7 @@ Migrated from mock_db to real SQLite via the shared `db` fixture.
 import pytest
 import json
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.persistent_task_service import (
     PersistentTaskService,
@@ -214,7 +214,7 @@ class TestPersistentTaskService:
     @patch('services.persistent_task_service.PersistentTaskService._embed_task')
     @patch('services.memory_client.MemoryClientService.create_connection')
     def test_create_task_returns_dict_with_accepted_status(
-        self, mock_redis, mock_embed, db, service
+        self, _mock_redis, mock_embed, db, service
     ):
         """create_task should INSERT and return a task dict with 'accepted' status."""
         result = service.create_task(account_id=1, goal="Learn Rust")

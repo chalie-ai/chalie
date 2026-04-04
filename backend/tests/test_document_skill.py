@@ -407,7 +407,7 @@ class TestCreateAction:
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DOC_QUEUE):
             from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {
+            handle_document("topic", {
                 "action": "create",
                 "name": "my-notes",
                 "content": "content here",

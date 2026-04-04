@@ -275,11 +275,11 @@ Chalie stops being an application and becomes a **cognitive operating system**. 
 |-----------|-------------|---------|
 | **Query** | "What does the user prefer about X?" | Context assembly + episodic retrieval |
 | **Observe** | "I noticed Y while doing Z" | Observation stream → memory pipeline |
-| **Judge** | "Should I proceed with X or escalate?" | Reasoning loop + uncertainty engine |
+| **Judge** | "Should I proceed with X or escalate?" | Reasoning loop + contradiction resolution |
 | **Report** | "Task complete, here's what happened" | World model update + episode creation |
 
 **What changes for the user:**
-- A coding agent in an IDE asks Chalie "what does the user care about in auth?" and gets reliability-weighted context accumulated over months
+- A coding agent in an IDE asks Chalie "what does the user care about in auth?" and gets confidence-weighted context accumulated over months
 - Multiple specialized agents coordinate through Chalie's shared cognitive layer
 - The user's preferences, history, and judgment are available to every tool they use, without re-explaining
 

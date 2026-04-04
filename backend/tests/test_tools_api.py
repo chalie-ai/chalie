@@ -3,7 +3,7 @@ Tests for backend/api/tools.py
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from flask import Flask
 from api.tools import tools_bp
 

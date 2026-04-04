@@ -100,7 +100,7 @@ class TestSkillCompleteAction:
     @patch('services.innate_skills.persistent_task_skill._surface_completion_from_skill')
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_complete_happy_path(self, mock_account, mock_get_svc, mock_surface):
+    def test_complete_happy_path(self, _mock_account, mock_get_svc, mock_surface):
         from services.innate_skills.persistent_task_skill import _complete
 
         mock_service = MagicMock()
@@ -120,7 +120,7 @@ class TestSkillCompleteAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_complete_task_not_found(self, mock_account, mock_get_svc):
+    def test_complete_task_not_found(self, _mock_account, mock_get_svc):
         from services.innate_skills.persistent_task_skill import _complete
 
         mock_service = MagicMock()
@@ -134,7 +134,7 @@ class TestSkillCompleteAction:
     @patch('services.innate_skills.persistent_task_skill._surface_completion_from_skill')
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_complete_uses_context_extras_fallback(self, mock_account, mock_get_svc, mock_surface):
+    def test_complete_uses_context_extras_fallback(self, _mock_account, mock_get_svc, mock_surface):
         """When no task_id in params, falls back to persistent_task_id from context_extras."""
         from services.innate_skills.persistent_task_skill import _complete
 
@@ -153,7 +153,7 @@ class TestSkillCompleteAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_complete_no_task_id_at_all(self, mock_account, mock_get_svc):
+    def test_complete_no_task_id_at_all(self, _mock_account, mock_get_svc):
         from services.innate_skills.persistent_task_skill import _complete
 
         mock_service = MagicMock()
@@ -170,7 +170,7 @@ class TestSkillProgressAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_progress_updates_coverage(self, mock_account, mock_get_svc):
+    def test_progress_updates_coverage(self, _mock_account, mock_get_svc):
         from services.innate_skills.persistent_task_skill import _progress_update
 
         mock_service = MagicMock()
@@ -191,7 +191,7 @@ class TestSkillProgressAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_progress_task_not_found(self, mock_account, mock_get_svc):
+    def test_progress_task_not_found(self, _mock_account, mock_get_svc):
         from services.innate_skills.persistent_task_skill import _progress_update
 
         mock_service = MagicMock()
@@ -204,7 +204,7 @@ class TestSkillProgressAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_progress_clamps_coverage(self, mock_account, mock_get_svc):
+    def test_progress_clamps_coverage(self, _mock_account, mock_get_svc):
         """Coverage values outside 0.0-1.0 are clamped."""
         from services.innate_skills.persistent_task_skill import _progress_update
 
@@ -222,7 +222,7 @@ class TestSkillProgressAction:
 
     @patch('services.innate_skills.persistent_task_skill._get_service')
     @patch('services.innate_skills.persistent_task_skill._get_account_id', return_value=1)
-    def test_progress_uses_context_extras_fallback(self, mock_account, mock_get_svc):
+    def test_progress_uses_context_extras_fallback(self, _mock_account, mock_get_svc):
         from services.innate_skills.persistent_task_skill import _progress_update
 
         mock_service = MagicMock()

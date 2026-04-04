@@ -9,7 +9,6 @@ from __future__ import annotations
 import email as _email_mod
 import email.mime.multipart
 import email.mime.text
-import textwrap
 from unittest.mock import MagicMock, patch
 
 import pytest

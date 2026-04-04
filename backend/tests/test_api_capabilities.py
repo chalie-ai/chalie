@@ -13,7 +13,7 @@ overrides the autouse fixture's active patch (inner context managers win).
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from flask import Flask
 from api.capabilities import capabilities_bp

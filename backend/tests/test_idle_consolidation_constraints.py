@@ -5,7 +5,6 @@ Verifies that recurring gate rejection patterns get consolidated into
 episodic memory as constraint_learning episodes.
 """
 
-import json
 import time
 import pytest
 from unittest.mock import patch, MagicMock

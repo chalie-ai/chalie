@@ -9,8 +9,7 @@ No real SQLite, no real embeddings, no real LLM calls.
 """
 
 import json
-import threading
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import patch
 
 import pytest
 
@@ -21,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 # ─── Service factory ──────────────────────────────────────────────────────────
 
-def _make_service(store: MemoryStore = None) -> "sms_mod.SituationModelService":
+def _make_service(store: MemoryStore = None):
     """Return a fresh SituationModelService instance wired to a real MemoryStore.
 
     Reloads the service module each call so module-level singleton state does
@@ -554,7 +553,6 @@ class TestMetaVersion:
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_focus", return_value={"active": False, "topic": None, "distraction": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -576,7 +574,6 @@ class TestMetaVersion:
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_focus", return_value={"active": False, "topic": None, "distraction": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -624,7 +621,6 @@ class TestStalenessTracking:
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_focus", return_value={"active": False, "topic": None, "distraction": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -653,7 +649,6 @@ class TestGracefulDegradation:
 
         patches = [
             patch.object(svc, "_collect_ambient", side_effect=_raise),
-            patch.object(svc, "_collect_focus", side_effect=_raise),
             patch.object(svc, "_collect_topic", side_effect=_raise),
             patch.object(svc, "_collect_identity", side_effect=_raise),
             patch.object(svc, "_collect_client", side_effect=_raise),
@@ -807,7 +802,6 @@ class TestCacheRead:
         svc = _make_service(store)
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_focus", return_value={"active": False, "topic": None, "distraction": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \

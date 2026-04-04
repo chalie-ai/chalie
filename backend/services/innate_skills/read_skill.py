@@ -19,9 +19,9 @@ import os
 import re
 import socket
 import urllib3
+from urllib.parse import urljoin, urlparse
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
 

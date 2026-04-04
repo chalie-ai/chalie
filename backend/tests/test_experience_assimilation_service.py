@@ -1,8 +1,7 @@
 """Tests for ExperienceAssimilationService — tool output -> episodic memory pipeline."""
 
-import json
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from services.experience_assimilation_service import ExperienceAssimilationService
 

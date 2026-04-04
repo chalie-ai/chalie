@@ -44,7 +44,7 @@ def conversation_recent():
         tcs = ThreadConversationService()
         from_expired = False
 
-        # After restart MemoryStore is empty — resolve thread from SQLite
+        # Resolve thread: MemoryStore pointer first, then SQLite
         if not thread_id:
             thread_id, from_expired = tcs.get_most_recent_thread_id()
             if not thread_id:
@@ -56,18 +56,9 @@ def conversation_recent():
                     "working_memory_count": WORKING_MEMORY_SIZE,
                     "from_expired": False,
                 }), 200
-        else:
-            # Check if the active thread has any exchanges (MemoryStore or SQLite)
-            active_total = tcs.store.llen(tcs._conv_key(thread_id))
-            if active_total == 0:
-                # Try SQLite fallback for active thread first
-                page = tcs.get_paginated_history(thread_id, limit=1, offset=0)
-                if page["total"] == 0:
-                    thread_id, from_expired = tcs.get_most_recent_thread_id()
-                    if not thread_id:
-                        from_expired = False
 
-        page = tcs.get_paginated_history(thread_id, limit=limit, offset=offset)
+        # Always read from SQLite — survives restarts, no MemoryStore dependency
+        page = tcs.get_paginated_history_durable(thread_id, limit=limit, offset=offset)
         total = page["total"]
         exchanges_raw = page["exchanges"]
         has_more = page["has_more"]

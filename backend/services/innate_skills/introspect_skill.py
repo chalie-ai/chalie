@@ -317,11 +317,6 @@ def _tool_summary(tool_name: str) -> str:
 def _scope_reasoning_state() -> str:
     parts = []
 
-    # Focus session
-    focus_line = _reasoning_focus()
-    if focus_line:
-        parts.append(focus_line)
-
     # Persistent tasks
     task_line = _reasoning_persistent_tasks()
     if task_line:
@@ -340,10 +335,6 @@ def _scope_reasoning_state() -> str:
     if not parts:
         return 'No active reasoning state.'
     return '\n'.join(parts)
-
-
-def _reasoning_focus() -> str:
-    return ''
 
 
 def _reasoning_persistent_tasks() -> str:

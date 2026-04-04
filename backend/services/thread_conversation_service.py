@@ -67,7 +67,7 @@ class ThreadConversationService:
             if self._insert_counter % _PURGE_EVERY == 0:
                 self._maybe_purge()
         except Exception as e:
-            logger.debug(f"[THREAD_CONV] SQLite persist failed: {e}")
+            logger.error(f"[THREAD_CONV] SQLite persist FAILED for exchange {exchange_id}: {e}", exc_info=True)
 
     def _persist_response(self, thread_id: str, exchange_id: str, response_message: str = None,
                           response_error: str = None, generation_time: float = None):
@@ -82,7 +82,7 @@ class ThreadConversationService:
                  generation_time, exchange_id)
             )
         except Exception as e:
-            logger.debug(f"[THREAD_CONV] SQLite response persist failed: {e}")
+            logger.error(f"[THREAD_CONV] SQLite response persist FAILED for {exchange_id}: {e}", exc_info=True)
 
     def _persist_json_field(self, exchange_id: str, field: str, value):
         """Write-through: UPDATE a JSON column by exchange_id."""
@@ -92,7 +92,7 @@ class ThreadConversationService:
                 (json.dumps(value), exchange_id)
             )
         except Exception as e:
-            logger.debug(f"[THREAD_CONV] SQLite {field} persist failed: {e}")
+            logger.error(f"[THREAD_CONV] SQLite {field} persist FAILED for {exchange_id}: {e}", exc_info=True)
 
     def _maybe_purge(self):
         """Delete oldest exchanges when table exceeds MAX_SQLITE_EXCHANGES."""
@@ -129,7 +129,7 @@ class ThreadConversationService:
             )
             rows = list(reversed(rows))  # Restore chronological order
         except Exception as e:
-            logger.debug(f"[THREAD_CONV] SQLite load failed: {e}")
+            logger.error(f"[THREAD_CONV] SQLite load failed: {e}", exc_info=True)
             return []
 
         if not rows:
@@ -387,6 +387,9 @@ class ThreadConversationService:
     def get_paginated_history(self, thread_id: str, limit: int = 12, offset: int = 0) -> dict:
         """Get a paginated slice of conversation history for a thread.
 
+        Uses MemoryStore as hot cache, falls back to SQLite.
+        For cold-start / page-load use get_paginated_history_durable() instead.
+
         Args:
             thread_id: Thread identifier.
             limit: Number of exchanges to return.
@@ -416,12 +419,97 @@ class ThreadConversationService:
         has_more = (offset + limit) < total
         return {"exchanges": exchanges, "total": total, "has_more": has_more}
 
+    def get_paginated_history_durable(self, thread_id: str, limit: int = 12, offset: int = 0) -> dict:
+        """Get paginated conversation history directly from SQLite.
+
+        Reads from the durable store, bypassing MemoryStore entirely.
+        Queries across ALL user-chat threads for the same channel so the
+        conversation history appears continuous (threads are an internal
+        lifecycle concept, not a UI boundary).
+
+        Args:
+            thread_id: Thread identifier (used to derive the channel prefix).
+            limit: Number of exchanges to return.
+            offset: Number of exchanges to skip from the END (0 = most recent).
+
+        Returns:
+            Dict with keys: exchanges (chronological slice), total, has_more.
+        """
+        # Derive channel prefix: "text:default:20" → "text:default:%"
+        # This matches all threads for the same channel (text:default:1, :2, …)
+        parts = thread_id.rsplit(":", 1)
+        channel_prefix = f"{parts[0]}:%" if len(parts) == 2 else thread_id
+
+        try:
+            rows_total = self._db.fetch_all(
+                "SELECT COUNT(*) AS cnt FROM thread_exchanges WHERE thread_id LIKE ?",
+                (channel_prefix,)
+            )
+            total = rows_total[0]["cnt"] if rows_total else 0
+        except Exception as e:
+            logger.error(f"[THREAD_CONV] SQLite count failed for {channel_prefix}: {e}")
+            return {"exchanges": [], "total": 0, "has_more": False}
+
+        if total == 0:
+            return {"exchanges": [], "total": 0, "has_more": False}
+
+        # SQL pagination: offset from end, return in chronological order
+        sql_offset = offset
+        try:
+            rows = self._db.fetch_all(
+                """SELECT id, topic, prompt_message, prompt_time,
+                          response_message, response_time, response_error,
+                          generation_time_ms, steps, memory_chunk
+                   FROM thread_exchanges
+                   WHERE thread_id LIKE ?
+                   ORDER BY rowid DESC
+                   LIMIT ? OFFSET ?""",
+                (channel_prefix, limit, sql_offset)
+            )
+            rows = list(reversed(rows))  # chronological order
+        except Exception as e:
+            logger.error(f"[THREAD_CONV] SQLite paginated load failed for {channel_prefix}: {e}")
+            return {"exchanges": [], "total": 0, "has_more": False}
+
+        exchanges = []
+        for row in rows:
+            exchange = {
+                "id": row["id"],
+                "topic": row["topic"],
+                "prompt": {
+                    "id": row["id"],
+                    "message": row["prompt_message"],
+                    "time": row["prompt_time"],
+                },
+                "response": None,
+                "steps": json.loads(row["steps"] or "[]"),
+                "memory_chunk": json.loads(row["memory_chunk"] or "{}"),
+            }
+            if row["response_message"]:
+                exchange["response"] = {
+                    "message": row["response_message"],
+                    "time": row["response_time"],
+                    "generation_time": row["generation_time_ms"] or 0,
+                }
+            elif row["response_error"]:
+                exchange["response"] = {
+                    "error": row["response_error"],
+                    "time": row["response_time"],
+                }
+            exchanges.append(exchange)
+
+        has_more = (offset + limit) < total
+        return {"exchanges": exchanges, "total": total, "has_more": has_more}
+
     def get_most_recent_thread_id(self) -> tuple[Optional[str], bool]:
         """Return the most recent thread from SQLite — active first, then expired.
 
         After a server restart MemoryStore is empty, so the active_thread
         pointer is gone.  This queries SQLite to find the thread that should
         be displayed.
+
+        Falls back to thread_exchanges if the threads table has no match
+        (handles edge case where thread persist failed but exchanges were saved).
 
         Returns:
             (thread_id, from_expired) — thread_id or None, and whether
@@ -451,9 +539,27 @@ class ThreadConversationService:
                     LIMIT 1
                 """)
                 row = cursor.fetchone()
+                if row:
+                    cursor.close()
+                    return row[0], True
+                # Last resort: no matching thread row, but exchanges may exist
+                # (thread persist failed silently, exchange persist succeeded)
+                cursor.execute("""
+                    SELECT thread_id FROM thread_exchanges
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
                 cursor.close()
-                return (row[0], True) if row else (None, False)
-        except Exception:
+                if row:
+                    logger.warning(
+                        f"[THREAD_CONV] Thread table had no match — "
+                        f"recovered thread_id from exchanges: {row[0]}"
+                    )
+                    return row[0], True
+                return None, False
+        except Exception as e:
+            logger.error(f"[THREAD_CONV] get_most_recent_thread_id failed: {e}", exc_info=True)
             return None, False
 
     def get_most_recent_expired_thread_id(self) -> Optional[str]:

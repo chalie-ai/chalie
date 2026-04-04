@@ -1,0 +1,26 @@
+name: Announce release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fire announce webhook
+        env:
+          RELEASE_VERSION:          ${{ github.ref_name }}
+          N8N_ANNOUNCE_WEBHOOK_URL: ${{ secrets.N8N_ANNOUNCE_WEBHOOK_URL }}
+        run: node scripts/announce-release.js

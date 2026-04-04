@@ -3,7 +3,6 @@ Tests for FolderWatcherService — CRUD, directory browsing, scan logic.
 """
 
 import json
-import os
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +12,6 @@ from services.folder_watcher_service import (
     MAX_ENQUEUE_PER_SCAN,
     MISSING_THRESHOLD,
     MIN_SCAN_INTERVAL,
-    ALLOWED_EXTENSIONS,
 )
 from services.database_service import get_shared_db_service
 
@@ -88,7 +86,7 @@ class TestCreateFolder:
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/real/test/folder')
-    def test_creates_folder_and_returns_dict(self, mock_real, mock_isdir, mock_access, db):
+    def test_creates_folder_and_returns_dict(self, mock_real, mock_isdir, _mock_access, db):
         svc = FolderWatcherService(get_shared_db_service())
 
         result = svc.create_folder('/test/folder', label='My Docs')
@@ -112,14 +110,14 @@ class TestCreateFolder:
     @patch('services.folder_watcher_service.os.access', return_value=False)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/unreadable')
-    def test_rejects_unreadable_path(self, mock_real, mock_isdir, mock_access, service):
+    def test_rejects_unreadable_path(self, mock_real, mock_isdir, _mock_access, service):
         with pytest.raises(PermissionError, match="not readable"):
             service.create_folder('/unreadable')
 
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/real/test')
-    def test_enforces_min_scan_interval(self, mock_real, mock_isdir, mock_access, db):
+    def test_enforces_min_scan_interval(self, mock_real, mock_isdir, _mock_access, db):
         svc = FolderWatcherService(get_shared_db_service())
 
         result = svc.create_folder('/test', scan_interval=10)
@@ -193,7 +191,7 @@ class TestUpdateFolder:
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/new/path')
-    def test_validates_new_folder_path(self, mock_real, mock_isdir, mock_access, db):
+    def test_validates_new_folder_path(self, mock_real, mock_isdir, _mock_access, db):
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
 
@@ -262,7 +260,7 @@ class TestBrowseDirectory:
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/test')
-    def test_returns_directory_structure(self, mock_real, mock_isdir, mock_access, service):
+    def test_returns_directory_structure(self, mock_real, mock_isdir, _mock_access, service):
         mock_entries = []
         for name in ['Documents', 'Desktop', '.hidden']:
             entry = MagicMock()
@@ -290,7 +288,7 @@ class TestBrowseDirectory:
     @patch('services.folder_watcher_service.os.access', return_value=False)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/unreadable')
-    def test_rejects_unreadable_directory(self, mock_real, mock_isdir, mock_access, service):
+    def test_rejects_unreadable_directory(self, mock_real, mock_isdir, _mock_access, service):
         with pytest.raises(PermissionError):
             service.browse_directory('/unreadable')
 
@@ -298,7 +296,7 @@ class TestBrowseDirectory:
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath')
     @patch('services.folder_watcher_service.os.path.expanduser')
-    def test_defaults_to_home_dir(self, mock_expand, mock_real, mock_isdir, mock_access, service):
+    def test_defaults_to_home_dir(self, mock_expand, mock_real, mock_isdir, _mock_access, service):
         mock_expand.return_value = '/Users/testuser'
         mock_real.return_value = '/Users/testuser'
 
@@ -404,7 +402,7 @@ class TestScanNewFiles:
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
     @patch('services.folder_watcher_service.mimetypes')
-    def test_detects_new_file(self, mock_mt, mock_size, mock_isdir, db):
+    def test_detects_new_file(self, mock_mt, _mock_size, mock_isdir, db):
         """scan_folder creates a document record and enqueues it for a brand-new file."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
@@ -435,7 +433,7 @@ class TestScanNewFiles:
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
     @patch('services.folder_watcher_service.mimetypes')
-    def test_rate_limits_new_files(self, mock_mt, mock_size, mock_isdir, db):
+    def test_rate_limits_new_files(self, mock_mt, _mock_size, mock_isdir, db):
         """scan_folder caps enqueuing at MAX_ENQUEUE_PER_SCAN new files per cycle."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
@@ -473,7 +471,7 @@ class TestScanModifiedFiles:
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.getsize', return_value=2048)
     @patch('services.folder_watcher_service.mimetypes')
-    def test_detects_modified_file(self, mock_mt, mock_size, mock_isdir, db):
+    def test_detects_modified_file(self, mock_mt, _mock_size, mock_isdir, db):
         """scan_folder supersedes a document when the file content changes on disk."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())

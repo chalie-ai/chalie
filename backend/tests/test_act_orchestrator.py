@@ -6,9 +6,8 @@ embedding-based repetition, escalation hints, persistent_task exit,
 all termination reasons.
 """
 
-import time
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from services.memory_store import MemoryStore
 from services.act_orchestrator_service import (
@@ -372,7 +371,7 @@ class TestMethodologyLearning:
         ])
 
         orchestrator = ACTOrchestrator(config={}, max_iterations=5, smart_repetition=False)
-        result = orchestrator.run(
+        orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
@@ -676,7 +675,7 @@ class TestAppendMode:
             orchestrator = ACTOrchestrator(
                 config={}, max_iterations=5, smart_repetition=False,
             )
-            result = orchestrator.run(
+            orchestrator.run(
                 topic='test', text='what is the weather?', cortex_service=cortex,
                 act_prompt='test', classification={'topic': 't', 'confidence': 10},
                 chat_history=[],
@@ -731,7 +730,7 @@ class TestAppendMode:
         orchestrator = ACTOrchestrator(
             config={}, max_iterations=5, smart_repetition=False,
         )
-        result = orchestrator.run(
+        orchestrator.run(
             topic='test', text='test', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
@@ -776,7 +775,7 @@ class TestAppendMode:
         orchestrator = ACTOrchestrator(
             config={}, max_iterations=5, smart_repetition=False,
         )
-        result = orchestrator.run(
+        orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
             act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
             chat_history=[],

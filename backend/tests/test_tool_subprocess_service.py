@@ -13,7 +13,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-from services.tool_subprocess_service import ToolSubprocessService
+from services.tool_subprocess_service import ToolSubprocessService  # noqa: E402
 
 
 @pytest.fixture
@@ -252,7 +252,7 @@ class TestRunInteractive:
         callback = MagicMock(return_value="ok")
 
         with patch("services.tool_subprocess_service.subprocess.Popen", return_value=mock_proc):
-            result = svc.run_interactive(
+            svc.run_interactive(
                 "/fake/runner.py", {"params": {}}, on_tool_output=callback
             )
 

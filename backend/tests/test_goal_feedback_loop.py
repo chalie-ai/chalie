@@ -1,7 +1,7 @@
 """Tests for H1.3 — Goal feedback loop wiring."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.mark.unit
@@ -117,7 +117,7 @@ class TestProactiveEngagementCorrelation:
         """Ignored response increments goal:recent_ignored_count."""
         mock_store.setex("proactive_response_tag:topic2", 14400, "goal-789")
 
-        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+        with patch('services.goal_ecology_service.GoalEcologyService'):
             from workers.digest_worker import _try_proactive_engagement_correlation
             _try_proactive_engagement_correlation("", "topic2")
 
@@ -130,7 +130,7 @@ class TestProactiveEngagementCorrelation:
         mock_store.setex("proactive_response_tag:topic3", 14400, "goal-abc")
         mock_store.setex("goal:recent_ignored_count", 86400, "3")
 
-        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+        with patch('services.goal_ecology_service.GoalEcologyService'):
             from workers.digest_worker import _try_proactive_engagement_correlation
             _try_proactive_engagement_correlation(
                 "yes please, tell me more about this",

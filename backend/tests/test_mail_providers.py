@@ -4,7 +4,6 @@ import pytest
 
 from capabilities.mail_capability.providers import (
     ServerSettings,
-    UnifiedProvider,
     discover_provider,
     list_supported_providers,
 )

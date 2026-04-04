@@ -22,41 +22,46 @@ and a lazy singleton accessor for the shared ``ContextAssemblyService``
 """
 
 import json
-import re
+import os
 import time
 import logging
 
-logger = logging.getLogger(__name__)
-from services import ConfigService, FrontalCortexService, OrchestratorService, SessionService
+from services import FrontalCortexService
 from services.llm_service import create_llm_service
 from services.world_state_service import WorldStateService
 from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
-from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
+from services.mode_router_service import collect_routing_signals, compute_nlp_signals
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
-from services.context_relevance_service import ContextRelevanceService
-from services.context_assembly_service import ContextAssemblyService
 from services.innate_skills.registry import ALL_SKILL_NAMES
 
-# Global session service instance (shared across worker invocations)
-_session_service = None
+# Singleton getters — canonical implementations live in digest_singletons.py;
+# re-exported here so existing ``from workers.digest_worker import get_*`` still works.
+from workers.digest_singletons import (          # noqa: F401
+    get_context_relevance_service,
+    get_context_assembly_service,
+    get_orchestrator,
+    get_thread_conv_service,
+    get_session_service,
+    get_mode_router,
+    load_configs,
+)
 
-# Global mode router instance (shared across invocations)
-_mode_router = None
+# Post-exchange hooks — canonical implementations live in post_exchange_hooks.py;
+# re-exported here so existing ``from workers.digest_worker import _run_*`` still works.
+from workers.post_exchange_hooks import (         # noqa: F401
+    _run_iip_hook,
+    _run_belief_correction_hook,
+    _classify_engagement,
+    _try_proactive_engagement_correlation,
+    _detect_fork_response,
+    _store_adaptive_signals,
+)
 
-# Global orchestrator instance
-_orchestrator = None
-
-# Global thread conversation service
-_thread_conv_service = None
-
-# Global context relevance service
-_context_relevance_service = None
-
-import os
+logger = logging.getLogger(__name__)
 _LOG_PROMPTS = os.environ.get('CHALIE_LOG_PROMPTS') == '1'
 
 
@@ -98,82 +103,6 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
     return contexts
 
 
-def get_context_relevance_service():
-    """Get or create global ContextRelevanceService instance."""
-    global _context_relevance_service
-    if _context_relevance_service is None:
-        _context_relevance_service = ContextRelevanceService()
-    return _context_relevance_service
-
-
-_context_assembly_service = None
-
-
-def get_context_assembly_service():
-    """Return the module-level singleton ``ContextAssemblyService`` instance.
-
-    The service is created lazily on first access and reused for the lifetime
-    of the worker process, avoiding repeated initialisation overhead across
-    queue items.
-
-    Returns:
-        ContextAssemblyService: Shared context assembly service instance
-            initialised with an empty configuration override dict.
-    """
-    global _context_assembly_service
-    if _context_assembly_service is None:
-        _context_assembly_service = ContextAssemblyService({})
-    return _context_assembly_service
-
-
-def get_orchestrator():
-    """Get or create global OrchestratorService instance."""
-    global _orchestrator
-    if _orchestrator is None:
-        _orchestrator = OrchestratorService()
-    return _orchestrator
-
-
-def get_thread_conv_service() -> ThreadConversationService:
-    """Get or create global ThreadConversationService instance."""
-    global _thread_conv_service
-    if _thread_conv_service is None:
-        _thread_conv_service = ThreadConversationService()
-    return _thread_conv_service
-
-
-def get_session_service():
-    """Get or create global session service instance."""
-    global _session_service
-    if _session_service is None:
-        episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        inactivity_timeout = episodic_config.get('inactivity_timeout', 600)
-        _session_service = SessionService(inactivity_timeout=inactivity_timeout)
-    return _session_service
-
-
-def get_mode_router():
-    """Get or create global mode router instance."""
-    global _mode_router
-    if _mode_router is None:
-        import os
-        # Prefer generated config (from stability regulator) over base config
-        generated_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "configs", "generated", "mode_router_config.json"
-        )
-        if os.path.exists(generated_path):
-            try:
-                with open(generated_path, 'r') as f:
-                    router_config = json.load(f)
-                logging.info("[DIGEST] Loaded generated mode router config")
-            except Exception as e:
-                logger.debug(f"[DIGEST] Failed to load generated mode router config, using default: {e}")
-                router_config = ConfigService.get_agent_config("mode-router")
-        else:
-            router_config = ConfigService.get_agent_config("mode-router")
-        _mode_router = ModeRouterService(router_config)
-    return _mode_router
 
 
 def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_id: str = None):
@@ -273,13 +202,19 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                     confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
                     decay_class = 'permanent' if is_permanent else 'standard'
 
-                    ks.store(
+                    stored_entry = ks.store(
                         kind='trait', entity='user', key=key, value=value,
                         data={'category': 'core' if is_permanent else 'preference'},
                         decay_class=decay_class,
                         confidence=confidence, source='llm_extraction',
                     )
                     stored_count += 1
+
+                    # Inline contradiction check — uses rowid from returned dict
+                    if stored_entry:
+                        new_id = stored_entry.get('rowid') or stored_entry.get('id')
+                        if new_id:
+                            _check_trait_contradiction(ks, new_id, key, value, confidence, thread_id, source='chat')
 
                 if stored_count > 0:
                     _synthesize_user_sentence(db, provider_config)
@@ -339,6 +274,8 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 if not sentence:
                     return
 
+                from services.knowledge_service import KnowledgeService
+                ks = KnowledgeService(db)
                 ks.store(
                     kind='fact', entity='system', key='user_summary',
                     value=sentence, decay_class='permanent',
@@ -355,27 +292,71 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
         logging.debug(f"[TRAIT_EXTRACT] Enqueue failed: {e}")
 
 
-def load_configs():
-    """Load frontal cortex mode-specific prompts and configurations."""
-    soul_prompt = ConfigService.get_agent_prompt("soul")
-    identity_prompt = ConfigService.get_agent_prompt("identity-core")
-    cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
+def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, thread_id: str, source: str = 'chat'):
+    """
+    Runs synchronously after a trait is stored.
+    - temporal_change + source=chat → hard-delete old trait
+    - true_contradiction OR source=ambient → reduce confidences, create pending record, push question
+    """
+    try:
+        from services.embedding_service import get_embedding_service
+        from services.contradiction_classifier_service import ContradictionClassifierService
+        from services.pending_contradiction_service import PendingContradictionService
+        from services.database_service import get_shared_db_service
+        from services.output_service import OutputService
 
-    # Mode-specific prompts: soul → identity → mode prompt (instincts + context + contract)
-    # Ordering: values first, then voice, then behavioral nudges closest to generation
-    # ACT does NOT get identity — reasoning stays pure
-    act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
-    unified_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
+        emb_svc = get_embedding_service()
+        new_text = f"{key}: {value}"
+        embedding = emb_svc.generate_embedding(new_text)
+        if embedding is None:
+            return
 
-    return {
-        'cortex': {
-            'config': cortex_config,
-            'prompt_map': {
-                'ACT': act_prompt,
-                'UNIFIED': unified_prompt,
-            }
-        },
-    }
+        similar = ks.find_similar_traits(embedding, exclude_id=new_id)
+        if not similar:
+            return
+
+        existing = similar[0]  # top candidate only
+        existing_text = f"{existing['key']}: {existing['value']}"
+
+        classifier = ContradictionClassifierService()
+        result = classifier.check_new_trait(new_text, existing_text, source=source)
+        if result is None:
+            return
+
+        classification = result.get('classification', 'compatible')
+
+        if classification == 'temporal_change' and source == 'chat':
+            # Auto-overwrite: hard-delete old trait
+            ks.hard_delete_by_id(existing['id'])
+            logging.info(f"[CONTRADICTION] temporal_change: deleted old trait id={existing['id']} key={existing['key']}")
+
+        elif classification in ('true_contradiction', 'ambiguous') or source == 'ambient':
+            # Ask user: reduce confidences, create pending record, push message
+            ks.update_confidence(existing['id'], existing['confidence'] * 0.75)
+            ks.update_confidence(new_id, 0.5)
+
+            question = (
+                f"I'm seeing two conflicting things about {key}: "
+                f"'{existing['value']}' (existing) and '{value}' (just mentioned). "
+                f"Which is correct? Just tell me and I'll update."
+            )
+
+            db = get_shared_db_service()
+            pending_svc = PendingContradictionService(db)
+            pending_svc.create(new_id, existing['id'], question, source)
+
+            if thread_id:
+                OutputService().enqueue_proactive(
+                    topic=thread_id,
+                    response=question,
+                    source='contradiction',
+                )
+                logging.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
+
+    except Exception as e:
+        logging.debug(f"[CONTRADICTION] Check failed: {e}")
+
+
 
 
 def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool, gists: list = None) -> float:
@@ -457,57 +438,6 @@ def unified_generate(topic, text, classification, thread_conv_service,
             )
     except Exception as e:
         logging.warning(f"[UNIFIED] Context assembly failed: {e}")
-
-    # Contradiction detection — always run for unified (every message may be conversational)
-    if assembled_context is not None:
-        try:
-            from services.contradiction_classifier_service import ContradictionClassifierService
-            from services.uncertainty_service import UncertaintyService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            classifier = ContradictionClassifierService(db_service=db)
-            conflict = classifier.check_ingestion(text)
-            if conflict:
-                conflict_type = conflict.get('classification')
-                mem_a = conflict.get('memory_a', {})
-                mem_b = conflict.get('memory_b', {})
-                unc_svc = UncertaintyService(db)
-
-                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_id = unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=True,
-                        )
-                        unc_svc.resolve_uncertainty(
-                            uncertainty_id=unc_id,
-                            strategy='temporal_supersede',
-                            detail=conflict.get('reasoning', ''),
-                        )
-                elif conflict_type in ('true_contradiction', 'context_dependent'):
-                    assembled_context['contradiction_context'] = {
-                        'classification': conflict_type,
-                        'memory_a_text': mem_a.get('text', ''),
-                        'memory_b_text': mem_b.get('text', ''),
-                        'reasoning': conflict.get('reasoning', ''),
-                        'surface_context': conflict.get('surface_context', ''),
-                    }
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=False,
-                            surface_context=conflict.get('surface_context'),
-                        )
-        except Exception as e:
-            logging.debug(f"[UNIFIED] Ingestion contradiction check skipped: {e}")
 
     # Inject visual context from attached images
     image_contexts = (metadata or {}).get('image_contexts', [])
@@ -758,117 +688,14 @@ def unified_generate(topic, text, classification, thread_conv_service,
     return terminal_response, routing_result
 
 
-def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
-                       mode_router, signals, metadata=None, context_warmth=1.0,
-                       _pre_routing_result=None, relevant_tools=None, selected_tools=None,
-                       selected_skills=None, thread_id=None, returning_from_silence=False,
-                       message_embedding=None):
-    """
-    Thin wrapper around unified_generate() — kept for backward compatibility.
-
-    Called by process_tool_dialog() and _handle_proactive_drift().
-    The mode_router and _pre_routing_result parameters are accepted but unused —
-    unified_generate() handles routing internally.
-
-    Returns:
-        tuple: (response_data dict, routing_result dict)
-    """
-    # Trait extraction — runs in background thread, non-blocking
-    enqueue_trait_extraction(
-        prompt_message=text[:1000],
-        metadata={'source': 'chat'},
-        thread_id=thread_id,
-    )
-
-    response_data, routing_result = unified_generate(
-        topic=topic,
-        text=text,
-        classification=classification,
-        thread_conv_service=thread_conv_service,
-        cortex_config=cortex_config,
-        cortex_prompt_map=cortex_prompt_map,
-        signals=signals,
-        metadata=metadata,
-        thread_id=thread_id,
-        returning_from_silence=returning_from_silence,
-        message_embedding=message_embedding,
-    )
-
-    # Store response
-    thread_conv_service.add_response(
-        thread_id,
-        response_data['response'],
-        response_data['generation_time']
-    )
-
-    # Route through orchestrator
-    if metadata:
-        try:
-            orchestrator = get_orchestrator()
-
-            context = {
-                'topic': topic,
-                'response': response_data.get('response', ''),
-                'confidence': response_data.get('confidence', 0.0),
-                'generation_time': response_data.get('generation_time', 0.0),
-                'destination': metadata.get('destination', 'web'),
-                'metadata': metadata,
-                'actions': response_data.get('actions', []),
-                'clarification_question': None,
-                'reply_actions': response_data.get('reply_actions'),
-            }
-
-            mode = response_data.get('mode', 'UNIFIED')
-            logging.info(f"[FRONTAL CORTEX] Routing through orchestrator: {mode}")
-
-            orchestrator_result = orchestrator.route_path(mode=mode, context=context)
-
-            if orchestrator_result['status'] == 'error':
-                logging.error(f"[ORCHESTRATOR] Error: {orchestrator_result['message']}")
-                try:
-                    from services.output_service import OutputService
-                    OutputService().enqueue_text(
-                        topic=topic,
-                        response=response_data.get('response') or "I ran into an issue. Please try again.",
-                        mode='UNIFIED',
-                        confidence=response_data.get('confidence', 0.0),
-                        generation_time=response_data.get('generation_time', 0.0),
-                        original_metadata=metadata,
-                    )
-                except Exception as oe:
-                    logging.warning(f"[ORCHESTRATOR] Failed to surface error to user: {oe}")
-            else:
-                logging.info(f"[ORCHESTRATOR] Executed {mode}: {orchestrator_result.get('result', {})}")
-        except Exception as e:
-            logging.error(f"[ORCHESTRATOR] Failed: {e}")
-
-    # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
-    if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
-        try:
-            from services.output_service import OutputService
-            OutputService().enqueue_text(
-                topic=topic,
-                response='',
-                mode='ACT',
-                confidence=response_data.get('confidence', 1.0),
-                generation_time=response_data.get('generation_time', 0.0),
-                original_metadata=metadata,
-                reply_actions=response_data.get('reply_actions'),
-            )
-        except Exception as e:
-            logging.warning(f"[IGNORE] Failed to publish empty-text message event: {e}")
-
-    return response_data, routing_result
-
-
 def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
     """
     Process tool data through Chalie's full cognitive pipeline (including ACT loop).
 
-    Called synchronously during an interactive tool↔Chalie dialog. Returns response text
+    Called synchronously during an interactive tool-Chalie dialog. Returns response text
     to be written back to the tool container's stdin. Does NOT surface to the user.
 
-    Memory is stored with memory_durability='tool_internal' — weaker than cron_tool,
+    Memory is stored with memory_durability='tool_internal' -- weaker than cron_tool,
     so the user can ask "did that tool ask you something?" but the tool dialog doesn't
     alter long-term behavioral patterns.
 
@@ -900,7 +727,7 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
             'topic_update': '',
         }
 
-        # Build minimal routing signals — tool dialogs don't need full signal collection
+        # Build minimal routing signals -- tool dialogs don't need full signal collection
         signals = {'_prompt_text': text}
 
         try:
@@ -915,22 +742,34 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         except Exception as e:
             logging.warning(f"[TOOL DIALOG] Context assembly failed for '{tool_name}': {e}")
 
-        mode_router = get_mode_router()
+        # Trait extraction -- runs in background thread, non-blocking
+        enqueue_trait_extraction(
+            prompt_message=text[:1000],
+            metadata={'source': 'chat'},
+            thread_id=thread_id,
+        )
 
-        # Route through full pipeline (may engage ACT loop if mode router selects ACT)
+        # Generate response via unified pipeline (may engage ACT loop)
         # metadata=None means orchestrator does NOT deliver to user
-        response_data, _ = route_and_generate(
+        response_data, _ = unified_generate(
             topic=topic,
             text=text,
             classification=classification,
             thread_conv_service=thread_conv_service,
             cortex_config=cortex_config,
             cortex_prompt_map=cortex_prompt_map,
-            mode_router=mode_router,
             signals=signals,
             metadata=None,
-            context_warmth=0.5,
             thread_id=thread_id,
+            returning_from_silence=False,
+            message_embedding=None,
+        )
+
+        # Store response in conversation history
+        thread_conv_service.add_response(
+            thread_id,
+            response_data['response'],
+            response_data['generation_time']
         )
 
         response = response_data.get('response', '')
@@ -981,6 +820,162 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
         logging.warning(f"[TOOL DIALOG] Memory storage failed for '{tool_name}': {e}")
 
 
+def _run_response_pipeline(
+    *,
+    text,
+    topic,
+    classification,
+    thread_id,
+    metadata,
+    cortex_config,
+    prompt_template,
+    generation_config,
+    destination='web',
+    trait_extraction_meta=None,
+    log_event_type=None,
+    log_payload=None,
+    log_source=None,
+    log_tag='PIPELINE',
+    working_memory=None,
+    wm_key=None,
+):
+    """Shared response pipeline for cron-tool and proactive-drift handlers.
+
+    Covers the common steps: context assembly, FrontalCortexService generation,
+    empty-response check, working-memory append, conversation history store,
+    orchestrator routing, trait extraction, and interaction logging.
+
+    Args:
+        text: The prompt text for generation.
+        topic: Topic key for context assembly and orchestrator.
+        classification: Classification dict for context/generation.
+        thread_id: Resolved thread ID.
+        metadata: Full metadata dict (passed to orchestrator).
+        cortex_config: Base cortex config dict.
+        prompt_template: System prompt template string for FrontalCortexService.
+        generation_config: Config dict for FrontalCortexService (may differ from cortex_config).
+        destination: Delivery destination (default 'web').
+        trait_extraction_meta: Dict passed as ``metadata`` to ``enqueue_trait_extraction``.
+        log_event_type: Event type string for interaction log (None to skip).
+        log_payload: Payload dict for interaction log (response text is injected automatically).
+        log_source: Source string for interaction log.
+        log_tag: Tag for log messages (e.g. 'CRON TOOL', 'PROACTIVE').
+        working_memory: Optional WorkingMemoryService instance for WM append.
+        wm_key: Key for working memory append (defaults to ``thread_id or topic``).
+
+    Returns:
+        tuple: (response_data dict, is_empty bool) where is_empty is True
+            when the LLM produced an empty response and the caller should
+            return an early-exit status string.
+    """
+    thread_conv_service = get_thread_conv_service()
+
+    # Context relevance
+    inclusion_map = None
+    try:
+        inclusion_map = get_context_relevance_service().compute_inclusion_map(
+            mode='UNIFIED', signals={}, classification=classification,
+        )
+    except Exception as e:
+        logging.warning(f"[{log_tag}] Context relevance failed: {e}")
+
+    # Context assembly
+    assembled_context = None
+    try:
+        from services.topic_context import TopicContext
+        _ctx = TopicContext(topic=topic, thread_id=thread_id)
+        assembled_context = get_context_assembly_service().assemble(
+            prompt=text, topic=topic, thread_id=thread_id,
+            context=_ctx,
+        )
+        if _ctx.failed_sections:
+            logging.warning(f"[{log_tag}] Context assembly had failures: {_ctx.failed_sections}")
+    except Exception as e:
+        logging.warning(f"[{log_tag}] Context assembly failed: {e}")
+
+    # Generation
+    cortex_service = FrontalCortexService(generation_config)
+    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
+
+    response_data = cortex_service.generate_response(
+        system_prompt_template=prompt_template,
+        original_prompt=text,
+        classification=classification,
+        chat_history=chat_history,
+        thread_id=thread_id,
+        inclusion_map=inclusion_map,
+        assembled_context=assembled_context,
+    )
+
+    # Force UNIFIED mode (both cron and proactive bypass mode routing)
+    response_data['mode'] = 'UNIFIED'
+
+    # Empty response check
+    if not response_data.get('response', '').strip():
+        logging.info(f"[{log_tag}] Empty response generated -- skipping delivery")
+        return response_data, True
+
+    # Working memory append
+    if working_memory is not None:
+        _wm_key = wm_key or thread_id or topic
+        working_memory.append_turn(_wm_key, 'assistant', response_data['response'])
+
+    # Store response in conversation history
+    if thread_id:
+        thread_conv_service.add_response(
+            thread_id, response_data['response'], response_data.get('generation_time', 0.0)
+        )
+
+    # Orchestrator routing
+    try:
+        orchestrator = get_orchestrator()
+        context = {
+            'topic': topic,
+            'response': response_data['response'],
+            'confidence': response_data.get('confidence', 0.5),
+            'generation_time': response_data.get('generation_time', 0.0),
+            'destination': destination,
+            'metadata': metadata,
+            'actions': [],
+        }
+        orchestrator.route_path(mode='UNIFIED', context=context)
+    except Exception as e:
+        logging.error(f"[{log_tag}] Orchestrator failed: {e}")
+
+    # Trait extraction
+    if trait_extraction_meta is not None:
+        try:
+            enqueue_trait_extraction(
+                prompt_message=text,
+                metadata=trait_extraction_meta,
+                thread_id=thread_id,
+            )
+        except Exception as e:
+            logging.warning(f"[{log_tag}] Trait extraction enqueue failed: {e}")
+
+    # Interaction logging
+    if log_event_type:
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+            db_service = get_shared_db_service()
+            log_service = InteractionLogService(db_service)
+            payload = dict(log_payload) if log_payload else {}
+            payload.setdefault('response', response_data['response'][:500])
+            payload.setdefault('generation_time', response_data.get('generation_time', 0))
+            log_service.log_event(
+                event_type=log_event_type,
+                payload=payload,
+                topic=topic,
+                source=log_source or log_tag.lower(),
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.debug(f"[{log_tag}] Failed to log {log_event_type} event: {e}", exc_info=True)
+
+    return response_data, False
+
+
 def _handle_cron_tool_result(text: str, metadata: dict) -> str:
     """
     Pipeline for scheduled (cron) tool results.
@@ -1007,128 +1002,53 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
             resolution = thread_service.resolve_thread('default',platform)
             thread_id = resolution.thread_id
 
-        thread_conv_service = get_thread_conv_service()
         working_memory = WorkingMemoryService(
             max_turns=cortex_config.get('max_working_memory_turns', 10)
         )
 
-        # Get recent chat history for context
-        chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-        # Load scheduled tool prompt template
+        # Load scheduled tool prompt template and config
         scheduled_tool_template = ConfigService.get_agent_prompt("frontal-cortex-scheduled-tool")
-
         try:
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
         except Exception as e:
             logging.warning(f"[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config: {e}")
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
 
-        _cron_classification = {
-            'topic': f'cron_tool:{tool_name}',
+        topic = f'cron_tool:{tool_name}'
+        classification = {
+            'topic': topic,
             'confidence': 10,
             'similar_topic': '',
             'topic_update': '',
         }
-        inclusion_map = None
-        try:
-            inclusion_map = get_context_relevance_service().compute_inclusion_map(
-                mode='UNIFIED', signals={}, classification=_cron_classification,
-            )
-        except Exception as e:
-            logging.warning(f"[CRON TOOL] Context relevance failed: {e}")
 
-        assembled_context = None
-        try:
-            from services.topic_context import TopicContext
-            _cron_ctx = TopicContext(topic=f'cron_tool:{tool_name}', thread_id=thread_id)
-            assembled_context = get_context_assembly_service().assemble(
-                prompt=text, topic=f'cron_tool:{tool_name}', thread_id=thread_id,
-                context=_cron_ctx,
-            )
-            if _cron_ctx.failed_sections:
-                logging.warning(f"[CRON TOOL] Context assembly had failures: {_cron_ctx.failed_sections}")
-        except Exception as e:
-            logging.warning(f"[CRON TOOL] Context assembly failed: {e}")
-
-        cortex_service = FrontalCortexService(scheduled_tool_config)
-
-        # Generate response using the scheduled tool prompt
-        response_data = cortex_service.generate_response(
-            system_prompt_template=scheduled_tool_template,
-            original_prompt=text,
-            classification=_cron_classification,
-            chat_history=chat_history,
+        response_data, is_empty = _run_response_pipeline(
+            text=text,
+            topic=topic,
+            classification=classification,
             thread_id=thread_id,
-            inclusion_map=inclusion_map,
-            assembled_context=assembled_context,
+            metadata=metadata,
+            cortex_config=cortex_config,
+            prompt_template=scheduled_tool_template,
+            generation_config=scheduled_tool_config,
+            destination=destination,
+            trait_extraction_meta={
+                'source': f'cron_tool:{tool_name}',
+                'priority': priority,
+            },
+            log_event_type='cron_tool_executed',
+            log_payload={
+                'tool_name': tool_name,
+                'priority': priority,
+            },
+            log_source='cron_tool',
+            log_tag='CRON TOOL',
+            working_memory=working_memory,
+            wm_key=thread_id or topic,
         )
 
-        # Always UNIFIED mode for scheduled tools (bypass mode routing)
-        response_data['mode'] = 'UNIFIED'
-
-        if not response_data.get('response', '').strip():
-            logging.info(f"[CRON TOOL] {tool_name}: Empty response generated — skipping delivery")
+        if is_empty:
             return f"Tool '{tool_name}' | Mode: UNIFIED | Empty response (no updates)"
-
-        # Append assistant turn to working memory
-        working_memory.append_turn(thread_id or f'cron_tool:{tool_name}', 'assistant', response_data['response'])
-
-        # Store response in conversation history
-        if thread_id:
-            thread_conv_service.add_response(
-                thread_id, response_data['response'], response_data.get('generation_time', 0.0)
-            )
-
-        # Route through orchestrator for delivery
-        try:
-            orchestrator = get_orchestrator()
-
-            context = {
-                'topic': f'cron_tool:{tool_name}',
-                'response': response_data['response'],
-                'confidence': response_data.get('confidence', 0.5),
-                'generation_time': response_data.get('generation_time', 0.0),
-                'destination': destination,
-                'metadata': metadata,
-                'actions': [],
-            }
-            orchestrator.route_path(mode='UNIFIED', context=context)
-        except Exception as e:
-            logging.error(f"[CRON TOOL] {tool_name}: Orchestrator failed: {e}")
-
-        try:
-            enqueue_trait_extraction(
-                prompt_message=text,
-                metadata={
-                    'source': f'cron_tool:{tool_name}',
-                    'priority': priority,
-                },
-                thread_id=thread_id,
-            )
-        except Exception as e:
-            logging.warning(f"[CRON TOOL] {tool_name}: Trait extraction enqueue failed: {e}")
-
-        # Log the cron tool execution
-        try:
-            from services.database_service import get_shared_db_service
-            from services.interaction_log_service import InteractionLogService
-            db_service = get_shared_db_service()
-            log_service = InteractionLogService(db_service)
-            log_service.log_event(
-                event_type='cron_tool_executed',
-                payload={
-                    'tool_name': tool_name,
-                    'priority': priority,
-                    'response': response_data['response'][:500],
-                    'generation_time': response_data.get('generation_time', 0),
-                },
-                topic=f'cron_tool:{tool_name}',
-                source='cron_tool',
-                metadata=metadata,
-            )
-        except Exception as e:
-            logger.debug(f"[CRON TOOL] Failed to log cron tool execution event: {e}", exc_info=True)
 
         logging.info(
             f"[CRON TOOL] {tool_name} delivered: priority={priority} "
@@ -1155,7 +1075,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     - Topic classification (topic provided in metadata)
     - Reward evaluation (no previous exchange to evaluate)
 
-    The mode router may select IGNORE for a weak thought — that's a feature.
+    The mode router may select IGNORE for a weak thought -- that's a feature.
     """
     configs = load_configs()
     cortex_config = configs['cortex']['config']
@@ -1167,7 +1087,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     destination = metadata.get('destination', 'web')
 
     # Resolve thread for proactive drift
-    thread_conv_service = get_thread_conv_service()
     thread_id = metadata.get('thread_id')
     if not thread_id:
         platform = metadata.get('source', 'unknown')
@@ -1205,8 +1124,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     # Collect signals for mode routing
     try:
         session_service = get_session_service()
-
-        # The prompt to the router is the drift thought itself
         classification_result = {'confidence': 1.0, 'is_new_topic': False}
 
         signals = collect_routing_signals(
@@ -1222,7 +1139,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         logging.warning(f"[PROACTIVE] Signal collection failed: {e}")
         signals = {}
 
-    # Route through mode router (unbiased — doesn't know this is proactive)
+    # Route through mode router (unbiased -- doesn't know this is proactive)
     try:
         routing_result = mode_router.route(signals, drift_gist)
         selected_mode = routing_result['mode']
@@ -1235,10 +1152,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         selected_mode = 'UNIFIED'
         routing_result = {'mode': 'UNIFIED', 'router_confidence': 0.5, 'routing_time_ms': 0.0}
 
-    # If router says IGNORE, respect it — the thought wasn't worth sharing
+    # If router says IGNORE, respect it -- the thought wasn't worth sharing
     if selected_mode == 'IGNORE':
-        logging.info("[PROACTIVE] Router selected IGNORE — thought filtered")
-        # Record as router_ignored for circuit breaker
+        logging.info("[PROACTIVE] Router selected IGNORE -- thought filtered")
         try:
             from services.autonomous_actions.engagement_tracker import EngagementTracker
             tracker = EngagementTracker()
@@ -1247,7 +1163,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             logger.debug(f"[PROACTIVE] Failed to record router_ignored engagement state: {e}", exc_info=True)
         return f"Topic '{topic}' | Mode: PROACTIVE_IGNORED | Router filtered thought"
 
-    # ACT mode doesn't make sense for proactive thoughts — fall back to UNIFIED
+    # ACT mode doesn't make sense for proactive thoughts -- fall back to UNIFIED
     if selected_mode == 'ACT':
         selected_mode = 'UNIFIED'
 
@@ -1256,63 +1172,41 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         from services.config_service import ConfigService
 
         proactive_template = ConfigService.get_agent_prompt("frontal-cortex-proactive")
-
         try:
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex-proactive")
         except Exception as e:
             logging.warning(f"[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config: {e}")
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex")
 
-        inclusion_map = None
-        try:
-            inclusion_map = get_context_relevance_service().compute_inclusion_map(
-                mode='UNIFIED', signals={}, classification=classification,
-            )
-        except Exception as e:
-            logging.warning(f"[PROACTIVE] Context relevance failed: {e}")
-
-        assembled_context = None
-        try:
-            from services.topic_context import TopicContext
-            _drift_ctx = TopicContext(topic=topic, thread_id=thread_id)
-            assembled_context = get_context_assembly_service().assemble(
-                prompt=drift_gist, topic=topic, thread_id=thread_id,
-                context=_drift_ctx,
-            )
-            if _drift_ctx.failed_sections:
-                logging.warning(f"[PROACTIVE] Context assembly had failures: {_drift_ctx.failed_sections}")
-        except Exception as e:
-            logging.warning(f"[PROACTIVE] Context assembly failed: {e}")
-
-        cortex_service = FrontalCortexService(proactive_config)
-        chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-        response_data = cortex_service.generate_response(
-            system_prompt_template=proactive_template,
-            original_prompt=drift_gist,
+        response_data, is_empty = _run_response_pipeline(
+            text=drift_gist,
+            topic=topic,
             classification=classification,
-            chat_history=chat_history,
             thread_id=thread_id,
-            inclusion_map=inclusion_map,
-            assembled_context=assembled_context,
+            metadata=metadata,
+            cortex_config=cortex_config,
+            prompt_template=proactive_template,
+            generation_config=proactive_config,
+            destination=destination,
+            trait_extraction_meta=None,  # proactive drift does not enqueue trait extraction
+            log_event_type='proactive_sent',
+            log_payload={
+                'mode': selected_mode,
+                'drift_type': drift_type,
+                'proactive_id': proactive_id,
+                'router_confidence': routing_result.get('router_confidence', 0),
+            },
+            log_source='proactive_drift',
+            log_tag='PROACTIVE',
+            working_memory=working_memory,
+            wm_key=thread_id or topic,
         )
 
-        # Proactive messages always deliver as UNIFIED
-        response_data['mode'] = 'UNIFIED'
-        selected_mode = 'UNIFIED'
-
-        if not response_data.get('response', '').strip():
-            logging.info("[PROACTIVE] Empty response generated — skipping delivery")
+        if is_empty:
             return f"Topic '{topic}' | Mode: PROACTIVE_EMPTY | No response generated"
 
-        # Append assistant turn to working memory
-        working_memory.append_turn(thread_id or topic, 'assistant', response_data['response'])
-
-        # Store response in conversation history
-        if thread_id:
-            thread_conv_service.add_response(
-                thread_id, response_data['response'], response_data['generation_time']
-            )
+        # Proactive messages always deliver as UNIFIED
+        selected_mode = 'UNIFIED'
 
         # Store goal_id in MemoryStore for engagement correlation
         goal_id = metadata.get('goal_id') or proactive_id
@@ -1324,47 +1218,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             except Exception as e:
                 logger.debug(f"[PROACTIVE] Failed to store response tag in MemoryStore: {e}", exc_info=True)
 
-        # Route through orchestrator for delivery
-        try:
-            orchestrator = get_orchestrator()
-
-            context = {
-                'topic': topic,
-                'response': response_data['response'],
-                'confidence': response_data.get('confidence', 0.5),
-                'generation_time': response_data.get('generation_time', 0.0),
-                'destination': destination,
-                'metadata': metadata,
-                'actions': [],
-            }
-            orchestrator.route_path(mode=selected_mode, context=context)
-        except Exception as e:
-            logging.error(f"[PROACTIVE] Orchestrator failed: {e}")
-
-        # Log the proactive send
-        try:
-            from services.database_service import get_shared_db_service
-            from services.interaction_log_service import InteractionLogService
-            db_service = get_shared_db_service()
-            log_service = InteractionLogService(db_service)
-            log_service.log_event(
-                event_type='proactive_sent',
-                payload={
-                    'response': response_data['response'][:500],
-                    'mode': selected_mode,
-                    'drift_type': drift_type,
-                    'proactive_id': proactive_id,
-                    'router_confidence': routing_result.get('router_confidence', 0),
-                },
-                topic=topic,
-                source='proactive_drift',
-                metadata=metadata,
-            )
-        except Exception as e:
-            logger.debug(f"[PROACTIVE] Failed to log proactive_sent event: {e}", exc_info=True)
-
         logging.info(
-            f"[PROACTIVE] Delivered: [{drift_type}] → {selected_mode} "
+            f"[PROACTIVE] Delivered: [{drift_type}] -> {selected_mode} "
             f"(proactive_id={proactive_id[:8] if proactive_id else '?'})"
         )
 
@@ -1377,334 +1232,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         logging.error(f"[PROACTIVE] Failed: {e}")
         return f"Topic '{topic}' | ERROR: proactive - {e}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Immediate Identity Promotion (IIP)
-#
-# Deterministic regex patterns for detecting explicit name statements.
-# Written synchronously (before any LLM call) to MemoryStore + SQLite so the name
-# is available within the same request cycle. Target: <5ms. No LLM, no embeddings.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Capture group: one or two tokens, each allowing Unicode letters, apostrophes, hyphens.
-# [^\W\d_] = any Unicode letter (standard re module — no external packages).
-# Accepts any case — casing is normalised on write.
-_IIP_NAME_CAPTURE = (
-    r"([^\W\d_](?:[^\W\d_]|['\-]){0,39}"
-    r"(?:\s+[^\W\d_](?:[^\W\d_]|['\-]){0,39})?)"
-)
-
-_IIP_PATTERNS = [
-    re.compile(r"\bcall me\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-    re.compile(r"\bmy name is\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-    re.compile(r"\bi go by\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-    re.compile(r"\byou can call me\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-    re.compile(r"\bi'?m known as\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-    re.compile(r"\brefer to me as\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
-]
-
-_IIP_STOPWORDS = frozenset([
-    'a', 'an', 'the', 'i', 'me', 'my', 'we', 'you', 'your', 'he', 'she',
-    'they', 'it', 'this', 'that', 'here', 'there', 'done', 'fine', 'good',
-    'okay', 'ok', 'sure', 'yes', 'no', 'maybe', 'later', 'anything',
-    'something', 'nothing', 'everything',
-])
-
-
-def _run_iip_hook(text: str, database_service) -> None:
-    """
-    Detect explicit name statements and write to MemoryStore + SQLite synchronously.
-
-    Deterministic regex only — no LLM, no embedding. Target: <5ms. Never raises.
-    Preserves user's mixed-case input (McDonald, O'Brien); only title-cases
-    when input is all-lowercase.
-    """
-    try:
-        matched_name = None
-        for pattern in _IIP_PATTERNS:
-            m = pattern.search(text)
-            if m:
-                candidate = m.group(1).strip()
-                # Reject stopwords (case-insensitive) and single-char matches
-                if candidate.lower() not in _IIP_STOPWORDS and len(candidate) >= 2:
-                    matched_name = candidate.title() if candidate.islower() else candidate
-                    break
-
-        if not matched_name:
-            return
-
-        from services.identity_state_service import IdentityStateService
-        IdentityStateService().set_field(
-            'name', matched_name, confidence=0.95, provisional=False
-        )
-
-        from services.knowledge_service import KnowledgeService
-        KnowledgeService(database_service).store(
-            kind='trait', entity='user', key='name', value=matched_name,
-            data={'category': 'core'},
-            decay_class='permanent', confidence=0.95, source='iip_hook',
-        )
-        logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
-
-    except Exception as e:
-        logging.warning(f"[IIP] Hook failed (non-fatal): {e}")
-
-
-# Belief correction patterns — detect explicit trait corrections/negations
-_BELIEF_CORRECTION_PATTERNS = [
-    # Direct negation: "I don't like X", "I'm not a Y"
-    re.compile(r"\b(?:I\s+(?:don'?t|do\s+not|never)\s+(?:like|enjoy|want|eat|drink|use|have|prefer|need))\s+(.+)", re.IGNORECASE),
-    re.compile(r"\b(?:I'?m\s+not\s+(?:a\s+)?|I\s+am\s+not\s+(?:a\s+)?)(.+)", re.IGNORECASE),
-
-    # Explicit correction: "actually my X is Y", "my name is actually Y"
-    re.compile(r"\b(?:actually,?\s+)?my\s+(\w+(?:\s+\w+)?)\s+is\s+(?:actually\s+)?(.+)", re.IGNORECASE),
-
-    # Belief correction: "that's wrong about me", "you're wrong about"
-    re.compile(r"\b(?:that'?s\s+(?:wrong|incorrect|not\s+(?:true|right|correct))\s+(?:about\s+me|about\s+that))", re.IGNORECASE),
-    re.compile(r"\b(?:you(?:'re|\s+are)\s+wrong\s+about)", re.IGNORECASE),
-
-    # Retraction: "I never said I liked X", "I didn't say"
-    re.compile(r"\b(?:I\s+never\s+said|I\s+didn'?t\s+say|I\s+didn'?t\s+tell\s+you)", re.IGNORECASE),
-
-    # Stop assuming: "stop assuming", "don't assume"
-    re.compile(r"\b(?:(?:stop|don'?t)\s+(?:assuming|thinking)\s+(?:I|that\s+I))", re.IGNORECASE),
-]
-
-
-def _run_belief_correction_hook(text: str, thread_id: str = None):
-    """
-    Detect explicit belief corrections and update/delete traits.
-    Runs synchronously in Phase A before LLM trait injection.
-    Precision-first: better to miss a correction than delete the wrong trait.
-    """
-    if not any(p.search(text) for p in _BELIEF_CORRECTION_PATTERNS):
-        return
-
-    text_lower = text.lower()
-
-    # GUARDRAIL 1: Require explicit self-reference before any mutation
-    # Prevents "sushi is terrible" from deleting a food preference
-    if not re.search(r"\b(i|me|my|about me)\b", text_lower):
-        return
-
-    try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
-        ks = KnowledgeService(get_shared_db_service())
-
-        traits = ks.get_by_kind('trait', entity='user', limit=100)
-        if not traits:
-            return
-
-        for trait in traits:
-            key = trait.get('key', '')
-            value = trait.get('value', '')
-            confidence = trait.get('confidence', 0)
-
-            # GUARDRAIL 2: Skip low-confidence traits — don't churn noisy data
-            if confidence < 0.4:
-                continue
-
-            # GUARDRAIL 3: Skip empty trait values — "" is substring of everything
-            if not value or not value.strip():
-                continue
-
-            # Check if the user's message negates this specific trait value
-            escaped_value = re.escape(value.lower())
-            if value.lower() in text_lower:
-                negation_near_value = re.search(
-                    rf"\b(?:not|don'?t|never|no longer|isn'?t|aren'?t|wasn'?t|wrong)\b.{{0,30}}\b{escaped_value}\b|"
-                    rf"\b{escaped_value}\b.{{0,30}}\b(?:is wrong|is incorrect|is not right|isn'?t right)\b",
-                    text_lower
-                )
-                if negation_near_value:
-                    ks.forget('user', key)
-                    logging.info(f"[BELIEF CORRECTION] Deleted trait '{key}={value}' — user negated it")
-                    continue
-
-            # Check for "actually my X is Y" pattern (value replacement)
-            # Cap capture at 3 words to avoid trailing clauses
-            replacement_match = re.search(
-                rf"(?:actually,?\s+)?my\s+{re.escape(key.replace('_', ' '))}\s+is\s+(?:actually\s+)?(.+?)(?:\.|,|!|\?|$)",
-                text_lower
-            )
-            if replacement_match:
-                raw_value = replacement_match.group(1).strip()
-                # Cap at 3 words to avoid trailing clause capture
-                new_value = " ".join(raw_value.split()[:3])
-                if new_value and new_value.lower() != value.lower():
-                    ks.update('user', key, value=new_value)
-                    logging.info(f"[BELIEF CORRECTION] Corrected trait '{key}': '{value}' → '{new_value}'")
-
-    except Exception as e:
-        logging.warning(f"[BELIEF CORRECTION] Hook failed (non-fatal): {e}")
-
-
-def _classify_engagement(text: str) -> str:
-    """
-    Classify user engagement with a proactive message.
-    Deterministic, no LLM. Pattern-based classification.
-    Returns: engaged|acknowledged|rejected|ignored
-    """
-    import re
-    text_lower = text.strip().lower()
-
-    if not text_lower:
-        return 'ignored'
-
-    # Acknowledgment patterns (short, non-substantive) — check first
-    ack = re.compile(
-        r'^(ok|okay|sure|thanks|cool|got it|noted|yep|yeah|alright|'
-        r'fine|roger|k|ty|thx|ack)\s*[.!]*$', re.IGNORECASE
-    )
-    if ack.match(text_lower):
-        return 'acknowledged'
-
-    if len(text_lower) < 3:
-        return 'ignored'
-
-    # For substantive messages (>20 chars), check engagement BEFORE rejection
-    # This handles "I don't think that's right but tell me more" correctly
-    engagement_pattern = re.compile(
-        r'\b(yes|please|tell me|show|how|what|why|when|do it|go ahead|'
-        r'more|explain|help|interesting|continue|elaborate)\b', re.IGNORECASE
-    )
-
-    rejection_pattern = re.compile(
-        r'\b(stop|don.t|no thanks|not interested|shut up|leave me|go away|'
-        r'not now|quit|enough|annoying)\b', re.IGNORECASE
-    )
-
-    has_engagement = engagement_pattern.search(text_lower)
-    has_rejection = rejection_pattern.search(text_lower)
-
-    # For longer messages with both signals, engagement wins
-    # (user is still engaging even if they disagree)
-    if len(text_lower) > 20 and has_engagement and has_rejection:
-        # Check if rejection is followed by a "but" clause with engagement
-        if re.search(r'\b(but|however|though|although)\b', text_lower):
-            return 'engaged'
-        # For longer messages, engagement signal wins by default
-        return 'engaged'
-
-    # Pure rejection (short or unambiguous)
-    if has_rejection:
-        return 'rejected'
-
-    # Engaged: longer response, question, or action words
-    if len(text_lower) > 20 or '?' in text or has_engagement:
-        return 'engaged'
-
-    return 'acknowledged'
-
-
-def _try_proactive_engagement_correlation(text: str, topic: str):
-    """
-    Check if user is responding to a proactive message and classify engagement.
-    Uses proactive_response_tag stored in MemoryStore (4h TTL).
-    """
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-
-        tag_key = f"proactive_response_tag:{topic}"
-        goal_id = store.get(tag_key)
-        if not goal_id:
-            return
-
-        # Consume the tag (one-shot correlation)
-        store.delete(tag_key)
-
-        response_type = _classify_engagement(text)
-
-        from services.goal_ecology_service import GoalEcologyService
-        ecology = GoalEcologyService()
-        ecology.record_outcome(goal_id, response_type)
-
-        # Track ignored count for social cost calculation
-        if response_type == 'ignored':
-            ignored_key = 'goal:recent_ignored_count'
-            current = int(store.get(ignored_key) or 0)
-            store.setex(ignored_key, 86400, str(current + 1))
-        elif response_type in ('engaged', 'acknowledged'):
-            store.delete('goal:recent_ignored_count')
-
-        logging.info(
-            f"[DIGEST] Proactive engagement: {response_type} "
-            f"for goal {goal_id[:8]}"
-        )
-    except Exception as e:
-        logging.debug(f"[DIGEST] Proactive engagement correlation failed: {e}")
-
-
-_FORK_RESPONSE_PATTERNS = {
-    'prefers_concise': [r'\b(quick|short|brief|summary|tldr|just.{0,10}(main|key|quick))\b'],
-    'prefers_depth': [r'\b(deep|deeper|detail|more|elaborate|explore|full|thorough)\b'],
-    'enjoys_challenge': [r'\b(challenge|push back|harder|stress.test|poke holes|counterpoint|disagree)\b'],
-}
-
-
-def _detect_fork_response(text: str, thread_id: str):
-    """
-    Detect if the user's message is a response to a previously offered fork.
-
-    If a fork was pending (adaptive_fork_pending:{thread_id} MemoryStore key exists),
-    pattern-match the user's reply and store the corresponding micro-preference.
-    """
-    import re as _re
-    try:
-        from services.memory_client import MemoryClientService
-        from services.database_service import get_shared_db_service
-        from services.knowledge_service import KnowledgeService
-
-        store = MemoryClientService.create_connection()
-        fork_type = store.get(f"adaptive_fork_pending:{thread_id}")
-        if not fork_type:
-            return
-
-        # Match user response to a micro-preference
-        text_lower = text.lower()
-        for pref_key, patterns in _FORK_RESPONSE_PATTERNS.items():
-            if any(_re.search(p, text_lower) for p in patterns):
-                db_service = get_shared_db_service()
-                ks = KnowledgeService(db_service)
-                ks.store(
-                    kind='trait', entity='user', key=pref_key, value='true',
-                    data={'category': 'preference'},
-                    decay_class='standard', confidence=0.75,
-                    source='fork_response',
-                )
-                logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
-                # Clear the pending key
-                store.delete(f"adaptive_fork_pending:{thread_id}")
-                break
-    except Exception as e:
-        logging.debug(f"[DIGEST] Fork response detection failed: {e}")
-
-
-def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
-    """
-    Store a minimal snapshot of current exchange signals to MemoryStore for use by
-    AdaptiveLayerService (energy mirroring, cognitive load).
-
-    Key: adaptive_signals:{thread_id}, TTL: 300s
-    """
-    import json as _json
-    try:
-        from services.memory_client import MemoryClientService
-
-        store = MemoryClientService.create_connection()
-        snapshot = {
-            'prompt_token_count': len(text.split()) if text else 0,
-            'explicit_feedback': signals.get('explicit_feedback') if signals else None,
-        }
-        store.setex(
-            f"adaptive_signals:{thread_id}",
-            300,
-            _json.dumps(snapshot),
-        )
-    except Exception as e:
-        logging.debug(f"[DIGEST] Adaptive signal storage failed: {e}")
 
 
 def digest_worker(text: str, metadata: dict = None) -> str:

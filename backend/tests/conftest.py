@@ -9,9 +9,7 @@ No real external connections. MemoryStore IS the production implementation.
 """
 
 import shutil
-import sys
 import sqlite3
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

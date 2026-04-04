@@ -4,10 +4,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from services.tool_schema_service import (
-    get_skill_schemas,
     get_external_tool_schemas,
     _manifest_to_schema,
-    clear_cache,
 )
 
 

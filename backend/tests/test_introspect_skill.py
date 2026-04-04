@@ -3,7 +3,7 @@ Tests for services/innate_skills/introspect_skill.py
 
 Tests use the real `db` fixture (fully-migrated SQLite) for all database
 interactions.  Non-DB services (SelfModelService, KnowledgeService,
-IdentityService, AutobiographyService, FocusSessionService, MemoryClientService)
+IdentityService, AutobiographyService, MemoryClientService)
 remain mocked where needed because they pull data from Redis/memory stores or
 perform complex internal logic that is not under test here.
 """
@@ -420,9 +420,8 @@ class TestReasoningStateScope:
 
     def test_reasoning_state_no_active_state_fallback_text(self, db):
         """When all sub-parts are empty, the scope returns the fallback sentence."""
-        with patch('services.innate_skills.introspect_skill._reasoning_focus', return_value=''):
-            from services.innate_skills.introspect_skill import _scope_reasoning_state
-            result = _scope_reasoning_state()
+        from services.innate_skills.introspect_skill import _scope_reasoning_state
+        result = _scope_reasoning_state()
 
         assert 'No active reasoning state.' in result
 

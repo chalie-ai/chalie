@@ -1,6 +1,5 @@
 """Tests for goals innate skill."""
 
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -167,14 +166,14 @@ class TestGoalsSkillAdjust:
         svc.update_goal.assert_called_once()
 
     def test_adjust_invalid_timescale(self, mock_store):
-        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+        with patch('services.goal_ecology_service.GoalEcologyService'):
             from services.innate_skills.goals_skill import handle_goals
             result = handle_goals('test-topic', {'action': 'adjust', 'goal_id': 'g1', 'timescale': 'invalid'})
 
         assert 'Invalid timescale' in result
 
     def test_unknown_action(self, mock_store):
-        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+        with patch('services.goal_ecology_service.GoalEcologyService'):
             from services.innate_skills.goals_skill import handle_goals
             result = handle_goals('test-topic', {'action': 'bogus'})
 
@@ -525,7 +524,7 @@ class TestGoalsSkillNarrate:
             MockProxy.return_value.send_message.return_value = mock_response
 
             from services.innate_skills.goals_skill import handle_goals
-            result = handle_goals('test-topic', {'action': 'narrate'})
+            handle_goals('test-topic', {'action': 'narrate'})
 
         # Verify feedback was passed to LLM
         call_args = MockProxy.return_value.send_message.call_args

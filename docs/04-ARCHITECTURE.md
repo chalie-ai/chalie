@@ -161,7 +161,6 @@ Built-in cognitive skills for the ACT loop:
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
@@ -181,7 +180,7 @@ Built-in cognitive skills for the ACT loop:
 - **Reasoning Loop** — Signal-driven continuous reasoning (see service listing above); attention-gated
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
-- **Decay Engine** — Periodic memory decay cycle; applies reliability multipliers so unreliable memories decay faster
+- **Decay Engine** — Periodic memory decay cycle; flat rate per decay class; contradicted traits resolve via inline contradiction check at creation time
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)

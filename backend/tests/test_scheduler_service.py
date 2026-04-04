@@ -6,7 +6,7 @@ Poll/DB tests require SQLite and are covered by integration tests.
 """
 
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 import services.scheduler_service as scheduler_svc
 

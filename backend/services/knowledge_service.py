@@ -10,9 +10,10 @@
 Knowledge Service — Unified knowledge store.
 
 Replaces UserTraitService, SemanticService concept CRUD, and ProceduralMemoryService
-with a single service operating on the ``knowledge`` table.  All knowledge entries
-share a common schema: (kind, entity, key, value, data, decay_class, confidence,
-reliability, source, evidence_count).
+with a single service operating on the ``knowledge`` table.
+
+All knowledge entries share a common schema: (kind, entity, key, value, data,
+decay_class, confidence, source, evidence_count).
 
 Retrieval uses Reciprocal Rank Fusion (RRF) across three signals: exact key match,
 FTS5 full-text search, and sqlite-vec KNN.
@@ -140,13 +141,6 @@ class KnowledgeService:
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
-    RELIABILITY_MULTIPLIER = {
-        'reliable':     1.0,
-        'uncertain':    1.5,
-        'contradicted': 2.0,
-        'superseded':   3.0,
-    }
-
     VALID_KINDS = {'trait', 'concept', 'fact', 'procedure', 'preference', 'relationship', 'rule', 'metric'}
     VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
 
@@ -254,10 +248,9 @@ class KnowledgeService:
         data: dict = None,
         decay_class: str = 'standard',
         confidence: float = 0.5,
-        reliability: str = 'reliable',
         source: str = None,
         embedding=None,
-    ) -> Optional[dict]:
+    ) -> Optional[int]:
         """
         Store or reinforce a knowledge entry. UPSERT on (entity, key).
 
@@ -268,7 +261,7 @@ class KnowledgeService:
 
         For kind=trait: applies trait validation before storage.
 
-        Returns the stored/updated row as dict, or None on failure.
+        Returns the integer rowid of the stored/updated record, or None on failure.
         """
         if kind not in self.VALID_KINDS:
             logger.warning(f"[KNOWLEDGE] Invalid kind '{kind}', must be one of {self.VALID_KINDS}")
@@ -292,7 +285,7 @@ class KnowledgeService:
 
                 # Check for existing entry
                 cursor.execute("""
-                    SELECT rowid, id, kind, value, data, confidence, evidence_count, reliability
+                    SELECT rowid, id, kind, value, data, confidence, evidence_count
                     FROM knowledge
                     WHERE entity = ? AND key = ? AND deleted_at IS NULL
                 """, (entity, key))
@@ -335,12 +328,11 @@ class KnowledgeService:
                             data = COALESCE(?, data),
                             confidence = ?,
                             evidence_count = ?,
-                            reliability = COALESCE(?, reliability),
                             source = COALESCE(?, source),
                             updated_at = datetime('now')
                         WHERE rowid = ?
                     """, (update_value, update_data, new_confidence, new_evidence,
-                          reliability, source, row_id))
+                          source, row_id))
 
                     # Update embedding if value changed
                     if value_changed and embedding is None and value:
@@ -377,10 +369,10 @@ class KnowledgeService:
 
                     cursor.execute("""
                         INSERT INTO knowledge (kind, entity, key, value, data, decay_class,
-                                               confidence, reliability, source, evidence_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                                               confidence, source, evidence_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
                     """, (kind, entity, key, value, data_json, decay_class,
-                          confidence, reliability, source))
+                          confidence, source))
 
                     row_id = cursor.lastrowid
 
@@ -437,10 +429,18 @@ class KnowledgeService:
           3. Vector KNN (requires embedding the query)
 
         Returns rows sorted by fused RRF score descending.
+        
+        When FTS and exact-key both return zero results, vector-only scores are
+        boosted 2.5x to ensure semantic matches are properly ranked.
         """
         rrf_k = 60
         scores = {}  # rowid -> float
         row_cache = {}  # rowid -> dict
+        
+        # Track which signals returned results for vector-only boost
+        exact_count = 0
+        fts_count = 0
+        vec_count = 0
 
         try:
             with self.db.connection() as conn:
@@ -470,7 +470,9 @@ class KnowledgeService:
                     ORDER BY k.confidence DESC
                     LIMIT 5
                 """, exact_params)
-                for rank, row in enumerate(cursor.fetchall()):
+                exact_rows = cursor.fetchall()
+                exact_count = len(exact_rows)
+                for rank, row in enumerate(exact_rows):
                     rid = row[0]
                     row_cache[rid] = self._row_to_dict(row)
                     scores[rid] = scores.get(rid, 0.0) + 1.0 / (rrf_k + rank)
@@ -491,6 +493,7 @@ class KnowledgeService:
                                 LIMIT 30
                             """, (fts_terms,))
                             fts_rowids = [(r[0], r[1]) for r in cursor.fetchall()]
+                            fts_count = len(fts_rowids)
 
                             # Filter by kind/entity/confidence via join
                             for rank, (rid, _fts_rank) in enumerate(fts_rowids):
@@ -523,6 +526,7 @@ class KnowledgeService:
                                 ORDER BY distance
                             """, (blob, vec_k))
                             vec_results = cursor.fetchall()
+                            vec_count = len(vec_results)
 
                             for rank, (rid, _dist) in enumerate(vec_results):
                                 if rid in row_cache:
@@ -541,6 +545,19 @@ class KnowledgeService:
                     logger.debug(f"[KNOWLEDGE] Vector search failed (non-fatal): {e}")
 
                 cursor.close()
+
+                # ── Vector-only boost ──────────────────────────────────
+                # When FTS and exact-key both return zero results, boost vector-only
+                # scores to ensure semantic matches are properly ranked.
+                # Example: "sister named Elena" vs stored "siblings" - zero word overlap
+                # means only vector search fires, but should still rank highly.
+                if exact_count == 0 and fts_count == 0 and vec_count > 0:
+                    vector_only_boost = 2.5
+                    logger.debug(
+                        f"[KNOWLEDGE] Vector-only recall (exact={exact_count}, fts={fts_count}, vec={vec_count}), "
+                        f"applying {vector_only_boost}x boost"
+                    )
+                    scores = {rid: score * vector_only_boost for rid, score in scores.items()}
 
                 # Sort by RRF score and return top results
                 ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
@@ -613,10 +630,10 @@ class KnowledgeService:
         """
         Update specific fields on an existing knowledge entry.
 
-        Allowed fields: value, data, confidence, reliability, decay_class.
+        Allowed fields: value, data, confidence, decay_class.
         Automatically syncs FTS and embedding if value changes.
         """
-        allowed = {'value', 'data', 'confidence', 'reliability', 'decay_class'}
+        allowed = {'value', 'data', 'confidence', 'decay_class'}
         updates = {k: v for k, v in changes.items() if k in allowed}
         if not updates:
             return self.get(entity, key)
@@ -766,7 +783,7 @@ class KnowledgeService:
         """
         Single-pass decay across all decay classes.
 
-        Applies per-class decay rate, factored by reliability multiplier.
+        Applies per-class decay rate to all active entries.
         Soft-deletes entries that hit the confidence floor (0.05).
         Emits memory_pressure signals for entries approaching threshold.
         Returns total count of updated rows.
@@ -783,11 +800,7 @@ class KnowledgeService:
 
                     cursor.execute("""
                         UPDATE knowledge SET
-                            confidence = MAX(0.05, confidence - (? * CASE COALESCE(reliability, 'reliable')
-                                WHEN 'uncertain' THEN 1.5
-                                WHEN 'contradicted' THEN 2.0
-                                WHEN 'superseded' THEN 3.0
-                                ELSE 1.0 END)),
+                            confidence = MAX(0.05, confidence - ?),
                             updated_at = datetime('now')
                         WHERE deleted_at IS NULL
                           AND decay_class = ?
@@ -886,8 +899,8 @@ class KnowledgeService:
                     # where multiple threads try to create the same procedure)
                     cursor.execute("""
                         INSERT INTO knowledge (kind, entity, key, value, data, decay_class,
-                                               confidence, reliability, source, evidence_count)
-                        VALUES ('procedure', ?, ?, ?, '{}', 'slow', 0.5, 'reliable', 'act_loop', 1)
+                                               confidence, source, evidence_count)
+                        VALUES ('procedure', ?, ?, ?, '{}', 'slow', 0.5, 'act_loop', 1)
                         ON CONFLICT(entity, key) DO UPDATE SET
                             updated_at = datetime('now'),
                             deleted_at = NULL
@@ -1200,6 +1213,89 @@ class KnowledgeService:
         except Exception as e:
             logger.error(f"[KNOWLEDGE] get_traits_for_prompt failed: {e}")
             return []
+
+    # ── Hard delete by rowid ───────────────────────────────────────────
+
+    def hard_delete_by_id(self, row_id: int) -> bool:
+        """Hard-delete a knowledge entry by rowid. Cascades to knowledge_vec and FTS."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT rowid FROM knowledge WHERE rowid = ?", (row_id,))
+                if not cursor.fetchone():
+                    cursor.close()
+                    return False
+                self._remove_fts(conn, row_id)
+                cursor.execute("DELETE FROM knowledge_vec WHERE rowid = ?", (row_id,))
+                cursor.execute("DELETE FROM knowledge WHERE rowid = ?", (row_id,))
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"[KNOWLEDGE] hard_delete_by_id({row_id}) failed: {e}")
+            return False
+
+    # ── Find similar traits ────────────────────────────────────────────
+
+    def find_similar_traits(self, embedding: list, exclude_id: int, limit: int = 3) -> list:
+        """Find traits/preferences semantically similar to the given embedding."""
+        try:
+            blob = pack_embedding(embedding)
+            if not blob:
+                return []
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.rowid, v.distance
+                    FROM knowledge_vec v
+                    WHERE v.embedding MATCH ? AND k = 20
+                    ORDER BY v.distance
+                """, (blob,))
+                vec_rows = cursor.fetchall()
+                results = []
+                for rid, dist in vec_rows:
+                    if dist >= 0.25 or rid == exclude_id:
+                        continue
+                    cursor.execute("""
+                        SELECT rowid, key, value, confidence, entity
+                        FROM knowledge
+                        WHERE rowid = ?
+                          AND kind IN ('trait', 'preference')
+                          AND deleted_at IS NULL
+                    """, (rid,))
+                    krow = cursor.fetchone()
+                    if krow:
+                        results.append({
+                            'id': krow[0], 'key': krow[1], 'value': krow[2],
+                            'confidence': krow[3], 'entity': krow[4],
+                        })
+                    if len(results) >= limit:
+                        break
+                cursor.close()
+                return results
+        except Exception as e:
+            logger.debug(f"[KNOWLEDGE] find_similar_traits failed: {e}")
+            return []
+
+    # ── Update confidence by rowid ─────────────────────────────────────
+
+    def update_confidence(self, row_id: int, new_confidence: float) -> bool:
+        """Update the confidence of a knowledge entry by rowid."""
+        from services.time_utils import utc_now
+        new_confidence = max(0.0, min(1.0, new_confidence))
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE knowledge SET confidence = ?, updated_at = ? WHERE rowid = ?",
+                    (new_confidence, utc_now().isoformat(), row_id)
+                )
+                conn.commit()
+                affected = cursor.rowcount > 0
+                cursor.close()
+                return affected
+        except Exception as e:
+            logger.error(f"[KNOWLEDGE] update_confidence({row_id}) failed: {e}")
+            return False
 
     # ── Filtered: get_by_kind ──────────────────────────────────────────
 

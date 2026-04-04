@@ -1,8 +1,7 @@
 """Tests for LLM rate limit handling — RateLimitError, _call_with_retry, provider wrapping."""
 
-import time
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from services.llm_service import (
     RateLimitError,
@@ -11,7 +10,6 @@ from services.llm_service import (
     LLMResponse,
     AnthropicService,
     OpenAIService,
-    GeminiService,
 )
 
 
@@ -166,7 +164,7 @@ class TestAnthropicWrapsRateLimit:
 
     @patch('services.llm_service._call_with_retry')
     @patch('services.llm_service._resolve_api_key', return_value='test-key')
-    def test_anthropic_rate_limit_wrapped(self, mock_key, mock_retry):
+    def test_anthropic_rate_limit_wrapped(self, _mock_key, mock_retry):
         """Anthropic RateLimitError should be converted to our RateLimitError."""
         import anthropic
 
@@ -202,7 +200,7 @@ class TestOpenAIWrapsRateLimit:
 
     @patch('services.llm_service._call_with_retry')
     @patch('services.llm_service._resolve_api_key', return_value='test-key')
-    def test_openai_rate_limit_wrapped(self, mock_key, mock_retry):
+    def test_openai_rate_limit_wrapped(self, _mock_key, mock_retry):
         """OpenAI RateLimitError should be converted to our RateLimitError."""
         import openai as openai_mod
 

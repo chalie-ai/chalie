@@ -109,12 +109,6 @@
       "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
     },
     {
-      "id": "reflect-skill",
-      "name": "Reflect",
-      "desc": "On-demand experiential synthesis; what worked, what didn't, patterns noticed.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "high", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "failure-analysis",
       "name": "Failure Analysis",
       "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",

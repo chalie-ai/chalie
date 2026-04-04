@@ -3,9 +3,9 @@
 import time
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from services.thread_service import ThreadService, ThreadResolution
+from services.thread_service import ThreadService
 
 
 @pytest.fixture

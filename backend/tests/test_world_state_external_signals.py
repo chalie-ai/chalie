@@ -8,7 +8,6 @@ showing only its most salient signal.
 """
 
 import json
-import math
 import time
 
 import pytest

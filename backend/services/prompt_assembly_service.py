@@ -265,7 +265,8 @@ class PromptAssemblyService:
         confidence = classification.get('confidence', 0)
 
         # Helper to check if a node should be included
-        _include = lambda node: (inclusion_map or {}).get(node, True)
+        def _include(node):
+            return (inclusion_map or {}).get(node, True)
 
         _ctx = assembled_context or {}
         episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
@@ -280,11 +281,13 @@ class PromptAssemblyService:
             else ''
         )
 
-        # Replace placeholders
+        # Replace placeholders — use user's local timezone when available
         try:
-            from services.time_utils import utc_now
-            _now = utc_now()
-            _current_datetime = _now.strftime('%A, %Y-%m-%d %H:%M UTC')
+            from services.time_utils import utc_now, get_user_tz
+            _tz = get_user_tz()
+            _now = utc_now().astimezone(_tz)
+            _tz_abbr = _now.strftime('%Z') or _tz.key
+            _current_datetime = _now.strftime(f'%A, %Y-%m-%d %H:%M {_tz_abbr}')
             _current_date = _now.strftime('%A, %Y-%m-%d')
         except Exception:
             from datetime import datetime, timezone
@@ -420,7 +423,7 @@ class PromptAssemblyService:
         if _include('user_traits'):
             user_traits = self._get_user_traits(
                 original_prompt, topic,
-                injection_threshold_override=0.2 if returning_from_silence else None,
+                _injection_threshold_override=0.2 if returning_from_silence else None,
             )
         else:
             user_traits = ''
@@ -435,13 +438,6 @@ class PromptAssemblyService:
         else:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
-
-        # Focus session (current declared or inferred focus)
-        if _include('focus'):
-            focus_context = self._get_focus_context(thread_id)
-        else:
-            focus_context = ''
-        result = result.replace('{{focus}}', focus_context)
 
         # Self-awareness (interoception — only injected when noteworthy)
         if _include('self_awareness'):
@@ -486,7 +482,7 @@ class PromptAssemblyService:
         self,
         prompt: str,
         topic: str,
-        injection_threshold_override: Optional[float] = None,
+        _injection_threshold_override: Optional[float] = None,
     ) -> str:
         """Get the pre-synthesized user sentence for prompt injection.
 
@@ -745,24 +741,6 @@ class PromptAssemblyService:
             return ""
         except Exception as e:
             logging.debug(f"[FRONTAL CORTEX] Onboarding nudge unavailable: {e}")
-            return ""
-
-    def _get_focus_context(self, thread_id: str = None) -> str:
-        """Get current focus session formatted for prompt injection.
-
-        Args:
-            thread_id: Thread identifier.
-
-        Returns:
-            str: Formatted focus section, or empty string when unavailable.
-        """
-        if not thread_id:
-            return ""
-        try:
-            from services.focus_session_service import FocusSessionService
-            return FocusSessionService().get_focus_for_prompt(thread_id)
-        except Exception as e:
-            logging.debug(f"Focus context not available: {e}")
             return ""
 
     def _get_adaptive_directives(self, original_prompt: str = "", thread_id: str = None) -> str:

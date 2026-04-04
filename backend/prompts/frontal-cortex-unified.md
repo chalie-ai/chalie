@@ -39,8 +39,6 @@ Registered external tools: {{registered_tool_names}}
 {{original_prompt}}
 {{visual_context}}
 
-{{focus}}
-
 {{working_memory}}
 
 {{episodic_memory}}

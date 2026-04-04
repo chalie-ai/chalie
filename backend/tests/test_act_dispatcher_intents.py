@@ -73,8 +73,7 @@ class TestWrapperIntentRouting:
 
         mock_intent_svc = MagicMock()
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
              patch("services.intent_service.IntentService", return_value=mock_intent_svc):
 
             result = service.dispatch_action("topic", {"type": "open_pr", "params": {"branch": "feature/x"}})
@@ -99,8 +98,7 @@ class TestWrapperIntentRouting:
         mock_intent_svc = MagicMock()
         mock_intent_svc.emit.side_effect = capture_emit
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
              patch("services.intent_service.IntentService", return_value=mock_intent_svc):
 
             service.dispatch_action("topic", {
@@ -124,8 +122,7 @@ class TestWrapperIntentRouting:
 
         mock_intent_svc = MagicMock()
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
              patch("services.intent_service.IntentService", return_value=mock_intent_svc):
 
             result = service.dispatch_action("topic", {"type": "run_command"})
@@ -142,8 +139,7 @@ class TestWrapperIntentRouting:
 
         mock_intent_svc = MagicMock()
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
              patch("services.intent_service.IntentService", return_value=mock_intent_svc):
 
             result = service.dispatch_action("topic", {"type": "git_push"})
@@ -162,8 +158,7 @@ class TestNoCapableWrapper:
         mock_wrapper_svc = MagicMock()
         mock_wrapper_svc.list_wrappers.return_value = []
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
 
             result = service.dispatch_action("topic", {"type": "no_such_action"})
 
@@ -176,8 +171,7 @@ class TestNoCapableWrapper:
         mock_wrapper_svc = MagicMock()
         mock_wrapper_svc.list_wrappers.return_value = [wrapper]
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
 
             result = service.dispatch_action("topic", {"type": "completely_different"})
 
@@ -199,8 +193,7 @@ class TestInnateSkillPriority:
         mock_wrapper_svc = MagicMock()
         mock_wrapper_svc.list_wrappers.return_value = [wrapper]
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc):
 
             result = service.dispatch_action("topic", {"type": "my_action"})
 
@@ -217,8 +210,7 @@ class TestExceptionResilience:
 
     def test_wrapper_svc_exception_falls_through_to_error(self, service, db):
         """If WrapperAuthService raises, the wrapper intent path returns None (no crash)."""
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", side_effect=RuntimeError("db down")):
+        with patch("services.wrapper_auth_service.WrapperAuthService", side_effect=RuntimeError("db down")):
 
             result = service.dispatch_action("topic", {"type": "exotic_action"})
 
@@ -234,8 +226,7 @@ class TestExceptionResilience:
         mock_intent_svc = MagicMock()
         mock_intent_svc.emit.side_effect = RuntimeError("store unavailable")
 
-        with patch("services.act_dispatcher_service.ActDispatcherService._check_source_reliability", return_value=""), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
+        with patch("services.wrapper_auth_service.WrapperAuthService", return_value=mock_wrapper_svc), \
              patch("services.intent_service.IntentService", return_value=mock_intent_svc):
 
             result = service.dispatch_action("topic", {"type": "risky_action"})

@@ -1,10 +1,9 @@
 """
 ReconcileAction — Drift-time cross-store contradiction sweep.
 
-Samples recent high-confidence traits and concepts, runs pairwise vector
-comparison, and classifies candidate pairs via ContradictionClassifierService.
-Auto-resolves temporal changes silently; creates uncertainty records for
-genuine contradictions.
+Samples recent high-confidence traits, runs pairwise vector comparison,
+and classifies candidate pairs via ContradictionClassifierService.
+Auto-resolves temporal changes by hard-deleting the loser trait.
 
 Priority: 4 — below REFLECT (5), well below COMMUNICATE (10).
 Runs at most once per RECONCILE_COOLDOWN_MINUTES to cap DB load.
@@ -26,9 +25,6 @@ _COOLDOWN_KEY = "reconcile_action:last_run"
 # Default: don't reconcile more than once per 30 minutes
 _DEFAULT_COOLDOWN_MINUTES = 30
 
-# Max uncertainty records to create per reconcile pass (safety limit)
-_MAX_UNCERTAINTY_CREATES = 5
-
 
 class ReconcileAction(AutonomousAction):
     """
@@ -36,10 +32,10 @@ class ReconcileAction(AutonomousAction):
 
     Process:
     1. Cooldown gate — skip if ran recently
-    2. Sample N traits + N concepts from DB
+    2. Sample N traits from DB
     3. Pairwise vector similarity — find high-similarity pairs
     4. LLM classification — is this a real contradiction?
-    5. Auto-resolve temporal changes; create uncertainty records for the rest
+    5. Auto-resolve temporal changes by hard-deleting the loser trait
     """
 
     def __init__(self, config: dict = None, services: dict = None):
@@ -49,7 +45,6 @@ class ReconcileAction(AutonomousAction):
             config: Optional configuration overrides. Supported keys:
                 ``cooldown_minutes`` (int, default 30) — minimum minutes between runs.
                 ``n_traits`` (int, default 5) — traits to sample per reconcile pass.
-                ``n_concepts`` (int, default 5) — concepts to sample per reconcile pass.
                 ``min_activation_energy`` (float, default 0.25) — minimum drift energy
                     required to trigger reconciliation.
                 ``enabled`` (bool, default True) — set to False to disable the action.
@@ -67,7 +62,6 @@ class ReconcileAction(AutonomousAction):
 
         self.cooldown_minutes = config.get('cooldown_minutes', _DEFAULT_COOLDOWN_MINUTES)
         self.n_traits = config.get('n_traits', 5)
-        self.n_concepts = config.get('n_concepts', 5)
         self.min_activation_energy = config.get('min_activation_energy', 0.25)
 
         if not config.get('enabled', True):
@@ -128,15 +122,14 @@ class ReconcileAction(AutonomousAction):
 
         Workflow:
         1. Resolve DB service (injected or shared fallback).
-        2. Import ContradictionClassifierService and UncertaintyService.
-        3. Sample ``n_traits`` traits + ``n_concepts`` concepts from the database.
+        2. Import ContradictionClassifierService.
+        3. Sample ``n_traits`` traits from the database.
         4. Run pairwise vector comparison to find high-similarity candidate pairs.
-        5. For each untracked pair:
+        5. For each pair:
 
-           - ``temporal_change`` with a temporal signal → auto-supersede via
-             :meth:`_auto_supersede`.
-           - All other contradictions → create an uncertainty record (capped at
-             ``_MAX_UNCERTAINTY_CREATES`` per pass).
+           - ``temporal_change`` with a temporal signal → hard-delete the loser trait.
+           - All other contradictions → log and skip (pending contradiction service
+             handles surface-level flagging separately).
         6. Record the cooldown timestamp.
 
         Args:
@@ -148,7 +141,7 @@ class ReconcileAction(AutonomousAction):
                 completion — including when no memories were found. ``success=False``
                 when a required service is unavailable or cannot be imported.
                 ``details`` keys: ``memories_sampled``, ``candidate_pairs``,
-                ``uncertainties_created``, ``auto_resolved``.
+                ``auto_resolved``.
 
         Raises:
             No exceptions are raised; all errors are caught and returned as a
@@ -156,7 +149,6 @@ class ReconcileAction(AutonomousAction):
         """
         db = self._db_service
         if db is None:
-            # Try to get shared DB service
             try:
                 from services.database_service import get_shared_db_service
                 db = get_shared_db_service()
@@ -167,20 +159,15 @@ class ReconcileAction(AutonomousAction):
 
         try:
             from services.contradiction_classifier_service import ContradictionClassifierService
-            from services.uncertainty_service import UncertaintyService
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} Failed to import services: {e}")
+            logger.error(f"{LOG_PREFIX} Failed to import ContradictionClassifierService: {e}")
             return ActionResult(action_name='RECONCILE', success=False,
                                 details={'reason': str(e)})
 
         classifier = ContradictionClassifierService(db_service=db)
-        uncertainty_svc = UncertaintyService(db)
 
-        # Sample memories
-        memories = classifier.sample_memories_for_reconcile(
-            n_traits=self.n_traits,
-            n_concepts=self.n_concepts,
-        )
+        # Sample traits
+        memories = classifier.sample_memories_for_reconcile(n_traits=self.n_traits)
         if not memories:
             self._record_run()
             return ActionResult(action_name='RECONCILE', success=True,
@@ -189,50 +176,46 @@ class ReconcileAction(AutonomousAction):
         # Cross-store comparison
         results = classifier.reconcile_memory_batch(memories)
 
-        created_count = 0
         auto_resolved_count = 0
 
         for result in results:
-            if created_count >= _MAX_UNCERTAINTY_CREATES:
-                break
-
             mem_a = result['memory_a']
             mem_b = result['memory_b']
-            id_a = mem_a.get('id')
-            id_b = mem_b.get('id')
-
-            # Skip if already tracked
-            if id_a and id_b and classifier.pair_already_tracked(id_a, id_b):
-                continue
 
             classification = result['classification']
 
             if classification == 'temporal_change' and result.get('temporal_signal'):
-                # Auto-resolve: supersede whichever memory appears older/weaker
-                self._auto_supersede(uncertainty_svc, mem_a, mem_b, result, db)
-                auto_resolved_count += 1
+                # Determine winner (higher confidence * reinforcement) and hard-delete loser
+                conf_a = mem_a.get('meta', {}).get('confidence', 0.5)
+                conf_b = mem_b.get('meta', {}).get('confidence', 0.5)
+                reinf_a = mem_a.get('meta', {}).get('reinforcement_count', 1)
+                reinf_b = mem_b.get('meta', {}).get('reinforcement_count', 1)
+                score_a = conf_a * (1 + 0.1 * reinf_a)
+                score_b = conf_b * (1 + 0.1 * reinf_b)
+                loser = mem_b if score_a >= score_b else mem_a
+
+                loser_id = loser.get('id')
+                if loser_id:
+                    try:
+                        from services.knowledge_service import KnowledgeService
+                        ks = KnowledgeService(db)
+                        ks.hard_delete_by_id(loser_id)
+                        logger.info(f"{LOG_PREFIX} Hard-deleted loser trait id={loser_id}")
+                        auto_resolved_count += 1
+                    except Exception as e:
+                        logger.warning(f"{LOG_PREFIX} Failed to hard-delete loser id={loser_id}: {e}")
             else:
-                # Create uncertainty record
-                type_a = mem_a['type'] if mem_a['type'] != 'incoming' else 'trait'
-                type_b = mem_b['type'] if mem_b['type'] != 'incoming' else 'trait'
-                uncertainty_svc.create_uncertainty(
-                    memory_a_type=type_a,
-                    memory_a_id=id_a or 'unknown',
-                    memory_b_type=type_b,
-                    memory_b_id=id_b,
-                    uncertainty_type='contradiction',
-                    detection_context='drift',
-                    reasoning=result.get('reasoning'),
-                    temporal_signal=result.get('temporal_signal', False),
-                    surface_context=result.get('surface_context'),
+                logger.debug(
+                    f"{LOG_PREFIX} Contradiction noted (not auto-resolved): "
+                    f"classification={classification} "
+                    f"ids=({mem_a.get('id')}, {mem_b.get('id')}) "
+                    f"reasoning={result.get('reasoning', '')[:80]}"
                 )
-                created_count += 1
 
         self._record_run()
         logger.info(
-            f"{LOG_PREFIX} Completed: {len(memories)} memories sampled, "
-            f"{len(results)} candidate pairs, {created_count} uncertainties created, "
-            f"{auto_resolved_count} auto-resolved"
+            f"{LOG_PREFIX} Completed: {len(memories)} traits sampled, "
+            f"{len(results)} candidate pairs, {auto_resolved_count} auto-resolved"
         )
 
         return ActionResult(
@@ -241,7 +224,6 @@ class ReconcileAction(AutonomousAction):
             details={
                 'memories_sampled': len(memories),
                 'candidate_pairs': len(results),
-                'uncertainties_created': created_count,
                 'auto_resolved': auto_resolved_count,
             }
         )
@@ -251,58 +233,3 @@ class ReconcileAction(AutonomousAction):
         self.store.set(_COOLDOWN_KEY, str(time.time()))
         # TTL slightly longer than cooldown so the key doesn't expire mid-cycle
         self.store.expire(_COOLDOWN_KEY, int(self.cooldown_minutes * 70))
-
-    def _auto_supersede(
-        self,
-        uncertainty_svc,
-        mem_a: dict,
-        mem_b: dict,
-        result: dict,
-        db,
-    ):
-        """
-        Auto-resolve a temporal change by superseding the older/weaker memory.
-
-        Creates a resolved uncertainty record for the audit trail.
-        """
-        # Determine winner (higher confidence) and loser
-        conf_a = mem_a.get('meta', {}).get('confidence', 0.5)
-        conf_b = mem_b.get('meta', {}).get('confidence', 0.5)
-        reinf_a = mem_a.get('meta', {}).get('reinforcement_count', 1)
-        reinf_b = mem_b.get('meta', {}).get('reinforcement_count', 1)
-
-        # Score based on confidence * reinforcement
-        score_a = conf_a * (1 + 0.1 * reinf_a)
-        score_b = conf_b * (1 + 0.1 * reinf_b)
-
-        if score_a >= score_b:
-            winner, loser = mem_a, mem_b
-        else:
-            winner, loser = mem_b, mem_a
-
-        # Create and immediately resolve uncertainty
-        unc_id = uncertainty_svc.create_uncertainty(
-            memory_a_type=winner['type'] if winner['type'] != 'incoming' else 'trait',
-            memory_a_id=winner.get('id') or 'unknown',
-            memory_b_type=loser['type'] if loser['type'] != 'incoming' else 'trait',
-            memory_b_id=loser.get('id'),
-            uncertainty_type='contradiction',
-            detection_context='drift',
-            reasoning=result.get('reasoning'),
-            temporal_signal=True,
-        )
-
-        uncertainty_svc.resolve_uncertainty(
-            uncertainty_id=unc_id,
-            strategy='temporal_supersede',
-            detail=f"Auto-resolved during drift reconcile: {result.get('reasoning', '')}",
-            winner_type=winner['type'] if winner['type'] != 'incoming' else 'trait',
-            winner_id=winner.get('id'),
-            loser_type=loser['type'] if loser['type'] != 'incoming' else 'trait',
-            loser_id=loser.get('id'),
-        )
-
-        logger.info(
-            f"{LOG_PREFIX} Auto-superseded: winner={winner.get('id')} "
-            f"loser={loser.get('id')} reasoning={result.get('reasoning', '')[:80]}"
-        )

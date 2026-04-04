@@ -1,7 +1,7 @@
 """Tests for world_awareness_service — interest extraction and news scanning."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -29,8 +29,8 @@ def _seed_trait(db, key, value, confidence, evidence_count, category='preference
     """Insert a knowledge row for a high-confidence user trait."""
     db.execute(
         """INSERT INTO knowledge (kind, entity, key, value, confidence, evidence_count,
-                                  reliability, data, deleted_at)
-           VALUES ('trait', 'user', ?, ?, ?, ?, 'reliable', ?, NULL)""",
+                                  data, deleted_at)
+           VALUES ('trait', 'user', ?, ?, ?, ?, ?, NULL)""",
         (key, value, confidence, evidence_count, json.dumps({"category": category})),
     )
     db.commit()

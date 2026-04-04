@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+from services.embedding_utils import pack_embedding as _pack_embedding
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,6 @@ PURGE_WINDOW_DAYS = 30
 # Document storage root — env var overrides for Docker; local default mirrors backend/data/
 _DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
-
-
-from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class DocumentService:
@@ -809,69 +807,54 @@ class DocumentService:
         distance_threshold: float = 1.5,
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid 3-signal search across document chunks:
-        1. Semantic vector search (sqlite-vec)
-        2. Full-text search (FTS5)
-        3. Exact keyword/numeric boosting
+        Hybrid 2-signal search across document chunks:
+        1. Semantic vector search on chunks (sqlite-vec)
+        2. Full-text search on chunks (FTS5)
 
         Results merged via Reciprocal Rank Fusion (RRF, k=60).
-        Two-stage: coarse doc-level → fine chunk-level within top docs.
         """
         try:
+            import re as _re
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
-                packed_query = _pack_embedding(query_embedding)
+                packed_query = _pack_embedding(query_embedding) if query_embedding else None
 
-                # Stage 1: Coarse — find relevant documents via documents_vec
-                cursor.execute("""
-                    SELECT d.id, d.original_name, d.created_at,
-                           v.distance
-                    FROM documents_vec v
-                    JOIN documents d ON d.rowid = v.rowid
-                    WHERE v.embedding MATCH ? AND k = 10
-                      AND d.deleted_at IS NULL
-                      AND d.status = 'ready'
-                    ORDER BY v.distance
-                """, (packed_query,))
-                candidate_docs = cursor.fetchall()
+                # Signal A: semantic search across all ready chunks
+                if packed_query:
+                    cursor.execute("""
+                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
+                               dc.page_number, dc.section_title, dc.token_count,
+                               v.distance, d.original_name, d.created_at
+                        FROM document_chunks_vec v
+                        JOIN document_chunks dc ON dc.rowid = v.rowid
+                        JOIN documents d ON d.id = dc.document_id
+                        WHERE v.embedding MATCH ? AND k = ?
+                          AND d.deleted_at IS NULL
+                          AND d.status = 'ready'
+                        ORDER BY v.distance
+                    """, (packed_query, limit * 3))
+                    semantic_results = cursor.fetchall()
+                else:
+                    semantic_results = []
 
-                if not candidate_docs:
-                    cursor.close()
-                    return []
-
-                doc_ids = [row[0] for row in candidate_docs]
-                doc_map = {row[0]: {'name': row[1], 'created_at': row[2]} for row in candidate_docs}
-
-                # Stage 2: Fine — semantic search within candidate docs via document_chunks_vec
-                placeholders = ', '.join('?' for _ in doc_ids)
-                cursor.execute(f"""
-                    SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
-                           dc.page_number, dc.section_title, dc.token_count,
-                           v.distance
-                    FROM document_chunks_vec v
-                    JOIN document_chunks dc ON dc.rowid = v.rowid
-                    WHERE v.embedding MATCH ? AND k = ?
-                      AND dc.document_id IN ({placeholders})
-                    ORDER BY v.distance
-                """, (packed_query, limit * 3, *doc_ids))
-                semantic_results = cursor.fetchall()
-
-                # Stage 2b: Full-text search within candidate docs via FTS5
-                import re as _re
+                # Signal B: FTS5 across all ready chunks
                 fts_query = _re.sub(r'[:\(\)\*\^"\\?,\'.]', ' ', query_text)
                 fts_query = _re.sub(r'\s+', ' ', fts_query).strip() or '*'
-                cursor.execute(f"""
+                cursor.execute("""
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
                            dc.page_number, dc.section_title, dc.token_count,
-                           fts.rank
+                           fts.rank, d.original_name, d.created_at
                     FROM document_chunks_fts fts
                     JOIN document_chunks dc ON dc.rowid = fts.rowid
+                    JOIN documents d ON d.id = dc.document_id
                     WHERE document_chunks_fts MATCH ?
-                      AND dc.document_id IN ({placeholders})
+                      AND d.deleted_at IS NULL
+                      AND d.status = 'ready'
                     ORDER BY fts.rank
                     LIMIT ?
-                """, (fts_query, *doc_ids, limit * 3))
+                """, (fts_query, limit * 3))
                 text_results = cursor.fetchall()
 
                 cursor.close()
@@ -880,7 +863,6 @@ class DocumentService:
             rrf_scores = {}
             chunk_data = {}
 
-            # Semantic signal
             for rank, row in enumerate(semantic_results):
                 chunk_id = row[0]
                 distance = float(row[7])
@@ -888,12 +870,11 @@ class DocumentService:
                     continue
                 rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (60 + rank + 1)
                 if chunk_id not in chunk_data:
-                    doc_info = doc_map.get(row[1], {})
                     chunk_data[chunk_id] = {
                         'chunk_id': chunk_id,
                         'document_id': row[1],
-                        'document_name': doc_info.get('name', ''),
-                        'document_created_at': doc_info.get('created_at'),
+                        'document_name': row[8] or '',
+                        'document_created_at': row[9],
                         'chunk_index': row[2],
                         'content': row[3],
                         'page_number': row[4],
@@ -902,17 +883,15 @@ class DocumentService:
                         'distance': distance,
                     }
 
-            # Full-text signal
             for rank, row in enumerate(text_results):
                 chunk_id = row[0]
                 rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (60 + rank + 1)
                 if chunk_id not in chunk_data:
-                    doc_info = doc_map.get(row[1], {})
                     chunk_data[chunk_id] = {
                         'chunk_id': chunk_id,
                         'document_id': row[1],
-                        'document_name': doc_info.get('name', ''),
-                        'document_created_at': doc_info.get('created_at'),
+                        'document_name': row[8] or '',
+                        'document_created_at': row[9],
                         'chunk_index': row[2],
                         'content': row[3],
                         'page_number': row[4],
@@ -921,15 +900,6 @@ class DocumentService:
                         'distance': None,
                     }
 
-            # Keyword boost: bonus for chunks containing exact query terms
-            query_terms = [t.lower() for t in query_text.split() if len(t) > 2]
-            for chunk_id, data in chunk_data.items():
-                content_lower = data['content'].lower()
-                for term in query_terms:
-                    if term in content_lower:
-                        rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 0.005
-
-            # Sort by RRF score and return top results
             sorted_ids = sorted(rrf_scores.keys(), key=lambda cid: rrf_scores[cid], reverse=True)
             results = []
             for chunk_id in sorted_ids[:limit]:

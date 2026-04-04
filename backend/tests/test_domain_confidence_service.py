@@ -15,7 +15,6 @@ Test coverage:
 """
 
 import json
-import math
 import sqlite3
 import uuid
 from contextlib import contextmanager
