@@ -349,6 +349,7 @@ class ModeRouterService:
         interrog = signals['interrogative_words']
         implicit_ref = signals['implicit_reference']
         token_count = signals['prompt_token_count']
+        explicit_feedback = signals.get('explicit_feedback')
 
         # Derived signals
         is_question = has_q or interrog
@@ -367,6 +368,8 @@ class ModeRouterService:
             respond += w.get('respond.question_cold', 0.10)
         if is_cold:
             respond -= w.get('respond.cold_penalty', 0.15)
+        if explicit_feedback == 'positive':
+            respond += w.get('boost.feedback_positive', 0.10)
         # Tool-needed penalty removed — tool dispatch handled by unified generation path
 
         # ── ACT ──────────────────────────────────────────────────
