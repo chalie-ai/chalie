@@ -283,56 +283,27 @@ TOOL_METADATA: dict = {
 
     "news": {
         "name": "news",
-        "description": "Search and browse news from 56 global RSS sources across 8 categories.",
+        "description": "Search news articles across global sources.",
         "documentation": (
-            "News search and browsing tool with 4 actions:\n\n"
-            "**search** — Find news articles matching a query. Optionally filter by source.\n"
-            "  Required: query (string)\n"
-            "  Optional: source (string), limit (integer, default 10)\n\n"
-            "**digest** — Get a curated news digest with international headlines and local news.\n"
-            "  Optional: category (string), source (string)\n\n"
-            "**trending** — Discover trending stories clustered by topic coverage across multiple sources.\n"
-            "  Optional: category (string, default 'international'), limit (integer, default 5), "
-            "min_sources (integer, default 2)\n\n"
-            "**sources** — List available news sources. Filter by category or search by name.\n"
-            "  Optional: category (string), query (string via 'source' param)"
+            "Search news by query. Supply a category only when the query is broad "
+            "(e.g. \"What's happening in tech today?\"). "
+            "Omit category for specific queries (e.g. \"Sam Altman fired\")."
         ),
-        "category": "research",
-        "icon": "fa-solid fa-newspaper",
         "trigger": {"type": "on_demand"},
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["search", "digest", "trending", "sources"],
-                    "description": "search: find articles by query. digest: curated headlines. trending: multi-source stories. sources: list available feeds.",
-                },
                 "query": {
                     "type": "string",
-                    "description": "Search query (required for search action).",
+                    "description": "What to search for.",
                 },
                 "category": {
                     "type": "string",
-                    "enum": ["international", "us", "uk", "tech", "business", "science", "sports", "entertainment"],
-                    "description": "Filter by news category.",
-                },
-                "source": {
-                    "type": "string",
-                    "description": "Filter by source ID or name.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results (default 10, max 20).",
-                    "default": 10,
-                },
-                "min_sources": {
-                    "type": "integer",
-                    "description": "Minimum sources for a trending cluster (default 2).",
-                    "default": 2,
+                    "enum": ["tech", "business", "sports", "science", "entertainment", "us", "uk"],
+                    "description": "Narrow to a news category. Use only for broad topic browsing.",
                 },
             },
-            "required": ["action"],
+            "required": ["query"],
         },
         "returns": {
             "text": {"type": "string", "description": "Formatted news results"},
@@ -344,26 +315,10 @@ TOOL_METADATA: dict = {
             "card": {"enabled": False},
         },
         "tips": [
-            "Use 'search' with a query to find specific news topics",
-            "Use 'trending' to see what stories are being covered by multiple sources",
-            "Use 'digest' for a quick overview of current headlines",
+            "Use for any news-related query — current events, headlines, what's happening",
+            "Add a category for broad topic browsing (e.g. 'tech', 'sports')",
         ],
         "ambient": {"enabled": False},
-        "config_schema": {
-            "preferred_source": {
-                "type": "string",
-                "description": "Default news source ID",
-                "default": "bbc_world",
-            },
-            "topics": {
-                "type": "string",
-                "description": "Comma-separated interest topics for digest",
-            },
-            "location_override": {
-                "type": "string",
-                "description": "Override location for local news",
-            },
-        },
     },
 }
 
@@ -573,11 +528,12 @@ BUILTIN_TOOL_PROFILES: dict = {
 
     "news": {
         "keywords": "news,headlines,rss,current events,articles,press",
-        "short_summary": "Search and browse news from 56 global RSS sources across 8 categories.",
+        "short_summary": "Search news articles across global sources.",
         "full_profile": (
-            "News search and browsing from 56 global RSS sources in 8 categories: international, US, UK, tech, business, science, sports, entertainment.\n\n"
-            "Four actions: search (find articles by query), digest (curated headlines overview), trending (stories covered by multiple outlets), sources (list available feeds).\n\n"
-            "latest news today, what happened in the world today, tech industry news, business headlines, sports results, science discoveries this week, entertainment news, political news update, breaking news, current events summary, what is trending right now, news about artificial intelligence, climate change latest, stock market news, election updates, new product launches, company earnings reports, startup funding news, cryptocurrency market update, space exploration news, medical research breakthroughs, trade deal negotiations, natural disaster updates, film and movie news, music industry headlines, European politics, Middle East situation, Asian markets update, sports transfer rumours, Olympic games coverage, UN general assembly news, central bank decisions, tech regulation updates, cybersecurity incidents, automotive industry news, real estate market trends, education policy changes, food and agriculture news, energy sector developments, aviation industry updates"
+            "News search from global sources including Google News and 56 curated RSS feeds in 7 categories: tech, business, sports, science, entertainment, US, UK.\n\n"
+            "Two parameters: query (required, what to search for) and category (optional enum, narrows to curated RSS feeds for broad topic browsing).\n\n"
+            "When to use: any request about current events, news, headlines, what's happening. "
+            "Examples: 'latest news about AI', 'what's happening in tech today', 'Sam Altman news', 'UK election results'."
         ),
         "effort": "light",
         "domain": "Research",
