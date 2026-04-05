@@ -304,7 +304,6 @@ def _execute_task_act_loop(task: dict) -> dict:
         critic_enabled=True,
         smart_repetition=True,
         escalation_hints=False,
-        persistent_task_exit=False,
         execution_gate=False,  # User already approved the task by creating it
     )
 

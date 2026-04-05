@@ -552,7 +552,6 @@ def unified_generate(topic, text, classification, thread_conv_service,
         critic_enabled=True,
         smart_repetition=True,
         escalation_hints=True,
-        persistent_task_exit=True,
         execution_gate=False,  # User explicitly requested this action — skip autonomous gate
         proactive=proactive,
     )

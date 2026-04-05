@@ -2,8 +2,7 @@
 Tests for ACTOrchestrator — unified ACT loop implementation.
 
 Verifies parameterized behavior: critic enabled/disabled, type-based and
-embedding-based repetition, escalation hints, persistent_task exit,
-all termination reasons.
+embedding-based repetition, escalation hints, all termination reasons.
 """
 
 import pytest
@@ -136,19 +135,21 @@ class TestMaxIterationsTermination:
         mock_loop.get_loop_telemetry.return_value = {'iterations_used': 5}
         mock_loop.get_critic_telemetry.return_value = {}
 
-        # First call: actions available, can_continue True
-        # Second call (after execute): can_continue False (max_iterations)
+        # can_continue: iter 0 pre-check, iter 0 post-execute, tool-free iter pre-check
         mock_loop.can_continue.side_effect = [
-            (True, None),
-            (False, 'max_iterations'),
+            (True, None),           # iter 0 pre-check
+            (False, 'max_iterations'),  # iter 0 post-execute → sets termination_reason
+            (True, None),           # tool-free iteration pre-check
         ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found something'),
         ]
         MockActLoop.return_value = mock_loop
 
+        # 1 action iteration + 1 tool-free iteration (LLM responds with text)
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'test'}]),
+            _make_response(actions=[]),  # tool-free iteration: LLM responds naturally
         ])
 
         orchestrator = ACTOrchestrator(
@@ -161,6 +162,8 @@ class TestMaxIterationsTermination:
         )
 
         assert result.termination_reason == 'max_iterations'
+        # 2 LLM calls: 1 action iteration + 1 tool-free response iteration
+        assert cortex.generate_response_appended.call_count == 2
 
 
 # ── Orchestrator: same-type actions allowed ────────────────────────
@@ -181,22 +184,24 @@ class TestSameTypeActionsAllowed:
         mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
-        # can_continue called twice per iteration: before + after execution
+        # can_continue: 2 per action iteration + 1 pre-check for tool-free iteration
         mock_loop.can_continue.side_effect = [
-            (True, None), (True, None),   # iter 0
-            (True, None), (True, None),   # iter 1
-            (True, None), (False, 'max_iterations'),  # iter 2
+            (True, None), (True, None),          # iter 0
+            (True, None), (True, None),          # iter 1
+            (True, None), (False, 'max_iterations'),  # iter 2 → sets termination_reason
+            (True, None),                        # tool-free iteration pre-check
         ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
         MockActLoop.return_value = mock_loop
 
-        # 3 recall actions with different queries — all should execute
+        # 3 action iterations + 1 tool-free iteration (LLM responds naturally)
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'topic A'}]),
             _make_response(actions=[{'type': 'recall', 'query': 'topic B'}]),
             _make_response(actions=[{'type': 'recall', 'query': 'topic C'}]),
+            _make_response(actions=[]),  # tool-free iteration
         ])
 
         orchestrator = ACTOrchestrator(
@@ -219,8 +224,8 @@ class TestSameTypeActionsAllowed:
 @pytest.mark.unit
 class TestForcedExitSynthesis:
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_synthesis_call_on_forced_exit(self, MockActLoop):
-        """When loop exits via max_iterations, a synthesis LLM call produces final_response."""
+    def test_tool_free_iteration_on_forced_exit(self, MockActLoop):
+        """When loop exits via max_iterations, a tool-free iteration lets LLM respond naturally."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
@@ -231,16 +236,18 @@ class TestForcedExitSynthesis:
         mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
-        # Run 1 iteration then hit max
+        # can_continue: iter 0 pre-check, iter 0 post-execute, tool-free iter pre-check
         mock_loop.can_continue.side_effect = [
-            (True, None), (False, 'max_iterations'),
+            (True, None),               # iter 0 pre-check
+            (False, 'max_iterations'),  # iter 0 post-execute → sets termination_reason
+            (True, None),               # tool-free iteration pre-check
         ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found data'),
         ]
         MockActLoop.return_value = mock_loop
 
-        # 1 recall action → max_iterations exit → 2nd call is synthesis
+        # 1 action iteration → max_iterations exit → tool-free iteration (LLM responds)
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
             {'response': 'Here is what I found from the data.', 'actions': [], 'confidence': 0.9},
@@ -257,8 +264,11 @@ class TestForcedExitSynthesis:
 
         assert result.termination_reason == 'max_iterations'
         assert result.final_response == 'Here is what I found from the data.'
-        # 1 loop iteration + 1 synthesis call = 2 total LLM calls
+        # 1 action iteration + 1 tool-free response iteration = 2 total LLM calls
         assert cortex.generate_response_appended.call_count == 2
+        # Second call must have empty tools (tool-free iteration)
+        second_call_kwargs = cortex.generate_response_appended.call_args_list[1][1]
+        assert second_call_kwargs.get('tools') == []
 
     @patch('services.act_orchestrator_service.ActLoopService')
     def test_synthesis_skipped_on_generation_error(self, MockActLoop):
@@ -317,8 +327,10 @@ class TestCallbackTermination:
         ]
         MockActLoop.return_value = mock_loop
 
+        # 1 action iteration → callback cancels → tool-free iteration (LLM responds)
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+            _make_response(actions=[]),  # tool-free iteration
         ])
 
         def cancel_callback(act_loop, iteration_start, actions_executed, termination_reason):
@@ -453,17 +465,20 @@ class TestConstructorParams:
         mock_loop.get_loop_telemetry.return_value = {'iterations_used': 2}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.side_effect = [
-            (True, None), (True, None),   # iter 0
-            (True, None), (False, 'max_iterations'),  # iter 1
+            (True, None), (True, None),          # iter 0
+            (True, None), (False, 'max_iterations'),  # iter 1 → sets termination_reason
+            (True, None),                        # tool-free iteration pre-check
         ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
         MockActLoop.return_value = mock_loop
 
+        # 2 action iterations + 1 tool-free iteration (LLM responds naturally)
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'a'}]),
             _make_response(actions=[{'type': 'recall', 'query': 'b'}]),
+            _make_response(actions=[]),  # tool-free iteration
         ])
 
         orch = ACTOrchestrator(config={}, max_iterations=2, smart_repetition=False)
@@ -476,36 +491,8 @@ class TestConstructorParams:
         assert mock_loop.execute_actions.call_count == 2
 
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_persistent_task_exit_triggers_early_termination(self, MockActLoop):
-        """persistent_task_exit=True causes loop to exit when PT action dispatched."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        mock_loop.execute_actions.return_value = [
-            _make_action_result('persistent_task', 'success', 'Task created'),
-        ]
-        MockActLoop.return_value = mock_loop
-
-        cortex = _make_cortex_service([
-            _make_response(actions=[{'type': 'persistent_task', 'goal': 'X'}]),
-        ])
-
-        orch = ACTOrchestrator(config={}, max_iterations=10, persistent_task_exit=True, smart_repetition=False)
-        result = orch.run(
-            topic='test', text='hello', cortex_service=cortex,
-            act_prompt='test', classification={'topic': 't', 'confidence': 10},
-            chat_history=[],
-        )
-        assert result.termination_reason == 'persistent_task_dispatched'
-
-    @patch('services.act_orchestrator_service.ActLoopService')
-    def test_persistent_task_exit_false_does_not_exit(self, MockActLoop):
-        """persistent_task_exit=False does NOT exit when PT action dispatched."""
+    def test_persistent_task_loop_continues_after_create(self, MockActLoop):
+        """After persistent_task create, loop continues and LLM produces a text response."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
@@ -516,26 +503,27 @@ class TestConstructorParams:
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.side_effect = [
             (True, None), (True, None),  # iter 0
-            (True, None),  # iter 1 pre-check
+            (True, None),  # iter 1 pre-check (soft_nudge path)
         ]
         mock_loop.execute_actions.return_value = [
-            _make_action_result('persistent_task', 'success', 'Task created'),
+            _make_action_result('persistent_task', 'success', '{"success": true, "response": "Working on it."}'),
         ]
         MockActLoop.return_value = mock_loop
 
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'persistent_task', 'goal': 'X'}]),
-            _make_response(actions=[]),  # exits via no_actions
+            _make_response(actions=[]),  # LLM reads tool result and responds
         ])
 
-        orch = ACTOrchestrator(config={}, max_iterations=10, persistent_task_exit=False, smart_repetition=False)
+        orch = ACTOrchestrator(config={}, max_iterations=10, smart_repetition=False)
         result = orch.run(
             topic='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
-        # Should NOT exit via persistent_task — continues to next iteration
-        assert result.termination_reason != 'persistent_task_dispatched'
+        # Loop continues naturally — exits via no_actions, not persistent_task_dispatched
+        assert result.termination_reason == 'no_actions'
+        assert cortex.generate_response_appended.call_count == 2
 
 
 # ── Append mode: _prune_messages ──────────────────────────────────
@@ -868,6 +856,138 @@ class TestOnNarrationCallback:
 
         # Auto-narration should mention the action type
         assert any('recall' in n for n in narrations)
+
+
+# ── Orchestrator: forced-exit static fallback ──────────────────────
+
+@pytest.mark.unit
+class TestForcedExitFallback:
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_static_fallback_when_tool_free_iteration_produces_no_text(self, MockActLoop):
+        """When tool-free iteration returns no text, static fallback string is used."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None),               # iter 0 pre-check
+            (False, 'max_iterations'),  # iter 0 post-execute
+            (True, None),               # tool-free iteration pre-check
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Tool-free iteration returns empty response text
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+            {'response': '', 'actions': [], 'confidence': 0.9},
+        ])
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=1, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        assert result.termination_reason == 'max_iterations'
+        assert result.final_response == "I wasn't able to complete this request."
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_proactive_mode_no_fallback_on_forced_exit(self, MockActLoop):
+        """Proactive mode does not inject fallback text when forced exit has no text response."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None),               # iter 0 pre-check
+            (False, 'max_iterations'),  # iter 0 post-execute
+            (True, None),               # tool-free iteration pre-check
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Tool-free iteration returns empty response
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+            {'response': '', 'actions': [], 'confidence': 0.9},
+        ])
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=1, smart_repetition=False, proactive=True,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        assert result.termination_reason == 'max_iterations'
+        # Proactive mode: no static fallback injected
+        assert result.final_response == ''
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_double_forced_exit_breaks_loop(self, MockActLoop):
+        """If the tool-free iteration itself hits a termination, the loop exits without looping again."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None),               # iter 0 pre-check
+            (False, 'max_iterations'),  # iter 0 post-execute → first forced exit
+            (True, None),               # tool-free iter pre-check
+            (False, 'timeout'),         # tool-free iter post-execute → second forced exit
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Tool-free iteration returns another action (triggering a second termination)
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'y'}]),
+        ])
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=1, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        # Loop must have broken — only 2 LLM calls, not infinite
+        assert cortex.generate_response_appended.call_count == 2
+        # Termination reason is the original forced-exit cause, not the second
+        assert result.termination_reason == 'max_iterations'
 
     @patch('services.act_orchestrator_service.ActLoopService')
     def test_on_narration_not_invoked_when_no_actions(self, MockActLoop):

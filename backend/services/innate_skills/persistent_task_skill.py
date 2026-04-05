@@ -16,6 +16,7 @@ Provides natural language commands:
 All DB access via get_shared_db_service() (lazy import inside function).
 """
 
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ def _create(topic: str, params: dict) -> str:
     """Create a new persistent task (starts immediately in accepted state)."""
     goal = params.get("goal", params.get("query", params.get("text", "")))
     if not goal:
-        return "No goal specified for the persistent task."
+        return json.dumps({"success": False, "error": "No goal specified for the persistent task."})
 
     service = _get_service()
     account_id = _get_account_id()
@@ -152,24 +153,36 @@ def _create(topic: str, params: dict) -> str:
     # Check for duplicates
     duplicate = service.find_duplicate(account_id, goal)
     if duplicate:
-        return (
-            f"You already have a similar task in progress: \"{duplicate['goal'][:80]}\"\n"
-            f"Status: {duplicate['status']} | Coverage: {duplicate.get('progress', {}).get('coverage_estimate', 0):.0%}\n"
-            f"Would you like to continue that task or create a new one?"
-        )
+        return json.dumps({
+            "success": False,
+            "error": (
+                f"You already have a similar task in progress: \"{duplicate['goal'][:80]}\". "
+                f"Status: {duplicate['status']} | Coverage: {duplicate.get('progress', {}).get('coverage_estimate', 0):.0%}. "
+                f"Would you like to continue that task or create a new one?"
+            ),
+        })
 
     scope = params.get("scope")
     priority = int(params.get("priority", 5))
 
-    task = service.create_task(
-        account_id=account_id,
-        goal=goal,
-        scope=scope,
-        priority=priority,
-    )
+    try:
+        task = service.create_task(
+            account_id=account_id,
+            goal=goal,
+            scope=scope,
+            priority=priority,
+        )
+    except Exception as e:
+        logger.error(f"{LOG_PREFIX} Task creation failed: {e}", exc_info=True)
+        return json.dumps({"success": False, "error": str(e)})
+
     task_id = task['id']
 
-    return f"Background task created: \"{goal[:80]}\" (#{task_id}) — running now."
+    return json.dumps({
+        "success": True,
+        "task_id": task_id,
+        "response": f"Working on \"{goal[:80]}\". This may take a few minutes.",
+    })
 
 
 def _status(topic: str, params: dict) -> str:

@@ -23,8 +23,8 @@ Termination model (fatigue-free):
   - No actions returned by LLM: natural completion signal
   - Soft nudge: at iteration 10, inject a prompt hint encouraging
     the LLM to conclude if it has enough information.
-  - Forced-exit synthesis: when loop exits without a final response,
-    one last tool-free LLM call synthesizes from accumulated results.
+  - Forced-exit tool strip: when loop hits a forced exit, one more
+    tool-free iteration lets the LLM respond naturally before giving up.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -87,7 +87,6 @@ class ACTOrchestrator:
         critic_enabled: bool = False,
         smart_repetition: bool = True,
         escalation_hints: bool = False,  # Deprecated — type-based repetition removed
-        persistent_task_exit: bool = False,
         execution_gate: bool = True,
         proactive: bool = False,
     ):
@@ -103,7 +102,6 @@ class ACTOrchestrator:
             escalation_hints: Deprecated — accepted for backward compatibility but
                 ignored. Type-based repetition was removed; smart (embedding-based)
                 repetition detection is the sole mechanism.
-            persistent_task_exit: Exit loop when a persistent_task is dispatched
             execution_gate: Whether to apply the autonomous execution gate to
                 non-safe actions. False for user-initiated ACT loops (the user
                 already asked for this), True for autonomous/background execution.
@@ -115,7 +113,6 @@ class ACTOrchestrator:
         self.critic_enabled = critic_enabled
         self.smart_repetition = smart_repetition
         self.escalation_hints = escalation_hints
-        self.persistent_task_exit = persistent_task_exit
         self.execution_gate = execution_gate
         self.proactive = proactive
 
@@ -246,7 +243,9 @@ class ACTOrchestrator:
         )
 
         termination_reason = None
+        _forced_exit_reason = None  # Preserved reason when tool-stripping is in progress
         _final_response = ''  # Model's text when it stops calling tools
+        _tools_disabled = False  # Set True on forced exit to give LLM a tool-free iteration
 
         # ── Main loop ───────────────────────────────────────────────────
         while True:
@@ -312,12 +311,13 @@ class ACTOrchestrator:
             # Token budget guard — prune oldest message pairs when approaching limit
             _messages = self._prune_messages(_messages, _context_budget)
 
+            tools_for_call = [] if _tools_disabled else _native_tools
             try:
                 response_data = cortex_service.generate_response_appended(
                     system_prompt=_system_prompt,
                     messages=_messages,
                     cache_prefix=True,
-                    tools=_native_tools,
+                    tools=tools_for_call,
                 )
             except Exception as _gen_err:
                 logger.error(
@@ -403,6 +403,25 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
+                )
+                act_loop.iteration_number += 1
+                break
+
+            # ── Defensive guard: tools disabled but LLM returned actions ──
+            if _tools_disabled:
+                _final_response = response_data.get('response', '') or response_data.get('narration', '')
+                logger.warning(
+                    f"{LOG_PREFIX} Tools disabled but LLM returned {len(actions)} actions — "
+                    f"capturing response and exiting"
+                )
+                act_loop.log_iteration(
+                    started_at=iteration_start,
+                    completed_at=time.time(),
+                    chosen_mode='ACT',
+                    chosen_confidence=response_data.get('confidence', 0.5),
+                    actions_executed=[],
+                    frontal_cortex_response=response_data,
+                    termination_reason='tools_disabled_override',
                 )
                 act_loop.iteration_number += 1
                 break
@@ -519,18 +538,6 @@ class ACTOrchestrator:
                     if smart_reason:
                         termination_reason = smart_reason
 
-            # ── Persistent task exit ────────────────────────────────────
-            if self.persistent_task_exit and not termination_reason:
-                if any(
-                    r.get('action_type') == 'persistent_task'
-                    and r.get('status') == 'success'
-                    for r in actions_executed
-                ):
-                    logger.info(
-                        f"{LOG_PREFIX} persistent_task dispatched — exiting loop"
-                    )
-                    termination_reason = 'persistent_task_dispatched'
-
             # ── Check timeout/max_iterations if no reason yet ───────────
             if not termination_reason:
                 can_continue, exit_reason = act_loop.can_continue()
@@ -563,45 +570,32 @@ class ACTOrchestrator:
                     logger.warning(f"{LOG_PREFIX} on_iteration_complete error: {e}")
 
             if termination_reason:
-                break
-
-        # ── Post-loop: synthesis call for forced exits ────────────────
-        # When the loop was forced to exit (timeout, repetition, etc.)
-        # the LLM never got a chance to produce a final text response.
-        # Make one last call WITHOUT tools so it can synthesize from the
-        # accumulated tool results in _messages.
-        if not _final_response and termination_reason and termination_reason != 'generation_error':
-            if self.proactive:
-                logger.info(f"{LOG_PREFIX} Proactive turn — silent exit (no forced synthesis)")
-            else:
-                logger.info(
-                    f"{LOG_PREFIX} Forced exit ({termination_reason}) with no final response "
-                    f"— running synthesis call"
-                )
-                _messages.append({
-                    "role": "user",
-                    "content": (
-                        "SYSTEM: The action loop has ended. Based on the results above, "
-                        "respond to the user now. Do NOT call any tools."
-                    ),
-                })
-                try:
-                    _synth = cortex_service.generate_response_appended(
-                        system_prompt=_system_prompt,
-                        messages=self._prune_messages(_messages, _context_budget),
-                        cache_prefix=True,
-                    )
-                    _final_response = (
-                        _synth.get('response', '') or _synth.get('narration', '')
-                    )
-                    if _final_response:
-                        logger.info(
-                            f"{LOG_PREFIX} Synthesis produced {len(_final_response)} chars"
+                if _tools_disabled:
+                    if termination_reason != _forced_exit_reason:
+                        logger.debug(
+                            f"{LOG_PREFIX} Secondary termination reason "
+                            f"'{termination_reason}' during tool-free iteration "
+                            f"(original: '{_forced_exit_reason}')"
                         )
-                except Exception as _synth_err:
-                    logger.warning(
-                        f"{LOG_PREFIX} Synthesis call failed: {_synth_err}"
-                    )
+                    # Already gave the LLM a tool-free iteration — give up
+                    break
+                _forced_exit_reason = termination_reason
+                _tools_disabled = True
+                termination_reason = None  # Reset so tool-free iteration runs cleanly
+                # Don't break — loop continues with tools stripped
+
+        # ── Post-loop: restore forced-exit reason ────────────────────
+        if _forced_exit_reason:
+            termination_reason = _forced_exit_reason
+
+        # ── Post-loop: static fallback for forced exits ───────────────
+        _forced_exit_reasons = {
+            'max_iterations', 'cumulative_timeout', 'tool_exhausted',
+            'smart_repetition', 'cancelled', 'tools_disabled_override',
+        }
+        if not _final_response and termination_reason in _forced_exit_reasons:
+            if not self.proactive:
+                _final_response = "I wasn't able to complete this request."
 
         # ── Post-loop: batch write iterations ───────────────────────────
         if act_loop.iteration_logs:
