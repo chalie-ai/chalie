@@ -292,7 +292,7 @@ class KnowledgeService:
                     # Value change: only overwrite if confidence dominance
                     value_changed = False
                     if value and old_value and value.lower().strip() != old_value.lower().strip():
-                        if confidence > old_confidence * 2:
+                        if confidence >= old_confidence * 0.8:
                             value_changed = True
                             new_confidence = confidence
                             logger.info(
