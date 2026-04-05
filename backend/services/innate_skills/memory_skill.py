@@ -143,7 +143,7 @@ TOOL_SCHEMA = {
 
 # ── Kind auto-classification rules ──────────────────────────────────
 
-_TRAIT_KEYS = {"name", "birthday", "age", "email", "phone", "address"}
+_TRAIT_KEYS = {"name", "birthday", "age", "email", "phone", "address", "allergy", "pet", "hobby", "job", "profession", "occupation", "location", "city", "country", "diet", "health", "condition", "family", "sibling", "sport", "exercise", "language"}
 _PREFERENCE_KEYS = {"prefer", "like", "dislike", "favorite"}
 _PROCEDURE_KEYS = {"how_to", "steps", "process", "workflow"}
 
