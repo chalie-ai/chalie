@@ -7,12 +7,6 @@
       "caps": { "reasoning": "high", "structured": "low", "creativity": "high", "classification": "none", "vision": "none" }
     },
     {
-      "id": "frontal-cortex",
-      "name": "Frontal Cortex",
-      "desc": "Core reasoning engine; orchestrates all response modes.",
-      "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "frontal-cortex-unified",
       "name": "Frontal Cortex (Unified)",
       "desc": "Unified generation path for user messages. Logs under this name; assign provider here.",
@@ -95,6 +89,18 @@
       "name": "Failure Analysis",
       "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
+    },
+    {
+      "id": "goal-emergence",
+      "name": "Goal Emergence",
+      "desc": "Detects new goals from episodic memory narratives. Fires per episode batch.",
+      "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "high", "vision": "none" }
+    },
+    {
+      "id": "ambient-wrapper",
+      "name": "Ambient Wrapper",
+      "desc": "Processes ambient context signals (location, time, environment) into cognitive input.",
+      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "medium", "vision": "none" }
     }
   ]
 }

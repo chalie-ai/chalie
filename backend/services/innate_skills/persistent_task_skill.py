@@ -2,16 +2,16 @@
 Persistent Task Skill — Native innate skill for multi-session background tasks.
 
 Provides natural language commands:
-  - create: Propose a new persistent task (with plan decomposition)
-  - status: Get progress summary
-  - plan: Show step-level plan for a task
+  - create: Propose a new persistent task
+  - status: Get task status
+  - list: List active tasks
   - pause: Pause an active task
   - resume: Resume a paused task
   - cancel: Cancel a task
-  - expand: Update task scope
-  - priority: Change task priority
   - complete: Mark a task as done with a final result
-  - progress: Update coverage estimate and optional summary
+
+Planning and execution are handled internally by the worker (three-phase:
+plan → execute → surface). No plan/expand/progress/priority actions.
 
 All DB access via get_shared_db_service() (lazy import inside function).
 """
@@ -38,26 +38,21 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "enum": [
                     "create", "status", "list", "pause", "resume",
-                    "cancel", "expand", "priority", "plan",
-                    "complete", "progress",
+                    "cancel", "complete",
                 ],
                 "description": "Task operation to perform.",
             },
             "goal": {
                 "type": "string",
-                "description": "What to accomplish — clear, specific objective. Required for create; used as fuzzy match for status/pause/resume/cancel/expand/priority/plan when task_id is omitted.",
+                "description": "What to accomplish — clear, specific objective. Required for create; used as fuzzy match for status/pause/resume/cancel when task_id is omitted.",
             },
             "scope": {
                 "type": "string",
                 "description": "Focus constraints for create — topics, URL patterns, time ranges, depth limits.",
             },
-            "priority": {
-                "type": "integer",
-                "description": "Task priority 1-10 (default 5). For create or priority action.",
-            },
             "task_id": {
                 "type": "integer",
-                "description": "Explicit task ID for status/pause/resume/cancel/plan/expand/priority/complete/progress.",
+                "description": "Explicit task ID for status/pause/resume/cancel/complete.",
             },
             "result": {
                 "type": "string",
@@ -66,14 +61,6 @@ TOOL_SCHEMA = {
             "artifact": {
                 "type": "string",
                 "description": "Optional artifact data for complete action.",
-            },
-            "coverage": {
-                "type": "number",
-                "description": "Coverage estimate 0.0-1.0 for progress action.",
-            },
-            "summary": {
-                "type": "string",
-                "description": "Progress summary text for progress action.",
             },
         },
         "required": ["action"],
@@ -104,18 +91,10 @@ def handle_persistent_task(topic: str, params: dict) -> str:
         return _resume(topic, params)
     elif action == "cancel":
         return _cancel(topic, params)
-    elif action == "expand":
-        return _expand(topic, params)
-    elif action == "priority":
-        return _priority(topic, params)
-    elif action == "plan":
-        return _show_plan(topic, params)
     elif action == "list":
         return _list_tasks(topic, params)
     elif action == "complete":
         return _complete(topic, params)
-    elif action == "progress":
-        return _progress_update(topic, params)
     else:
         return f"Unknown persistent task action: {action}"
 
@@ -157,20 +136,19 @@ def _create(topic: str, params: dict) -> str:
             "success": False,
             "error": (
                 f"You already have a similar task in progress: \"{duplicate['goal'][:80]}\". "
-                f"Status: {duplicate['status']} | Coverage: {duplicate.get('progress', {}).get('coverage_estimate', 0):.0%}. "
+                f"Status: {duplicate['status']}. "
                 f"Would you like to continue that task or create a new one?"
             ),
         })
 
     scope = params.get("scope")
-    priority = int(params.get("priority", 5))
 
     try:
         task = service.create_task(
             account_id=account_id,
             goal=goal,
             scope=scope,
-            priority=priority,
+            max_iterations=200,
         )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Task creation failed: {e}", exc_info=True)
@@ -193,7 +171,6 @@ def _status(topic: str, params: dict) -> str:
     if task_id:
         return service.get_status_summary(int(task_id))
 
-    # If no task_id, search by goal text
     goal = params.get("goal", params.get("query", params.get("text", "")))
     account_id = _get_account_id()
     active_tasks = service.get_active_tasks(account_id)
@@ -202,18 +179,14 @@ def _status(topic: str, params: dict) -> str:
         return "You don't have any active background tasks."
 
     if goal:
-        # Find best match
         from services.persistent_task_service import _jaccard_similarity
         best_match = max(active_tasks, key=lambda t: _jaccard_similarity(goal, t['goal']))
         if _jaccard_similarity(goal, best_match['goal']) > 0.3:
             return service.get_status_summary(best_match['id'])
 
-    # Return all active task summaries
     summaries = []
     for t in active_tasks:
-        progress = t.get('progress', {}) or {}
-        coverage = progress.get('coverage_estimate', 0)
-        summaries.append(f"- [{t['status']}] \"{t['goal'][:60]}\" ({coverage:.0%} done)")
+        summaries.append(f"- [{t['status']}] \"{t['goal'][:60]}\"")
 
     return "Active background tasks:\n" + "\n".join(summaries)
 
@@ -251,33 +224,6 @@ def _cancel(topic: str, params: dict) -> str:
     return msg if ok else f"Cannot cancel: {msg}"
 
 
-def _expand(topic: str, params: dict) -> str:
-    """Update task scope."""
-    service = _get_service()
-    task_id = _resolve_task_id(params)
-    if not task_id:
-        return "Could not identify which task to update."
-
-    new_scope = params.get("scope", params.get("query", params.get("text", "")))
-    if not new_scope:
-        return "No new scope specified."
-
-    ok, msg = service.update_scope(task_id, new_scope)
-    return msg if ok else f"Cannot update scope: {msg}"
-
-
-def _priority(topic: str, params: dict) -> str:
-    """Change task priority."""
-    service = _get_service()
-    task_id = _resolve_task_id(params)
-    if not task_id:
-        return "Could not identify which task to update."
-
-    new_priority = int(params.get("priority", params.get("value", 5)))
-    ok, msg = service.update_priority(task_id, new_priority)
-    return msg if ok else f"Cannot update priority: {msg}"
-
-
 def _list_tasks(topic: str, params: dict) -> str:
     """List all active tasks."""
     service = _get_service()
@@ -289,69 +235,15 @@ def _list_tasks(topic: str, params: dict) -> str:
 
     summaries = []
     for t in active_tasks:
-        progress = t.get('progress', {}) or {}
-        coverage = progress.get('coverage_estimate', 0)
-        summaries.append(
-            f"- #{t['id']} [{t['status']}] \"{t['goal'][:60]}\" "
-            f"({coverage:.0%} done, priority {t['priority']})"
-        )
+        summaries.append(f"- #{t['id']} [{t['status']}] \"{t['goal'][:60]}\"")
 
     return "Active background tasks:\n" + "\n".join(summaries)
-
-
-def _show_plan(topic: str, params: dict) -> str:
-    """Show the plan (step DAG) for a task."""
-    service = _get_service()
-    task_id = _resolve_task_id(params)
-    if not task_id:
-        return "Could not identify which task to show the plan for."
-
-    task = service.get_task(task_id)
-    if not task:
-        return "Task not found."
-
-    progress = task.get('progress', {}) or {}
-    plan = progress.get('plan')
-    if not plan or not plan.get('steps'):
-        return f"Task \"{task['goal'][:60]}\" has no step plan (running as flat ACT loop)."
-
-    steps = plan['steps']
-    lines = [f"Plan for: \"{task['goal'][:60]}\""]
-    lines.append(f"Confidence: {plan.get('decomposition_confidence', 0):.0%} | "
-                 f"Cost: {plan.get('cost_class', 'unknown')}")
-
-    if plan.get('blocked_on'):
-        lines.append(f"BLOCKED: {plan.get('blocked_reason', 'unknown reason')}")
-
-    for s in steps:
-        status_icon = {
-            'pending': '○', 'ready': '◎', 'in_progress': '◉',
-            'completed': '●', 'skipped': '⊘', 'failed': '✗',
-        }.get(s.get('status', 'pending'), '?')
-
-        line = f"  {status_icon} {s['id']}: {s['description']}"
-        if s.get('result_summary'):
-            line += f" → {s['result_summary'][:60]}"
-        if s.get('skip_reason'):
-            line += f" (skipped: {s['skip_reason'][:40]})"
-        if s.get('failure_reason'):
-            line += f" (failed: {s['failure_reason'][:40]})"
-        lines.append(line)
-
-    from services.plan_decomposition_service import PlanDecompositionService
-    coverage = PlanDecompositionService.get_plan_coverage(plan)
-    lines.append(f"Progress: {coverage:.0%} ({sum(1 for s in steps if s.get('status') in ('completed', 'skipped'))}/{len(steps)} steps)")
-
-    return '\n'.join(lines)
-
-
 
 
 def _complete(topic: str, params: dict) -> str:
     """Mark a task as completed with a final result."""
     task_id = _resolve_task_id(params)
     if not task_id:
-        # Fallback: check if persistent_task_id was injected via context_extras
         task_id = params.get('persistent_task_id')
     if not task_id:
         return "Could not identify which task to complete."
@@ -364,66 +256,9 @@ def _complete(topic: str, params: dict) -> str:
     result = params.get("result", params.get("text", "Task completed."))
     artifact = params.get("artifact")
 
-    is_system = task.get('priority') == 7
-
     service.complete_task(int(task_id), result, artifact)
-    _surface_completion_from_skill(task, result)
-
-    if is_system:
-        _notify_plan_action_outcome('completed', int(task_id))
 
     return f"Task #{task_id} \"{task['goal'][:60]}\" marked as completed."
-
-
-def _progress_update(topic: str, params: dict) -> str:
-    """Update coverage estimate and optional summary for a task."""
-    task_id = _resolve_task_id(params)
-    if not task_id:
-        # Fallback: check if persistent_task_id was injected via context_extras
-        task_id = params.get('persistent_task_id')
-    if not task_id:
-        return "Could not identify which task to update progress for."
-
-    service = _get_service()
-    task = service.get_task(int(task_id))
-    if not task:
-        return f"Task {task_id} not found."
-
-    coverage = params.get("coverage", params.get("value"))
-    if coverage is not None:
-        coverage = max(0.0, min(1.0, float(coverage)))
-
-    summary = params.get("summary", params.get("text"))
-
-    # Merge into existing progress
-    progress = dict(task.get('progress', {}) or {})
-    if coverage is not None:
-        progress['coverage_estimate'] = coverage
-    if summary:
-        progress['last_summary'] = summary
-
-    service.checkpoint(int(task_id), progress=progress)
-
-    parts = [f"Task #{task_id} progress updated"]
-    if coverage is not None:
-        parts.append(f"coverage: {coverage:.0%}")
-    if summary:
-        parts.append(f"summary: {summary[:80]}")
-    return " — ".join(parts) + "."
-
-
-def _surface_completion_from_skill(task: dict, result: str):
-    """Surface task completion to user when completed via skill."""
-    try:
-        from services.output_service import OutputService
-        output = OutputService()
-        message = (
-            f"I've finished working on \"{task['goal'][:60]}\". "
-            f"Here's what I found:\n\n{result}"
-        )
-        output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Completion surfacing failed: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:

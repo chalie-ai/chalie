@@ -14,7 +14,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'schedule', 'autobiography', 'list',
     'persistent_task', 'document',
     'read', 'find_tools', 'goals',
-    'rich_render',
+    'rich_render', 'sub_agent',
 })
 
 # Backward-compat aliases — old names that map to the unified 'memory' skill.
@@ -62,6 +62,7 @@ SKILL_DESCRIPTIONS: dict = {
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
     'goals': 'Create, view, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
     'rich_render': 'Returns block rendering reference for producing rich visual output (metrics, cards, charts, progress, timelines)',
+    'sub_agent': 'Spawn a focused worker for a specific task. Blocks until done, returns result.',
     # Backward-compat aliases (for lookup only)
     'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
     'memorize': 'Store information, save a note, remember a fact, keep something for later',
@@ -81,6 +82,7 @@ SKILL_EFFORT: dict = {
     'find_tools': 'trivial',
     'goals': 'trivial',
     'rich_render': 'trivial',
+    'sub_agent': 'deep',
     # Backward-compat aliases
     'recall': 'trivial',
     'memorize': 'trivial',
@@ -100,6 +102,7 @@ SKILL_CATEGORIES: dict = {
     'find_tools': 'cognition',
     'goals': 'cognition',
     'rich_render': 'presentation',
+    'sub_agent': 'task_management',
     # Backward-compat aliases
     'recall': 'memory',
     'memorize': 'memory',

@@ -1,22 +1,16 @@
 """
-Persistent Task Worker — Background processing for multi-session ACT tasks.
+Persistent Task Worker — Three-phase background task execution.
 
 Event-driven: blocks on `persistent_task:execute` queue (blpop).
-  - On signal: pick 1 eligible task → run organic ACT loop → checkpoint
-  - On 5-min timeout: fallback scan for any eligible tasks
+  Phase 1: PLAN    — Single LLM call, structured JSON plan
+  Phase 2: EXECUTE — ACT loop with sub_agent skill, 200 iterations, no timeout
+  Phase 3: SURFACE — Inject result into digest worker
 
-Every task runs the same organic ACT loop — no mandatory pre-planning, no
-plan-aware vs flat distinction. If the LLM decides it needs a plan, it can
-use the `persistent_task` innate skill to decompose the goal organically.
-
-Crash-safe: if worker dies mid-cycle, task stays IN_PROGRESS and the next
-wake resumes from the last checkpoint.
+Crash-safe: if worker dies mid-execution, task stays IN_PROGRESS.
 """
 
 import json
 import logging
-
-from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PERSISTENT TASK WORKER]"
@@ -24,347 +18,217 @@ LOG_PREFIX = "[PERSISTENT TASK WORKER]"
 EXECUTE_QUEUE_KEY = "persistent_task:execute"
 BLPOP_TIMEOUT = 300  # 5-minute heartbeat fallback
 
+# Skills available in the outer execution loop
+OUTER_SKILLS = ['memory', 'find_tools', 'document', 'read', 'sub_agent']
+
 
 def persistent_task_worker(shared_state):
-    """
-    Background worker for persistent task processing.
-
-    Blocks on the `persistent_task:execute` queue. When a signal arrives
-    (task accepted, resumed, etc.) or the 5-min timeout fires, picks one
-    eligible task and runs an organic ACT loop.
-
-    Args:
-        shared_state: Shared state dict from WorkerManager
-    """
-    logger.info(f"{LOG_PREFIX} Starting persistent task worker (event-driven)")
+    """Background worker — blocks on execute queue, processes tasks."""
+    logger.info(f"{LOG_PREFIX} Starting persistent task worker")
 
     from services.memory_client import MemoryClientService
     store = MemoryClientService.create_connection()
 
     while True:
         try:
-            # Block until a signal arrives or timeout fires
             result = store.blpop([EXECUTE_QUEUE_KEY], timeout=BLPOP_TIMEOUT)
 
             if result:
                 _key, raw = result
                 try:
                     signal = json.loads(raw) if isinstance(raw, (str, bytes)) else {}
-                    task_id = signal.get('task_id')
                     logger.debug(
-                        f"{LOG_PREFIX} Signal received — task_id={task_id}, "
+                        f"{LOG_PREFIX} Signal: task_id={signal.get('task_id')}, "
                         f"reason={signal.get('reason', 'unknown')}"
                     )
                 except Exception:
                     pass
             else:
-                logger.debug(f"{LOG_PREFIX} Heartbeat timeout — scanning for eligible tasks")
+                logger.debug(f"{LOG_PREFIX} Heartbeat — scanning for eligible tasks")
 
             _run_cycle()
-
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Worker loop error: {e}", exc_info=True)
 
 
 def _run_cycle():
-    """Process all eligible tasks, running each to completion."""
+    """Pick and process eligible tasks."""
     from services.database_service import get_shared_db_service
     from services.persistent_task_service import PersistentTaskService
 
     db = get_shared_db_service()
     task_service = PersistentTaskService(db)
 
-    # Auto-expire stale tasks
     expired = task_service.expire_stale_tasks()
     if expired:
         logger.info(f"{LOG_PREFIX} Expired {expired} stale tasks")
 
-    # Process eligible tasks one by one
-    processed = set()
-    while True:
-        task = task_service.get_eligible_task()
-        if not task:
-            logger.debug(f"{LOG_PREFIX} No eligible tasks")
-            return
-        if task['id'] in processed:
-            return  # Already ran this task this cycle
+    task = task_service.get_eligible_task()
+    if not task:
+        logger.debug(f"{LOG_PREFIX} No eligible tasks")
+        return
 
-        logger.info(f"{LOG_PREFIX} Processing task {task['id']}: {task['goal'][:80]}")
-        _process_task(task_service, task)
-        processed.add(task['id'])
+    logger.info(f"{LOG_PREFIX} Processing task {task['id']}: {task['goal'][:80]}")
+    _process_task(task_service, task)
 
 
 def _process_task(task_service, task):
-    """Run continuous ACT cycles on a task until complete or naturally stopped.
-
-    Steps run back-to-back — each cycle's results feed into the next so the
-    DAG plan can adapt.  The worker only pauses when the ACT loop exits
-    naturally (LLM decided it's done) or on error.
-    """
+    """Three-phase task execution: Plan → Execute → Surface."""
     task_id = task['id']
-    MAX_CONTINUOUS_CYCLES = 300  # Safety valve — not a throttle
 
-    # Transition to IN_PROGRESS if needed
+    # Transition to in_progress
     if task['status'] == 'accepted':
         ok, msg = task_service.transition(task_id, 'in_progress')
         if not ok:
             logger.warning(f"{LOG_PREFIX} Cannot start task {task_id}: {msg}")
             return
 
-    for _cycle_num in range(MAX_CONTINUOUS_CYCLES):
-        # Refresh task from DB — may have been completed by innate skill
+    try:
+        # Phase 1: Plan
+        logger.info(f"{LOG_PREFIX} Phase 1: Planning task {task_id}")
+        plan = _generate_plan(task['goal'])
+        task_service.checkpoint(task_id, progress={'plan': plan, 'phase': 'planning_complete'})
+        logger.info(f"{LOG_PREFIX} Plan generated: {len(plan.get('steps', []))} steps")
+
+        # Check if paused/cancelled between phases
         task = task_service.get_task(task_id)
-        if not task or task['status'] not in ('accepted', 'in_progress'):
-            logger.info(
-                f"{LOG_PREFIX} Task {task_id} no longer active "
-                f"(status={task['status'] if task else 'deleted'})"
-            )
+        if not task or task['status'] not in ('in_progress',):
+            logger.info(f"{LOG_PREFIX} Task {task_id} no longer active after planning")
             return
 
-        # Respect iteration budget
-        if task.get('iterations_used', 0) >= task.get('max_iterations', 20):
-            logger.info(
-                f"{LOG_PREFIX} Task {task_id} exhausted iteration budget "
-                f"({task['iterations_used']}/{task['max_iterations']})"
-            )
-            task_service.stall_task(task_id, 'Iteration budget exhausted')
-            return
+        # Phase 2: Execute
+        logger.info(f"{LOG_PREFIX} Phase 2: Executing task {task_id}")
+        result = _execute_with_plan(task, plan)
 
-        progress = task.get('progress', {}) or {}
-        prev_coverage = progress.get('coverage_estimate', 0.0)
-
-        # Run one ACT loop cycle
-        try:
-            result_data = _execute_task_act_loop(task)
-        except Exception as e:
-            logger.error(f"{LOG_PREFIX} ACT loop failed for task {task_id}: {e}", exc_info=True)
-            return  # Crash-safe: task stays IN_PROGRESS
-
-        # Merge progress
-        new_progress = dict(progress)
-        new_progress.update(result_data.get('progress_update', {}))
-        cycles_completed = progress.get('cycles_completed', 0) + 1
-        new_progress['cycles_completed'] = cycles_completed
-        new_progress['last_cycle_at'] = utc_now().isoformat()
-
-        # Atomic checkpoint
-        task_service.checkpoint(
-            task_id=task_id,
-            progress=new_progress,
-            result_fragment=result_data.get('result_fragment'),
-        )
-
-        # Safety check: checkpoint may have auto-stalled the task
-        refreshed_after_cp = task_service.get_task(task_id)
-        if refreshed_after_cp and refreshed_after_cp['status'] == 'stalled':
-            logger.info(f"{LOG_PREFIX} Task {task_id} auto-stalled by checkpoint")
-            return
-
-        # Check if task is complete
-        if result_data.get('task_complete', False):
-            final_result = new_progress.get('last_summary', 'Task completed.')
-            task_service.complete_task(task_id, final_result, result_data.get('artifact'))
-            _surface_completion(task, final_result)
-            logger.info(f"{LOG_PREFIX} Task {task_id} completed!")
-            return
-
-        # Check if completed by innate skill during the ACT loop
-        refreshed = task_service.get_task(task_id)
-        if refreshed and refreshed['status'] in ('completed', 'cancelled'):
-            logger.info(f"{LOG_PREFIX} Task {task_id} {refreshed['status']} during ACT loop")
-            return
-
-        # Adaptive surfacing
-        new_coverage = new_progress.get('coverage_estimate', prev_coverage)
-        coverage_jump = new_coverage - prev_coverage
-        if (cycles_completed == 2) or (coverage_jump > 0.15):
-            _surface_progress(task, new_progress)
-
-        # Decide whether to continue immediately
-        termination = result_data.get('termination_reason', '')
-        if termination in ('natural_exit', 'no_actions'):
-            # LLM decided it's done for now — stop cycling
-            logger.info(
-                f"{LOG_PREFIX} Task {task_id} cycle {cycles_completed} — "
-                f"natural stop ({termination}), coverage: {new_coverage:.0%}"
-            )
-            return
-
-        # max_iterations or timeout — more work to do, continue immediately
+        # Store result
+        final_response = result.final_response or f"Task completed ({result.termination_reason})"
+        task_service.complete_task(task_id, final_response)
         logger.info(
-            f"{LOG_PREFIX} Task {task_id} cycle {cycles_completed} "
-            f"(coverage: {prev_coverage:.0%} → {new_coverage:.0%}) — continuing"
+            f"{LOG_PREFIX} Task {task_id} completed — "
+            f"{result.iterations_used} iterations, reason: {result.termination_reason}"
         )
 
-    logger.warning(
-        f"{LOG_PREFIX} Task {task_id} hit safety limit ({MAX_CONTINUOUS_CYCLES} cycles)"
+        # Phase 3: Surface via digest worker
+        logger.info(f"{LOG_PREFIX} Phase 3: Surfacing task {task_id}")
+        _surface_via_digest(task, final_response)
+
+    except Exception as e:
+        logger.error(f"{LOG_PREFIX} Task {task_id} failed: {e}", exc_info=True)
+        try:
+            task_service.stall_task(task_id, str(e)[:500])
+        except Exception as stall_err:
+            logger.critical(f"{LOG_PREFIX} Failed to stall task {task_id}: {stall_err}")
+
+
+def _generate_plan(goal: str) -> dict:
+    """Phase 1: Single LLM call to generate a structured plan."""
+    import re
+    from services.config_service import ConfigService
+    from services import FrontalCortexService
+
+    try:
+        config = ConfigService.resolve_agent_config("cognitive-triage")
+    except Exception:
+        config = ConfigService.resolve_agent_config("frontal-cortex")
+
+    prompt_template = ConfigService.get_agent_prompt("persistent-task-plan")
+    prompt = prompt_template.replace('{{goal}}', goal)
+
+    cortex = FrontalCortexService(config)
+
+    # Single LLM call — no ACT loop, just generate
+    response = cortex.generate_response(
+        system_prompt_template=prompt,
+        original_prompt=goal,
+        classification={'topic': 'persistent_task_planning', 'confidence': 10},
+        chat_history=[],
     )
 
+    text = response.get('response', '') if isinstance(response, dict) else str(response)
 
-def _build_task_chat_history(task):
-    progress = task.get('progress', {}) or {}
-    result_text = task.get('result', '') or ''
-    history = []
+    try:
+        json_match = re.search(r'\{[\s\S]*\}', text)
+        if json_match:
+            plan = json.loads(json_match.group())
+            if 'steps' in plan:
+                return plan
+    except (json.JSONDecodeError, AttributeError):
+        pass
 
-    if progress.get('last_summary'):
-        cycles = progress.get('cycles_completed', 0)
-        history.append({
-            'role': 'assistant',
-            'content': f"[Previous cycle {cycles}] {progress['last_summary']}"
-        })
-
-    if result_text:
-        truncated = result_text[-3000:] if len(result_text) > 3000 else result_text
-        if truncated != result_text:
-            truncated = '...' + truncated
-        history.append({
-            'role': 'assistant',
-            'content': f"Intermediate findings from prior cycles:\n{truncated}"
-        })
-
-    return history
+    # Fallback: single-step plan
+    logger.warning(f"{LOG_PREFIX} Could not parse plan JSON, using single-step fallback")
+    return {"steps": [{"id": "s1", "action": goal, "depends_on": [], "parallel": False}]}
 
 
-def _execute_task_act_loop(task: dict) -> dict:
-    """
-    Run the organic ACT loop for a persistent task.
-
-    No plan decomposition is forced — the LLM gets the goal as context and
-    decides what to do. If it needs a structured plan, it can invoke the
-    `persistent_task` innate skill to decompose the goal.
-
-    Returns dict with:
-      - progress_update: dict
-      - task_complete: bool
-      - result_fragment: str (optional)
-      - artifact: dict (optional)
-    """
+def _execute_with_plan(task: dict, plan: dict):
+    """Phase 2: Run ACT loop with plan context and sub_agent skill."""
     from services.config_service import ConfigService
     from services import FrontalCortexService
     from services.act_orchestrator_service import ACTOrchestrator
-    from services.innate_skills.registry import COGNITIVE_PRIMITIVES_ORDERED, SKILL_DESCRIPTIONS
-    from services.plan_decomposition_service import PlanDecompositionService
+    from services.database_service import get_shared_db_service
+    from services.persistent_task_service import PersistentTaskService
 
-    # Load config
     try:
-        cortex_config = ConfigService.resolve_agent_config("frontal-cortex-act")
+        config = ConfigService.resolve_agent_config("frontal-cortex-unified")
     except Exception:
-        cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
+        config = ConfigService.resolve_agent_config("frontal-cortex")
 
-    act_prompt = ConfigService.get_agent_prompt("persistent-task-act")
-    cortex_service = FrontalCortexService(cortex_config)
+    prompt_template = ConfigService.get_agent_prompt("persistent-task-execute")
+    prompt = prompt_template.replace('{{goal}}', task['goal'])
+    prompt = prompt.replace('{{plan_json}}', json.dumps(plan, indent=2))
+    prompt = prompt.replace('{{completed_steps}}', 'None yet')
 
-    # Retrieve cognitive context for this task
-    assembled_context = None
-    try:
-        from services.context_assembly_service import ContextAssemblyService
-        from services.topic_context import TopicContext
-        _task_ctx = TopicContext(topic=f"persistent_task_{task['id']}")
-        cas = ContextAssemblyService({})
-        assembled_context = cas.assemble(
-            prompt=task['goal'],
-            topic=f"persistent_task_{task['id']}",
-            context=_task_ctx,
-        )
-        if _task_ctx.failed_sections:
-            logger.warning(f"{LOG_PREFIX} Context assembly had failures: {_task_ctx.failed_sections}")
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Context assembly failed (non-fatal): {e}")
+    cortex = FrontalCortexService(config)
 
-    # Build task context for prompt
-    progress = task.get('progress', {}) or {}
-    task_context = {
-        'task_id': str(task['id']),
-        'task_goal': task['goal'],
-        'task_scope': task.get('scope', 'No specific scope defined'),
-        'task_progress': json.dumps(progress, indent=2) if progress else 'No previous progress',
-        'task_intermediate_results': task.get('result', 'None yet'),
-    }
+    db = get_shared_db_service()
+    task_service = PersistentTaskService(db)
+    task_id = task['id']
 
-    # Fill skill/tool/context placeholders
-    skills_text = '\n'.join(
-        f'- **{name}**: {SKILL_DESCRIPTIONS.get(name, "")}'
-        for name in COGNITIVE_PRIMITIVES_ORDERED
-    )
-    tools_text = PlanDecompositionService._get_available_tools()
-    task_context['injected_skills'] = skills_text
-    task_context['available_tools'] = tools_text
-    task_context['client_context'] = 'Background worker execution (persistent task cycle)'
-
-    # Fill prompt template
-    prompt_filled = act_prompt
-    for key, value in task_context.items():
-        prompt_filled = prompt_filled.replace(f'{{{{{key}}}}}', str(value))
+    def on_iteration_complete(_act_loop, _iteration_start, _actions_executed, _termination_reason):
+        """Check if task was paused or cancelled between iterations."""
+        refreshed = task_service.get_task(task_id)
+        if not refreshed or refreshed['status'] in ('paused', 'cancelled', 'stalled'):
+            return 'cancelled'
+        return None
 
     orchestrator = ACTOrchestrator(
-        config=cortex_config,
-        max_iterations=50,
-        cumulative_timeout=120.0,
-        per_action_timeout=15.0,
-        critic_enabled=True,
-        smart_repetition=True,
-        escalation_hints=False,
-        execution_gate=False,  # User already approved the task by creating it
+        config=config,
+        max_iterations=200,
+        cumulative_timeout=None,
+        per_action_timeout=None,
+        execution_gate=False,
+        proactive=False,
     )
 
-    result = orchestrator.run(
+    return orchestrator.run(
         topic=f"persistent_task_{task['id']}",
         text=task['goal'],
-        cortex_service=cortex_service,
-        act_prompt=prompt_filled,
+        cortex_service=cortex,
+        act_prompt=prompt,
         classification={'topic': f"task_{task['id']}", 'confidence': 10},
-        chat_history=_build_task_chat_history(task),
+        chat_history=[],
+        selected_skills=OUTER_SKILLS,
         session_id='persistent_task',
         exchange_id=f"ptask_{task['id']}",
-        assembled_context=assembled_context,
-        context_extras={'persistent_task_id': task['id']},
+        on_iteration_complete=on_iteration_complete,
     )
 
-    progress_update = {
-        'last_summary': (
-            f"Cycle completed with {result.iterations_used} iterations "
-            f"(termination: {result.termination_reason})"
-        ),
-        'coverage_estimate': progress.get('coverage_estimate', 0.0),
-    }
 
-    return {
-        'progress_update': progress_update,
-        'task_complete': False,  # Completion determined by task skill or next cycle
-        'result_fragment': None,
-        'artifact': None,
-        'termination_reason': result.termination_reason,
-    }
-
-
-def _surface_progress(task: dict, progress: dict):
-    """Surface a progress update to the user via the communicate pipeline."""
+def _surface_via_digest(task: dict, result: str):
+    """Phase 3: Inject result into digest worker for natural surfacing."""
     try:
-        from services.output_service import OutputService
-        output = OutputService()
-        summary = progress.get('last_summary', 'Making progress...')
-        coverage = progress.get('coverage_estimate', 0)
-
-        message = (
-            f"Update on your task \"{task['goal'][:60]}\" — "
-            f"{summary} ({coverage:.0%} coverage)"
+        from workers.digest_worker import digest_worker
+        digest_worker(
+            text=result,
+            metadata={
+                'source': 'persistent_task_result',
+                'task_id': task['id'],
+                'thread_id': task.get('thread_id'),
+                'goal': task.get('goal', ''),
+            }
         )
-        output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
-        logger.info(f"{LOG_PREFIX} Surfaced progress for task {task['id']}")
     except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Progress surfacing failed: {e}")
-
-
-def _surface_completion(task: dict, result: str):
-    """Surface task completion to the user."""
-    try:
-        from services.output_service import OutputService
-        output = OutputService()
-        message = (
-            f"I've finished working on \"{task['goal'][:60]}\". "
-            f"Here's what I found:\n\n{result}"
+        logger.critical(
+            f"{LOG_PREFIX} SURFACING FAILED for task {task['id']} — result is stored in DB "
+            f"but was not delivered to user: {e}", exc_info=True
         )
-        output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
-        logger.info(f"{LOG_PREFIX} Surfaced completion for task {task['id']}")
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Completion surfacing failed: {e}")

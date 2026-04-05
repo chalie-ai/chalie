@@ -110,8 +110,7 @@ frontend/
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`critic_service.py`** — Post-action verification via lightweight LLM; safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
-- **`persistent_task_service.py`** — Multi-session background task management with state machine (ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
-- **`plan_decomposition_service.py`** — LLM-powered goal → step DAG decomposition; validates DAG (Kahn's cycle detection), step quality (4–30 word descriptions, Jaccard dedup), and cost classification (cheap/expensive); plans stored in `persistent_tasks.progress` JSON (stored as TEXT in SQLite); ready-step ordering (shallowest depth, cheapest first)
+- **`persistent_task_service.py`** — Multi-session background task management with state machine (ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; 5 active tasks max
 
 #### Constants & Registries
 - **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
@@ -160,7 +159,7 @@ Built-in cognitive skills for the ACT loop:
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
+- **`persistent_task_skill.py`** — Multi-session background task management: create, pause, resume, cancel, check status, list (<100ms; create enqueues task for three-phase background execution)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
@@ -190,7 +189,7 @@ Built-in cognitive skills for the ACT loop:
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
-- **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
+- **Persistent Task Worker** — Runs eligible multi-session background tasks via three-phase execution (30min cycle with ±30% jitter): (1) PLAN — single LLM call generates a 2–6 step guidance plan; (2) EXECUTE — ACTOrchestrator with up to 200 iterations, no timeout; `sub_agent` innate skill available for spawning focused sub-workers (50 iterations each); (3) SURFACE — result injected into digest worker, LLM produces natural summary; outer loop denies `persistent_task` skill, sub-agents deny both `persistent_task` and `sub_agent`
 - **Document Worker** — PromptQueue worker for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
 - **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in ``vault_config``; unlocked post-login; migrates legacy Fernet data on first unlock
@@ -301,7 +300,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Operational Limits
 - **ACT loop**: 60s cumulative timeout, 30 max iterations; post-action critic verification
-- **Persistent tasks**: 5 active max, 3 cycles/hr rate limit, 14-day auto-expiry; plan-decomposed tasks: 3–8 steps per plan, up to 3 steps executed per cycle, 3 ACT iterations per step
+- **Persistent tasks**: 5 active max, 14-day auto-expiry; execution bounded by iterations (200 outer, 50 per sub-agent), no wall-clock timeout
 - **Fatigue budget**: 2.5 activation units per 30min
 - **Per-concept cooldown**: 60min (prevents circular rumination)
 - **Delegation rate**: 1 per topic per 30min

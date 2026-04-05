@@ -118,7 +118,7 @@ class ActLoopService:
 
         # Safety: cumulative timeout (hard safety limit)
         elapsed = time.time() - self.start_time
-        if elapsed >= self.cumulative_timeout:
+        if self.cumulative_timeout is not None and elapsed >= self.cumulative_timeout:
             logging.warning(f"[MODE:ACT] [ACT LOOP] Cumulative timeout reached ({elapsed:.2f}s)")
             return False, 'timeout'
 
