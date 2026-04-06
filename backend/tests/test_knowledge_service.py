@@ -296,7 +296,7 @@ class TestRecall:
     def test_recall_fts_match(self, svc):
         """FTS finds entries by text content."""
         svc.store(
-            kind='concept', entity='user', key='python_lists',
+            kind='fact', entity='user', key='python_lists',
             value='Python lists are ordered mutable collections',
         )
         results = svc.recall(query='mutable collections')
@@ -463,18 +463,16 @@ class TestStrengthen:
         assert after['confidence'] > before['confidence']
         assert after['evidence_count'] == before['evidence_count'] + 1
 
-    def test_strengthen_appends_episode(self, svc):
-        """For concepts, appends to source_episodes in data."""
-        svc.store(kind='concept', entity='user', key='concept_ep_test',
-                  value='a concept with episodes',
-                  data={'source_episodes': ['ep-1']})
+    def test_strengthen_with_episode_id_still_works(self, svc):
+        """strengthen() accepts episode_id param and bumps evidence_count."""
+        svc.store(kind='fact', entity='user', key='strengthen_ep_test',
+                  value='a fact with episodes')
 
-        assert svc.strengthen('user', 'concept_ep_test', episode_id='ep-2') is True
+        before = svc.get('user', 'strengthen_ep_test')
+        assert svc.strengthen('user', 'strengthen_ep_test', episode_id='ep-2') is True
 
-        result = svc.get('user', 'concept_ep_test')
-        data = result['data']
-        assert 'ep-2' in data['source_episodes']
-        assert 'ep-1' in data['source_episodes']
+        after = svc.get('user', 'strengthen_ep_test')
+        assert after['evidence_count'] == before['evidence_count'] + 1
 
     def test_strengthen_diminishing_returns(self, svc):
         """Multiple strengthens show diminishing boost."""
@@ -824,7 +822,7 @@ class TestFtsStopWordFiltering:
     def test_content_word_query_still_hits_fts(self, svc, db_service):
         """Non-stop-word queries still hit FTS as before."""
         svc.store(
-            kind='concept', entity='user', key='python_concept',
+            kind='fact', entity='user', key='python_concept',
             value='Python generators are lazy iterators',
         )
         results = svc.recall(query='generators lazy')
@@ -1074,7 +1072,7 @@ class TestPorterStemming:
     def test_stemming_applies_to_key_column(self, svc, db_service):
         """Stemmed query word should match a stemmed key token."""
         svc.store(
-            kind='concept', entity='user', key='programming_languages',
+            kind='fact', entity='user', key='programming_languages',
             value='knowledge about various languages',
         )
         # 'programmed' → stem 'program' should match 'programming' → same stem

@@ -6,9 +6,6 @@
       "output_queue": "output-queue"
     },
     "queues": {
-      "semantic_consolidation_queue": {
-        "name": "semantic_consolidation_queue"
-      },
       "act_queue": {
         "name": "act-queue"
       }

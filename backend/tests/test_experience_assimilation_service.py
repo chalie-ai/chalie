@@ -158,7 +158,6 @@ class TestStoreEpisode:
         call_args = mock_storage.store_episode.call_args[0][0]
         assert call_args['topic'] == 'python'
         assert call_args['salience'] == 6  # stable -> 6
-        assert call_args['freshness'] == 1.0
         assert 'embedding' in call_args
 
     def test_store_episode_missing_text_raises(self, service, db):

@@ -140,11 +140,7 @@ class ThreadExpiryService:
         except Exception as e:
             logger.debug(f"[THREAD EXPIRY] SQLite persist failed: {e}")
 
-        # Trigger episodic summarization if enough exchanges
         exchange_count = int(thread_data.get("exchange_count", 0))
-        if exchange_count >= 3:
-            self._trigger_episodic_summarization(thread_id, thread_data)
-
         logger.info(
             f"[THREAD EXPIRY] Expired: {thread_id} "
             f"(exchanges={exchange_count}, "
@@ -196,20 +192,6 @@ class ThreadExpiryService:
                     break
         except Exception as e:
             logger.debug(f"[THREAD EXPIRY] Idle save suggestion scan failed: {e}")
-
-    def _trigger_episodic_summarization(self, thread_id: str, thread_data: dict):
-        """Enqueue episodic memory job for the expired thread."""
-        try:
-            from services.prompt_queue import enqueue_episodic_memory
-            topic = thread_data.get("current_topic", "general")
-            enqueue_episodic_memory({
-                "topic": topic,
-                "thread_id": thread_id,
-            })
-            logger.info(f"[THREAD EXPIRY] Enqueued episodic job for thread {thread_id}")
-        except Exception as e:
-            logger.debug(f"[THREAD EXPIRY] Failed to enqueue episodic job: {e}")
-
 
 def thread_expiry_worker(shared_state=None):
     """

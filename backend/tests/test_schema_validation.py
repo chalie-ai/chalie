@@ -87,17 +87,16 @@ class TestSchemaValidation:
     # ── Scenario 200 ─────────────────────────────────────────────────────────
 
     def test_reliability_columns_on_memory_tables(self, schema_db):
-        """Absorbs scenario 200: reliability columns exist on memory tables.
+        """Absorbs scenario 200: reliability column exists on knowledge.
 
         uncertainties table was removed from schema.sql (dropped by migration
-        025, replaced by pending_contradictions). Reliability columns are still
-        present on knowledge (for migration 026 compat) and episodes.
+        025, replaced by pending_contradictions). Reliability column is still
+        present on knowledge (for migration 026 compat).
         """
-        for table in ('knowledge', 'episodes'):
-            cols = _get_columns(schema_db, table)
-            assert 'reliability' in cols, (
-                f"reliability column missing from {table}"
-            )
+        cols = _get_columns(schema_db, 'knowledge')
+        assert 'reliability' in cols, (
+            "reliability column missing from knowledge"
+        )
 
         # uncertainties should NOT be in schema.sql (removed; migration 025 drops it)
         tables = _get_tables(schema_db)
@@ -133,17 +132,14 @@ class TestSchemaValidation:
         ep_id = str(uuid.uuid4())
         schema_db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, freshness, topic) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ep_id, '{}', '{}', 'test', '{}', 'test', 'test gist', 5, 5, 'test-topic')
+            "(id, intent, context, action, emotion, outcome, gist, salience, topic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ep_id, '{}', '{}', 'test', '{}', 'test', 'test gist', 5, 'test-topic')
         )
         row = schema_db.execute(
-            "SELECT reliability FROM episodes WHERE id = ?", (ep_id,)
+            "SELECT id FROM episodes WHERE id = ?", (ep_id,)
         ).fetchone()
         assert row is not None, "episodes INSERT failed"
-        assert row[0] == 'reliable', (
-            f"episodes.reliability default is {row[0]!r}, expected 'reliable'"
-        )
 
         schema_db.rollback()
 

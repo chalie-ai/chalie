@@ -513,6 +513,108 @@ class DatabaseService:
             # Find all .sql migration files
             migration_files = sorted(migrations_dir.glob("*.sql"))
 
+            # Idempotent column additions BEFORE migrations (SQLite lacks ADD COLUMN IF NOT EXISTS).
+            # Each tuple: (table, column, column_def, optional_index_sql).
+            _optional_columns = [
+                ("documents", "watched_folder_id", "TEXT REFERENCES watched_folders(id)",
+                 "CREATE INDEX IF NOT EXISTS idx_documents_watched_folder ON documents(watched_folder_id) WHERE watched_folder_id IS NOT NULL"),
+                ("documents", "doc_category", "TEXT", None),
+                ("documents", "doc_project", "TEXT", None),
+                ("documents", "doc_date", "TEXT", None),
+                ("documents", "meta_locked", "INTEGER DEFAULT 0", None),
+                ("tool_capability_profiles", "effort", "TEXT DEFAULT 'moderate'", None),
+                ("tool_capability_profiles", "skill_category", "TEXT", None),
+                ("tool_capability_profiles", "descriptor", "TEXT", None),
+                # episodes.reliability — now in _deprecated_columns (dropped by episodic redesign)
+                # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
+                ("goals", "is_muted", "INTEGER DEFAULT 0", None),
+                # Multi-model providers — JSON array of available models per provider
+                ("providers", "models", "TEXT", None),
+                # Per-job model override — overrides provider default when set
+                ("job_provider_assignments", "model", "TEXT", None),
+                # Scheduler — external source integration columns
+                ("scheduled_items", "source", "TEXT", None),
+                ("scheduled_items", "external_uid", "TEXT",
+                 ["DROP INDEX IF EXISTS idx_scheduled_items_external_uid",
+                  "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid)"]),
+                ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
+                ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
+                ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
+                # Migration 029 — keyword scoring for find_tools 2-axis search
+                ("tool_capability_profiles", "keywords", "TEXT DEFAULT ''", None),
+                # Migration 031 — doc2query generated search queries for knowledge entries
+                ("knowledge", "search_queries", "TEXT DEFAULT NULL", None),
+                # Migration 032 — episodic redesign: transcript linkage, emotional dimensions, dual-strength scoring
+                ("episodes", "transcript_ids", "TEXT DEFAULT '[]'", None),
+                ("episodes", "transcript_id_start", "INTEGER", None),
+                ("episodes", "transcript_id_end", "INTEGER",
+                 "CREATE INDEX IF NOT EXISTS idx_episodes_transcript_range ON episodes(transcript_id_start, transcript_id_end)"),
+                ("episodes", "entities", "TEXT DEFAULT '[]'", None),
+                ("episodes", "goal_tags", "TEXT DEFAULT '[]'", None),
+                ("episodes", "emotional_valence", "REAL", None),
+                ("episodes", "emotional_arousal", "REAL", None),
+                ("episodes", "consolidated_from", "TEXT DEFAULT '[]'", None),
+                ("episodes", "storage_strength", "REAL DEFAULT 1.0", None),
+                ("episodes", "retrieval_weight", "REAL DEFAULT 1.0",
+                 "CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_weight DESC)"),
+            ]
+            for table, col, col_def, *extra in _optional_columns:
+                cursor.execute(f"PRAGMA table_info({table})")
+                rows = cursor.fetchall()
+                if not rows:
+                    continue  # table doesn't exist (may have been dropped by a migration)
+                existing_cols = {row[1] for row in rows}
+                if col not in existing_cols:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+                    logger.info(f"Added column {table}.{col}")
+                # Always try to create the index (idempotent)
+                if extra and extra[0]:
+                    stmts = extra[0] if isinstance(extra[0], list) else [extra[0]]
+                    for stmt in stmts:
+                        cursor.execute(stmt)
+
+            # Backfill + drop deprecated columns (SQLite 3.35+ required)
+            _deprecated_columns = [
+                ("episodes", "freshness"),
+                ("episodes", "exchange_id"),
+                ("episodes", "activation_score"),
+                ("episodes", "semantic_consolidation_status"),
+                ("episodes", "reliability"),
+            ]
+            # Before dropping activation_score, backfill storage_strength/retrieval_weight
+            cursor.execute("PRAGMA table_info(episodes)")
+            ep_cols = {row[1] for row in cursor.fetchall()}
+            if 'activation_score' in ep_cols and 'storage_strength' in ep_cols:
+                cursor.execute("""
+                    UPDATE episodes
+                    SET storage_strength = MAX(0.1, activation_score),
+                        retrieval_weight = MAX(0.1, activation_score)
+                    WHERE activation_score IS NOT NULL
+                      AND activation_score != 1.0
+                      AND storage_strength = 1.0
+                """)
+                if cursor.rowcount > 0:
+                    logger.info(f"Backfilled storage_strength/retrieval_weight for {cursor.rowcount} episodes")
+
+            for table, col in _deprecated_columns:
+                cursor.execute(f"PRAGMA table_info({table})")
+                rows = cursor.fetchall()
+                if not rows:
+                    continue
+                existing_cols = {row[1] for row in rows}
+                if col in existing_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+                        logger.info(f"Dropped deprecated column {table}.{col}")
+                    except Exception as drop_err:
+                        logger.debug(f"Could not drop {table}.{col}: {drop_err}")
+
+            # Data migration: populate providers.models from providers.model where NULL
+            cursor.execute("UPDATE providers SET models = json_array(model) WHERE models IS NULL AND model IS NOT NULL")
+            if cursor.rowcount > 0:
+                logger.info(f"Migrated {cursor.rowcount} providers: populated models from model")
+
+            # Run pending SQL migrations (after optional columns so new columns exist)
             pending_count = 0
             for migration_file in migration_files:
                 filename = migration_file.name
@@ -532,60 +634,6 @@ class DatabaseService:
                 )
                 pending_count += 1
                 logger.info(f"Migration applied: {filename}")
-
-            # Idempotent column additions (SQLite lacks ADD COLUMN IF NOT EXISTS).
-            # Each tuple: (table, column, column_def, optional_index_sql).
-            _optional_columns = [
-                ("documents", "watched_folder_id", "TEXT REFERENCES watched_folders(id)",
-                 "CREATE INDEX IF NOT EXISTS idx_documents_watched_folder ON documents(watched_folder_id) WHERE watched_folder_id IS NOT NULL"),
-                ("documents", "doc_category", "TEXT", None),
-                ("documents", "doc_project", "TEXT", None),
-                ("documents", "doc_date", "TEXT", None),
-                ("documents", "meta_locked", "INTEGER DEFAULT 0", None),
-                ("tool_capability_profiles", "effort", "TEXT DEFAULT 'moderate'", None),
-                ("tool_capability_profiles", "skill_category", "TEXT", None),
-                ("tool_capability_profiles", "descriptor", "TEXT", None),
-                # Uncertainty Engine Phase 1 — reliability columns on durable memory stores
-                # user_traits and semantic_concepts dropped in migration 019
-                ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),
-                # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
-                ("goals", "is_muted", "INTEGER DEFAULT 0", None),
-                # Multi-model providers — JSON array of available models per provider
-                ("providers", "models", "TEXT", None),
-                # Per-job model override — overrides provider default when set
-                ("job_provider_assignments", "model", "TEXT", None),
-                # Scheduler — external source integration columns
-                ("scheduled_items", "source", "TEXT", None),
-                ("scheduled_items", "external_uid", "TEXT",
-                 ["DROP INDEX IF EXISTS idx_scheduled_items_external_uid",
-                  "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid)"]),
-                ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
-                ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
-                ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
-                # Migration 029 — keyword scoring for find_tools 2-axis search
-                ("tool_capability_profiles", "keywords", "TEXT DEFAULT ''", None),
-                # Migration 031 — doc2query generated search queries for knowledge entries
-                ("knowledge", "search_queries", "TEXT DEFAULT NULL", None),
-            ]
-            for table, col, col_def, *extra in _optional_columns:
-                cursor.execute(f"PRAGMA table_info({table})")
-                rows = cursor.fetchall()
-                if not rows:
-                    continue  # table doesn't exist (may have been dropped by a migration)
-                existing_cols = {row[1] for row in rows}
-                if col not in existing_cols:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
-                    logger.info(f"Added column {table}.{col}")
-                # Always try to create the index (idempotent)
-                if extra and extra[0]:
-                    stmts = extra[0] if isinstance(extra[0], list) else [extra[0]]
-                    for stmt in stmts:
-                        cursor.execute(stmt)
-
-            # Data migration: populate providers.models from providers.model where NULL
-            cursor.execute("UPDATE providers SET models = json_array(model) WHERE models IS NULL AND model IS NOT NULL")
-            if cursor.rowcount > 0:
-                logger.info(f"Migrated {cursor.rowcount} providers: populated models from model")
 
             if pending_count == 0:
                 logger.info("No pending migrations")

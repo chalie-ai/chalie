@@ -250,12 +250,6 @@ class TestEstimateConfidenceDirectly:
         """Read action with None result gets the lowest read confidence."""
         assert _estimate_confidence('recall', None) == 0.40
 
-    def test_associate_follows_read_rules(self):
-        """'associate' is a read action and follows length-based confidence."""
-        assert _estimate_confidence('associate', 'y' * 101) == 0.75
-        assert _estimate_confidence('associate', 'y' * 50) == 0.60
-        assert _estimate_confidence('associate', 'y') == 0.40
-
     def test_autobiography_follows_read_rules(self):
         """'autobiography' is a read action and follows length-based confidence."""
         assert _estimate_confidence('autobiography', 'z' * 200) == 0.75

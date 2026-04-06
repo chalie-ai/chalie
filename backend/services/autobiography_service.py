@@ -260,11 +260,11 @@ class AutobiographyService:
                 # Gather constraint learning episodes (from idle consolidation)
                 result = session.execute(
                     text("""
-                    SELECT gist, action, created_at, activation_score
+                    SELECT gist, action, created_at, retrieval_weight
                     FROM episodes
                     WHERE outcome = 'constraint_learned'
                       AND deleted_at IS NULL
-                    ORDER BY activation_score DESC, created_at DESC
+                    ORDER BY retrieval_weight DESC, created_at DESC
                     LIMIT 10
                     """),
                     {}
@@ -278,7 +278,7 @@ class AutobiographyService:
                         "gist": row[0],
                         "action": row[1],
                         "created_at": created_at,
-                        "activation_score": row[3],
+                        "retrieval_weight": row[3],
                     })
                 inputs["constraint_episodes"] = constraint_episodes
 

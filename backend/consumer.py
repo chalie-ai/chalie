@@ -198,7 +198,6 @@ if __name__ == "__main__":
     from services import SchemaService
     from workers import rest_api_worker
     from services.config_service import ConfigService
-    from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.experience_assimilation_service import experience_assimilation_worker
@@ -256,7 +255,6 @@ if __name__ == "__main__":
     manager = WorkerManager()
 
     # Register service workers (all run as daemon threads)
-    manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("rest-api-worker-1", rest_api_worker)

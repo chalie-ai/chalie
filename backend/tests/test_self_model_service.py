@@ -114,14 +114,14 @@ class TestGetSnapshot:
     def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
 
-        # Seed episodes (42 total, all with activation_score = 0.65)
+        # Seed episodes (42 total)
         for i in range(42):
             db.execute(
                 "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
-                " gist, salience, freshness, topic, activation_score)"
+                " gist, salience, topic)"
                 " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
-                " ?, ?, ?, 'test', ?)",
-                (f"ep-{i}", f"gist {i}", 5, 1, 0.65),
+                " ?, ?, 'test')",
+                (f"ep-{i}", f"gist {i}", 5),
             )
 
         # Seed 15 concepts in knowledge table
@@ -149,7 +149,7 @@ class TestGetSnapshot:
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
         assert pressure["trait_count"] == 8
-        assert pressure["avg_activation"] == 0.65
+        assert pressure["avg_activation"] == 1.0
 
     def test_queue_depth_from_store(self, mock_store):
         """Queue depths reflect actual list lengths in MemoryStore."""

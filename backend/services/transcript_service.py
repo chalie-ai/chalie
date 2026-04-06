@@ -12,6 +12,7 @@ Key operations:
 """
 
 import logging
+import threading
 from typing import List, Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -68,6 +69,10 @@ def append(
         # Generate embedding for substantive entries
         if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
             _embed_entry(rowid, content)
+
+        # Rolling episode extraction trigger every 25 entries (per global rowid)
+        if rowid % 25 == 0:
+            _trigger_episode_extraction(topic, rowid)
 
         return rowid
 
@@ -310,6 +315,101 @@ def get_latest_id(topic: str) -> Optional[int]:
         return None
 
 
+def cleanup_unlinked_entries(topic: str = None) -> int:
+    """Delete transcript entries not linked to any episode and below compaction watermark.
+
+    Returns number of entries deleted.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+
+            if topic:
+                cursor.execute(
+                    "SELECT topic, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
+                    (topic,),
+                )
+            else:
+                cursor.execute("SELECT topic, compacted_up_to_id FROM topic_compactions")
+
+            watermarks = cursor.fetchall()
+
+            if not watermarks:
+                cursor.close()
+                return 0
+
+            total_deleted = 0
+
+            for row in watermarks:
+                t, watermark = row[0], row[1]
+                if not watermark:
+                    continue
+
+                # Collect transcript IDs referenced by any episode for this topic
+                cursor.execute(
+                    """
+                    SELECT transcript_ids FROM episodes
+                    WHERE topic = ? AND deleted_at IS NULL
+                      AND transcript_ids IS NOT NULL AND transcript_ids != '[]'
+                    """,
+                    (t,),
+                )
+                referenced_ids = set()
+                import json as _json
+                for ep_row in cursor.fetchall():
+                    try:
+                        ids = _json.loads(ep_row[0])
+                        if isinstance(ids, list):
+                            referenced_ids.update(int(i) for i in ids if i is not None)
+                    except Exception:
+                        pass
+
+                # Find transcript rowids below watermark that are not referenced
+                cursor.execute(
+                    """
+                    SELECT id, rowid FROM topic_transcript
+                    WHERE topic = ? AND id < ?
+                    """,
+                    (t, watermark),
+                )
+                candidate_rows = cursor.fetchall()
+
+                to_delete_ids = []
+                to_delete_rowids = []
+                for entry_id, entry_rowid in candidate_rows:
+                    if entry_id not in referenced_ids:
+                        to_delete_ids.append(entry_id)
+                        to_delete_rowids.append(entry_rowid)
+
+                if not to_delete_ids:
+                    continue
+
+                placeholders = ','.join('?' * len(to_delete_rowids))
+                cursor.execute(
+                    f"DELETE FROM topic_transcript_vec WHERE rowid IN ({placeholders})",
+                    to_delete_rowids,
+                )
+                id_placeholders = ','.join('?' * len(to_delete_ids))
+                cursor.execute(
+                    f"DELETE FROM topic_transcript WHERE id IN ({id_placeholders})",
+                    to_delete_ids,
+                )
+                total_deleted += len(to_delete_ids)
+
+            cursor.close()
+
+        if total_deleted > 0:
+            logger.info(f"{LOG_PREFIX} Cleaned up {total_deleted} unlinked transcript entries")
+        return total_deleted
+
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} cleanup_unlinked_entries failed: {e}")
+        return 0
+
+
 def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
     """Delete transcript entries older than ttl_days.
 
@@ -362,6 +462,104 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
 
 
 # ── Internal helpers ─────────────────────────────────────────────────
+
+
+def _trigger_episode_extraction(topic: str, rowid: int) -> None:
+    """Fire-and-forget episode extraction for the window ending at rowid.
+
+    Queries the 35 transcript entries up to and including rowid for the given
+    topic, runs episode extraction, computes embeddings, calculates salience,
+    and stores episodes + traits. Never raises — any failure is logged only.
+    """
+    def _run():
+        try:
+            from services.database_service import get_shared_db_service
+            from services.episode_extractor_service import EpisodeExtractorService
+            from services.episodic_service import EpisodicService
+            from services.salience_service import SalienceService
+            from services.embedding_service import get_embedding_service
+            from services.knowledge_service import KnowledgeService
+            from services.config_service import ConfigService
+
+            db = get_shared_db_service()
+
+            # Fetch the window: up to 35 entries for this topic up to rowid
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id, role, content, tool_name, created_at
+                    FROM topic_transcript
+                    WHERE topic = ? AND id <= ?
+                    ORDER BY id DESC
+                    LIMIT 35
+                    """,
+                    (topic, rowid),
+                )
+                rows = cursor.fetchall()
+                cursor.close()
+
+            if not rows:
+                return
+
+            entries = [
+                {
+                    'id': r[0],
+                    'role': r[1],
+                    'content': r[2],
+                    'tool_name': r[3],
+                    'created_at': r[4],
+                }
+                for r in reversed(rows)
+            ]
+
+            extractor = EpisodeExtractorService()
+            episodes = extractor.extract(entries, topic)
+
+            if not episodes:
+                return
+
+            try:
+                episodic_config = ConfigService.resolve_agent_config("episodic-memory")
+            except Exception:
+                episodic_config = {}
+
+            episodic_svc = EpisodicService(db, episodic_config)
+            salience_svc = SalienceService()
+            emb_svc = get_embedding_service()
+            knowledge_svc = KnowledgeService(db)
+
+            for ep in episodes:
+                try:
+                    salience_factors = ep.get('salience_factors', {})
+                    salience = salience_svc.calculate_salience(salience_factors)
+                    ep['salience'] = salience
+                    ep['topic'] = topic
+
+                    gist = ep.get('gist', '')
+                    if gist:
+                        ep['embedding'] = emb_svc.generate_embedding(gist)
+
+                    episodic_svc.store_episode(ep)
+
+                    for trait in ep.get('traits', []):
+                        if not isinstance(trait, dict):
+                            continue
+                        knowledge_svc.store(
+                            kind=trait.get('kind', 'trait'),
+                            entity='user',
+                            key=trait.get('key', ''),
+                            value=trait.get('value'),
+                            decay_class=trait.get('decay_class', 'standard'),
+                        )
+
+                except Exception as ep_err:
+                    logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
+
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Episode extraction trigger failed (rowid={rowid}): {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _embed_entry(rowid: int, content: str) -> None:

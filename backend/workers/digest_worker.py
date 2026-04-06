@@ -1419,7 +1419,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     }
 
     if session_service.check_topic_switch(topic):
-        # Episodic consolidation handled by EpisodicMemoryObserver (signal density scan)
         session_service.reset_session()
         session_service.mark_topic_switch(topic)
 
@@ -1667,8 +1666,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
     # ═══════════════════════════════════════════════════════════
-
-    # Step 12: Episodic consolidation handled by EpisodicMemoryObserver (60s scan)
 
     # Print the actual response to stdout for the user
     logging.info(f"\n{'='*60}")

@@ -154,7 +154,7 @@ class KnowledgeService:
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
-    VALID_KINDS = {'trait', 'concept', 'fact', 'procedure', 'preference', 'relationship', 'rule', 'metric'}
+    VALID_KINDS = {'trait', 'fact', 'procedure', 'preference', 'rule', 'metric'}
     VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
 
     # Procedural learning constants (ported from ProceduralMemoryService)
@@ -757,7 +757,7 @@ class KnowledgeService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT rowid, confidence, evidence_count, data, kind
+                    SELECT rowid, confidence, evidence_count
                     FROM knowledge
                     WHERE entity = ? AND key = ? AND deleted_at IS NULL
                 """, (entity, key))
@@ -766,40 +766,17 @@ class KnowledgeService:
                     cursor.close()
                     return False
 
-                row_id, old_conf, old_evidence, raw_data, kind = row
+                row_id, old_conf, old_evidence = row
                 new_evidence = old_evidence + 1
                 boost = 0.05 / math.log2(new_evidence + 1)
                 new_conf = min(1.0, old_conf + boost)
 
-                # If episode_id provided and kind=concept, append to source_episodes
-                data_update = None
-                if episode_id and kind == 'concept':
-                    data_obj = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-                    episodes = data_obj.get('source_episodes', [])
-                    if episode_id not in episodes:
-                        episodes.append(episode_id)
-                        data_obj['source_episodes'] = episodes
-                        data_update = json.dumps(data_obj)
-
-                if data_update:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?, data = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, data_update, row_id))
-                else:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, row_id))
+                cursor.execute("""
+                    UPDATE knowledge
+                    SET confidence = ?, evidence_count = ?,
+                        last_accessed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE rowid = ?
+                """, (new_conf, new_evidence, row_id))
 
                 cursor.close()
 

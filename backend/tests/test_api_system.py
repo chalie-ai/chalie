@@ -160,9 +160,9 @@ class TestSystemAPI:
         for i in range(42):
             db.execute(
                 "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, freshness, topic, activation_score) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 5, 't', ?)",
-                (f'ep-{i}', 0.7123),
+                "gist, salience, topic) "
+                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
+                (f'ep-{i}',),
             )
         # Seed concept knowledge entries
         for i in range(15):
@@ -198,7 +198,7 @@ class TestSystemAPI:
         assert data['concepts'] == 15
         assert data['traits'] == 8
         assert data['facts'] == 8  # falls back to traits when no facts:* keys
-        assert data['avg_episode_activation'] == 0.7123
+        assert data['avg_episode_activation'] == 1.0
         assert data['avg_trait_strength'] == 0.6234
         assert data['working_memory'] == 8  # 3 + 5 turns across two threads
         assert 'generated_at' in data
@@ -513,8 +513,8 @@ class TestSystemAPI:
         for i in range(10):
             db.execute(
                 "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, freshness, topic, activation_score) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 5, 't', 0.5)",
+                "gist, salience, topic) "
+                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
                 (f'ep-flat-{i}',),
             )
         # Seed concepts
