@@ -283,7 +283,7 @@ def main():
                     return
 
                 # No sentence yet — check if traits exist and synthesize
-                traits = db.execute_query(
+                traits = db.fetch_all(
                     "SELECT key, value, confidence, decay_class FROM knowledge "
                     "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
                     "ORDER BY decay_class DESC, confidence DESC"

@@ -564,6 +564,8 @@ class DatabaseService:
                 ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
                 # Migration 029 — keyword scoring for find_tools 2-axis search
                 ("tool_capability_profiles", "keywords", "TEXT DEFAULT ''", None),
+                # Migration 031 — doc2query generated search queries for knowledge entries
+                ("knowledge", "search_queries", "TEXT DEFAULT NULL", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS knowledge (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
     last_accessed_at TEXT,
     deleted_at  TEXT,
+    search_queries TEXT DEFAULT NULL,
     UNIQUE(entity, key)
 );
 
@@ -150,7 +151,8 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE 
 CREATE INDEX IF NOT EXISTS idx_knowledge_kind_entity_active ON knowledge(kind, entity) WHERE deleted_at IS NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-    key, value, kind, entity, content='knowledge', content_rowid='rowid'
+    key, value, kind, entity, search_queries, content='knowledge', content_rowid='rowid',
+    tokenize='porter unicode61'
 );
 
 -- ────────────────────────────────────────────────────────────────

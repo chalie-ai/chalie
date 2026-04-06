@@ -240,7 +240,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
             try:
                 import os
 
-                rows = db.execute_query(
+                rows = db.fetch_all(
                     "SELECT key, value, confidence, decay_class "
                     "FROM knowledge "
                     "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
@@ -282,7 +282,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 )
                 logging.debug("[TRAIT_SYNTH] Sentence stored: %s", sentence)
             except Exception as e:
-                logging.debug("[TRAIT_SYNTH] Failed: %s", e)
+                logging.warning("[TRAIT_SYNTH] Failed: %s", e)
 
         t = threading.Thread(target=_extract_traits, daemon=True)
         t.start()
