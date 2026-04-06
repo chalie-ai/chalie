@@ -343,6 +343,8 @@ class PromptAssemblyService:
                     f"- Current context suggests: {mem_a}\n"
                     f"- Classification: {classification}\n"
                     f"- Reasoning: {reasoning}\n\n"
+                    f"When information in the current conversation contradicts stored knowledge, "
+                    f"always prefer the conversation — it represents the user correcting a stale fact. "
                     f"If relevant to the response, weave this naturally into your reply "
                     f"(e.g. noting a change, gently asking for clarification). "
                     f"Do NOT present it as a system alert. Omit entirely if not relevant."
