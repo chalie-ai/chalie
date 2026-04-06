@@ -96,7 +96,7 @@ class DMNService:
             return local_hour >= QUIET_START or local_hour < QUIET_END
         except Exception as exc:
             logger.warning("[DMN] Quiet-hours check failed: %s", exc)
-            return False
+            return True
 
     def _rate_limit_exceeded(self) -> bool:
         """Return True if MAX_PROACTIVE_PER_DAY deliveries occurred in the last 24 h."""
