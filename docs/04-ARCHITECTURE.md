@@ -171,15 +171,14 @@ Built-in cognitive skills for the ACT loop:
 
 ### Queue Workers (Daemon Threads)
 - **Digest Worker** — Core pipeline: classify → unified generate → enqueue memory job
-- **Episodic Memory Worker** — Builds episodes from sequences of exchanges
-- **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes
+- **Episodic Memory Worker** — Utility functions for goal emergence detection (episode extraction now runs inline via rolling transcript trigger)
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
 - **DMN Service** — Timer-based proactive intelligence (60min idle → recent, 6h cadence → salience); see service listing above
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
-- **Decay Engine** — Periodic memory decay cycle; flat rate per decay class; contradicted traits resolve via inline contradiction check at creation time
+- **Decay Engine** — Periodic memory decay cycle (30min); power-law retrieval_weight decay for episodes (no hard deletes), episode consolidation (super episodes from 3-5 similar episodes), deferred reconsolidation, transcript cleanup, constraint consolidation; contradicted traits resolve via inline contradiction check at creation time
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
@@ -206,10 +205,9 @@ Built-in cognitive skills for the ACT loop:
     ├─ Unified LLM Generation (skills + tools discoverable inline)
     │  └─ ACT loop runs inline when LLM invokes skills/tools
     └─ Enqueue Memory Job
-      → [Episodic Memory Queue] → [Episodic Memory Worker]
-        → SQLite Episodes Table
-        → [Semantic Consolidation Queue] → [Semantic Consolidation Worker]
-          → SQLite Concepts Table
+      → [Transcript Service] (rolling trigger at id % 25)
+        → [Episode Extractor] → SQLite Episodes Table
+        → Traits extracted → Knowledge Store
 ```
 
 ### Background Processes
@@ -218,9 +216,13 @@ Built-in cognitive skills for the ACT loop:
     → adjusts configs/generated/mode_router_config.json
 
 [Decay Engine] → runs every 1800s (30min)
-    ├─ Episodic decay (salience-weighted)
-    ├─ Semantic decay (strength-weighted)
-    └─ User trait decay (category-specific)
+    ├─ Episodic decay (power-law retrieval_weight, no hard delete)
+    ├─ Episode consolidation (super episodes from 3-5 similar)
+    ├─ Deferred reconsolidation (pending episodes from retrieval)
+    ├─ Knowledge decay (confidence-weighted)
+    ├─ User trait decay (category-specific)
+    ├─ Constraint consolidation
+    └─ Transcript cleanup (unlinked entries below compaction watermark)
 
 [DMN Service] → timer-based proactive intelligence
     ├─ 60min idle → "recent" (last 50 episodes)
@@ -254,10 +256,8 @@ Built-in cognitive skills for the ACT loop:
 - **Working Memory** (MemoryStore, legacy fallback) — FIFO buffer used only when no transcript data exists yet
 - **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
 - **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
-- **Episodes** (SQLite + sqlite-vec) — Narrative units with decay
-- **Concepts** (SQLite + sqlite-vec) — Knowledge nodes and relationships
-- **Procedural Memory** (SQLite) — Learned action reliability; surfaced in context assembly as reliability hints (≥8 attempts, top 3 skills)
-- **User Traits** (SQLite) — Personal facts with category-specific decay (includes behavioral patterns from temporal mining)
+- **Episodes** (SQLite + sqlite-vec) — Transcript-linked narrative units with power-law retrieval_weight decay and storage_strength that never decreases; created by rolling transcript trigger (id % 25); consolidate into "super episodes" referencing source episodes
+- **Knowledge** (SQLite + sqlite-vec) — Unified store for traits, facts, procedures, preferences, rules, metrics; RRF hybrid search (exact + FTS5 + vector KNN); traits extracted from episodes during extraction
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
 Each layer optimized for its timescale; all integrated via context assembly. Context assembly reads compaction summary + budget-constrained recent transcript entries for working memory context. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
