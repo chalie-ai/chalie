@@ -50,7 +50,7 @@ COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'associate', 'find_tools']
 
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
-    'memory': 'Store, recall, update, or forget knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
+    'memory': 'Store, recall, or update knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
     'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
     'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',

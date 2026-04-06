@@ -167,7 +167,7 @@ class ActLoopService:
 
         When the full history exceeds max_history_tokens (estimated via word_count * 1.3),
         older entries are dropped with a count note. Full content is preserved in
-        topic_transcript for later retrieval via recall(include_transcript=true).
+        topic_transcript (transcript is always searched during recall).
 
         Returns:
             Formatted history string showing executed actions
@@ -221,7 +221,7 @@ class ActLoopService:
 
                 lines = [
                     "## Internal Cognitive Actions",
-                    f"[entries 1-{pruned_count} dropped — use recall with include_transcript=true to search earlier results]",
+                    f"[entries 1-{pruned_count} dropped — use recall to search earlier results]",
                 ]
                 for idx, result in enumerate(remaining, pruned_count + 1):
                     lines.append(_format_entry(idx, result))
