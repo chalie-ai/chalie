@@ -1,17 +1,21 @@
-"""Tests for capability failure alerting (base.py)."""
+"""Tests for capability failure alerting (base.py).
+
+Rewritten to use a real MemoryStore instead of a MagicMock.
+Assertions check actual queue state (llen, lrange) rather than
+mock call counts.
+"""
 
 import json
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from capabilities.base import AbstractCapability
 
-_MEM = "services.memory_client.MemoryClientService.create_connection"
+pytestmark = pytest.mark.unit
 
 
 def _make_cap():
-    """Build a mock with the attributes _maybe_send_failure_alert reads."""
+    """Return a MagicMock with the attributes _maybe_send_failure_alert reads."""
+    from unittest.mock import MagicMock
     m = MagicMock()
     m._failure_alerted = False
     m._last_error = "auth expired"
@@ -21,36 +25,49 @@ def _make_cap():
     return m
 
 
-@pytest.mark.unit
 class TestFailureAlert:
 
-    def test_fires_once_and_dedup(self):
+    def test_fires_and_pushes_to_queue(self, store):
+        """First call writes one item to the prompt-queue in the real store."""
         cap = _make_cap()
-        ms = MagicMock()
-        with patch(_MEM, return_value=ms):
-            AbstractCapability._maybe_send_failure_alert(cap)
-            assert cap._failure_alerted is True
-            ms.rpush.assert_called_once()
-            AbstractCapability._maybe_send_failure_alert(cap)
-            assert ms.rpush.call_count == 1
+        AbstractCapability._maybe_send_failure_alert(cap)
 
-    def test_prompt_content(self):
+        assert cap._failure_alerted is True
+        assert store.llen("prompt-queue") == 1
+
+    def test_dedup_prevents_second_push(self, store):
+        """Second call after first is a no-op — queue stays at length 1."""
         cap = _make_cap()
-        ms = MagicMock()
-        with patch(_MEM, return_value=ms):
-            AbstractCapability._maybe_send_failure_alert(cap)
-        payload = json.loads(ms.rpush.call_args[0][1])
+        AbstractCapability._maybe_send_failure_alert(cap)
+        AbstractCapability._maybe_send_failure_alert(cap)
+
+        assert store.llen("prompt-queue") == 1
+
+    def test_prompt_content_contains_cap_name_and_error(self, store):
+        """The queued payload embeds the capability name and last_error."""
+        cap = _make_cap()
+        AbstractCapability._maybe_send_failure_alert(cap)
+
+        raw = store.lrange("prompt-queue", 0, -1)[0]
+        payload = json.loads(raw)
         assert "Test" in payload["prompt"]
         assert "auth expired" in payload["prompt"]
-        assert payload["metadata"]["source"] == (
-            "capability_health:test"
-        )
 
-    def test_reset_after_recovery(self):
+    def test_metadata_source_matches_cap_id(self, store):
+        """metadata.source must be capability_health:<cap_id>."""
         cap = _make_cap()
-        ms = MagicMock()
-        with patch(_MEM, return_value=ms):
-            AbstractCapability._maybe_send_failure_alert(cap)
-            cap._failure_alerted = False
-            AbstractCapability._maybe_send_failure_alert(cap)
-        assert ms.rpush.call_count == 2
+        AbstractCapability._maybe_send_failure_alert(cap)
+
+        raw = store.lrange("prompt-queue", 0, -1)[0]
+        payload = json.loads(raw)
+        assert payload["metadata"]["source"] == "capability_health:test"
+
+    def test_reset_after_recovery_allows_second_alert(self, store):
+        """After resetting _failure_alerted, a second alert is pushed."""
+        cap = _make_cap()
+        AbstractCapability._maybe_send_failure_alert(cap)
+        assert store.llen("prompt-queue") == 1
+
+        cap._failure_alerted = False
+        AbstractCapability._maybe_send_failure_alert(cap)
+        assert store.llen("prompt-queue") == 2
