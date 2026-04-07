@@ -820,6 +820,22 @@ CREATE TABLE IF NOT EXISTS topic_compactions (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- TOOL CALLS — audit log of every tool invocation per transcript turn
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tool_calls (
+    transcript_id INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    params TEXT DEFAULT '{}',
+    result TEXT DEFAULT '',
+    invoked_by TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (transcript_id) REFERENCES topic_transcript(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_transcript ON tool_calls(transcript_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC);
+
+-- ────────────────────────────────────────────────────────────────
 -- BROWSER SNAPSHOTS — page monitoring change detection
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS browser_snapshots (

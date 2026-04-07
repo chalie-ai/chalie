@@ -104,6 +104,7 @@ class DecayEngineService:
         knowledge_count = self._decay_knowledge()
         goal_decay_count = self._decay_goals()
         transcript_cleaned = self._cleanup_transcript()
+        tool_calls_purged = self._purge_tool_calls()
 
         # Non-essential sub-cycles gated on sufficient memory richness
         if richness >= 0.3:
@@ -121,6 +122,7 @@ class DecayEngineService:
             f"consolidation={consolidation_count} super-episodes, "
             f"knowledge={knowledge_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
+            f"tool_calls_purged={tool_calls_purged}, "
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
             f"goals={goal_decay_count} decayed"
@@ -340,6 +342,27 @@ class DecayEngineService:
             return transcript_service.cleanup_unlinked_entries()
         except Exception as e:
             logger.debug(f"[DECAY ENGINE] Transcript cleanup non-fatal: {e}")
+            return 0
+
+    def _purge_tool_calls(self, max_rows: int = 25000) -> int:
+        """Purge tool_calls rows beyond the newest max_rows entries."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
+                if total <= max_rows:
+                    return 0
+                excess = total - max_rows
+                conn.execute("""
+                    DELETE FROM tool_calls WHERE rowid IN (
+                        SELECT rowid FROM tool_calls ORDER BY created_at ASC LIMIT ?
+                    )
+                """, (excess,))
+                logger.info(f"[DECAY ENGINE] Purged {excess} tool_calls rows (kept {max_rows})")
+                return excess
+        except Exception as e:
+            logger.debug(f"[DECAY ENGINE] Tool calls purge non-fatal: {e}")
             return 0
 
     def _run_constraint_consolidation(self) -> None:
