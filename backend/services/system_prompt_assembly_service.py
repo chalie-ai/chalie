@@ -47,20 +47,9 @@ class SystemPromptAssemblyService(PromptAssemblyContract):
 
         Returns self for chaining: `svc.build(...).to_provider()`
         """
-        # Delegate to legacy PromptAssemblyService for now.
-        # As methods are migrated here, the delegation shrinks.
-        from services.prompt_assembly_service import PromptAssemblyService
-        legacy = PromptAssemblyService(self.config)
-        self._result = legacy.build_system_prompt(
-            system_prompt_template=template,
-            original_prompt='',
-            classification=classification,
-            chat_history=[],
-            selected_skills=selected_skills,
-            thread_id=thread_id,
-            returning_from_silence=returning_from_silence,
-            inclusion_map=inclusion_map,
-        )
+        # TODO: migrate methods from PromptAssemblyService here one at a time.
+        # For now returns empty — pragmatic migration in progress.
+        self._result = ''
         return self
 
     def to_provider(self) -> str:
