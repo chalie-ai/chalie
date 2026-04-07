@@ -14,7 +14,7 @@ Chalie is a **persistent cognitive agent** — a continuously running cognitive 
 ### Communication Pattern
 1. Client connects to `/ws` (WebSocket via flask-sock)
 2. Client sends `{"type": "message", "text": "..."}` JSON frame
-3. Backend enqueues message → Digest Worker processes → response streamed back as WebSocket frames (`status` → `message` → `done`)
+3. Backend spawns daemon thread → `UserMessageProcessor.process()` → response published via pub/sub → WebSocket frames (`status` → `message` → `done`)
 4. Drift thoughts, cards, and proactive notifications also arrive over the same `/ws` connection
 5. Authentication: Session cookie-based (`@require_session` decorator)
 
@@ -81,10 +81,16 @@ frontend/
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
+#### Message Processing
+- **`user_message_processor.py`** — Entry point for all user-initiated messages. Builds user + system prompts, applies voice-mode tool filtering, sends via `MessageProcessor.send()`, parks ACT tool calls (task-ddffe1), and returns a normalized result dict. Singleton.
+- **`message_processor.py`** — Base class for all message processing pipelines. Handles transcript persistence (user turn in, assistant turn out) and LLM invocation via `Providers`.
+- **`providers.py`** — Thin singleton gateway wrapping provider resolution and LLM send. Resolves the correct LLM provider for a given job (e.g. `frontal-cortex-unified`), sends messages, returns a raw `LLMResponse`. No response parsing.
+- **`user_prompt_assembly_service.py`** — Builds the per-turn user message: world state header, conversation context (compaction + recent transcript + tool calls), system awareness, and current turn (episodic auto-recall + user message + file/nudge tags). Changes every turn; not cached.
+- **`system_prompt_assembly_service.py`** — Builds the stable, cacheable system prompt: identity modulation, adaptive directives, and the frontal-cortex-unified template. Designed for provider-side prompt caching. Previously an empty shell — now fully implemented.
+
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, knowledge) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
-- **`transcript_service.py`** — Persistent, topic-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
-- **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `topic_compactions`
+- **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
+- **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `compactions` table
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`knowledge_service.py`** — Unified knowledge store (traits, concepts, procedures, relationships) with RRF hybrid search (exact + FTS5 porter-stemmed + vector KNN), NLTK stop-word filtering on FTS queries, doc2query expansion at write time, decay management, and prompt injection
 - **`doc2query_service.py`** — Generates potential search queries for knowledge entries at write time using `doc2query/msmarco-t5-small-v1` (77M param T5 via ONNX); stored in `search_queries` column and indexed in FTS5 for improved recall
@@ -136,14 +142,8 @@ frontend/
 - **`output_service.py`** — Output queue management for responses
 - **`event_bus_service.py`** — Pub/sub event routing
 
-#### Topic Classification
-- **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with two-signal boundary detection
-- **`two_signal_boundary_service.py`** — Self-calibrating topic boundary detector: consecutive + window similarity must both drop below adaptive thresholds (K=1.6), with discourse marker fast path; per-thread state in MemoryStore with 24h TTL
-
-#### Session & Conversation
-- **`thread_conversation_service.py`** — MemoryStore-backed conversation thread persistence
-- **`thread_service.py`** — Manages conversation threads with expiry
-- **`session_service.py`** — Tracks user sessions and topic changes
+#### Channel & Conversation
+- **`two_signal_boundary_service.py`** — Self-calibrating channel boundary detector: consecutive + window similarity must both drop below adaptive thresholds (K=1.6), with discourse marker fast path; per-channel state in MemoryStore with 24h TTL
 
 #### Documents & File Management
 - **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic via sqlite-vec + FTS5 + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
@@ -170,7 +170,7 @@ Built-in cognitive skills for the ACT loop:
 ## Worker Processes (`backend/workers/`)
 
 ### Queue Workers (Daemon Threads)
-- **Digest Worker** — Core pipeline: classify → unified generate → enqueue memory job
+- **Digest Worker** — Legacy pipeline retained for non-WebSocket consumers (agent API, background workers). WebSocket user messages bypass digest_worker entirely and call `UserMessageProcessor` directly.
 - **Episodic Memory Worker** — Utility functions for goal emergence detection (episode extraction now runs inline via rolling transcript trigger)
 
 ### Services/Daemons (Daemon Threads)
@@ -181,7 +181,6 @@ Built-in cognitive skills for the ACT loop:
 - **Decay Engine** — Periodic memory decay cycle (30min); power-law retrieval_weight decay for episodes (no hard deletes), episode consolidation (super episodes from 3-5 similar episodes), deferred reconsolidation, transcript cleanup, constraint consolidation; contradicted traits resolve via inline contradiction check at creation time
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
-- **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
 - **Triage Calibration** — Triage correctness scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from clarification→tool resolution chains
@@ -198,16 +197,26 @@ Built-in cognitive skills for the ACT loop:
 
 ### User Input → Response Pipeline
 ```
-[User Input]
-  → [run.py] → [PromptQueue] → [Digest Worker]
-    ├─ Classification (embedding-based, two-signal boundary detection)
-    ├─ Context Assembly (transcript + compaction + semantic memories)
-    ├─ Unified LLM Generation (skills + tools discoverable inline)
-    │  └─ ACT loop runs inline when LLM invokes skills/tools
-    └─ Enqueue Memory Job
-      → [Transcript Service] (rolling trigger at id % 25)
-        → [Episode Extractor] → SQLite Episodes Table
-        → Traits extracted → Knowledge Store
+[User Input via WebSocket]
+  → [WebSocket handler] spawns daemon thread
+    → [UserMessageProcessor.process()]
+      ├─ UserPromptAssemblyService.build()
+      │    (world state, transcript, compaction, episodic recall)
+      ├─ SystemPromptAssemblyService.build()
+      │    (identity, directives, frontal-cortex-unified template)
+      ├─ MessageProcessor.send()
+      │    ├─ transcript.append(channel, 'user', ...)
+      │    ├─ Providers.send() → LLM call (frontal-cortex-unified)
+      │    └─ transcript.append(channel, 'assistant', ...)
+      └─ OutputService.enqueue_text() → pub/sub → WebSocket → client
+
+  Background (async, from OutputService):
+    → [Transcript Service] (rolling trigger at id % 25)
+      → [Episode Extractor] → SQLite episodes table
+      → Traits extracted → Knowledge Store
+
+NOTE: ACT loop is parked for user messages (task-ddffe1). Tool calls
+from the LLM are logged and narration text is returned as the response.
 ```
 
 ### Background Processes
@@ -251,16 +260,15 @@ Built-in cognitive skills for the ACT loop:
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Topic Transcript** (SQLite + sqlite-vec) — Persistent, append-only conversation record per topic; budget-aware filling replaces fixed turn limits
-- **Compaction** (SQLite) — Incremental LLM summarization of older transcript entries; preserves facts/decisions/preferences, discards conversation flow
-- **Working Memory** (MemoryStore, legacy fallback) — FIFO buffer used only when no transcript data exists yet
-- **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
+- **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; budget-aware filling; `UserPromptAssemblyService` reads compaction summary + up to 50 recent entries above the compaction watermark
+- **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization of older transcript entries; preserves facts/decisions/preferences, discards conversation flow; keyed by `channel`
+- **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries; key: `gist:{channel}`
 - **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
 - **Episodes** (SQLite + sqlite-vec) — Transcript-linked narrative units with power-law retrieval_weight decay and storage_strength that never decreases; created by rolling transcript trigger (id % 25); consolidate into "super episodes" referencing source episodes
 - **Knowledge** (SQLite + sqlite-vec) — Unified store for traits, facts, procedures, preferences, rules, metrics; RRF hybrid search (exact + FTS5 + vector KNN); traits extracted from episodes during extraction
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
-Each layer optimized for its timescale; all integrated via context assembly. Context assembly reads compaction summary + budget-constrained recent transcript entries for working memory context. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
+Each layer optimized for its timescale; all integrated via `UserPromptAssemblyService`. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
 
 ### Configuration Precedence
 ```
@@ -274,17 +282,12 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - Shared state managed via thread-safe data structures (locks, queues)
 - No multiprocessing overhead — lightweight, in-process coordination
 
-### Adaptive Topic Boundary Detection
+### Adaptive Channel Boundary Detection
 - Replaces static 0.65 cosine similarity threshold with a 3-layer self-calibrating detector
 - **Two-Signal Detection**: consecutive similarity (cos to previous message) AND window similarity (cos to centroid of last 5 messages) must both drop below self-calibrating thresholds (mean - K*std, K=1.6) for a boundary to fire
 - **Discourse Markers**: 16 regex patterns for explicit topic switch phrases ("by the way", "speaking of", etc.) provide a high-precision fast path bypassing the two-signal gate
 - All thresholds derived from running conversation statistics; stats only updated on non-boundary messages to keep baseline clean
-- State persisted in MemoryStore (`two_signal_boundary:{thread_id}`, 24h TTL); cold-start mode (markers only) during first 6 messages
-
-### Topic Confidence Reinforcement
-- Topic confidence updated via bounded reinforcement formula
-- `new = current + (new_confidence - current) * 0.5`
-- Ensures gradual adaptation without oscillation
+- State persisted in MemoryStore (`two_signal_boundary:{channel}`, 24h TTL); cold-start mode (markers only) during first 6 messages
 
 ### Error Resilience
 - All workers catch JSON decode errors from LLM responses
@@ -296,7 +299,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 ### Hard Boundaries
 - **Prompt hierarchy** immutable (marked as "authoritative and final")
 - **Skill registry** fixed at startup (no runtime skill registration)
-- **Data scope** parameterized by topic (no cross-topic leakage)
+- **Data scope** parameterized by channel (no cross-channel leakage)
 - **Speaker confidence** gates trait storage (unknown speakers = 0.3 penalty)
 
 ### Operational Limits

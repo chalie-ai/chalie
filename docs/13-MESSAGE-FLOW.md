@@ -22,48 +22,44 @@ This document is the single authoritative visual map of how a user message trave
                             │  User Message via    │
                             │    /ws  (WebSocket)  │
                             └──────────┬───────────┘
-                                       │ daemon thread
+                                       │ spawns daemon thread
                             ┌──────────▼───────────┐
-                            │   digest_worker()    │◄──── background
+                            │  _handle_chat_       │
+                            │  background()        │
+                            └──────────┬───────────┘
+                                       │
+                            ┌──────────▼───────────────────────────────┐
+                            │  UserMessageProcessor.instance().process()│
+                            │                                           │
+                            │  1. UserPromptAssemblyService.build()     │
+                            │     (world state, transcript, episodes,   │
+                            │      knowledge, self-awareness, files)    │
+                            │                                           │
+                            │  2. SystemPromptAssemblyService.build()   │
+                            │     (identity, directives, frontal-cortex │
+                            │      template — cacheable, stable)        │
+                            │                                           │
+                            │  3. MessageProcessor.send()               │
+                            │     ├─ 📤 DB  transcript (user turn)      │
+                            │     ├─ 🧠 LLM  Providers.send()          │
+                            │     │         (frontal-cortex-unified)    │
+                            │     └─ 📤 DB  transcript (assistant turn) │
+                            └──────────┬────────────────────────────────┘
+                                       │ result dict
+                            ┌──────────▼───────────┐
+                            │  OutputService.       │
+                            │  enqueue_text()       │
                             └──────────┬───────────┘
                                        │
                             ┌──────────▼───────────┐
-                            │   PHASE A            │
-                            │   Ingestion &        │
-                            │   Context Assembly   │
-                            │   (see §2)           │
-                            └──────────┬───────────┘
-                                       │
-                            ┌──────────▼───────────┐
-                            │   PHASE B            │
-                            │   Signal Collection  │
-                            │   & Unified Path     │
-                            │   (see §3)           │
-                            └──────────┬───────────┘
-                                       │
-                           ┌───────────┴──────────────┐
-                           │    Unified Generation    │
-                           │    (unified_generate)    │
-                           └──┬───────────────────────┘
-                              │
-               ┌──────────────▼──────────────────────────────┐
-               │  Single LLM call — LLM decides:             │
-               │  • Respond directly (Format B)               │
-               │  • Invoke skills/tools first (Format A)      │
-               │  • CANCEL / empty → fast exit                │
-               └──────────────────────┬──────────────────────┘
-                                      │
-                               ┌──────▼───────────┐
-                               │   PHASE D        │
-                               │   Post-Response  │
-                               │   Commit (see §5)│
-                               └──────┬───────────┘
-                                      │
-                               ┌──────▼───────────┐
-                               │  📤 M  pub/sub   │
-                               │  output:{id}     │
-                               │  WS → Client     │
-                               └──────────────────┘
+                            │  📤 M  pub/sub        │
+                            │  sse:{request_id}    │
+                            │  WS → Client         │
+                            └──────────────────────┘
+
+NOTE: ACT loop is intentionally parked (task-ddffe1). If the LLM returns
+tool calls, they are logged and the narration text is returned as the
+response. Tool execution is deferred to a future release.
 
 BACKGROUND (always running, independent of user messages):
   PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §5)
@@ -72,82 +68,66 @@ BACKGROUND (always running, independent of user messages):
 
 ---
 
-## 2. Phase A — Ingestion & Context Assembly
+## 2. Phase A — Context Assembly (UserPromptAssemblyService)
 
-Runs immediately for every message, before any routing decision.
+Runs inside `UserMessageProcessor.process()` on every user message, before the LLM call.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE A: Context Assembly                                          │
+│  UserPromptAssemblyService.build()                                  │
 │                                                                     │
-│  Step 1  IIP Hook (Identity Promotion)            ⚡ DET  <5ms     │
-│          Regex: "call me X", "my name is X", …                     │
-│          Match → 📤 M  📤 DB  (trait + identity)                   │
-│          No match → continue                                        │
-│                           │                                         │
-│  Step 2  Working Memory (transcript + compaction)  📥 DB             │
-│          topic_compactions + topic_transcript (budget-aware)        │
+│  Step 1  World State header                       📥 M  <5ms       │
+│          WorldStateService.get_world_state(channel)                 │
+│          Includes: time, calendar events, active reminders          │
 │          ─────────────────────────────────────────────────          │
-│  Step 3  Gists                                    📥 M              │
-│          key: gist:{topic}  (sorted set, 30min TTL)                │
+│  Step 2  Voice mode guard (per-turn)              ⚡ DET            │
+│          If metadata.source == 'voice':                             │
+│          Injects TTS instruction (no markdown/formatting)           │
 │          ─────────────────────────────────────────────────          │
-│  Step 4  Facts                                    📥 M              │
-│          key: fact:{topic}:{key}  (24h TTL)                        │
+│  Step 3  Conversation context                     📥 DB             │
+│          compaction_service.get_compaction(channel)                 │
+│          transcript_service.get_recent(channel, limit=50,           │
+│                                        since_id=watermark)          │
+│          → "## Context" (compaction text, if any)                   │
+│          → "## Previous Messages" (transcript entries + tool_calls) │
 │          ─────────────────────────────────────────────────          │
-│  Step 5  World State                              📥 M              │
-│          key: world_state:{topic}                                   │
+│  Step 4  System Awareness                         ⚡ DET            │
+│          SelfModelService.format_for_prompt()                       │
+│          Only non-empty when degradation signals are present        │
 │          ─────────────────────────────────────────────────          │
-│  Step 6  FOK (Feeling-of-Knowing) score           📥 M              │
-│          key: fok:{topic}  (float 0.0–5.0)                         │
-│          ─────────────────────────────────────────────────          │
-│  Step 7  Context Warmth                           ⚡ DET            │
-│          warmth = (wm_score + world_score) / 2                     │
-│          ─────────────────────────────────────────────────          │
-│  Step 8  Memory Confidence                        ⚡ DET            │
-│          conf = 0.4×fok + 0.4×warmth + 0.2×density                │
-│          is_new_topic → conf *= 0.7                                 │
-│          ─────────────────────────────────────────────────          │
-│  Step 9  Session / Focus Tracking                 📥📤 M            │
-│          topic_streak:{thread_id}  (2h TTL)                        │
-│          focus:{thread_id}  (auto-infer after N exchanges)         │
-│          Silence gap > 2700s → trigger episodic memory             │
+│  Step 5  Current Turn                             📥 DB             │
+│          EpisodicService.retrieve_episodes(query, radius=0.2)       │
+│          → "### Related Memories" (episodic auto-recall)            │
+│          → "## User Message" (raw user text)                        │
+│          → file tags (images / documents from metadata)             │
+│          → nudge tag (if present in metadata)                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Phase B — Signal Collection & Unified Generation
+## 3. Phase B — System Prompt Assembly (SystemPromptAssemblyService)
 
-User messages go through a single unified LLM call. No mode gate, no UNIFIED/ACT routing split.
+Builds the stable, cacheable system prompt sent alongside every user message.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 1: NLP Signal Collection                   ⚡ DET  <1ms     │
+│  SystemPromptAssemblyService.build(type='unified')                  │
 │                                                                     │
-│  compute_nlp_signals()                                              │
-│  Input:  text                                                       │
-│  Output: { has_question_mark, interrogative_words, greeting_pattern, │
-│            explicit_feedback, information_density, implicit_reference}│
-│  No external calls — pure regex/heuristics                          │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│  LAYER 2: Unified Generation                      🧠 LLM           │
-│  unified_generate()                                                 │
+│  Template: frontal-cortex-unified.md (loaded via load_configs)      │
 │                                                                     │
-│  Single LLM call with discoverable skills/tools.                   │
-│  The LLM decides whether to:                                        │
-│    • Respond directly (Format B — conversational response)          │
-│    • Invoke skills/tools first (Format A — action + synthesis)      │
+│  Placeholder injection:                                             │
+│    {{identity_modulation}}                                          │
+│        IdentityService → VoiceMapperService.generate_modulation()   │
+│        → tone/personality instruction string                        │
 │                                                                     │
-│  Empty input and CANCEL patterns handled inline (fast exit).        │
-│  Context relevance pre-parser selects which context nodes to inject.│
+│    {{adaptive_directives}}                                          │
+│        AdaptiveLayerService.generate_directives()                   │
+│        → response style adjustments based on interaction signals    │
 │                                                                     │
-│  Config: frontal-cortex-unified.json                                │
-│  Prompt: frontal-cortex-unified.md                                  │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                           Phase D  (§6)
+│  Designed for provider-side prompt caching. Content rarely changes  │
+│  between turns (identity vectors + adaptive signals are slow-moving)│
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -156,19 +136,19 @@ User messages go through a single unified LLM call. No mode gate, no UNIFIED/ACT
 
 ### 4a. Mode Router (Deterministic)
 
-Used only for non-user flows (cognitive drift, proactive notifications, fallback). User messages bypass this entirely via unified_generate.
+Used only for non-user flows (cognitive drift, proactive notifications, fallback). User messages bypass this entirely — they go directly through `UserMessageProcessor`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ModeRouterService                           ⚡ DET  ~5ms           │
 │                                                                     │
-│  Signal inputs (all already in memory from Phase A/B):             │
-│    context_warmth       topic_confidence     has_question_mark     │
-│    working_memory_turns fok_score            interrogative_words   │
-│    gist_count           is_new_topic         greeting_pattern      │
-│    fact_count           world_state_present  explicit_feedback     │
-│    intent_type          intent_complexity    intent_confidence     │
-│    information_density  implicit_reference   prompt_token_count    │
+│  Signal inputs (all already in memory from prior assembly):         │
+│    context_warmth       channel_confidence   has_question_mark      │
+│    working_memory_turns fok_score            interrogative_words    │
+│    gist_count           is_new_channel       greeting_pattern       │
+│    fact_count           world_state_present  explicit_feedback      │
+│    intent_type          intent_complexity    intent_confidence      │
+│    information_density  implicit_reference   prompt_token_count     │
 │                                                                     │
 │  Scoring formula (per mode):                                       │
 │    score[mode] = base_score + Σ(weight[signal] × signal_value)    │
@@ -190,7 +170,7 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 │  Prompt = soul.md + identity-core.md + frontal-cortex-{mode}.md    │
 │                                                                     │
 │  Context injected:                                                  │
-│    • Working memory (thread_id)                                     │
+│    • Working memory (channel)                                       │
 │    • Chat history                                                   │
 │    • Assembled context (semantic retrieval)                         │
 │    • Drift gists (if idle thoughts exist)                           │
@@ -205,72 +185,26 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
                            Phase D  (§6)
 ```
 
-### 4b. ACT Mode — The Action Loop
+### 4b. ACT Mode — Parked (task-ddffe1)
 
-Used by background workers (tool_worker, persistent_task_worker) and when the mode router (non-user flows) selects ACT.
+The ACT loop exists in code but is not executed for user messages. When `UserMessageProcessor` receives tool calls from the LLM, it logs a warning and returns the narration text as the response. Tool execution is deferred.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ACTOrchestrator                                                    │
-│  Config: cumulative_timeout=60s  per_action=10s  max_iterations=30 │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  Iteration N                                                 │  │
-│  │                                                              │  │
-│  │  1. Generate action plan            🧠 LLM                  │  │
-│  │     Prompt: frontal-cortex-act.md                           │  │
-│  │     Input:  user text + act_history (prior results)         │  │
-│  │     Output: [{ type, params, … }, …]                        │  │
-│  │                                                              │  │
-│  │  2. Termination check               ⚡ DET                  │  │
-│  │     • Cumulative timeout reached?                            │  │
-│  │     • Max iterations reached?                                │  │
-│  │     • No actions in plan?                                    │  │
-│  │     • Semantic repetition detected? (embedding-based)        │  │
-│  │     • Same action type repeated 3× in a row?                │  │
-│  │     If any → exit loop                                       │  │
-│  │                                                              │  │
-│  │  3. Execute actions                  ⚡/🧠 varies           │  │
-│  │     ActDispatcherService                                     │  │
-│  │     Chains outputs: result[N] → input[N+1]                  │  │
-│  │     Action types:                                            │  │
-│  │       recall, memorize, associate, find_tools               │  │
-│  │       (cognitive primitives, always available)              │  │
-│  │       schedule, list, focus, persistent_task, etc.          │  │
-│  │       (all innate skills available directly)                │  │
-│  │       (+ external tools via tool_worker thread)             │  │
-│  │                                                              │  │
-│  │  4. Log iteration                    📤 DB                  │  │
-│  │     Table: cortex_iterations                                 │  │
-│  │     Fields: iteration_number, actions_executed,             │  │
-│  │             execution_time_ms, fatigue, mode                │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│           │                                                         │
-│           └──► repeat if can_continue()                             │
-│                                                                     │
-│  After loop terminates:                                             │
-│  1. Re-route → terminal mode (force previous_mode='ACT')           │
-│     Mode router (deterministic, skip_tiebreaker=True)              │
-│     Typically selects UNIFIED                                       │
-│  2. Generate terminal response (FrontalCortex)   🧠 LLM           │
-│     act_history passed as context                                   │
-│     All-card actions → skip text (mode='IGNORE')                   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+Background workers (persistent_task_worker) continue to use the ACT orchestrator independently.
 
 ---
 
 ## 5. Phase D — Post-Response Commit
 
-Runs after every response is generated (Paths A, B, C).
+Runs after every response is generated.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE D: Post-Response Commit                                      │
 │                                                                     │
 │  Step 1  Append to transcript + compaction check  📤 DB              │
-│          topic_transcript (append assistant turn)                   │
-│          Fires compaction if context > 85% of budget               │
+│          transcript table (assistant turn already appended by       │
+│          MessageProcessor.send() before this phase)                 │
+│          Fires compaction if context > 85% of provider budget       │
 │                         │                                           │
 │  Step 2  Log interaction event                  📤 DB              │
 │          Table: interaction_log                                      │
@@ -291,9 +225,9 @@ Runs after every response is generated (Paths A, B, C).
 │          │    → 📤 DB  concepts, semantic_relationships         │  │
 │          └──────────────────────────────────────────────────────┘  │
 │                         │                                           │
-│  Step 5  Publish to WebSocket                   📤 M  (pub/sub)    │
-│          key: output:{request_id}                                   │
-│          /chat endpoint receives, streams to client                 │
+│  Step 4  Publish to WebSocket                   📤 M  (pub/sub)    │
+│          key: sse:{request_id}                                      │
+│          OutputService.enqueue_text() → /ws → client               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -369,7 +303,7 @@ Runs only when all PromptQueues are idle. Signal-driven continuous reasoning.
 │  Preconditions:                               ⚡ DET               │
 │    All queues idle?   📥 M  (queue lengths = 0)                    │
 │    Recent episodes exist? (lookback 168h)  📥 DB                   │
-│    Bail if user is in deep focus           📥 M  focus:{thread_id} │
+│    Bail if user is in deep focus           📥 M  focus:{channel}   │
 │                                                                     │
 │  1. Seed Selection (weighted random)          ⚡ DET               │
 │     Salient  0.60 │ Insight  0.40                                   │
@@ -387,7 +321,7 @@ Runs only when all PromptQueues are idle. Signal-driven continuous reasoning.
 │     Output: thought text                                            │
 │                                                                     │
 │  4. Store drift gist                          📤 M               │
-│     key: gist:{topic}  (30min TTL)                                  │
+│     key: gist:{channel}  (30min TTL)                               │
 │     Will surface in frontal cortex context on next user message    │
 │                                                                     │
 │  5. Action Decision Routing                   ⚡ DET               │
@@ -424,14 +358,13 @@ Runs only when all PromptQueues are idle. Signal-driven continuous reasoning.
 ```
 Key Pattern                        TTL        Read    Written by
 ─────────────────────────────────────────────────────────────────────
-fok:{topic}                        —          A,B     FOK update service
+fok:{channel}                      —          A,B     FOK update service
 world_model:items                  —          A       WorldStateService
 reasoning_loop:activations         —          E       Reasoning loop
 reasoning_loop:cooldowns           —          E       Reasoning loop
-output:{request_id}                short      /ws     digest_worker
+sse:{request_id}                   short      /ws     UserMessageProcessor / OutputService
 
 PromptQueues (in-memory, thread-safe):
-prompt-queue                       —          —       run.py → digest_worker
 episodic-memory-queue              —          D       encode event handler
 semantic_consolidation_queue       —          D       episodic_memory_worker
 ```
@@ -442,15 +375,14 @@ semantic_consolidation_queue       —          D       episodic_memory_worker
 Table                      When Written                    When Read
 ──────────────────────────────────────────────────────────────────────
 interaction_log            Phase D (every message)         observability endpoints
-cortex_iterations          ACT loop, Path B                observability endpoints
+cortex_iterations          ACT loop (background workers)   observability endpoints
 episodes                   episodic_memory_worker (async)  frontal_cortex, reasoning loop
 concepts                   semantic_consolidation (async)  drift engine, context assembly
 semantic_relationships     semantic_consolidation          drift engine
 user_traits                IIP hook                        identity service
 persistent_tasks           Path D (task worker)            persistent_task_worker
-topics                     Phase A (new topic)             topic_classifier
-threads                    session management              session_service
-topic_transcript           Phase D                         context_assembly
+transcript                 MessageProcessor.send()         UserPromptAssemblyService
+compactions                compaction_service              UserPromptAssemblyService
 place_fingerprints         ambient inference               place_learning_service
 ```
 
@@ -461,18 +393,15 @@ place_fingerprints         ambient inference               place_learning_servic
 Every LLM call in the system, with typical latency and model used.
 
 ```
-Service                      Model            Prompt                   Latency   Triggered by
-────────────────────────────────────────────────────────────────────────────────────────────────
-TopicClassifierService       lightweight      topic-classifier.md      ~100ms    Every message
-ModeRouterService (tiebreaker) ONNX           mode-tiebreaker model    ~5ms      Non-user flows only
-FrontalCortex (UNIFIED)      primary model    soul + unified.md        ~500ms-2s User path
-FrontalCortex (ACT plan)     primary model    frontal-cortex-act.md    ~500ms-2s Path C ACT loop
-FrontalCortex (terminal)     primary model    mode-specific            ~500ms-2s After ACT loop
-CriticService                lightweight      critic.md                ~200ms    Path B (optional)
-ReasoningLoop (thought)      lightweight      cognitive-drift.md       ~100ms    Path E
-PlanDecompositionService     lightweight      plan-decomposition.md    ~300ms    On task creation
-episodic_memory_worker       lightweight      episodic-memory.md       ~200ms    Phase D async
-semantic_consolidation       lightweight      semantic-extract.md      ~200ms    Phase D async
+Service                          Model            Prompt                   Latency   Triggered by
+──────────────────────────────────────────────────────────────────────────────────────────────────
+UserMessageProcessor (unified)   primary model    frontal-cortex-unified   ~500ms-2s User path (via UserPromptAssemblyService + SystemPromptAssemblyService)
+ModeRouterService (tiebreaker)   ONNX             mode-tiebreaker model    ~5ms      Non-user flows only
+FrontalCortexService (UNIFIED)   primary model    soul + unified.md        ~500ms-2s Non-user flows
+ReasoningLoop (thought)          lightweight      cognitive-drift.md       ~100ms    Path E
+PlanDecompositionService         lightweight      plan-decomposition.md    ~300ms    On task creation
+episodic_memory_worker           lightweight      episodic-memory.md       ~200ms    Phase D async
+semantic_consolidation           lightweight      semantic-extract.md      ~200ms    Phase D async
 
 ```
 
@@ -495,18 +424,16 @@ semantic_consolidation       lightweight      semantic-extract.md      ~200ms   
 Path              P50 Latency    Bottleneck
 ────────────────────────────────────────────────────────────
 Unified (user)    1s – 3s        Unified LLM call (primary model)
-Unified + skills  2s – 30s       Skill execution (varies)
-B — ACT + Tools   5s – 30s+      Tool execution (background workers)
+Unified + skills  2s – 30s       Skill execution (varies — ACT parked)
 D — Task Worker   30min cycle    Background, no user wait
 E — Drift         300s cycle     Background, no user wait
 
 Component latency breakdown (unified path, typical):
-  Context assembly     <10ms   ── MemoryStore reads (all cached)
-  Intent classify      ~5ms    ── Deterministic
+  UserPromptAssembly   <20ms   ── DB reads (transcript + episodes)
+  SystemPromptAssembly <10ms   ── MemoryStore + identity vectors
   Unified LLM call     ~800ms  ── Primary model (varies by provider)
-  Working memory write <5ms    ── MemoryStore append
-  DB event log         ~10ms   ── SQLite WAL write
-  WS publish           ~1ms    ── MemoryStore pub/sub
+  Transcript write     <5ms    ── SQLite WAL write (both turns)
+  OutputService        ~1ms    ── MemoryStore pub/sub
   ─────────────────────────────────────────────────────────
   Total (typical)      ~0.85s
 ```
@@ -517,12 +444,12 @@ Component latency breakdown (unified path, typical):
 
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
-| **Attention is sacred** | Unified path lets LLM decide when to act vs respond — no wasted routing overhead; ACT fatigue model prevents runaway tool chains |
+| **Attention is sacred** | User messages go direct to LLM — no routing overhead; ACT parked to prevent runaway tool chains until execution is solid |
 | **Judgment over activity** | Single unified LLM call for user messages; mode router handles non-user flows deterministically |
-| **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
-| **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
-| **Single authority** | Router weight mutation bounded by single regulator (24h cycle, ±0.02/day max) |
+| **Tool agnosticism** | Tool schemas injected at send time via `Providers._get_tools()` — no tool names hardcoded in the pipeline |
+| **Continuity over transactions** | Transcript + compaction + episodes all feed every response; drift gists surface on next user message |
+| **System prompt caching** | `SystemPromptAssemblyService` builds stable content (identity, directives) separately from volatile user-turn content |
 
 ---
 
-*Last updated: 2026-03-21. See `docs/INDEX.md` for the full documentation map.*
+*Last updated: 2026-04-08. See `docs/INDEX.md` for the full documentation map.*
