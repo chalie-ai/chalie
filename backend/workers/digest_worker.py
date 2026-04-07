@@ -240,7 +240,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
             try:
                 import os
 
-                rows = db.execute_query(
+                rows = db.fetch_all(
                     "SELECT key, value, confidence, decay_class "
                     "FROM knowledge "
                     "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
@@ -282,7 +282,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 )
                 logging.debug("[TRAIT_SYNTH] Sentence stored: %s", sentence)
             except Exception as e:
-                logging.debug("[TRAIT_SYNTH] Failed: %s", e)
+                logging.warning("[TRAIT_SYNTH] Failed: %s", e)
 
         t = threading.Thread(target=_extract_traits, daemon=True)
         t.start()
@@ -1419,7 +1419,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     }
 
     if session_service.check_topic_switch(topic):
-        # Episodic consolidation handled by EpisodicMemoryObserver (signal density scan)
         session_service.reset_session()
         session_service.mark_topic_switch(topic)
 
@@ -1667,8 +1666,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
     # ═══════════════════════════════════════════════════════════
-
-    # Step 12: Episodic consolidation handled by EpisodicMemoryObserver (60s scan)
 
     # Print the actual response to stdout for the user
     logging.info(f"\n{'='*60}")

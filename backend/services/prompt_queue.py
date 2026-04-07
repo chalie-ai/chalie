@@ -79,23 +79,3 @@ class PromptQueue:
         return None
 
 
-def enqueue_episodic_memory(topic_data: dict):
-    """
-    Enqueue episodic memory generation job.
-
-    Args:
-        topic_data: Dict with 'topic' key.
-    """
-    from workers.episodic_memory_worker import episodic_memory_worker
-
-    job_data = {
-        'topic': topic_data['topic']
-    }
-    if topic_data.get('thread_id'):
-        job_data['thread_id'] = topic_data['thread_id']
-    if topic_data.get('retry_count'):
-        job_data['retry_count'] = topic_data['retry_count']
-
-    queue = PromptQueue(queue_name="episodic-memory-queue", worker_func=episodic_memory_worker)
-    queue.enqueue(job_data)
-    logger.info(f"Enqueued episodic memory job for topic '{topic_data['topic']}'")

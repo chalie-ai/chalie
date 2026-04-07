@@ -1,0 +1,11 @@
+{
+  "temperature": 0.3,
+  "format": "json",
+  "timeout": 120,
+  "max_tokens": 2000,
+  "database": {
+    "pool_size": 2,
+    "max_overflow": 2,
+    "pool_timeout": 30
+  }
+}

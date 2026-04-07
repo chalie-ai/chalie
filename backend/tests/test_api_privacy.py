@@ -86,9 +86,9 @@ class TestPrivacyAPI:
 
         # Seed some data to verify it gets deleted
         db.execute(
-            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, freshness, topic) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("ep1", '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 5, 'test'),
+            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("ep1", '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 'test'),
         )
         db.commit()
 

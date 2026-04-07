@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from typing import List, Optional, TYPE_CHECKING
 
@@ -34,24 +35,33 @@ from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 
+# ── Stop words (NLTK-backed, lazy-loaded) ─────────────────────────────
+
+_nltk_stop_words = None
+_stop_words_lock = threading.Lock()
+
+
+def _get_stop_words() -> frozenset:
+    """Return the NLTK English stop word set, downloading the corpus on first use."""
+    global _nltk_stop_words
+    if _nltk_stop_words is not None:
+        return _nltk_stop_words
+    with _stop_words_lock:
+        if _nltk_stop_words is not None:
+            return _nltk_stop_words
+        import nltk
+        try:
+            from nltk.corpus import stopwords
+            _nltk_stop_words = frozenset(stopwords.words('english'))
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+            from nltk.corpus import stopwords
+            _nltk_stop_words = frozenset(stopwords.words('english'))
+    return _nltk_stop_words
+
+
 # ── Trait validation (deterministic, zero LLM) ────────────────────────
 # Ported from UserTraitService — catches garbage traits from weak models.
-
-_STOP_WORDS = frozenset({
-    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-    'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for',
-    'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'like',
-    'through', 'after', 'over', 'between', 'out', 'up', 'down', 'off',
-    'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either',
-    'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most',
-    'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than',
-    'too', 'very', 'just', 'because', 'if', 'when', 'while', 'this',
-    'that', 'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we',
-    'our', 'you', 'your', 'he', 'she', 'they', 'them', 'their',
-    'what', 'which', 'who', 'whom', 'how', 'where', 'there', 'here',
-    'often', 'discusses', 'yes', 'no', 'ok', 'okay', 'true', 'false',
-})
 
 _PLACEHOLDER_RE = re.compile(
     r'^(?:unknown|n/?a|none|null|undefined|not specified|unspecified|empty|default)$',
@@ -61,10 +71,12 @@ _PLACEHOLDER_RE = re.compile(
 _MAX_TOPIC_SLUG_SEGMENTS = 3
 
 
-def _extract_content_words(text: str) -> list:
+def _extract_content_words(text: str, stop_words: frozenset = None) -> list:
     """Extract meaningful content words (not stop words, len > 1)."""
     words = re.findall(r'[a-zA-Z]{2,}', text.lower())
-    return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+    if stop_words is None:
+        stop_words = _get_stop_words()
+    return [w for w in words if w not in stop_words and len(w) > 1]
 
 
 def _validate_trait(key: str, value: str) -> Optional[str]:
@@ -72,8 +84,9 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
     if not key or len(key) < 2:
         return 'key_too_short'
 
+    stop_words = _get_stop_words()
     key_segments = [w for w in re.split(r'[_\-\s]+', key.lower()) if w]
-    content_key = [w for w in key_segments if w not in _STOP_WORDS and len(w) > 1]
+    content_key = [w for w in key_segments if w not in stop_words and len(w) > 1]
     if not content_key:
         return 'key_is_stop_words'
 
@@ -85,7 +98,7 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
     if _PLACEHOLDER_RE.match(value.strip()):
         return 'placeholder_value'
 
-    content_words_value = _extract_content_words(value)
+    content_words_value = _extract_content_words(value, stop_words)
     if len(content_words_value) < 1:
         return 'no_content_words'
 
@@ -98,7 +111,7 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
         slug_segments = [s for s in topic_slug.split('_') if s]
         if len(slug_segments) > _MAX_TOPIC_SLUG_SEGMENTS:
             return 'topic_slug_too_long'
-        topic_content = [s for s in slug_segments if s not in _STOP_WORDS and len(s) > 1]
+        topic_content = [s for s in slug_segments if s not in stop_words and len(s) > 1]
         if not topic_content:
             return 'topic_slug_no_content'
 
@@ -141,7 +154,7 @@ class KnowledgeService:
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
-    VALID_KINDS = {'trait', 'concept', 'fact', 'procedure', 'preference', 'relationship', 'rule', 'metric'}
+    VALID_KINDS = {'trait', 'fact', 'procedure', 'preference', 'rule', 'metric'}
     VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
 
     # Procedural learning constants (ported from ProceduralMemoryService)
@@ -196,23 +209,45 @@ class KnowledgeService:
         except Exception as e:
             logger.warning(f"[KNOWLEDGE] Failed to store vec embedding: {e}")
 
-    def _sync_fts(self, conn, rowid: int, key: str, value: str, kind: str, entity: str):
-        """Sync the FTS index for a knowledge row."""
+    def _sync_fts(self, conn, rowid: int, key: str = None, value: str = None,
+                  kind: str = None, entity: str = None, search_queries: str = None):
+        """Sync the FTS index for a knowledge row.
+
+        When called with only rowid (e.g. from doc2query background thread),
+        reads the current row values from the DB before syncing.
+        When key/value/kind/entity are provided, search_queries can also be
+        passed directly to avoid an extra DB roundtrip.
+        """
         try:
             cursor = conn.cursor()
+
+            # If key/value/kind/entity not provided, read from DB
+            if key is None:
+                cursor.execute(
+                    "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                    (rowid,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    cursor.close()
+                    return
+                key, value, kind, entity = row[0], row[1], row[2], row[3]
+                search_queries = row[4]
+
             # Delete old entry (if exists)
             cursor.execute(
                 "DELETE FROM knowledge_fts WHERE rowid = ?",
                 (rowid,)
             )
-            # Insert new entry
+            # Insert new entry including search_queries column
             cursor.execute(
-                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity) VALUES (?, ?, ?, ?, ?)",
-                (rowid, key, value or '', kind, entity)
+                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity, search_queries) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, entity, search_queries or '')
             )
             cursor.close()
         except Exception as e:
-            logger.debug(f"[KNOWLEDGE] FTS sync failed for rowid={rowid}: {e}")
+            logger.warning(f"[KNOWLEDGE] FTS sync failed for rowid={rowid}: {e}")
 
     def _remove_fts(self, conn, rowid: int):
         """Remove a row from the FTS index."""
@@ -221,8 +256,32 @@ class KnowledgeService:
             cursor.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
             cursor.close()
         except Exception as e:
-            logger.debug(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
+            logger.warning(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
 
+    def _schedule_doc2query(self, rowid: int, key: str, value: str):
+        """Fire-and-forget: generate search queries for a knowledge entry and persist them."""
+        import threading
+
+        def _run():
+            try:
+                from services.doc2query_service import get_doc2query_service
+                d2q = get_doc2query_service()
+                if not d2q.is_available():
+                    return
+                queries = d2q.generate_queries(f"{key}: {value}")
+                if not queries:
+                    return
+                import json as _json
+                with self.db.connection() as conn:
+                    conn.execute(
+                        "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
+                        (_json.dumps(queries), rowid)
+                    )
+                    self._sync_fts(conn, rowid)
+            except Exception as e:
+                logger.warning(f"[KNOWLEDGE] doc2query failed for rowid={rowid}: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Core: store ────────────────────────────────────────────────────
 
@@ -267,6 +326,8 @@ class KnowledgeService:
         data_json = json.dumps(data) if data is not None else None
 
         try:
+            _schedule_d2q_args = None  # (rowid, key, value) — set when doc2query should run
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
@@ -330,10 +391,11 @@ class KnowledgeService:
                     # Sync FTS if value changed
                     if value_changed:
                         self._sync_fts(conn, row_id, key, update_value, kind, entity)
+                        # Re-generate search queries for the new value
+                        if value:
+                            _schedule_d2q_args = (row_id, key, value)
 
                     cursor.close()
-
-                    return self.get(entity, key)
 
                 else:
                     # New entry
@@ -362,7 +424,15 @@ class KnowledgeService:
                         f"(confidence={confidence:.2f}, decay={decay_class}, entity={entity})"
                     )
 
-                    return self.get(entity, key)
+                    # Schedule doc2query after connection commits
+                    if value:
+                        _schedule_d2q_args = (row_id, key, value)
+
+            # Fire doc2query AFTER the connection context exits (row committed)
+            if _schedule_d2q_args:
+                self._schedule_doc2query(*_schedule_d2q_args)
+
+            return self.get(entity, key)
 
         except Exception as e:
             logger.error(f"[KNOWLEDGE] Failed to store '{key}': {e}")
@@ -441,8 +511,15 @@ class KnowledgeService:
                     # Sanitize query for FTS: remove special characters
                     fts_query = re.sub(r'[^\w\s]', '', query).strip()
                     if fts_query:
+                        # Filter stop words before building FTS terms so that
+                        # purely stop-word queries fall through to the vector-only
+                        # 2.5x boost path instead of returning low-quality matches.
+                        fts_words = [
+                            w for w in fts_query.split()
+                            if w and w.lower() not in _get_stop_words()
+                        ]
                         # Use prefix search for partial matches
-                        fts_terms = ' OR '.join(f'"{w}"*' for w in fts_query.split() if w)
+                        fts_terms = ' OR '.join(f'"{w}"*' for w in fts_words if w)
                         if fts_terms:
                             cursor.execute("""
                                 SELECT f.rowid, f.rank
@@ -680,7 +757,7 @@ class KnowledgeService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT rowid, confidence, evidence_count, data, kind
+                    SELECT rowid, confidence, evidence_count
                     FROM knowledge
                     WHERE entity = ? AND key = ? AND deleted_at IS NULL
                 """, (entity, key))
@@ -689,40 +766,17 @@ class KnowledgeService:
                     cursor.close()
                     return False
 
-                row_id, old_conf, old_evidence, raw_data, kind = row
+                row_id, old_conf, old_evidence = row
                 new_evidence = old_evidence + 1
                 boost = 0.05 / math.log2(new_evidence + 1)
                 new_conf = min(1.0, old_conf + boost)
 
-                # If episode_id provided and kind=concept, append to source_episodes
-                data_update = None
-                if episode_id and kind == 'concept':
-                    data_obj = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-                    episodes = data_obj.get('source_episodes', [])
-                    if episode_id not in episodes:
-                        episodes.append(episode_id)
-                        data_obj['source_episodes'] = episodes
-                        data_update = json.dumps(data_obj)
-
-                if data_update:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?, data = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, data_update, row_id))
-                else:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, row_id))
+                cursor.execute("""
+                    UPDATE knowledge
+                    SET confidence = ?, evidence_count = ?,
+                        last_accessed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE rowid = ?
+                """, (new_conf, new_evidence, row_id))
 
                 cursor.close()
 

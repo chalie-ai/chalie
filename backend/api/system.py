@@ -203,7 +203,7 @@ def observability_memory():
 
         # ── Long-term counts from SQLite ──
         episode_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(activation_score), 0) AS avg_act "
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_act "
             "FROM episodes WHERE deleted_at IS NULL"
         )
         episodes = episode_row[0]['cnt'] if episode_row else 0

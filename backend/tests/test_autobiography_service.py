@@ -90,18 +90,17 @@ def _insert_autobiography(db_service, version=1, narrative="Test narrative",
 
 
 def _insert_episode(db_service, gist="test episode", salience=5, topic="general",
-                    emotion="{}", outcome="ok", created_at=None,
-                    activation_score=1.0):
+                    emotion="{}", outcome="ok", created_at=None):
     """Insert a minimal episode row."""
     eid = str(uuid.uuid4())
     with db_service.connection() as conn:
         conn.execute(
             """INSERT INTO episodes
                (id, intent, context, action, emotion, outcome, gist,
-                salience, freshness, topic, created_at, activation_score)
-               VALUES (?, '{}', '{}', 'act', ?, ?, ?, ?, 5, ?, ?, ?)""",
+                salience, topic, created_at)
+               VALUES (?, '{}', '{}', 'act', ?, ?, ?, ?, ?, ?)""",
             (eid, emotion, outcome, gist, salience, topic,
-             created_at or "2026-01-15T12:00:00", activation_score)
+             created_at or "2026-01-15T12:00:00")
         )
     return eid
 
@@ -338,14 +337,13 @@ class TestGatherSynthesisInputs:
     def test_gathers_constraint_episodes(self, db_service, service):
         """Episodes with outcome='constraint_learned' are gathered separately."""
         _insert_episode(db_service, gist="blocked by timing_gate",
-                        outcome="constraint_learned", activation_score=3.0)
+                        outcome="constraint_learned")
         _insert_episode(db_service, gist="normal episode", outcome="ok")
 
         result = service.gather_synthesis_inputs()
 
         assert len(result["constraint_episodes"]) == 1
         assert "timing_gate" in result["constraint_episodes"][0]["gist"]
-        assert result["constraint_episodes"][0]["activation_score"] == 3.0
 
     def test_respects_since_cursor(self, db_service, service):
         """When since_cursor is provided, only episodes after it are returned."""
@@ -440,7 +438,7 @@ class TestBuildSynthesisPrompt:
                 {"gist": "communicate blocked by timing_gate",
                  "action": "learned constraint",
                  "created_at": "2026-03-07T12:00:00",
-                 "activation_score": 3}
+                 "retrieval_weight": 1.0}
             ],
         }
 

@@ -1,16 +1,5 @@
-"""
-Memory Skill — Unified knowledge storage and retrieval.
-
-Replaces memorize_skill (store) and recall_skill (multi-source search)
-with a single skill offering four actions: store, recall, update, forget.
-
-Store/update/forget operate on the knowledge table via KnowledgeService.
-Recall searches the knowledge store AND episodes AND transcript (preserving
-the multi-source search from recall_skill).
-"""
-
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -28,13 +17,12 @@ TOOL_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["store", "recall", "update", "forget"],
+                "enum": ["store", "recall", "update"],
                 "description": (
                     "store: Save new knowledge. recall: Search memory. "
-                    "update: Modify existing entry. forget: Remove knowledge."
+                    "update: Modify existing entry."
                 ),
             },
-            # store params
             "entries": {
                 "type": "array",
                 "description": "For store action: list of entries to store.",
@@ -75,52 +63,13 @@ TOOL_SCHEMA = {
                     "required": ["key", "value"],
                 },
             },
-            # recall params
             "query": {
                 "type": "string",
                 "description": "For recall action: what to search for.",
             },
-            "kinds": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Filter by knowledge kinds.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum results (default 10).",
-            },
-            "include_transcript": {
-                "type": "boolean",
-                "description": (
-                    "Also search verbatim conversation transcript. "
-                    "Use when you need to find what was actually said. Default false."
-                ),
-            },
-            "transcript_topic": {
-                "type": "string",
-                "description": (
-                    "Topic to search transcript in. Defaults to current topic. "
-                    "Set to \"global\" to search across all topics."
-                ),
-            },
-            "date_range": {
-                "type": "object",
-                "properties": {
-                    "from": {
-                        "type": "string",
-                        "description": "ISO datetime lower bound (inclusive).",
-                    },
-                    "to": {
-                        "type": "string",
-                        "description": "ISO datetime upper bound (inclusive).",
-                    },
-                },
-                "description": "Optional date range filter for transcript search.",
-            },
-            # update params
             "key": {
                 "type": "string",
-                "description": "For update/forget: the key to modify.",
+                "description": "For update: the key to modify.",
             },
             "value": {
                 "type": "string",
@@ -130,7 +79,6 @@ TOOL_SCHEMA = {
                 "type": "number",
                 "description": "For update: new confidence (0-1).",
             },
-            # common
             "entity": {
                 "type": "string",
                 "description": "Who this is about (default: 'user').",
@@ -167,16 +115,6 @@ def _auto_classify(key: str) -> Tuple[str, str]:
 
 
 def handle_memory(topic: str, params: dict) -> str:
-    """
-    Unified memory operations: store, recall, update, forget.
-
-    Args:
-        topic: Current conversation topic
-        params: Action parameters dict with 'action' key
-
-    Returns:
-        Formatted result string
-    """
     action = params.get("action", "recall")
 
     try:
@@ -186,12 +124,10 @@ def handle_memory(topic: str, params: dict) -> str:
             return _handle_recall(topic, params)
         elif action == "update":
             return _handle_update(topic, params)
-        elif action == "forget":
-            return _handle_forget(topic, params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
-                f"Valid: store, recall, update, forget"
+                f"Valid: store, recall, update"
             )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
@@ -276,50 +212,39 @@ def _handle_store(topic: str, params: dict) -> str:
 
 
 def _handle_recall(topic: str, params: dict) -> str:
-    """Search knowledge store, episodes, and optionally transcript."""
     query = params.get("query", "")
     if not query:
         return f"{LOG_PREFIX} Error: no query specified for recall."
 
-    limit = min(params.get("limit", 10), 20)
-    entity = params.get("entity")  # None = search all entities
-    kinds = params.get("kinds")
-    include_transcript = params.get("include_transcript", False)
+    limit = 10
+    entity = params.get("entity")
 
     results: List[Dict] = []
     layer_status: Dict[str, str] = {}
 
-    # 1. Knowledge store
-    hits, status = _search_knowledge(entity, query, kinds, limit)
+    hits, status = _search_knowledge(entity, query, limit)
     layer_status["knowledge"] = status
     results.extend(hits)
 
-    # 2. Episodes
     hits, status = _search_episodes(topic, query, limit)
     layer_status["episodes"] = status
     results.extend(hits)
 
-    # 3. Transcript (opt-in)
-    if include_transcript:
-        hits, status = _search_transcript(topic, query, limit, params)
-        layer_status["transcript"] = status
-        results.extend(hits)
+    hits, status = _search_transcript(topic, query, limit)
+    layer_status["transcript"] = status
+    results.extend(hits)
 
-    # FOK signal for introspect
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(topic, partial)
 
     if not results:
-        searched = ["knowledge", "episodes"]
-        if include_transcript:
-            searched.append("transcript")
-        return _format_empty(searched, layer_status, query)
+        return _format_empty(["knowledge", "episodes", "transcript"], layer_status, query)
 
     return _format_results(results, query)
 
 
 def _search_knowledge(
-    entity: str, query: str, kinds: Optional[List[str]], limit: int
+    entity: str, query: str, limit: int
 ) -> Tuple[List[Dict], str]:
     """Search the knowledge store via KnowledgeService."""
     try:
@@ -329,7 +254,7 @@ def _search_knowledge(
         db = get_shared_db_service()
         ks = KnowledgeService(db)
 
-        rows = ks.recall(entity=entity, query=query, kinds=kinds, limit=limit)
+        rows = ks.recall(entity=entity, query=query, limit=limit)
 
         if not rows:
             return [], "0 matches"
@@ -406,32 +331,15 @@ def _search_episodes(
 
 
 def _search_transcript(
-    topic: str, query: str, limit: int, params: dict
+    topic: str, query: str, limit: int
 ) -> Tuple[List[Dict], str]:
-    """Search verbatim conversation transcript."""
     try:
         from services import transcript_service
 
-        transcript_topic_param = params.get("transcript_topic", "")
-        if transcript_topic_param == "global":
-            search_topic = None
-        elif transcript_topic_param:
-            search_topic = transcript_topic_param
-        else:
-            search_topic = topic
-
-        date_range = params.get("date_range") or {}
-        date_from = date_range.get("from")
-        date_to = date_range.get("to")
-
-        results = transcript_service.search(
-            search_topic, query, limit=limit,
-            date_from=date_from, date_to=date_to,
-        )
+        results = transcript_service.search(topic, query, limit=limit)
 
         if not results:
-            scope = "global" if search_topic is None else search_topic
-            return [], f"0 matches (scope: {scope})"
+            return [], f"0 matches (scope: {topic})"
 
         hits = []
         for r in results:
@@ -515,34 +423,6 @@ def _handle_update(topic: str, params: dict) -> str:
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Update failed: {e}", exc_info=True)
         return f"{LOG_PREFIX} Update failed: {e}"
-
-
-# ── Forget ───────────────────────────────────────────────────────────
-
-
-def _handle_forget(topic: str, params: dict) -> str:
-    """Soft-delete a knowledge entry."""
-    entity = params.get("entity", "user")
-    key = params.get("key")
-    if not key:
-        return f"{LOG_PREFIX} Error: 'key' is required for forget."
-
-    try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        ks = KnowledgeService(db)
-
-        forgotten = ks.forget(entity=entity, key=key)
-
-        if forgotten:
-            return f"{LOG_PREFIX} Forgotten '{key}' for entity='{entity}'."
-        return f"{LOG_PREFIX} No entry found for key='{key}', entity='{entity}'."
-
-    except Exception as e:
-        logger.error(f"{LOG_PREFIX} Forget failed: {e}", exc_info=True)
-        return f"{LOG_PREFIX} Forget failed: {e}"
 
 
 # ── Formatting helpers ───────────────────────────────────────────────

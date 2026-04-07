@@ -412,7 +412,6 @@ class ExperienceAssimilationService:
             'outcome': obs_text,
             'gist': obs_text,
             'salience': salience,
-            'freshness': 1.0,
             'topic': topic,
             'embedding': embedding,
             'salience_factors': {

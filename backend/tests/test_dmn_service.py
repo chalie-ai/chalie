@@ -205,20 +205,20 @@ class TestDMNContextGathering:
 
         ts = utc_now().isoformat()
         # intent, context, emotion are JSONB columns — must be valid JSON strings.
-        # action, outcome, gist, topic are plain TEXT; salience/freshness are 1-10 integers.
+        # action, outcome, gist, topic are plain TEXT; salience is a 1-10 integer.
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, freshness, topic, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('ep-1', '"query"', '{}', 'searched_weather', '"neutral"', 'success',
-             'User asked about weather', 1, 1, 'general', ts),
+             'User asked about weather', 1, 'general', ts),
         )
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, freshness, topic, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('ep-2', '"discuss"', '{}', '', '"neutral"', 'success',
-             'Discussed meal plan', 1, 1, 'general', ts),
+             'Discussed meal plan', 1, 'general', ts),
         )
         db.commit()
 

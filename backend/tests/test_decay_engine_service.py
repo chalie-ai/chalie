@@ -17,7 +17,7 @@ class TestDecayEngineService:
     def test_constructor_loads_config_rates(self):
         """Constructor should load decay rates from ConfigService."""
         mock_config = {
-            'episodic_decay_rate': 0.08,
+            'retrieval_decay_exponent': 0.08,
         }
         with patch(
             'services.decay_engine_service.ConfigService.get_agent_config',
@@ -25,7 +25,7 @@ class TestDecayEngineService:
         ):
             svc = DecayEngineService(decay_interval=600)
 
-        assert svc.episodic_decay_rate == 0.08
+        assert svc.retrieval_decay_exponent == 0.08
         assert svc.decay_interval == 600
 
     def test_constructor_uses_defaults_on_config_failure(self):
@@ -36,7 +36,7 @@ class TestDecayEngineService:
         ):
             svc = DecayEngineService()
 
-        assert svc.episodic_decay_rate == 0.05
+        assert svc.retrieval_decay_exponent == 0.5
 
     def test_default_decay_interval(self):
         """Default decay interval should be 1800 seconds (30 minutes)."""

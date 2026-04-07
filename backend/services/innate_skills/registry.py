@@ -10,7 +10,7 @@ register_innate_skills() in __init__.py (currently 12 skills + backward-compat a
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
-    'memory', 'introspect', 'associate',
+    'memory', 'introspect',
     'schedule', 'autobiography', 'list',
     'persistent_task', 'document',
     'read', 'find_tools', 'goals',
@@ -34,7 +34,7 @@ REFLECTION_FILTER_SKILLS: frozenset = ALL_SKILL_NAMES
 # ── Cognitive primitives: always injected into ACT mode regardless of
 #    triage selection. These are the foundational memory operations. ─────────
 COGNITIVE_PRIMITIVES: frozenset = frozenset({
-    'memory', 'associate', 'find_tools',
+    'memory', 'find_tools',
 })
 
 # ── Contextual skills: planning-visible skills minus primitives.
@@ -46,13 +46,12 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 
 # ── Ordered primitives list: used where insertion order matters
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
-COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'associate', 'find_tools']
+COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'find_tools']
 
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
-    'memory': 'Store, recall, update, or forget knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
+    'memory': 'Store, recall, or update knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
     'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
-    'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
@@ -72,7 +71,6 @@ SKILL_DESCRIPTIONS: dict = {
 SKILL_EFFORT: dict = {
     'memory': 'trivial',
     'introspect': 'trivial',
-    'associate': 'light',
     'list': 'trivial',
     'schedule': 'light',
     'autobiography': 'light',
@@ -92,7 +90,6 @@ SKILL_EFFORT: dict = {
 SKILL_CATEGORIES: dict = {
     'memory': 'memory',
     'introspect': 'cognition',
-    'associate': 'cognition',
     'list': 'productivity',
     'schedule': 'productivity',
     'autobiography': 'identity',

@@ -401,8 +401,8 @@ class SelfModelService:
                 trait_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT AVG(activation_score) FROM episodes "
-                    "WHERE activation_score > 0"
+                    "SELECT AVG(retrieval_weight) FROM episodes "
+                    "WHERE retrieval_weight > 0"
                 )
                 row = cursor.fetchone()
                 avg_activation = round(row[0], 3) if row[0] else 1.0

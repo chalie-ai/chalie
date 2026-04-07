@@ -178,12 +178,10 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.thread_expiry_service import thread_expiry_worker
-    from services.episodic_memory_observer import episodic_memory_observer_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
     from workers.persistent_task_worker import persistent_task_worker
@@ -194,12 +192,10 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("thread-expiry-service", thread_expiry_worker)
-    manager.register_service("episodic-memory-observer", episodic_memory_observer_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)
@@ -283,7 +279,7 @@ def main():
                     return
 
                 # No sentence yet — check if traits exist and synthesize
-                traits = db.execute_query(
+                traits = db.fetch_all(
                     "SELECT key, value, confidence, decay_class FROM knowledge "
                     "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
                     "ORDER BY decay_class DESC, confidence DESC"

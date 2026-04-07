@@ -24,13 +24,6 @@ except Exception as e:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-RELIABILITY_DECAY_MULTIPLIER = {
-    'reliable':    1.0,
-    'uncertain':   1.5,
-    'contradicted': 2.0,
-    'superseded':  3.0,
-}
-
 
 class DecayEngineService:
     """Background service that applies decay to all memory types periodically."""
@@ -47,15 +40,15 @@ class DecayEngineService:
         # Load decay rates from config
         try:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
-            self.episodic_decay_rate = episodic_config.get('episodic_decay_rate', 0.05)
+            self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
         except Exception as e:
             logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
-            self.episodic_decay_rate = 0.05
+            self.retrieval_decay_exponent = 0.5
 
         logger.info(
             f"[DECAY ENGINE] Initialized "
             f"(interval={decay_interval}s, "
-            f"episodic_rate={self.episodic_decay_rate})"
+            f"retrieval_decay_exponent={self.retrieval_decay_exponent})"
         )
 
     def run(self, shared_state: Optional[dict] = None) -> None:
@@ -66,6 +59,7 @@ class DecayEngineService:
             shared_state: Optional shared state dict (for consumer integration)
         """
         logger.info("[DECAY ENGINE] Service started")
+        self._cleanup_legacy_store_keys()
 
         while True:
             try:
@@ -105,13 +99,17 @@ class DecayEngineService:
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
+        reconsolidation_count = self._process_pending_reconsolidation()
+        consolidation_count = self._run_episode_consolidation()
         knowledge_count = self._decay_knowledge()
         goal_decay_count = self._decay_goals()
+        transcript_cleaned = self._cleanup_transcript()
 
         # Non-essential sub-cycles gated on sufficient memory richness
         if richness >= 0.3:
             identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
+            self._run_constraint_consolidation()
         else:
             identity_count = external_count = 0
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
@@ -119,7 +117,10 @@ class DecayEngineService:
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
+            f"reconsolidation={reconsolidation_count} processed, "
+            f"consolidation={consolidation_count} super-episodes, "
             f"knowledge={knowledge_count} updated, "
+            f"transcript_cleaned={transcript_cleaned}, "
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
             f"goals={goal_decay_count} decayed"
@@ -168,12 +169,14 @@ class DecayEngineService:
 
     def _decay_episodic(self) -> int:
         """
-        Apply exponential decay to episodic activation scores.
+        Apply power-law decay to episodic retrieval_weight.
 
-        Formula: activation_score = activation_score * exp(-decay_rate * hours_since_access)
+        Formula: rw = rw * (1 + hours_since_access)^(-exponent)
 
-        SQLite lacks EXP(), so we fetch eligible rows, compute decay in Python,
-        then batch-UPDATE.
+        storage_strength is never modified by decay — only increases on access.
+        No hard-delete at any threshold.
+
+        Reliability multipliers still apply (contradicted memories decay faster).
 
         Returns:
             Number of episodes updated
@@ -187,16 +190,14 @@ class DecayEngineService:
                 with db_service.connection() as conn:
                     cursor = conn.cursor()
 
-                    # Fetch episodes eligible for decay (activation > floor, older than 1 hour)
                     cursor.execute("""
-                        SELECT id, activation_score,
+                        SELECT id, retrieval_weight,
                                (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', COALESCE(last_accessed_at, created_at)) AS REAL)) / 3600.0 AS hours_since,
                                json_extract(salience_factors, '$.source') AS sf_source,
-                               json_extract(salience_factors, '$.durability') AS sf_durability,
-                               COALESCE(reliability, 'reliable') AS reliability
+                               json_extract(salience_factors, '$.durability') AS sf_durability
                         FROM episodes
                         WHERE deleted_at IS NULL
-                          AND activation_score > 0.1
+                          AND retrieval_weight > 0.01
                           AND COALESCE(last_accessed_at, created_at) < datetime('now', '-1 hour')
                     """)
                     rows = cursor.fetchall()
@@ -206,37 +207,33 @@ class DecayEngineService:
                     cron_tool_updated = 0
 
                     for row in rows:
-                        episode_id, activation_score, hours_since, sf_source, sf_durability, reliability = row
+                        episode_id, retrieval_weight, hours_since, sf_source, sf_durability = row
 
-                        # Determine effective decay rate
-                        rate = self.episodic_decay_rate
+                        exponent = self.retrieval_decay_exponent
 
                         # Durability-based accelerated decay for tool_reflection episodes
                         if sf_source == 'tool_reflection':
                             if sf_durability == 'transient':
-                                rate = self.episodic_decay_rate * 2.0
+                                exponent = self.retrieval_decay_exponent * 2.0
                                 durability_updated += 1
                             elif sf_durability == 'evolving':
-                                rate = self.episodic_decay_rate * 1.5
+                                exponent = self.retrieval_decay_exponent * 1.5
                                 durability_updated += 1
 
                         # 3x accelerated decay for cron_tool episodes
                         if sf_durability == 'cron_tool':
-                            rate = self.episodic_decay_rate * 3.0
+                            exponent = self.retrieval_decay_exponent * 3.0
                             cron_tool_updated += 1
 
-                        # Reliability multiplier: contradicted/uncertain memories decay faster
-                        rate *= RELIABILITY_DECAY_MULTIPLIER.get(reliability, 1.0)
+                        # Power-law decay: rw = rw * (1 + hours)^(-exponent)
+                        new_rw = max(0.01, retrieval_weight * math.pow(1.0 + hours_since, -exponent))
 
-                        # Compute new activation: activation * exp(-rate * hours)
-                        new_activation = max(0.1, activation_score * math.exp(-rate * hours_since))
-
-                        if abs(new_activation - activation_score) > 0.0001:
+                        if abs(new_rw - retrieval_weight) > 0.0001:
                             cursor.execute("""
                                 UPDATE episodes
-                                SET activation_score = ?
+                                SET retrieval_weight = ?
                                 WHERE id = ?
-                            """, (new_activation, episode_id))
+                            """, (new_rw, episode_id))
                             updated += 1
 
                     if durability_updated > 0:
@@ -254,7 +251,7 @@ class DecayEngineService:
                     cursor.close()
 
                     if updated > 0:
-                        logger.info(f"[DECAY ENGINE] Decayed {updated} episodic activation scores")
+                        logger.info(f"[DECAY ENGINE] Decayed {updated} episodic retrieval weights")
                     return updated
 
             except Exception as e:
@@ -265,6 +262,41 @@ class DecayEngineService:
 
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
+            return 0
+
+    def _process_pending_reconsolidation(self) -> int:
+        try:
+            from .database_service import get_shared_db_service
+            from .episodic_service import EpisodicService
+
+            db_service = get_shared_db_service()
+            try:
+                svc = EpisodicService(db_service)
+                return svc.process_pending_reconsolidation()
+            finally:
+                db_service.close_pool()
+        except Exception as e:
+            logger.error(f"[DECAY ENGINE] Pending reconsolidation failed: {e}", exc_info=True)
+            return 0
+
+    def _run_episode_consolidation(self) -> int:
+        """Consolidate clusters of similar episodes into super episodes.
+
+        Returns:
+            Number of super episodes created, or 0 on any error.
+        """
+        try:
+            from .database_service import get_shared_db_service
+            from .episode_consolidation_service import EpisodeConsolidationService
+
+            db_service = get_shared_db_service()
+            try:
+                svc = EpisodeConsolidationService(db_service)
+                return svc.run_consolidation_cycle()
+            finally:
+                db_service.close_pool()
+        except Exception as e:
+            logger.error(f"[DECAY ENGINE] Episode consolidation failed: {e}", exc_info=True)
             return 0
 
     def _decay_knowledge(self) -> int:
@@ -290,6 +322,33 @@ class DecayEngineService:
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
             return 0
+
+    def _cleanup_legacy_store_keys(self) -> None:
+        """Remove stale MemoryStore keys left by previous pipeline versions."""
+        try:
+            from .memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            for key in store.keys("semantic_consolidation:*"):
+                store.delete(key)
+        except Exception as e:
+            logger.debug(f"[DECAY ENGINE] Legacy store key cleanup non-fatal: {e}")
+
+    def _cleanup_transcript(self) -> int:
+        """Delete unlinked transcript entries below compaction watermark."""
+        try:
+            from services import transcript_service
+            return transcript_service.cleanup_unlinked_entries()
+        except Exception as e:
+            logger.debug(f"[DECAY ENGINE] Transcript cleanup non-fatal: {e}")
+            return 0
+
+    def _run_constraint_consolidation(self) -> None:
+        """Run constraint consolidation — convert recurring rejection patterns into episodes."""
+        try:
+            from services.constraint_consolidation_service import run_constraint_consolidation
+            run_constraint_consolidation()
+        except Exception as e:
+            logger.debug(f"[DECAY ENGINE] Constraint consolidation non-fatal: {e}")
 
     # Sources that qualify for accelerated external knowledge decay
     EXTERNAL_KNOWLEDGE_PREFIXES = ("external_specialist:",)

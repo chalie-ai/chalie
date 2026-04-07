@@ -17,7 +17,6 @@ Do NOT define local skill sets elsewhere. Import from the registry.
 import logging
 from services.innate_skills.memory_skill import handle_memory
 from services.innate_skills.introspect_skill import handle_introspect
-from services.innate_skills.associate_skill import handle_associate
 from services.innate_skills.scheduler_skill import handle_scheduler
 from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.list_skill import handle_list
@@ -39,7 +38,6 @@ _SKILL_HANDLERS = {
     'recall': handle_memory,       # backward-compat alias
     'memorize': handle_memory,     # backward-compat alias
     'introspect': handle_introspect,
-    'associate': handle_associate,
     'schedule': handle_scheduler,
     'autobiography': handle_autobiography,
     'list': handle_list,
@@ -68,7 +66,6 @@ def register_innate_skills(dispatcher) -> None:
     # Register innate skills
     dispatcher.handlers["memory"] = lambda topic, action: handle_memory(topic, action)
     dispatcher.handlers["introspect"] = lambda topic, action: handle_introspect(topic, action)
-    dispatcher.handlers["associate"] = lambda topic, action: handle_associate(topic, action)
     dispatcher.handlers["schedule"] = lambda topic, action: handle_scheduler(topic, action)
     dispatcher.handlers["autobiography"] = lambda topic, action: handle_autobiography(topic, action)
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)

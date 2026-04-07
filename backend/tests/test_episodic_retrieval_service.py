@@ -73,10 +73,8 @@ class TestEpisodicRetrievalService:
                 'outcome': f'outcome-{i}',
                 'gist': f'gist-{i}',
                 'salience': 5,
-                'freshness': 0.8,
                 'topic': 'test',
                 'created_at': utc_now() - timedelta(hours=i),
-                'activation_score': 5.0,
                 'last_accessed_at': None,
                 'salience_factors': {},
                 'open_loops': [],
@@ -152,31 +150,6 @@ class TestEpisodicRetrievalService:
         fresh_low = svc._calculate_effective_freshness(salience=0.1, created_at=created)
 
         assert fresh_high > fresh_low
-
-    # ── Semantic boost ────────────────────────────────────────────────
-
-    def test_semantic_boost_with_matching_concepts(self, db):
-        """Concept names appearing in episode text should produce a boost."""
-        svc = EpisodicService(get_shared_db_service(), config={})
-        episode = {'gist': 'Learned about python decorators', 'outcome': 'understood decorators'}
-        concepts = [{'name': 'decorators'}, {'name': 'metaclasses'}]
-        boost = svc._calculate_semantic_boost(episode, concepts)
-        assert boost > 0.0
-
-    def test_semantic_boost_no_match_returns_zero(self, db):
-        """No matching concepts should return 0.0 boost."""
-        svc = EpisodicService(get_shared_db_service(), config={})
-        episode = {'gist': 'Went to the gym', 'outcome': 'felt good'}
-        concepts = [{'name': 'quantum mechanics'}]
-        boost = svc._calculate_semantic_boost(episode, concepts)
-        assert boost == 0.0
-
-    def test_semantic_boost_empty_concepts_returns_zero(self, db):
-        """Empty concept list should return 0.0 boost."""
-        svc = EpisodicService(get_shared_db_service(), config={})
-        episode = {'gist': 'test', 'outcome': 'test'}
-        assert svc._calculate_semantic_boost(episode, []) == 0.0
-        assert svc._calculate_semantic_boost(episode, None) == 0.0
 
     # ── Exception handling ────────────────────────────────────────────
 

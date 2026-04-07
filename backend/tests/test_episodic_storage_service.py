@@ -19,7 +19,7 @@ def episodic_svc(db):
 
 
 def _make_episode_data(**overrides):
-    """Minimal valid episode data with all 9 required fields."""
+    """Minimal valid episode data with all 8 required fields."""
     base = {
         'intent': {'type': 'exploration'},
         'context': {'topic': 'test'},
@@ -28,7 +28,6 @@ def _make_episode_data(**overrides):
         'outcome': 'answered successfully',
         'gist': 'Test conversation about coding',
         'salience': 5,
-        'freshness': 5,
         'topic': 'programming',
     }
     base.update(overrides)
@@ -41,10 +40,10 @@ class TestStoreEpisodeValidation:
 
     @pytest.mark.parametrize("missing_field", [
         'intent', 'context', 'action', 'emotion', 'outcome',
-        'gist', 'salience', 'freshness', 'topic',
+        'gist', 'salience', 'topic',
     ])
     def test_raises_value_error_for_missing_field(self, episodic_svc, missing_field):
-        """Each of the 9 required fields triggers ValueError when absent."""
+        """Each of the 8 required fields triggers ValueError when absent."""
         svc = episodic_svc
         data = _make_episode_data()
         del data[missing_field]

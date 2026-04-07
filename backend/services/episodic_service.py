@@ -29,6 +29,9 @@ from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now, parse_utc
 
 
+_reconsolidation_pending: set = set()
+
+
 class EpisodicService:
     """Manages episode storage, CRUD, retrieval, and hybrid search."""
 
@@ -46,8 +49,13 @@ class EpisodicService:
             'vector_similarity': 4,
             'topic_overlap': 2,
             'intent_overlap': 3,
-            'activation_score': 3,
-            'outcome_relevance': 2
+            'retrieval_weight': 3,
+            'outcome_relevance': 2,
+            'entity_overlap': 3,
+            'goal_tag_overlap': 2,
+            'arousal_salience': 2,
+            'emotional_congruence': 1,
+            'temporal_proximity': 1,
         })
         # Freshness decay rate (lambda)
         self.decay_rate = self.config.get('freshness_decay_rate', 0.05)
@@ -66,7 +74,7 @@ class EpisodicService:
             ValueError: If any required field is missing.
         """
         required_fields = ['intent', 'context', 'action', 'emotion', 'outcome',
-                          'gist', 'salience', 'freshness', 'topic']
+                          'gist', 'salience', 'topic']
         for field in required_fields:
             if field not in episode_data:
                 raise ValueError(f"Missing required field: {field}")
@@ -75,31 +83,70 @@ class EpisodicService:
             episode_id = str(uuid.uuid4())
             embedding = episode_data.get('embedding')
 
+            transcript_id_start = episode_data.get('transcript_id_start')
+            transcript_id_end = episode_data.get('transcript_id_end')
+
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
+
+                # Deduplication: skip if >50% transcript ID overlap with existing episode
+                if transcript_id_start is not None and transcript_id_end is not None:
+                    new_span = transcript_id_end - transcript_id_start + 1
+                    cursor.execute("""
+                        SELECT id, transcript_id_start, transcript_id_end FROM episodes
+                        WHERE transcript_id_start IS NOT NULL
+                          AND transcript_id_end IS NOT NULL
+                          AND transcript_id_start <= ?
+                          AND transcript_id_end >= ?
+                          AND deleted_at IS NULL
+                    """, (transcript_id_end, transcript_id_start))
+                    for overlap_row in cursor.fetchall():
+                        existing_start = overlap_row[1]
+                        existing_end = overlap_row[2]
+                        overlap_start = max(transcript_id_start, existing_start)
+                        overlap_end = min(transcript_id_end, existing_end)
+                        overlap_count = max(0, overlap_end - overlap_start + 1)
+                        if new_span > 0 and overlap_count / new_span > 0.5:
+                            cursor.close()
+                            logging.info(
+                                f"Skipping duplicate episode for transcript range "
+                                f"[{transcript_id_start}, {transcript_id_end}] — "
+                                f">50% overlap with existing episode {overlap_row[0]}"
+                            )
+                            return overlap_row[0]
 
                 cursor.execute("""
                     INSERT INTO episodes (
                         id, intent, context, action, emotion, outcome, gist,
-                        salience, freshness, topic, exchange_id,
-                        activation_score, salience_factors, open_loops
+                        salience, topic,
+                        salience_factors, open_loops,
+                        transcript_ids, transcript_id_start, transcript_id_end,
+                        entities, goal_tags, emotional_valence, emotional_arousal,
+                        consolidated_from, storage_strength, retrieval_weight
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     json.dumps(episode_data['intent']),
-                    json.dumps(episode_data['context']),
+                    json.dumps(episode_data['context']) if isinstance(episode_data['context'], (dict, list)) else episode_data['context'],
                     episode_data['action'],
                     json.dumps(episode_data['emotion']),
                     episode_data['outcome'],
                     episode_data['gist'],
                     episode_data['salience'],
-                    episode_data['freshness'],
                     episode_data['topic'],
-                    episode_data.get('exchange_id'),
-                    1.0,
                     json.dumps(episode_data.get('salience_factors', {})),
-                    json.dumps(episode_data.get('open_loops', []))
+                    json.dumps(episode_data.get('open_loops', [])),
+                    json.dumps(episode_data.get('transcript_ids', [])),
+                    transcript_id_start,
+                    transcript_id_end,
+                    json.dumps(episode_data.get('entities', [])),
+                    json.dumps(episode_data.get('goal_tags', [])),
+                    episode_data.get('emotional_valence'),
+                    episode_data.get('emotional_arousal'),
+                    json.dumps(episode_data.get('consolidated_from', [])),
+                    episode_data.get('storage_strength', 1.0),
+                    episode_data.get('retrieval_weight', 1.0),
                 ))
 
                 # Insert embedding into vec table if available
@@ -224,9 +271,12 @@ class EpisodicService:
 
                 cursor.execute("""
                     SELECT id, intent, context, action, emotion, outcome, gist,
-                           salience, freshness, topic, exchange_id,
+                           salience, topic,
                            created_at, updated_at, last_accessed_at, access_count,
-                           activation_score, salience_factors, open_loops
+                           salience_factors, open_loops,
+                           transcript_ids, transcript_id_start, transcript_id_end,
+                           entities, goal_tags, emotional_valence, emotional_arousal,
+                           consolidated_from, storage_strength, retrieval_weight
                     FROM episodes
                     WHERE id = ? AND deleted_at IS NULL
                 """, (episode_id,))
@@ -239,6 +289,7 @@ class EpisodicService:
 
                 # Update access tracking
                 self._update_activation_score(episode_id)
+                self.mark_for_reconsolidation(episode_id)
 
                 episode = {
                     'id': str(row[0]),
@@ -249,16 +300,23 @@ class EpisodicService:
                     'outcome': row[5],
                     'gist': row[6],
                     'salience': row[7],
-                    'freshness': row[8],
-                    'topic': row[9],
-                    'exchange_id': row[10],
-                    'created_at': row[11],
-                    'updated_at': row[12],
-                    'last_accessed_at': row[13],
-                    'access_count': row[14],
-                    'activation_score': row[15],
-                    'salience_factors': row[16] if len(row) > 16 else {},
-                    'open_loops': row[17] if len(row) > 17 else []
+                    'topic': row[8],
+                    'created_at': row[9],
+                    'updated_at': row[10],
+                    'last_accessed_at': row[11],
+                    'access_count': row[12],
+                    'salience_factors': row[13] if len(row) > 13 else {},
+                    'open_loops': row[14] if len(row) > 14 else [],
+                    'transcript_ids': row[15] if len(row) > 15 else '[]',
+                    'transcript_id_start': row[16] if len(row) > 16 else None,
+                    'transcript_id_end': row[17] if len(row) > 17 else None,
+                    'entities': row[18] if len(row) > 18 else '[]',
+                    'goal_tags': row[19] if len(row) > 19 else '[]',
+                    'emotional_valence': row[20] if len(row) > 20 else None,
+                    'emotional_arousal': row[21] if len(row) > 21 else None,
+                    'consolidated_from': row[22] if len(row) > 22 else '[]',
+                    'storage_strength': row[23] if len(row) > 23 else 1.0,
+                    'retrieval_weight': row[24] if len(row) > 24 else 1.0,
                 }
 
                 return episode
@@ -268,7 +326,7 @@ class EpisodicService:
             return None
 
     def _update_activation_score(self, episode_id: str):
-        """Update activation score based on access frequency and recency (ACT-R model)."""
+        """Reconsolidation on access: boost storage_strength and reset retrieval_weight."""
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -276,19 +334,9 @@ class EpisodicService:
                 cursor.execute("""
                     UPDATE episodes
                     SET access_count = access_count + 1,
-                        last_accessed_at = datetime('now')
-                    WHERE id = ?
-                """, (episode_id,))
-
-                cursor.execute("""
-                    UPDATE episodes
-                    SET activation_score = 1.0
-                        + (access_count * 0.1)
-                        + CASE
-                            WHEN last_accessed_at IS NOT NULL THEN
-                                (1.0 / (1.0 + (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', last_accessed_at) AS REAL)) / 86400.0))
-                            ELSE 0
-                          END
+                        last_accessed_at = datetime('now'),
+                        storage_strength = MIN(storage_strength + 0.1, 10.0),
+                        retrieval_weight = MIN(retrieval_weight + 0.3, 1.0)
                     WHERE id = ?
                 """, (episode_id,))
 
@@ -297,12 +345,132 @@ class EpisodicService:
         except Exception as e:
             logging.error(f"Failed to update activation score: {e}")
 
+    def mark_for_reconsolidation(self, episode_id: str) -> None:
+        _reconsolidation_pending.add(episode_id)
+
+    def process_pending_reconsolidation(self, current_context: str = "") -> int:
+        if not _reconsolidation_pending:
+            return 0
+
+        pending = list(_reconsolidation_pending)
+        _reconsolidation_pending.clear()
+
+        processed = 0
+        for episode_id in pending:
+            try:
+                self._reconsolidate_episode(episode_id, current_context)
+                processed += 1
+            except Exception as e:
+                logging.warning(f"Reconsolidation failed for {episode_id}: {e}")
+
+        return processed
+
+    def _reconsolidate_episode(self, episode_id: str, current_context: str) -> None:
+        if not current_context:
+            return
+
+        episode = self.get_episode_by_id(episode_id)
+        if not episode:
+            return
+
+        gist = episode.get('gist', '')
+        outcome = episode.get('outcome', '')
+        if not gist and not outcome:
+            return
+
+        episode_summary = f"Gist: {gist}\nOutcome: {outcome}"
+
+        try:
+            from services.background_llm_queue import create_background_llm_proxy
+
+            llm = create_background_llm_proxy("episodic-reconsolidation")
+            system_prompt = (
+                "You are a memory reconsolidation assistant. "
+                "Respond with JSON only: {\"verdict\": \"contradiction\"|\"extension\"|\"none\", "
+                "\"resolved_loops\": [\"...\"], \"correction\": \"...\"}"
+            )
+            user_message = (
+                f"Episode memory:\n{episode_summary}\n\n"
+                f"Current context:\n{current_context}\n\n"
+                "Does the current context contradict this episode, extend it (resolve open loops), or neither?"
+            )
+            response = llm.send_message(system_prompt, user_message)
+        except Exception as e:
+            logging.warning(f"Reconsolidation LLM call failed for {episode_id}: {e}")
+            return
+
+        if not response:
+            return
+
+        try:
+            raw = response.text.strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            result = json.loads(raw.strip())
+        except Exception as e:
+            logging.warning(f"Reconsolidation LLM parse failed for {episode_id}: {e}")
+            return
+
+        verdict = result.get("verdict", "none")
+
+        if verdict == "contradiction":
+            correction = result.get("correction", "")
+            self.update_episode(episode_id, {"reliability": "contradicted"})
+            logging.info(f"Reconsolidation: episode {episode_id} marked contradicted")
+
+            if correction:
+                open_loops = episode.get('open_loops', [])
+                if isinstance(open_loops, str):
+                    try:
+                        open_loops = json.loads(open_loops)
+                    except Exception:
+                        open_loops = []
+                try:
+                    self.store_episode({
+                        'intent': episode.get('intent', {}),
+                        'context': f"Reconsolidation of episode {episode_id}",
+                        'action': 'reconsolidation_correction',
+                        'emotion': episode.get('emotion', {}),
+                        'outcome': correction,
+                        'gist': f"Corrected: {correction[:120]}",
+                        'salience': episode.get('salience', 5),
+                        'topic': episode.get('topic', ''),
+                        'open_loops': open_loops,
+                        'salience_factors': {'source': 'reconsolidation', 'original_episode': episode_id},
+                        'storage_strength': 1.0,
+                        'retrieval_weight': 1.0,
+                    })
+                except Exception as e:
+                    logging.warning(f"Failed to store corrected episode for {episode_id}: {e}")
+
+        elif verdict == "extension":
+            resolved = result.get("resolved_loops", [])
+            if resolved:
+                open_loops = episode.get('open_loops', [])
+                if isinstance(open_loops, str):
+                    try:
+                        open_loops = json.loads(open_loops)
+                    except Exception:
+                        open_loops = []
+                updated_loops = [l for l in open_loops if l not in resolved]
+                self.update_episode(episode_id, {"open_loops": updated_loops})
+                logging.info(
+                    f"Reconsolidation: episode {episode_id} extended, "
+                    f"resolved {len(resolved)} open loop(s)"
+                )
+
     # ── Retrieval ────────────────────────────────────────────────────
 
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
                          weights: dict = None, semantic_concepts: List[Dict] = None,
-                         query_embedding=None, _context: 'TopicContext' = None) -> List[dict]:
+                         query_embedding=None, _context: 'TopicContext' = None,
+                         entities: List[str] = None, goal_tags: List[str] = None,
+                         emotional_valence: float = None,
+                         emotional_arousal: float = None) -> List[dict]:
         """Retrieve relevant episodes using hybrid search and composite scoring."""
         try:
             scoring_weights = weights or self.weights
@@ -323,10 +491,14 @@ class EpisodicService:
                 'text': query_text,
                 'topic': topic,
                 'intent': intent,
-                'embedding': query_embedding
+                'embedding': query_embedding,
+                'entities': entities or [],
+                'goal_tags': goal_tags or [],
+                'emotional_valence': emotional_valence,
+                'emotional_arousal': emotional_arousal,
             }
             ranked_episodes = self._rerank_with_composite_score(
-                candidates, query_data, scoring_weights, semantic_concepts=semantic_concepts
+                candidates, query_data, scoring_weights
             )
 
             top_episodes = ranked_episodes[:limit]
@@ -366,6 +538,7 @@ class EpisodicService:
                     store.set(debounce_key, "1", ex=debounce_minutes * 60)
 
                 self._update_activation_score(episode_id)
+                self.mark_for_reconsolidation(episode_id)
 
                 # Touch-on-read: increment retrieval_count for tool_reflection episodes
                 salience_factors = episode.get('salience_factors', {})
@@ -418,10 +591,13 @@ class EpisodicService:
 
                 vector_query = """
                     SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                           e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                           e.salience, e.topic, e.created_at,
                            e.last_accessed_at, e.salience_factors, e.open_loops,
-                           COALESCE(e.reliability, 'reliable') AS reliability,
-                           v.distance AS vector_distance
+                           COALESCE(e.retrieval_weight, 1.0) AS retrieval_weight,
+                           v.distance AS vector_distance,
+                           COALESCE(e.entities, '[]') AS entities,
+                           COALESCE(e.goal_tags, '[]') AS goal_tags,
+                           e.emotional_valence, e.emotional_arousal
                     FROM episodes e
                     JOIN episodes_vec v ON v.rowid = e.rowid
                     WHERE v.embedding MATCH ? AND k = ?
@@ -448,10 +624,13 @@ class EpisodicService:
                 if fts_terms:
                     fts_query = """
                         SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                               e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                               e.salience, e.topic, e.created_at,
                                e.last_accessed_at, e.salience_factors, e.open_loops,
-                               COALESCE(e.reliability, 'reliable') AS reliability,
-                               episodes_fts.rank AS text_rank
+                               COALESCE(e.retrieval_weight, 1.0) AS retrieval_weight,
+                               episodes_fts.rank AS text_rank,
+                               COALESCE(e.entities, '[]') AS entities,
+                               COALESCE(e.goal_tags, '[]') AS goal_tags,
+                               e.emotional_valence, e.emotional_arousal
                         FROM episodes_fts
                         JOIN episodes e ON e.rowid = episodes_fts.rowid
                         WHERE episodes_fts MATCH ?
@@ -494,14 +673,16 @@ class EpisodicService:
                     'outcome': row['outcome'],
                     'gist': row['gist'],
                     'salience': row['salience'],
-                    'freshness': row['freshness'],
                     'topic': row['topic'],
                     'created_at': row['created_at'],
-                    'activation_score': row['activation_score'],
+                    'retrieval_weight': row.get('retrieval_weight', 1.0),
                     'last_accessed_at': row['last_accessed_at'],
                     'salience_factors': row.get('salience_factors', {}),
                     'open_loops': row.get('open_loops', []),
-                    'reliability': row.get('reliability', 'reliable'),
+                    'entities': row.get('entities', '[]'),
+                    'goal_tags': row.get('goal_tags', '[]'),
+                    'emotional_valence': row.get('emotional_valence'),
+                    'emotional_arousal': row.get('emotional_arousal'),
                     'vector_distance': row.get('vector_distance'),
                     'text_rank': None,
                     'rrf_score': 0
@@ -520,14 +701,16 @@ class EpisodicService:
                     'outcome': row['outcome'],
                     'gist': row['gist'],
                     'salience': row['salience'],
-                    'freshness': row['freshness'],
                     'topic': row['topic'],
                     'created_at': row['created_at'],
-                    'activation_score': row['activation_score'],
+                    'retrieval_weight': row.get('retrieval_weight', 1.0),
                     'last_accessed_at': row['last_accessed_at'],
                     'salience_factors': row.get('salience_factors', {}),
                     'open_loops': row.get('open_loops', []),
-                    'reliability': row.get('reliability', 'reliable'),
+                    'entities': row.get('entities', '[]'),
+                    'goal_tags': row.get('goal_tags', '[]'),
+                    'emotional_valence': row.get('emotional_valence'),
+                    'emotional_arousal': row.get('emotional_arousal'),
                     'vector_distance': None,
                     'text_rank': row.get('text_rank'),
                     'rrf_score': 0
@@ -541,8 +724,7 @@ class EpisodicService:
         return candidates
 
     def _rerank_with_composite_score(self, candidates: List[dict],
-                                     query_data: dict, weights: dict,
-                                     semantic_concepts: List[Dict] = None) -> List[dict]:
+                                     query_data: dict, weights: dict) -> List[dict]:
         """Stage 2: Rerank candidates using composite scoring."""
         scored_episodes = []
 
@@ -559,26 +741,42 @@ class EpisodicService:
             effective_freshness = self._calculate_effective_freshness(
                 episode['salience'], episode['created_at'], episode.get('last_accessed_at')
             )
-            activation = self._calculate_activation_score(
-                episode['activation_score'], effective_freshness
+            retrieval = self._calculate_activation_score(
+                episode.get('retrieval_weight', 1.0), effective_freshness
             )
             outcome_relevance = self._calculate_outcome_relevance(
                 query_data['text'], episode['outcome']
             )
 
-            semantic_boost = 0
-            if semantic_concepts:
-                semantic_boost = self._calculate_semantic_boost(
-                    episode, semantic_concepts
-                )
+            episode_entities = self._parse_json_list(episode.get('entities', '[]'))
+            episode_goal_tags = self._parse_json_list(episode.get('goal_tags', '[]'))
+
+            entity_overlap = self._jaccard(query_data.get('entities', []), episode_entities)
+            goal_tag_overlap = self._jaccard(query_data.get('goal_tags', []), episode_goal_tags)
+
+            ep_arousal = episode.get('emotional_arousal')
+            arousal_salience = float(ep_arousal) if ep_arousal is not None else 0.5
+
+            query_valence = query_data.get('emotional_valence')
+            ep_valence = episode.get('emotional_valence')
+            if query_valence is not None and ep_valence is not None:
+                emotional_congruence = 1.0 - abs(float(query_valence) - float(ep_valence)) / 2.0
+            else:
+                emotional_congruence = 0.5
+
+            temporal_proximity = effective_freshness
 
             composite_score = (
                 vector_sim * weights.get('vector_similarity', 4) +
                 topic_overlap * weights.get('topic_overlap', 2) +
                 intent_overlap * weights.get('intent_overlap', 3) +
-                activation * weights.get('activation_score', 3) +
+                retrieval * weights.get('retrieval_weight', 3) +
                 outcome_relevance * weights.get('outcome_relevance', 2) +
-                semantic_boost * weights.get('semantic_boost', 2)
+                entity_overlap * 10 * weights.get('entity_overlap', 3) +
+                goal_tag_overlap * 10 * weights.get('goal_tag_overlap', 2) +
+                arousal_salience * 10 * weights.get('arousal_salience', 2) +
+                emotional_congruence * 10 * weights.get('emotional_congruence', 1) +
+                temporal_proximity * 10 * weights.get('temporal_proximity', 1)
             )
 
             episode['composite_score'] = composite_score
@@ -586,9 +784,13 @@ class EpisodicService:
                 'vector_similarity': vector_sim,
                 'topic_overlap': topic_overlap,
                 'intent_overlap': intent_overlap,
-                'activation': activation,
+                'retrieval_weight': retrieval,
                 'outcome_relevance': outcome_relevance,
-                'semantic_boost': semantic_boost
+                'entity_overlap': entity_overlap,
+                'goal_tag_overlap': goal_tag_overlap,
+                'arousal_salience': arousal_salience,
+                'emotional_congruence': emotional_congruence,
+                'temporal_proximity': temporal_proximity,
             }
             scored_episodes.append(episode)
 
@@ -679,18 +881,83 @@ class EpisodicService:
         overlap = intersection / union if union > 0 else 0
         return 1 + (overlap * 9)
 
-    def _calculate_semantic_boost(self, episode: dict, concepts: List[Dict]) -> float:
-        """Calculate boost (0-10 scale) based on concept mention in episode."""
-        if not concepts:
+    @staticmethod
+    def _jaccard(set_a, set_b) -> float:
+        if not set_a or not set_b:
             return 0.0
+        a, b = set(set_a), set(set_b)
+        intersection = len(a & b)
+        union = len(a | b)
+        return intersection / union if union > 0 else 0.0
 
-        episode_text = f"{episode.get('gist', '')} {episode.get('outcome', '')}".lower()
+    @staticmethod
+    def _parse_json_list(value) -> list:
+        if isinstance(value, list):
+            return value
+        try:
+            result = json.loads(value)
+            return result if isinstance(result, list) else []
+        except Exception:
+            return []
 
-        matched_concepts = 0
-        for concept in concepts:
-            concept_name = concept.get('concept_name', concept.get('name', '')).lower()
-            if concept_name in episode_text:
-                matched_concepts += 1
 
-        boost = min(10, (matched_concepts / len(concepts)) * 10) if concepts else 0
-        return boost
+def backfill_episode_transcript_ids() -> int:
+    """Best-effort backfill of transcript_ids for existing episodes that have none.
+
+    Matches episodes to transcript entries by timestamp proximity (±5 minutes,
+    same topic). Returns the number of episodes updated.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT id, topic, created_at
+                FROM episodes
+                WHERE deleted_at IS NULL
+                  AND (transcript_ids IS NULL OR transcript_ids = '[]')
+                  AND transcript_id_start IS NULL
+            """)
+            episodes_to_backfill = cursor.fetchall()
+
+            if not episodes_to_backfill:
+                cursor.close()
+                return 0
+
+            updated = 0
+            for ep_id, topic, created_at_str in episodes_to_backfill:
+                try:
+                    cursor.execute("""
+                        SELECT id FROM topic_transcript
+                        WHERE topic = ?
+                          AND created_at BETWEEN datetime(?, '-5 minutes')
+                                             AND datetime(?, '+5 minutes')
+                        ORDER BY id ASC
+                    """, (topic, created_at_str, created_at_str))
+                    matching = cursor.fetchall()
+                    if not matching:
+                        continue
+
+                    ids = [r[0] for r in matching]
+                    cursor.execute("""
+                        UPDATE episodes
+                        SET transcript_ids = ?,
+                            transcript_id_start = ?,
+                            transcript_id_end = ?
+                        WHERE id = ?
+                    """, (json.dumps(ids), min(ids), max(ids), ep_id))
+                    updated += 1
+                except Exception:
+                    pass
+
+            cursor.close()
+
+        logging.info(f"[EPISODIC] Backfilled transcript_ids for {updated} episodes")
+        return updated
+
+    except Exception as e:
+        logging.warning(f"[EPISODIC] backfill_episode_transcript_ids failed: {e}")
+        return 0
