@@ -150,9 +150,7 @@ class TestTopicContextWorkingMemory:
         ctx = TopicContext(topic='general', thread_id='thread-42')
 
         with patch.object(svc, '_get_working_memory', return_value='wm') as mock_wm, \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+             patch.object(svc, '_get_moments', return_value=''):
 
             svc.assemble(prompt='hello', topic='general', context=ctx)
 

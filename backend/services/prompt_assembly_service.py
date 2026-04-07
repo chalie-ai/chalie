@@ -269,9 +269,7 @@ class PromptAssemblyService:
             return (inclusion_map or {}).get(node, True)
 
         _ctx = assembled_context or {}
-        episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
         working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
-        concepts_context = _ctx.get('concepts', '') if _include('concepts') else ''
         _msg_emb = _ctx.get('message_embedding') if _ctx else None
         world_state = (
             self.world_state_service.get_world_state(
@@ -304,8 +302,6 @@ class PromptAssemblyService:
         result = result.replace('{{topic}}', str(topic))
         result = result.replace('{{confidence}}', str(confidence))
         result = result.replace('{{world_state}}', world_state if _include('world_state') else '')
-        result = result.replace('{{episodic_memory}}', episodic_context if _include('episodic_memory') else '')
-
         # Situation directive — plain-language behavioral guidance derived from the
         # situation model.  Returns None when the situation is unremarkable; the
         # placeholder is then replaced with empty string so zero tokens are added.
@@ -319,7 +315,6 @@ class PromptAssemblyService:
             except Exception:
                 pass
             result = result.replace('{{situation}}', situation_directive)
-        result = result.replace('{{semantic_concepts}}', concepts_context)
         result = result.replace('{{act_history}}', act_history)
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 

@@ -45,10 +45,6 @@ Registered external tools: {{registered_tool_names}}
 
 {{working_memory}}
 
-{{episodic_memory}}
-
-{{semantic_concepts}}
-
 {{world_state}}
 
 {{situation}}

@@ -203,30 +203,6 @@ class TestInjectParameters:
         )
         assert result.strip() == 'H:'
 
-    def test_episodic_memory_excluded_by_inclusion_map(self, assembly_svc):
-        assembled_ctx = {'episodes': 'memory content here'}
-        result = assembly_svc._inject_parameters(
-            'E:{{episodic_memory}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            assembled_context=assembled_ctx,
-            inclusion_map={'episodic_memory': False},
-        )
-        assert 'memory content here' not in result
-
-    def test_episodic_memory_included_from_assembled_context(self, assembly_svc):
-        assembled_ctx = {'episodes': 'user loves Python'}
-        result = assembly_svc._inject_parameters(
-            '{{episodic_memory}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            assembled_context=assembled_ctx,
-            inclusion_map={'episodic_memory': True},
-        )
-        assert 'user loves Python' in result
-
     @pytest.mark.parametrize("placeholder", [
         "identity_context", "client_context", "available_skills",
     ])

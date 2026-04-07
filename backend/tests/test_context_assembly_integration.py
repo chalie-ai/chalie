@@ -54,9 +54,7 @@ class TestFullAssembly:
         svc = _make_svc()
         ctx = TopicContext(topic='cooking')
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='next?', topic='cooking', context=ctx)
 
@@ -88,9 +86,7 @@ class TestFullAssembly:
         svc = _make_svc()
         ctx = TopicContext(topic='travel')
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='more?', topic='travel', context=ctx)
 
@@ -116,9 +112,7 @@ class TestTopicIsolation:
         svc = _make_svc()
         ctx = TopicContext(topic='topic-B')
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='more?', topic='topic-B', context=ctx)
 
@@ -132,9 +126,7 @@ class TestTopicIsolation:
         svc = _make_svc()
         ctx = TopicContext(topic='never-discussed', is_new_topic=True)
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='hello', topic='never-discussed', context=ctx)
 
@@ -144,7 +136,7 @@ class TestTopicIsolation:
 class TestFailureTracking:
 
     def test_failed_sections_tracked(self, db):
-        """When one section fails, failure is recorded and other sections still work."""
+        """When moments fails, failure is recorded and other sections still work."""
         _seed_transcript(db, 'test', [
             ('user', 'Hello there'),
             ('assistant', 'Hi!'),
@@ -153,29 +145,15 @@ class TestFailureTracking:
         svc = _make_svc()
         ctx = TopicContext(topic='test')
 
-        # Episodes will fail, everything else works
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', side_effect=Exception('episode DB crash')), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            # Need to handle the exception at the assemble level
-            # Actually, _get_episodes is called directly and its except catches it
-            pass
-
-        # Test via the real path — patch the episodic import to fail
-        with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep down')), \
-             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
+        # Moments will fail via MomentService import error
+        with patch('services.moment_service.MomentService', side_effect=Exception('moments down')):
             result = svc.assemble(prompt='hi', topic='test', context=ctx)
 
         # Working memory should still be populated from real DB
         assert 'Hello' in result['working_memory']
-        # Episodes should have recorded a failure
-        assert len(ctx.failed_sections) >= 1
+        # Moments failure should be tracked
         section_names = [s[0] for s in ctx.failed_sections]
-        assert 'episodes' in section_names
+        assert 'moments' in section_names
 
     def test_multiple_failures_do_not_crash(self, db):
         """Even if all sections fail, assemble returns a valid dict with failures tracked."""
@@ -183,21 +161,13 @@ class TestFailureTracking:
         ctx = TopicContext(topic='broken-topic')
 
         with patch('services.compaction_service.get_compaction', side_effect=Exception('comp down')), \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch('services.episodic_service.EpisodicService', side_effect=Exception('ep down')), \
-             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
-             patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks down')), \
-             patch.object(svc, '_get_concepts', return_value=''):
+             patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='hi', topic='broken-topic', context=ctx)
 
         # Should still return a valid dict
         assert 'working_memory' in result
-        assert 'episodes' in result
         assert isinstance(result['total_tokens_est'], int)
-
-        # Failures should be tracked
-        assert len(ctx.failed_sections) >= 2
 
 
 class TestBudgetConstraint:
@@ -214,9 +184,7 @@ class TestBudgetConstraint:
         svc = _make_svc(budget=200)  # Very small budget
         ctx = TopicContext(topic='verbose')
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value='Some episode' * 50), \
-             patch.object(svc, '_get_concepts', return_value='Some concept' * 50):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             result = svc.assemble(prompt='hi', topic='verbose', context=ctx)
 
@@ -239,9 +207,7 @@ class TestTopicContextIdentifier:
         svc = _make_svc()
         ctx = TopicContext(topic='general', thread_id='thread-99')
 
-        with patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
+        with patch.object(svc, '_get_moments', return_value=''):
 
             svc.assemble(prompt='hi', topic='general', context=ctx)
 

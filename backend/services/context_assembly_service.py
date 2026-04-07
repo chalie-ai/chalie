@@ -1,9 +1,8 @@
 """
 Context Assembly Service - Unified multi-memory context retrieval and ranking.
 
-Orchestrates retrieval from all memory types (working memory, episodes,
-concepts), ranks with unified scoring, and produces budget-constrained
-context payload.
+Orchestrates retrieval from working memory (compaction + transcript) and
+moments, with budget-constrained context payload.
 """
 
 import logging
@@ -15,7 +14,6 @@ if TYPE_CHECKING:
 try:
     from services.telemetry_service import (
         get_telemetry_collector,
-        MEMORY_RECALL,
         CONTEXT_ASSEMBLY,
     )
     _TELEMETRY_AVAILABLE = True
@@ -30,8 +28,6 @@ class ContextAssemblyService:
     DEFAULT_WEIGHTS = {
         'working_memory': 1.0,
         'moments': 0.95,
-        'episodes': 0.7,
-        'concepts': 0.6
     }
 
     def __init__(self, config: dict):
@@ -88,8 +84,6 @@ class ContextAssemblyService:
 
         sections['working_memory'] = self._get_working_memory(wm_identifier, topic, context=context)
         sections['moments'] = self._get_moments(prompt, context=context)
-        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding, context=context)
-        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding, context=context)
 
         # Inject recent visible context from previous session (visual continuity bridge)
         if recent_visible_context:
@@ -123,27 +117,11 @@ class ContextAssemblyService:
         if total_tokens > self.max_context_tokens:
             sections = self._apply_budget(sections)
 
-        # Emit CONTEXT_ASSEMBLY telemetry event for observability.
-        # Item counts are estimated from the formatted section text so that
-        # no changes to sub-method return types are required.
         if _TELEMETRY_AVAILABLE:
             try:
-                episodes_text = sections.get("episodes", "")
-                concepts_text = sections.get("concepts", "")
-                # Count numbered episode items ("1. ", "2. ", etc.)
-                episode_count = sum(
-                    1
-                    for line in episodes_text.splitlines()
-                    if line.strip() and line.strip()[0].isdigit() and ". " in line
-                )
-                # Count concept bullet entries ("- **name**")
-                concept_count = concepts_text.count("- **")
                 get_telemetry_collector().record(
                     CONTEXT_ASSEMBLY,
                     {
-                        "episode_count": episode_count,
-                        "concept_count": concept_count,
-                        "trait_count": 0,
                         "total_tokens_est": sections.get("total_tokens_est", 0),
                         "has_working_memory": bool(sections.get("working_memory")),
                         "has_moments": bool(sections.get("moments")),
@@ -297,130 +275,6 @@ class ContextAssemblyService:
                 context.record_failure('moments', e)
             return ""
 
-    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
-        """Retrieve relevant episodic memories via semantic search.
-
-        Args:
-            prompt: Current user prompt used as the semantic query.
-            topic: Conversation topic for additional scoping.
-            act_history: Accumulated ACT loop history used to boost relevant episodes.
-            message_embedding: Optional pre-computed embedding for the current message.
-
-        Returns:
-            Formatted episodic memory string, or empty string when nothing relevant is found.
-        """
-        try:
-            from services.episodic_service import EpisodicService
-            from services.database_service import get_shared_db_service
-            from services.config_service import ConfigService
-
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            db_service = get_shared_db_service()
-            retrieval = EpisodicService(db_service, episodic_config)
-
-            # Extract semantic concepts from act_history for boost
-            semantic_concepts = self._extract_semantic_from_history(act_history)
-
-            episodes = retrieval.retrieve_episodes(
-                query_text=prompt,
-                topic=topic,
-                limit=3,
-                semantic_concepts=semantic_concepts if semantic_concepts else None,
-                query_embedding=message_embedding,
-            )
-
-            if not episodes:
-                return ""
-
-            # Emit MEMORY_RECALL telemetry event for observability
-            if _TELEMETRY_AVAILABLE:
-                try:
-                    get_telemetry_collector().record(
-                        MEMORY_RECALL,
-                        {
-                            "episode_count": len(episodes),
-                            "query_topic": topic,
-                        },
-                    )
-                except Exception as _tel_err:
-                    logging.debug(
-                        "[CONTEXT] MEMORY_RECALL telemetry emit failed (non-fatal): %s",
-                        _tel_err,
-                    )
-
-            lines = ["\n## Relevant Past Experiences"]
-            for i, ep in enumerate(episodes, 1):
-                lines.append(f"{i}. {ep['gist']}")
-                lines.append(f"   - Outcome: {ep['outcome']}")
-                lines.append(f"   - Salience: {ep['salience']}/10")
-
-            return "\n".join(lines)
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Episodic memory unavailable: {e}")
-            if context is not None:
-                context.record_failure('episodes', e)
-            return ""
-
-    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
-        """Retrieve relevant semantic concepts for context injection.
-
-        Args:
-            prompt: Current user prompt used as the semantic query.
-            topic: Conversation topic (currently unused; reserved for future scoping).
-            act_history: Accumulated ACT loop history (currently unused).
-            message_embedding: Optional pre-computed embedding for the current message.
-
-        Returns:
-            Formatted concepts string with header, or empty string when nothing qualifies.
-        """
-        try:
-            from services.knowledge_service import KnowledgeService
-            from services.database_service import get_shared_db_service
-
-            db = get_shared_db_service()
-            ks = KnowledgeService(db)
-            concepts = ks.recall(prompt, kinds=['concept', 'trait'], limit=5)
-
-            if not concepts:
-                return ""
-
-            lines = ["## Relevant Concepts"]
-            for c in concepts:
-                name = c.get('key', 'unknown')
-                definition = c.get('value', '')
-                kind = c.get('kind', '')
-                confidence = c.get('confidence', 0)
-                # Only surface concepts with meaningful definitions and non-trivial confidence
-                if definition and confidence > 0.2:
-                    lines.append(f"- **{name}** ({kind}): {definition}")
-
-            return "\n".join(lines) if len(lines) > 1 else ""
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
-            if context is not None:
-                context.record_failure('concepts', e)
-            return ""
-
-    def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
-        """Parse semantic_query results from an act_history string.
-
-        Args:
-            act_history: Accumulated ACT loop history text.
-
-        Returns:
-            List of dicts with 'name' and 'definition' keys for matched concepts.
-        """
-        import re
-        concepts = []
-        pattern = r'-\s+([^:]+):\s+([^(]+)\s+\((?:strength[:=]|confidence=)'
-        matches = re.findall(pattern, act_history)
-        for name, definition in matches:
-            concepts.append({
-                'name': name.strip(),
-                'definition': definition.strip()
-            })
-        return concepts
-
     def _estimate_tokens(self, text: str) -> int:
         """Produce a rough token estimate using 4 characters per token.
 
@@ -445,7 +299,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'moments', 'episodes', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))
