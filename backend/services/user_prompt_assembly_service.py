@@ -19,30 +19,30 @@ This content changes every turn and is never cached.
 """
 
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
+
+from services.prompt_assembly_contract import PromptAssemblyContract
 
 logger = logging.getLogger(__name__)
 
 
-class UserPromptAssemblyService:
-    """Builds the per-turn user message from world state, transcript, and memory."""
+class UserPromptAssemblyService(PromptAssemblyContract):
+    """Builds the per-turn user message from world state, transcript, and memory.
+
+    Usage:
+        svc = UserPromptAssemblyService()
+        svc.build(user_message, topic, ...)
+        user_prompt = svc.to_provider()
+    """
 
     def __init__(self):
-        pass
+        self._result = ''
 
     def build(self, user_message: str, topic: str, thread_id: str = None,
-              metadata: dict = None) -> str:
+              metadata: dict = None) -> 'UserPromptAssemblyService':
         """Build the full user prompt for a single turn.
 
-        Args:
-            user_message: The raw text the user typed.
-            topic: Current conversation topic.
-            thread_id: Conversation thread identifier.
-            metadata: Optional request metadata (source, exchange_id, etc.).
-
-        Returns:
-            Assembled user prompt string with world state, transcript,
-            memory context, and the user's message.
+        Returns self for chaining: `svc.build(...).to_provider()`
         """
         parts = []
 
@@ -60,10 +60,15 @@ class UserPromptAssemblyService:
         current_turn = self._build_current_turn(user_message, topic)
         parts.append(current_turn)
 
-        return '\n\n'.join(parts)
+        self._result = '\n\n'.join(parts)
+        return self
+
+    def to_provider(self) -> str:
+        return self._result
+
+    # ── Internal builders ────────────────────────────────────────────
 
     def _get_world_state(self, topic: str, thread_id: str = None) -> str:
-        """Retrieve world state (time, calendar, weather, etc.)."""
         try:
             from services.world_state_service import WorldStateService
             svc = WorldStateService()
@@ -73,13 +78,7 @@ class UserPromptAssemblyService:
             return ''
 
     def _get_conversation_context(self, topic: str) -> str:
-        """Build conversation context from compaction + recent transcript + tool calls.
-
-        Returns formatted string with:
-        - Compaction summary (## Context) if older turns were compacted
-        - Recent transcript entries (## Previous Messages) with timestamps,
-          interleaved with [memory] and [tool:name] annotations from tool_calls table
-        """
+        """Build conversation context from compaction + recent transcript + tool calls."""
         try:
             from services import compaction_service, transcript_service
             from services.database_service import get_shared_db_service
@@ -91,11 +90,9 @@ class UserPromptAssemblyService:
 
             parts = []
 
-            # Compaction summary
             if compaction and compaction.get('compacted_text'):
                 parts.append(f"## Context\n{compaction['compacted_text']}")
 
-            # Recent transcript with tool call annotations
             if entries:
                 tool_calls = self._get_tool_calls_for_entries(entries)
                 lines = ["## Previous Messages"]
@@ -105,7 +102,6 @@ class UserPromptAssemblyService:
                     content = entry.get('content', '')
                     lines.append(f"[{created}] {role}: {content}")
 
-                    # Interleave tool calls that belong to this transcript entry
                     entry_id = entry.get('id')
                     if entry_id and entry_id in tool_calls:
                         for tc in tool_calls[entry_id]:
@@ -163,10 +159,8 @@ class UserPromptAssemblyService:
             return {}
 
     def _build_current_turn(self, user_message: str, topic: str) -> str:
-        """Build the current turn section with episodic auto-recall + user message."""
         parts = ["# Current Turn"]
 
-        # Episodic auto-recall (tight radius for high relevance)
         memories = self._get_episodic_recall(user_message)
         if memories:
             parts.append(f"### Related Memories\n{memories}")
@@ -176,7 +170,6 @@ class UserPromptAssemblyService:
         return '\n\n'.join(parts)
 
     def _get_episodic_recall(self, query_text: str) -> str:
-        """Auto-recall relevant episodes for the current turn (tight radius)."""
         try:
             from services.episodic_service import EpisodicService
             from services.database_service import get_shared_db_service

@@ -452,9 +452,8 @@ def unified_generate(topic, text, classification, thread_conv_service,
         assembled_context['message_embedding'] = message_embedding
 
     cortex_service = FrontalCortexService(config)
-    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
-    # Build system prompt and native tool schemas for the first call
+    # Build native tool schemas
     all_skills = list(ALL_SKILL_NAMES)
     # Voice mode: exclude visual-only skills (rich_render outputs blocks unusable via TTS)
     if (metadata or {}).get('source') == 'voice':
@@ -462,12 +461,12 @@ def unified_generate(topic, text, classification, thread_conv_service,
     from services.tool_schema_service import get_skill_schemas
     native_tools = get_skill_schemas(all_skills)
 
-    system_prompt = cortex_service.build_system_prompt(
-        system_prompt_template=prompt,
-        original_prompt=text,
+    # ── System prompt (stable, cacheable) ─────────────────────────
+    from services.system_prompt_assembly_service import SystemPromptAssemblyService
+    system_prompt_svc = SystemPromptAssemblyService(config)
+    system_prompt_svc.build(
+        template=prompt,
         classification=classification,
-        chat_history=chat_history,
-        assembled_context=assembled_context,
         selected_skills=all_skills,
         thread_id=thread_id,
         returning_from_silence=returning_from_silence,
@@ -475,6 +474,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     )
 
     # Voice mode: inject plain-text-only instruction for TTS-friendly responses
+    system_prompt = system_prompt_svc.to_provider()
     if (metadata or {}).get('source') == 'voice':
         system_prompt = system_prompt.replace('{{voice_mode_instruction}}',
             '\n\nIMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
@@ -483,9 +483,18 @@ def unified_generate(topic, text, classification, thread_conv_service,
     else:
         system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
 
-    # Prompt tracing — enabled via CHALIE_LOG_PROMPTS=1 env var.
-    # Logs the full assembled system prompt to interaction_log so the meta-harness
-    # can see exactly what the LLM received.
+    # ── User prompt (per-turn, never cached) ──────────────────────
+    from services.user_prompt_assembly_service import UserPromptAssemblyService
+    user_prompt_svc = UserPromptAssemblyService()
+    user_prompt_svc.build(
+        user_message=text,
+        topic=topic,
+        thread_id=thread_id,
+        metadata=metadata,
+    )
+    user_prompt = user_prompt_svc.to_provider()
+
+    # Prompt tracing
     if _LOG_PROMPTS:
         try:
             from services.database_service import get_shared_db_service
@@ -495,7 +504,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
                 event_type='llm_prompt',
                 payload={
                     'system_prompt': system_prompt,
-                    'user_message': text,
+                    'user_message': user_prompt,
                     'skills': all_skills,
                     'tool_count': len(native_tools),
                 },
@@ -508,7 +517,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
         except Exception as _lp_e:
             logging.debug(f"[DIGEST] Prompt logging failed: {_lp_e}")
 
-    first_messages = [{"role": "user", "content": text}]
+    first_messages = [{"role": "user", "content": user_prompt}]
 
     # First LLM call with native tools — model either responds with text or calls tools
     first_response = cortex_service.generate_response_appended(
@@ -892,15 +901,32 @@ def _run_response_pipeline(
     except Exception as e:
         logging.warning(f"[{log_tag}] Context assembly failed: {e}")
 
+    # ── System prompt (stable) ──────────────────────────────────────
+    from services.system_prompt_assembly_service import SystemPromptAssemblyService
+    system_prompt_svc = SystemPromptAssemblyService(generation_config)
+    system_prompt_svc.build(
+        template=prompt_template,
+        classification=classification,
+        thread_id=thread_id,
+        inclusion_map=inclusion_map,
+    )
+    system_prompt = system_prompt_svc.to_provider()
+    system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
+
+    # ── User prompt (per-turn) ────────────────────────────────────
+    from services.user_prompt_assembly_service import UserPromptAssemblyService
+    user_prompt_svc = UserPromptAssemblyService()
+    user_prompt_svc.build(user_message=text, topic=topic, thread_id=thread_id)
+    user_prompt = user_prompt_svc.to_provider()
+
     # Generation
     cortex_service = FrontalCortexService(generation_config)
-    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
     response_data = cortex_service.generate_response(
         system_prompt_template=prompt_template,
-        original_prompt=text,
+        original_prompt=user_prompt,
         classification=classification,
-        chat_history=chat_history,
+        chat_history=[],
         thread_id=thread_id,
         inclusion_map=inclusion_map,
         assembled_context=assembled_context,
