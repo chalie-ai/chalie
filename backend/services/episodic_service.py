@@ -21,6 +21,15 @@ import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, TYPE_CHECKING
 
+try:
+    import nltk
+    from nltk import pos_tag, word_tokenize, RegexpParser
+    nltk.download('punkt_tab', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
+    _NLTK_AVAILABLE = True
+except ImportError:
+    _NLTK_AVAILABLE = False
+
 if TYPE_CHECKING:
     from services.topic_context import TopicContext
 
@@ -47,8 +56,6 @@ class EpisodicService:
         self.embedding_dimensions = self.config.get('embedding_dimensions', 256)
         self.weights = self.config.get('inference_weights', {
             'vector_similarity': 4,
-            'topic_overlap': 2,
-            'intent_overlap': 3,
             'retrieval_weight': 3,
             'outcome_relevance': 2,
             'entity_overlap': 3,
@@ -464,53 +471,75 @@ class EpisodicService:
 
     # ── Retrieval ────────────────────────────────────────────────────
 
-    def retrieve_episodes(self, query_text: str, topic: str = None,
-                         intent: str = None, limit: int = 3,
-                         weights: dict = None, semantic_concepts: List[Dict] = None,
-                         query_embedding=None, _context: 'TopicContext' = None,
-                         entities: List[str] = None, goal_tags: List[str] = None,
-                         emotional_valence: float = None,
-                         emotional_arousal: float = None) -> List[dict]:
-        """Retrieve relevant episodes using hybrid search and composite scoring."""
+    def retrieve_episodes(self, query_text: str, radius: float = 0.3) -> List[dict]:
         try:
-            scoring_weights = weights or self.weights
-
-            if query_embedding is None:
-                query_embedding = self._generate_embedding(query_text)
-
-            prefilter_limit = self.config.get('prefilter_candidates', 50)
-            candidates = self._hybrid_retrieve(
-                query_embedding, query_text, topic, prefilter_limit
-            )
+            query_analysis = self._analyze_query(query_text)
+            query_embedding = self._generate_embedding(query_text)
+            episode_count = self._count_episodes()
+            effective_radius = radius / (1 + 0.1 * math.log2(episode_count + 2))
+            candidates = self._hybrid_retrieve(query_embedding, query_text, effective_radius)
 
             if not candidates:
-                logging.info("No candidate episodes found")
                 return []
 
             query_data = {
                 'text': query_text,
-                'topic': topic,
-                'intent': intent,
                 'embedding': query_embedding,
-                'entities': entities or [],
-                'goal_tags': goal_tags or [],
-                'emotional_valence': emotional_valence,
-                'emotional_arousal': emotional_arousal,
+                'entities': query_analysis['entities'],
+                'goal_tags': [],
+                'emotional_valence': None,
+                'emotional_arousal': None,
             }
-            ranked_episodes = self._rerank_with_composite_score(
-                candidates, query_data, scoring_weights
-            )
+            ranked = self._rerank_with_composite_score(candidates, query_data, self.weights)
+            self._apply_reconsolidation(ranked)
 
-            top_episodes = ranked_episodes[:limit]
-            self._apply_reconsolidation(top_episodes)
-
-            return top_episodes
+            return ranked
 
         except Exception as e:
             logging.error(f"Failed to retrieve episodes: {e}")
-            if _context is not None:
-                _context.record_failure('episodic_retrieval', e)
             return []
+
+    def _count_episodes(self) -> int:
+        try:
+            with self.db_service.connection() as conn:
+                return conn.execute("SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL").fetchone()[0]
+        except Exception:
+            return 0
+
+    def _analyze_query(self, query_text: str) -> dict:
+        if not _NLTK_AVAILABLE or not query_text:
+            tokens = query_text.split() if query_text else []
+            return {'entities': tokens, 'keywords': tokens, 'noun_phrases': []}
+
+        try:
+            tokens = word_tokenize(query_text)
+            tagged = pos_tag(tokens)
+
+            grammar = r"NP: {<DT>?<JJ>*<NN.*>+}"
+            parser = RegexpParser(grammar)
+            tree = parser.parse(tagged)
+
+            noun_phrases = []
+            for subtree in tree.subtrees(filter=lambda t: t.label() == 'NP'):
+                phrase = ' '.join(word for word, tag in subtree.leaves())
+                noun_phrases.append(phrase)
+
+            stop_tags = {'CC', 'CD', 'DT', 'EX', 'IN', 'MD', 'PDT', 'POS',
+                         'PRP', 'PRP$', 'RP', 'TO', 'UH', 'WDT', 'WP', 'WP$', 'WRB'}
+            content_tags = {'NN', 'NNS', 'NNP', 'NNPS', 'VB', 'VBD', 'VBG',
+                            'VBN', 'VBP', 'VBZ', 'JJ', 'JJR', 'JJS', 'RB', 'RBR', 'RBS'}
+            entity_tags = {'NNP', 'NNPS'}
+
+            entities = [word for word, tag in tagged if tag in entity_tags]
+            keywords = [word for word, tag in tagged
+                        if tag in content_tags and tag not in stop_tags and len(word) > 1]
+
+            return {'entities': entities, 'keywords': keywords, 'noun_phrases': noun_phrases}
+
+        except Exception as e:
+            logging.warning(f"NLTK query analysis failed, falling back: {e}")
+            tokens = query_text.split()
+            return {'entities': tokens, 'keywords': tokens, 'noun_phrases': []}
 
     def _apply_reconsolidation(self, episodes: List[dict]) -> None:
         """Apply memory reconsolidation to retrieved episodes.
@@ -583,12 +612,12 @@ class EpisodicService:
             raise
 
     def _hybrid_retrieve(self, query_embedding: List[float], query_text: str,
-                        topic: str, limit: int) -> List[dict]:
-        """Stage 1: Hybrid prefilter using vector similarity + full-text search."""
+                        effective_radius: float) -> List[dict]:
         try:
             with self.db_service.connection() as conn:
                 cursor = DictCursor(conn.cursor())
 
+                vector_ceiling = 200
                 vector_query = """
                     SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
                            e.salience, e.topic, e.created_at,
@@ -602,22 +631,17 @@ class EpisodicService:
                     JOIN episodes_vec v ON v.rowid = e.rowid
                     WHERE v.embedding MATCH ? AND k = ?
                       AND e.deleted_at IS NULL
+                    ORDER BY v.distance
                 """
-                vector_params = [pack_embedding(query_embedding), limit]
-
-                if topic:
-                    vector_query += " AND e.topic = ?"
-                    vector_params.append(topic)
-
-                vector_query += " ORDER BY v.distance"
-
-                cursor.execute(vector_query, vector_params)
-                vector_results = cursor.fetchall()
+                cursor.execute(vector_query, [pack_embedding(query_embedding), vector_ceiling])
+                all_vector_results = cursor.fetchall()
+                vector_results = [r for r in all_vector_results
+                                  if r.get('vector_distance') is not None
+                                  and r['vector_distance'] <= effective_radius]
 
                 import re as _re
                 fts_safe = _re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
-                # Quote each token to prevent FTS5 interpreting words as column names or operators
                 fts_terms = ' '.join(f'"{w}"' for w in fts_safe.split() if w)
 
                 fts_results = []
@@ -635,21 +659,15 @@ class EpisodicService:
                         JOIN episodes e ON e.rowid = episodes_fts.rowid
                         WHERE episodes_fts MATCH ?
                           AND e.deleted_at IS NULL
+                        ORDER BY episodes_fts.rank
+                        LIMIT 200
                     """
-                    fts_params = [fts_terms]
-
-                    if topic:
-                        fts_query += " AND e.topic = ?"
-                        fts_params.append(topic)
-
-                    fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
-                    fts_params.append(limit)
-
-                    cursor.execute(fts_query, fts_params)
-                    fts_results = cursor.fetchall()
+                    cursor.execute(fts_query, [fts_terms])
+                    all_fts = cursor.fetchall()
+                    fts_results = [r for r in all_fts
+                                   if r.get('text_rank') is not None and r['text_rank'] > -50]
 
                 candidates = self._merge_with_rrf(vector_results, fts_results)
-
                 return candidates
 
         except Exception as e:
@@ -732,12 +750,6 @@ class EpisodicService:
             vector_sim = self._calculate_vector_similarity(
                 query_data.get('embedding'), episode.get('vector_distance')
             )
-            topic_overlap = self._calculate_topic_overlap(
-                query_data.get('topic'), episode['topic']
-            )
-            intent_overlap = self._calculate_intent_overlap(
-                query_data.get('intent'), episode['intent']
-            )
             effective_freshness = self._calculate_effective_freshness(
                 episode['salience'], episode['created_at'], episode.get('last_accessed_at')
             )
@@ -768,8 +780,6 @@ class EpisodicService:
 
             composite_score = (
                 vector_sim * weights.get('vector_similarity', 4) +
-                topic_overlap * weights.get('topic_overlap', 2) +
-                intent_overlap * weights.get('intent_overlap', 3) +
                 retrieval * weights.get('retrieval_weight', 3) +
                 outcome_relevance * weights.get('outcome_relevance', 2) +
                 entity_overlap * 10 * weights.get('entity_overlap', 3) +
@@ -782,8 +792,6 @@ class EpisodicService:
             episode['composite_score'] = composite_score
             episode['score_breakdown'] = {
                 'vector_similarity': vector_sim,
-                'topic_overlap': topic_overlap,
-                'intent_overlap': intent_overlap,
                 'retrieval_weight': retrieval,
                 'outcome_relevance': outcome_relevance,
                 'entity_overlap': entity_overlap,
@@ -807,42 +815,6 @@ class EpisodicService:
         similarity = max(0, 10 - (distance * 5))
         return similarity
 
-    def _calculate_topic_overlap(self, query_topic: str, episode_topic: str) -> float:
-        """Calculate topic overlap score (2-10 scale)."""
-        if not query_topic:
-            return 5.0
-
-        if query_topic.lower() == episode_topic.lower():
-            return 10.0
-        elif query_topic.lower() in episode_topic.lower() or episode_topic.lower() in query_topic.lower():
-            return 7.0
-        else:
-            return 2.0
-
-    def _calculate_intent_overlap(self, query_intent: str, episode_intent: dict) -> float:
-        """Calculate intent overlap score (1-10 scale)."""
-        if not query_intent:
-            return 5.0
-
-        if isinstance(episode_intent, dict):
-            intent_type = episode_intent.get('type', '')
-            intent_direction = episode_intent.get('direction', '')
-            episode_intent_str = f"{intent_type} {intent_direction}"
-        else:
-            episode_intent_str = str(episode_intent)
-
-        query_tokens = set(query_intent.lower().split())
-        episode_tokens = set(episode_intent_str.lower().split())
-
-        if not query_tokens or not episode_tokens:
-            return 5.0
-
-        intersection = len(query_tokens & episode_tokens)
-        union = len(query_tokens | episode_tokens)
-
-        jaccard = intersection / union if union > 0 else 0
-        return 1 + (jaccard * 9)
-
     def _calculate_effective_freshness(self, salience: float, created_at: datetime,
                                        last_accessed_at: datetime = None) -> float:
         """Calculate effective freshness using exponential decay."""
@@ -852,7 +824,7 @@ class EpisodicService:
                 reference_time = parse_utc(reference_time)
             delta_hours = (utc_now() - reference_time).total_seconds() / 3600.0
 
-            effective_decay = self.decay_rate * (1.0 - salience)
+            effective_decay = self.decay_rate * (1.0 - salience / 10.0)
             freshness = math.exp(-effective_decay * delta_hours)
 
             return round(max(0.0, min(freshness, 1.0)), 3)
@@ -899,6 +871,79 @@ class EpisodicService:
             return result if isinstance(result, list) else []
         except Exception:
             return []
+
+    def format_for_prompt(self, episodes: List[dict]) -> str:
+        if not episodes:
+            return ''
+
+        lines = []
+        for episode in episodes:
+            gist = episode.get('gist', '')
+            if not gist:
+                continue
+
+            consolidated_from = episode.get('consolidated_from')
+            if isinstance(consolidated_from, str):
+                try:
+                    consolidated_from = json.loads(consolidated_from)
+                except Exception:
+                    consolidated_from = []
+
+            if consolidated_from:
+                date_range = self._get_consolidated_date_range(consolidated_from, episode)
+                lines.append(f"{date_range} — {gist}")
+            else:
+                created_at = episode.get('created_at', '')
+                try:
+                    dt = parse_utc(created_at)
+                    date_str = dt.strftime('%Y-%m-%d')
+                except Exception:
+                    date_str = str(created_at)[:10]
+                lines.append(f"{date_str} — {gist}")
+
+        return '\n'.join(lines)
+
+    def _get_consolidated_date_range(self, source_ids: list, episode: dict) -> str:
+        fallback_created = episode.get('created_at', '')
+        try:
+            fallback_dt = parse_utc(fallback_created)
+            fallback_str = fallback_dt.strftime('%Y-%m-%d')
+        except Exception:
+            fallback_str = str(fallback_created)[:10]
+
+        if not source_ids:
+            return fallback_str
+
+        source_ids = [s for s in source_ids if s != episode.get('id')]
+        if not source_ids:
+            return fallback_str
+
+        try:
+            with self.db_service.connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join('?' for _ in source_ids)
+                cursor.execute(
+                    f"SELECT MIN(created_at), MAX(created_at) FROM episodes WHERE id IN ({placeholders})",
+                    source_ids
+                )
+                row = cursor.fetchone()
+                cursor.close()
+
+                if not row or row[0] is None:
+                    return fallback_str
+
+                min_dt = parse_utc(row[0])
+                max_dt = parse_utc(row[1])
+                min_str = min_dt.strftime('%Y-%m-%d')
+                max_str = max_dt.strftime('%Y-%m-%d')
+
+                if min_str == max_str:
+                    return min_str
+                return f"{min_str} to {max_str}"
+
+        except Exception as e:
+            logging.warning(f"Failed to get consolidated date range: {e}")
+            return fallback_str
 
 
 def backfill_episode_transcript_ids() -> int:

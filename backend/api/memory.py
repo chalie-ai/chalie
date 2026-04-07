@@ -33,7 +33,7 @@ def memory_search():
         try:
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
             retrieval = EpisodicService(db, episodic_config)
-            episodes = retrieval.retrieve_episodes(query_text=query, limit=5)
+            episodes = retrieval.retrieve_episodes(query_text=query, radius=0.5)
             for ep in episodes:
                 results.append({
                     "type": "episode",

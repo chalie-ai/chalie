@@ -304,8 +304,7 @@ def _search_episodes(
 
         episodes = service.retrieve_episodes(
             query_text=query,
-            topic=topic,
-            limit=limit,
+            radius=0.5,
         )
 
         if not episodes:

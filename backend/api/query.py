@@ -188,7 +188,7 @@ def _slice_relevance(query: str) -> dict:
         EpisodicSvc = _get_episodic_service()
         db = _get_db_service()
         svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query, limit=3)
+        episodes = svc.retrieve_episodes(query_text=query)
 
         if episodes:
             top = episodes[0]
@@ -322,7 +322,7 @@ def _slice_memory(query: str, k: int) -> dict:
         EpisodicSvc = _get_episodic_service()
         db = _get_db_service()
         svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query, limit=max(1, min(k, 20)))
+        episodes = svc.retrieve_episodes(query_text=query, radius=0.5)
 
         results = []
         for ep in episodes:

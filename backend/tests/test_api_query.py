@@ -663,7 +663,7 @@ class TestMemoryEndpoint:
         assert resp.status_code == 200
         assert resp.get_json()["results"] == []
 
-    def test_k_param_forwarded_to_service(self, cookie_app):
+    def test_radius_forwarded_to_service(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
                 stack, ep_instance = self._patch_memory_services([])
@@ -671,28 +671,7 @@ class TestMemoryEndpoint:
                     client.get("/api/query/memory?q=test&k=3")
 
         call_kwargs = ep_instance.retrieve_episodes.call_args[1]
-        assert call_kwargs["limit"] == 3
-
-    def test_k_clamped_to_20(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, ep_instance = self._patch_memory_services([])
-                with stack:
-                    client.get("/api/query/memory?q=test&k=999")
-
-        call_kwargs = ep_instance.retrieve_episodes.call_args[1]
-        assert call_kwargs["limit"] <= 20
-
-    def test_invalid_k_defaults_to_5(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, ep_instance = self._patch_memory_services([])
-                with stack:
-                    resp = client.get("/api/query/memory?q=test&k=abc")
-
-        assert resp.status_code == 200
-        call_kwargs = ep_instance.retrieve_episodes.call_args[1]
-        assert call_kwargs["limit"] == 5
+        assert call_kwargs["radius"] == 0.5
 
     def test_service_unavailable_returns_empty(self, cookie_app):
         with cookie_app.test_client() as client:
