@@ -57,12 +57,10 @@ class UserMessageProcessor(MessageProcessor):
         # 1. Channel from metadata (default: 'user')
         channel = (metadata or {}).get('channel', 'user')
 
-        # 2. Build user prompt (per-turn, volatile).
-        #    UserPromptAssemblyService.build() currently takes `topic` — pass channel
-        #    as the topic value (transitional; Phase 8 renames topic → channel).
+        # 2. Build user prompt (per-turn, volatile)
         user_prompt = UserPromptAssemblyService().build(
             user_message=prompt,
-            topic=channel,
+            channel=channel,
             metadata=metadata,
         ).to_provider()
 
