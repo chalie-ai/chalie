@@ -111,7 +111,6 @@ CREATE TABLE IF NOT EXISTS interaction_log (
     exchange_id TEXT,
     session_id TEXT,
     source TEXT,
-    thread_id TEXT,
     payload TEXT NOT NULL DEFAULT '{}',       -- JSONB
     metadata TEXT DEFAULT '{}',              -- JSONB
     created_at TEXT DEFAULT (datetime('now'))

@@ -163,9 +163,11 @@ ALTER TABLE persistent_tasks_new RENAME TO persistent_tasks;
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_status ON persistent_tasks(account_id, status);
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_next_run ON persistent_tasks(status, next_run_after);
 
--- Recreate vec companion (empty, rowids preserved)
-DROP TABLE IF EXISTS persistent_tasks_vec;
+-- Recreate vec companion and copy existing embeddings
+ALTER TABLE persistent_tasks_vec RENAME TO persistent_tasks_vec_old;
 CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);
+INSERT INTO persistent_tasks_vec(rowid, embedding) SELECT rowid, embedding FROM persistent_tasks_vec_old;
+DROP TABLE IF EXISTS persistent_tasks_vec_old;
 
 -- ────────────────────────────────────────────────────────────────
 -- 11–13. Drop obsolete tables
@@ -177,3 +179,31 @@ DROP TABLE IF EXISTS topic_compactions;
 DROP TABLE IF EXISTS threads;
 DROP TABLE IF EXISTS thread_exchanges;
 DROP TABLE IF EXISTS topics;
+
+-- ────────────────────────────────────────────────────────────────
+-- 14. Drop thread_id from interaction_log (recreate without it)
+-- ────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS interaction_log_new (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    channel TEXT,
+    exchange_id TEXT,
+    session_id TEXT,
+    source TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+INSERT INTO interaction_log_new
+    SELECT id, event_type, channel, exchange_id, session_id, source,
+           payload, metadata, created_at
+    FROM interaction_log;
+
+DROP TABLE interaction_log;
+ALTER TABLE interaction_log_new RENAME TO interaction_log;
+
+CREATE INDEX IF NOT EXISTS idx_interaction_log_channel_created ON interaction_log(channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction_log(event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);

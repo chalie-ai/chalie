@@ -878,17 +878,6 @@ def _run_response_pipeline(
     except Exception as e:
         logging.warning(f"[{log_tag}] Context relevance failed: {e}")
 
-    # ── System prompt (stable) ──────────────────────────────────────
-    from services.system_prompt_assembly_service import SystemPromptAssemblyService
-    system_prompt_svc = SystemPromptAssemblyService(generation_config)
-    system_prompt_svc.build(
-        template=prompt_template,
-        classification=classification,
-        thread_id=thread_id,
-        inclusion_map=inclusion_map,
-    )
-    system_prompt = system_prompt_svc.to_provider()
-
     # ── User prompt (per-turn) ────────────────────────────────────
     from services.user_prompt_assembly_service import UserPromptAssemblyService
     user_prompt_svc = UserPromptAssemblyService()

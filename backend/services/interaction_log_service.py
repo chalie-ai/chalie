@@ -69,33 +69,13 @@ class InteractionLogService:
         self,
         event_type: str,
         payload: Dict[str, Any],
-        topic: str = None,
+        channel: str = None,
         exchange_id: str = None,
         session_id: str = None,
         source: str = None,
         metadata: Dict[str, Any] = None,
-        thread_id: str = None,
-        channel: str = None,
     ) -> Optional[str]:
-        """
-        Log an event to the interaction log.
-
-        Args:
-            event_type: Type of event (user_input, classification, system_response, etc.)
-            payload: Event-specific data
-            topic: Deprecated alias for channel. Use channel instead.
-            exchange_id: Exchange identifier
-            session_id: Session identifier
-            source: Event source (telegram, rest_api, etc.)
-            metadata: Optional metadata dict
-            channel: Conversation channel (replaces topic)
-
-        Returns:
-            UUID of the created log entry, or None on failure
-        """
-        # Accept topic as a backward-compat alias for channel
-        resolved_channel = channel or topic
-
+        """Log an event to the interaction log."""
         try:
             event_id = str(uuid.uuid4())
 
@@ -105,24 +85,23 @@ class InteractionLogService:
                 cursor.execute("""
                     INSERT INTO interaction_log (
                         id, event_type, channel, exchange_id, session_id, source,
-                        payload, metadata, thread_id
+                        payload, metadata
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event_id,
                     event_type,
-                    resolved_channel,
+                    channel,
                     exchange_id,
                     session_id,
                     source,
                     json.dumps(payload),
                     json.dumps(metadata or {}),
-                    thread_id,
                 ))
 
                 cursor.close()
 
-                logging.info(f"[INTERACTION LOG] Logged {event_type} event {event_id} for channel '{resolved_channel}'")
+                logging.info(f"[INTERACTION LOG] Logged {event_type} event {event_id} for channel '{channel}'")
                 return event_id
 
         except Exception as e:
