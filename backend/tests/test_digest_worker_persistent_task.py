@@ -103,10 +103,6 @@ class TestHandlePersistentTaskResult:
 
         mock_pipeline = MagicMock(return_value=pipeline_return)
         mock_wm = MagicMock()
-        resolved = MagicMock()
-        resolved.thread_id = resolve_thread_id
-        mock_thread_svc = MagicMock()
-        mock_thread_svc.return_value.resolve_thread.return_value = resolved
 
         load_mock = MagicMock(
             side_effect=load_configs_side_effect,
@@ -115,13 +111,12 @@ class TestHandlePersistentTaskResult:
 
         with patch('workers.digest_worker._run_response_pipeline', mock_pipeline), \
              patch('workers.digest_worker.WorkingMemoryService', mock_wm), \
-             patch('workers.digest_worker.get_thread_service', mock_thread_svc), \
              patch('workers.digest_worker.load_configs', load_mock), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
              patch('services.config_service.ConfigService.get_agent_prompt', return_value="Summarise."):
             result = _handle_persistent_task_result(text, metadata)
 
-        return result, mock_pipeline, mock_thread_svc
+        return result, mock_pipeline, None
 
     def test_run_response_pipeline_called_with_injected_text(self):
         """_run_response_pipeline receives text that includes the goal and result."""
@@ -152,17 +147,15 @@ class TestHandlePersistentTaskResult:
         pipeline_kwargs = mock_pipeline.call_args.kwargs
         assert pipeline_kwargs['thread_id'] == 'thread-explicit'
 
-    def test_missing_thread_id_falls_back_to_resolve_thread(self):
-        """When thread_id is None, resolve_thread('default', 'persistent_task') is called."""
-        _, _, mock_thread_svc = self._call_handler(
+    def test_missing_thread_id_falls_back_to_default_channel(self):
+        """When thread_id is None, defaults to 'persistent_task' channel."""
+        _, mock_pipeline, _ = self._call_handler(
             "Result here",
             {'task_id': 8, 'thread_id': None, 'goal': 'Background work'},
-            resolve_thread_id='resolved-thread-id',
         )
 
-        mock_thread_svc.return_value.resolve_thread.assert_called_once_with(
-            'default', 'persistent_task'
-        )
+        pipeline_kwargs = mock_pipeline.call_args.kwargs
+        assert pipeline_kwargs['thread_id'] == 'persistent_task'
 
     def test_return_value_includes_task_id_and_time(self):
         """Return string includes task_id and surfacing time."""
@@ -215,4 +208,4 @@ class TestHandlePersistentTaskResult:
         )
 
         pipeline_kwargs = mock_pipeline.call_args.kwargs
-        assert '77' in pipeline_kwargs['topic']
+        assert '77' in pipeline_kwargs['channel']

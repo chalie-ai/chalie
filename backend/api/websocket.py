@@ -322,17 +322,50 @@ def _handle_chat(ws, store, msg, active_request=None):
     bg_error = {}
     bg_done = threading.Event()
 
-    def run_digest_fallback():
-        """Fallback: direct digest_worker dispatch if signal emission fails."""
+    def _handle_chat_background():
+        """Background thread: process user message via UserMessageProcessor and publish response."""
         try:
-            from workers.digest_worker import digest_worker
-            digest_worker(text, metadata={
+            from services.user_message_processor import UserMessageProcessor
+            from services.output_service import OutputService
+
+            metadata = {
                 'uuid': request_id,
+                'exchange_id': request_id,
                 'source': source,
                 'image_ids': image_ids,
-            })
+                'channel': 'user',
+            }
+
+            result = UserMessageProcessor.instance().process(prompt=text, metadata=metadata)
+
+            output_svc = OutputService()
+            output_svc.enqueue_text(
+                topic=result.get('channel', 'user'),
+                response=result.get('response', ''),
+                mode='UNIFIED',
+                confidence=1.0,
+                generation_time=result.get('generation_time', 0),
+                original_metadata=metadata,
+            )
+
+            # Store result at output:{request_id} so the fallback path can
+            # find it if the pub/sub message was missed.
+            try:
+                fallback_output = {
+                    "type": "TEXT",
+                    "topic": result.get('channel', 'user'),
+                    "metadata": {
+                        "blocks": _blocks_svc.from_markdown(result.get('response', '')),
+                        "mode": "UNIFIED",
+                        "confidence": 1.0,
+                        "metadata": metadata,
+                    },
+                }
+                store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
+            except Exception as fb_err:
+                logger.debug(f"[WS] Fallback store failed: {fb_err}")
         except Exception as e:
-            logger.error(f"[WS] digest_worker error for {request_id}: {e}", exc_info=True)
+            logger.error(f"[WS] UserMessageProcessor error for {request_id}: {e}", exc_info=True)
             bg_error['message'] = str(e)
             try:
                 store.publish(sse_channel, json.dumps({"error": str(e)}))
@@ -341,7 +374,7 @@ def _handle_chat(ws, store, msg, active_request=None):
         finally:
             bg_done.set()
 
-    thread = threading.Thread(target=run_digest_fallback, daemon=True)
+    thread = threading.Thread(target=_handle_chat_background, daemon=True)
     thread.start()
 
     seq = _next_seq()

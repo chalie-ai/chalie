@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     outcome TEXT NOT NULL,
     gist TEXT NOT NULL,
     salience REAL NOT NULL DEFAULT 5.0,
-    topic TEXT NOT NULL DEFAULT 'test',
+    channel TEXT NOT NULL DEFAULT 'test',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT,
     last_accessed_at TEXT,
@@ -92,7 +92,7 @@ def mem_db():
             outcome TEXT NOT NULL,
             gist TEXT NOT NULL,
             salience REAL NOT NULL DEFAULT 5.0,
-            topic TEXT NOT NULL DEFAULT 'test',
+            channel TEXT NOT NULL DEFAULT 'test',
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT,
             last_accessed_at TEXT,
@@ -145,7 +145,7 @@ def _insert_episode(conn, ep_id=None, gist="test gist", entities=None,
     conn.execute("""
         INSERT INTO episodes (
             id, intent, context, action, emotion, outcome, gist,
-            salience, topic, entities, goal_tags, storage_strength,
+            salience, channel, entities, goal_tags, storage_strength,
             retrieval_weight, consolidated_from, open_loops,
             emotional_valence, emotional_arousal
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -359,7 +359,7 @@ class TestRunConsolidationCycle:
         mem_db.execute("""
             INSERT INTO episodes (
                 id, intent, context, action, emotion, outcome, gist,
-                salience, topic, consolidated_from, retrieval_weight
+                salience, channel, consolidated_from, retrieval_weight
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             existing_super,

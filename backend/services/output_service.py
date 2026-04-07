@@ -27,19 +27,21 @@ class OutputService:
 
     def enqueue_text(
         self,
-        topic: str,
-        response: str,
-        mode: str,
-        confidence: float,
-        generation_time: float,
+        topic: str = None,
+        response: str = '',
+        mode: str = 'UNIFIED',
+        confidence: float = 0.0,
+        generation_time: float = 0.0,
         original_metadata: dict = None,
         reply_actions: list = None,
+        channel: str = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
 
         Args:
-            topic: Conversation topic identifier
+            topic: Deprecated alias for channel. Use channel instead.
+            channel: Conversation channel identifier
             response: The response text to deliver
             mode: Output mode (UNIFIED, ACT)
             confidence: Confidence score of the response
@@ -50,6 +52,9 @@ class OutputService:
         Returns:
             str: UUID of the enqueued output
         """
+        # Accept topic as backward-compat alias for channel
+        _channel = channel or topic
+
         output_id = str(uuid.uuid4())
         metadata_dict = {
             "response": response,
@@ -70,7 +75,7 @@ class OutputService:
         output = {
             "id": output_id,
             "type": "TEXT",
-            "topic": topic,
+            "topic": _channel,
             "created_at": utc_now().isoformat(),
             "metadata": metadata_dict
         }
@@ -97,7 +102,7 @@ class OutputService:
         event_payload_dict = {
             'output_id': output_id,
             'type': event_type,
-            'topic': topic,
+            'topic': _channel,
             'blocks': blocks,
             'mode': mode,
             'confidence': confidence,
@@ -143,7 +148,7 @@ class OutputService:
             self._send_to_notification_tools(response)
 
         logger.info(
-            f"Enqueued TEXT output {output_id} for topic '{topic}' "
+            f"Enqueued TEXT output {output_id} for topic '{_channel}' "
             f"(mode={mode}, confidence={confidence:.2f})"
         )
 
@@ -202,12 +207,13 @@ class OutputService:
 
     def enqueue_act(
         self,
-        topic: str,
-        actions: List[str],
-        downstream_mode: str,
-        act_history: List[Dict[str, Any]],
-        loop_id: str,
-        generation_time: float
+        topic: str = None,
+        actions: List[str] = None,
+        downstream_mode: str = 'ACT',
+        act_history: List[Dict[str, Any]] = None,
+        loop_id: str = '',
+        generation_time: float = 0.0,
+        channel: str = None,
     ) -> str:
         """
         Enqueue an ACT output for action processing.
@@ -223,11 +229,14 @@ class OutputService:
         Returns:
             str: UUID of the enqueued output
         """
+        _channel = channel or topic
+        actions = actions or []
+        act_history = act_history or []
         output_id = str(uuid.uuid4())
         output = {
             "id": output_id,
             "type": "ACT",
-            "topic": topic,
+            "topic": _channel,
             "created_at": utc_now().isoformat(),
             "metadata": {
                 "actions": actions,
@@ -245,7 +254,7 @@ class OutputService:
         self.store.lpush(self.queue_name, output_id)
 
         logger.info(
-            f"Enqueued ACT output {output_id} for topic '{topic}' "
+            f"Enqueued ACT output {output_id} for topic '{_channel}' "
             f"(loop_id={loop_id}, actions={len(actions)})"
         )
 

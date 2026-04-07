@@ -99,7 +99,6 @@ def collect_routing_signals(
     working_memory,
     world_state_service,
     classification_result: dict,
-    session_service,
 ) -> Dict[str, Any]:
     """
     Collect all routing signals from existing services and NLP analysis.
@@ -113,7 +112,6 @@ def collect_routing_signals(
         working_memory: WorkingMemoryService instance
         world_state_service: WorldStateService instance
         classification_result: Dict from topic classifier
-        session_service: SessionService instance
 
     Returns:
         Dict of routing signals
@@ -129,8 +127,7 @@ def collect_routing_signals(
     topic_confidence = classification_result.get('confidence', 0.5)
     is_new_topic = classification_result.get('is_new_topic', False)
 
-    # Session signals
-    session_exchange_count = getattr(session_service, 'topic_exchange_count', 0) if session_service else 0
+    session_exchange_count = 0
 
     # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
     # Read from MemoryStore (set by recall skill), compute composite confidence score

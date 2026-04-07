@@ -250,7 +250,7 @@ class DomainConfidenceService:
             FROM interaction_log
             WHERE event_type IN ('tool_result', 'action_gate_rejected')
               AND (
-                  lower(topic) LIKE lower(?)
+                  lower(channel) LIKE lower(?)
                   OR lower(payload) LIKE lower(?)
               )
         """
@@ -337,7 +337,7 @@ class DomainConfidenceService:
             FROM interaction_log
             WHERE event_type = 'action_gate_rejected'
               AND (
-                  lower(topic) LIKE lower(?)
+                  lower(channel) LIKE lower(?)
                   OR lower(payload) LIKE lower(?)
               )
               AND lower(payload) NOT LIKE '%"gate": "timing"%'
@@ -376,7 +376,7 @@ class DomainConfidenceService:
             SELECT MAX(created_at) AS latest
             FROM interaction_log
             WHERE (
-                lower(topic) LIKE lower(?)
+                lower(channel) LIKE lower(?)
                 OR lower(payload) LIKE lower(?)
             )
         """

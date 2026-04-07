@@ -56,6 +56,7 @@ def track(
     exchange_id: str = '',
     failure_class: str | None = None,
     result: str = '',
+    channel: str = '',
 ) -> None:
     """Record a single invocation to both observability and learning stores.
 
@@ -63,11 +64,14 @@ def track(
         name:          Tool, skill, or interface capability name.
         success:       Whether the invocation succeeded.
         latency_ms:    Wall-clock execution time in milliseconds.
-        topic:         Conversation topic (for context-specific stats).
+        topic:         Deprecated alias for channel. Use channel instead.
         exchange_id:   Optional exchange ID for cross-referencing.
         failure_class: 'external' for upstream errors, 'internal' for bugs, None for success.
         result:        Raw result string (used by reward map for richer signal).
+        channel:       Conversation channel (for context-specific stats).
     """
+    # Accept topic as backward-compat alias for channel
+    channel = channel or topic
     # ── tool_performance_metrics (observability) ──────────────────────────
     try:
         from services.tool_performance_service import ToolPerformanceService
@@ -91,7 +95,7 @@ def track(
             action_name=name,
             success=success,
             reward=reward,
-            topic=topic,
+            channel=channel,
             failure_class=failure_class,
         )
     except Exception as e:

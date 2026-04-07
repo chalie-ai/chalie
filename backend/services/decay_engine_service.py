@@ -110,7 +110,6 @@ class DecayEngineService:
         if richness >= 0.3:
             identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
-            self._run_constraint_consolidation()
         else:
             identity_count = external_count = 0
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
@@ -364,14 +363,6 @@ class DecayEngineService:
         except Exception as e:
             logger.debug(f"[DECAY ENGINE] Tool calls purge non-fatal: {e}")
             return 0
-
-    def _run_constraint_consolidation(self) -> None:
-        """Run constraint consolidation — convert recurring rejection patterns into episodes."""
-        try:
-            from services.constraint_consolidation_service import run_constraint_consolidation
-            run_constraint_consolidation()
-        except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Constraint consolidation non-fatal: {e}")
 
     # Sources that qualify for accelerated external knowledge decay
     EXTERNAL_KNOWLEDGE_PREFIXES = ("external_specialist:",)

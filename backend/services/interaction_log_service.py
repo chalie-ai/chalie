@@ -74,7 +74,8 @@ class InteractionLogService:
         session_id: str = None,
         source: str = None,
         metadata: Dict[str, Any] = None,
-        thread_id: str = None
+        thread_id: str = None,
+        channel: str = None,
     ) -> Optional[str]:
         """
         Log an event to the interaction log.
@@ -82,15 +83,19 @@ class InteractionLogService:
         Args:
             event_type: Type of event (user_input, classification, system_response, etc.)
             payload: Event-specific data
-            topic: Conversation topic
+            topic: Deprecated alias for channel. Use channel instead.
             exchange_id: Exchange identifier
             session_id: Session identifier
             source: Event source (telegram, rest_api, etc.)
             metadata: Optional metadata dict
+            channel: Conversation channel (replaces topic)
 
         Returns:
             UUID of the created log entry, or None on failure
         """
+        # Accept topic as a backward-compat alias for channel
+        resolved_channel = channel or topic
+
         try:
             event_id = str(uuid.uuid4())
 
@@ -99,14 +104,14 @@ class InteractionLogService:
 
                 cursor.execute("""
                     INSERT INTO interaction_log (
-                        id, event_type, topic, exchange_id, session_id, source,
+                        id, event_type, channel, exchange_id, session_id, source,
                         payload, metadata, thread_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event_id,
                     event_type,
-                    topic,
+                    resolved_channel,
                     exchange_id,
                     session_id,
                     source,
@@ -117,7 +122,7 @@ class InteractionLogService:
 
                 cursor.close()
 
-                logging.info(f"[INTERACTION LOG] Logged {event_type} event {event_id} for topic '{topic}'")
+                logging.info(f"[INTERACTION LOG] Logged {event_type} event {event_id} for channel '{resolved_channel}'")
                 return event_id
 
         except Exception as e:
@@ -147,19 +152,19 @@ class InteractionLogService:
 
                 if event_type:
                     cursor.execute("""
-                        SELECT id, event_type, topic, exchange_id, session_id, source,
+                        SELECT id, event_type, channel, exchange_id, session_id, source,
                                payload, metadata, created_at
                         FROM interaction_log
-                        WHERE topic = ? AND event_type = ?
+                        WHERE channel = ? AND event_type = ?
                         ORDER BY created_at ASC
                         LIMIT ?
                     """, (topic, event_type, limit))
                 else:
                     cursor.execute("""
-                        SELECT id, event_type, topic, exchange_id, session_id, source,
+                        SELECT id, event_type, channel, exchange_id, session_id, source,
                                payload, metadata, created_at
                         FROM interaction_log
-                        WHERE topic = ?
+                        WHERE channel = ?
                         ORDER BY created_at ASC
                         LIMIT ?
                     """, (topic, limit))
@@ -188,7 +193,7 @@ class InteractionLogService:
                 cursor = conn.cursor()
 
                 cursor.execute("""
-                    SELECT id, event_type, topic, exchange_id, session_id, source,
+                    SELECT id, event_type, channel, exchange_id, session_id, source,
                            payload, metadata, created_at
                     FROM interaction_log
                     WHERE exchange_id = ?
@@ -224,10 +229,10 @@ class InteractionLogService:
                 cursor = conn.cursor()
 
                 cursor.execute("""
-                    SELECT id, event_type, topic, exchange_id, session_id, source,
+                    SELECT id, event_type, channel, exchange_id, session_id, source,
                            payload, metadata, created_at
                     FROM interaction_log
-                    WHERE topic = ? AND event_type IN ('user_input', 'system_response')
+                    WHERE channel = ? AND event_type IN ('user_input', 'system_response')
                     ORDER BY created_at ASC
                     LIMIT ?
                 """, (topic, limit))
@@ -271,7 +276,7 @@ class InteractionLogService:
                 # 1. Autonomous events from interaction_log
                 placeholders = ','.join(['?'] * len(_ACTIVITY_EVENT_TYPES))
                 cursor.execute(
-                    f"SELECT id, event_type, topic, payload, source, created_at "
+                    f"SELECT id, event_type, channel, payload, source, created_at "
                     f"FROM interaction_log "
                     f"WHERE created_at > ? AND event_type IN ({placeholders}) "
                     f"ORDER BY created_at DESC LIMIT ?",
@@ -282,7 +287,7 @@ class InteractionLogService:
                     items.append({
                         'source': 'autonomous',
                         'type': row[1],
-                        'topic': row[2],
+                        'channel': row[2],
                         'summary': _summarize_event(row[1], payload),
                         'occurred_at': row[5],
                     })
@@ -301,7 +306,7 @@ class InteractionLogService:
                         items.append({
                             'source': 'background_task',
                             'type': f'task_{row[2]}',
-                            'topic': row[1],
+                            'channel': row[1],
                             'summary': progress.get('last_summary', f'Task {row[2]}'),
                             'detail': {
                                 'task_id': row[0],
@@ -317,7 +322,7 @@ class InteractionLogService:
                 # 3. Fired scheduled items
                 try:
                     cursor.execute(
-                        "SELECT id, message, item_type, topic, last_fired_at "
+                        "SELECT id, message, item_type, channel, last_fired_at "
                         "FROM scheduled_items "
                         "WHERE status = 'fired' AND last_fired_at > ? "
                         "AND hidden = 0 "
@@ -328,7 +333,7 @@ class InteractionLogService:
                         items.append({
                             'source': 'scheduler',
                             'type': 'reminder_fired',
-                            'topic': row[3],
+                            'channel': row[3],
                             'summary': row[1],
                             'detail': {'item_type': row[2], 'schedule_id': row[0]},
                             'occurred_at': row[4],
@@ -373,7 +378,7 @@ class InteractionLogService:
                 cursor = conn.cursor()
                 placeholders = ','.join(['?'] * len(event_types))
                 cursor.execute(
-                    f"SELECT id, event_type, topic, exchange_id, session_id, source, "
+                    f"SELECT id, event_type, channel, exchange_id, session_id, source, "
                     f"       payload, metadata, created_at "
                     f"FROM interaction_log "
                     f"WHERE event_type IN ({placeholders}) AND created_at > ? "
@@ -403,7 +408,7 @@ class InteractionLogService:
         return {
             'id': str(row[0]),
             'event_type': row[1],
-            'topic': row[2],
+            'channel': row[2],
             'exchange_id': row[3],
             'session_id': row[4],
             'source': row[5],

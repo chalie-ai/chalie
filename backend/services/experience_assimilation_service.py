@@ -145,28 +145,28 @@ class ExperienceAssimilationService:
 
         return count >= self.max_sessions
 
-    def _is_topic_on_cooldown(self, topic: str) -> bool:
-        """Check whether a topic is within its post-processing cooldown window.
+    def _is_topic_on_cooldown(self, channel: str) -> bool:
+        """Check whether a channel is within its post-processing cooldown window.
 
         Args:
-            topic: The conversation topic string to check.
+            channel: The conversation channel string to check.
 
         Returns:
-            ``True`` if the topic was processed within ``cooldown_per_topic``
+            ``True`` if the channel was processed within ``cooldown_per_topic``
             seconds ago and should be skipped this cycle.
         """
-        last_time = self.store.zscore(COOLDOWN_ZSET_KEY, topic)
+        last_time = self.store.zscore(COOLDOWN_ZSET_KEY, channel)
         if last_time and (time.time() - float(last_time)) < self.cooldown_per_topic:
             return True
         return False
 
-    def _mark_topic_processed(self, topic: str):
-        """Record the current timestamp for a topic, starting its cooldown window.
+    def _mark_topic_processed(self, channel: str):
+        """Record the current timestamp for a channel, starting its cooldown window.
 
         Args:
-            topic: The conversation topic that was just successfully processed.
+            channel: The conversation channel that was just successfully processed.
         """
-        self.store.zadd(COOLDOWN_ZSET_KEY, {topic: time.time()})
+        self.store.zadd(COOLDOWN_ZSET_KEY, {channel: time.time()})
 
     def _content_hash(self, tool_outputs: list) -> str:
         """Compute a short MD5 fingerprint of tool outputs for content-level deduplication.
@@ -246,7 +246,7 @@ class ExperienceAssimilationService:
         Args:
             item: Dict with keys ``topic``, ``user_prompt``, and ``tool_outputs``.
         """
-        topic = item.get('topic', 'general')
+        channel = item.get('topic', item.get('channel', 'general'))
         user_prompt = item.get('user_prompt', '')
         tool_outputs = item.get('tool_outputs', [])
 
@@ -254,21 +254,21 @@ class ExperienceAssimilationService:
             return
 
         # Filter internal telemetry — don't learn about our own plumbing
-        if topic in _INTERNAL_TOPICS:
-            logger.debug(f"{LOG_PREFIX} Skipping internal topic '{topic}'")
+        if channel in _INTERNAL_TOPICS:
+            logger.debug(f"{LOG_PREFIX} Skipping internal channel '{channel}'")
             return
 
         combined_output = ' '.join(
             str(o.get('result', '')) for o in tool_outputs
         )
         if any(kw in combined_output for kw in _INTERNAL_KEYWORDS):
-            logger.debug(f"{LOG_PREFIX} Skipping internal telemetry in topic '{topic}'")
+            logger.debug(f"{LOG_PREFIX} Skipping internal telemetry in channel '{channel}'")
             return
 
-        if self._is_topic_on_cooldown(topic):
-            logger.debug(f"{LOG_PREFIX} Topic '{topic}' on cooldown, skipping")
-            self._log_rejection(topic, 'topic_cooldown',
-                                f"Topic '{topic}' still on cooldown")
+        if self._is_topic_on_cooldown(channel):
+            logger.debug(f"{LOG_PREFIX} Channel '{channel}' on cooldown, skipping")
+            self._log_rejection(channel, 'topic_cooldown',
+                                f"Channel '{channel}' still on cooldown")
             return
 
         # Novelty gate layer 3: content hash dedup
@@ -282,13 +282,13 @@ class ExperienceAssimilationService:
             reflected = self._reflect(user_prompt, tool_outputs)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} LLM reflection failed: {e}")
-            self._log_rejection(topic, 'llm_reflection_failed', str(e)[:200])
+            self._log_rejection(channel, 'llm_reflection_failed', str(e)[:200])
             return
 
         if not reflected.get('worth_reflecting'):
-            logger.debug(f"{LOG_PREFIX} Topic '{topic}': nothing worth reflecting")
+            logger.debug(f"{LOG_PREFIX} Channel '{channel}': nothing worth reflecting")
             tool_names = [o.get('tool', 'unknown') for o in tool_outputs]
-            self._log_rejection(topic, 'not_worth_reflecting',
+            self._log_rejection(channel, 'not_worth_reflecting',
                                 "LLM judged tool outputs not worth reflecting",
                                 {'tools': tool_names})
             return
@@ -298,7 +298,7 @@ class ExperienceAssimilationService:
             return
 
         logger.info(
-            f"{LOG_PREFIX} Topic '{topic}': {len(observations)} observation(s) to store"
+            f"{LOG_PREFIX} Channel '{channel}': {len(observations)} observation(s) to store"
         )
 
         stored = 0
@@ -312,7 +312,7 @@ class ExperienceAssimilationService:
                 continue
 
             try:
-                self._store_episode(obs, topic, user_prompt, tool_outputs)
+                self._store_episode(obs, channel, user_prompt, tool_outputs)
                 stored += 1
 
 
@@ -320,12 +320,12 @@ class ExperienceAssimilationService:
                 logger.error(f"{LOG_PREFIX} Failed to store episode: {e}")
 
         if stored > 0:
-            self._mark_topic_processed(topic)
+            self._mark_topic_processed(channel)
             self.store.hincrby(STATE_KEY, 'sessions_today', 1)
-            logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for topic '{topic}'")
+            logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for channel '{channel}'")
 
     @staticmethod
-    def _log_rejection(topic: str, rejection_type: str, reason: str,
+    def _log_rejection(channel: str, rejection_type: str, reason: str,
                        details: dict = None):
         """Log assimilation rejection to interaction_log for memory pipeline."""
         try:
@@ -341,7 +341,7 @@ class ExperienceAssimilationService:
                     'reason': reason,
                     **(details or {}),
                 },
-                topic=topic,
+                channel=channel,
                 source='experience_assimilation',
             )
         except Exception as e:
@@ -377,7 +377,7 @@ class ExperienceAssimilationService:
 
         return json.loads(response)
 
-    def _store_episode(self, observation: dict, topic: str, user_prompt: str, tool_outputs: list):
+    def _store_episode(self, observation: dict, channel: str, user_prompt: str, tool_outputs: list):
         """Persist a single reflection observation as an episodic memory entry.
 
         Embeds the observation text, builds the episode payload, and writes it
@@ -387,7 +387,7 @@ class ExperienceAssimilationService:
         Args:
             observation: Observation dict from the LLM with ``text`` and
                 ``durability`` (``'stable'``, ``'evolving'``, or ``'transient'``).
-            topic: The conversation topic associated with this episode.
+            channel: The conversation channel associated with this episode.
             user_prompt: Original user prompt that triggered the ACT loop.
             tool_outputs: List of tool output dicts used to produce the observation.
         """
@@ -412,7 +412,7 @@ class ExperienceAssimilationService:
             'outcome': obs_text,
             'gist': obs_text,
             'salience': salience,
-            'topic': topic,
+            'channel': channel,
             'embedding': embedding,
             'salience_factors': {
                 'source': 'tool_reflection',

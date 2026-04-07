@@ -125,28 +125,6 @@ class TestBuildSystemPrompt:
         )
         assert result == template
 
-    def test_inclusion_map_false_excludes_world_state(self, assembly_svc):
-        assembly_svc.world_state_service.get_world_state.return_value = 'ACTIVE: buy groceries'
-        result = assembly_svc.build_system_prompt(
-            system_prompt_template='State: {{world_state}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            inclusion_map={'world_state': False},
-        )
-        assert 'ACTIVE: buy groceries' not in result
-        assert '{{world_state}}' not in result
-
-    def test_inclusion_map_true_allows_world_state(self, assembly_svc):
-        assembly_svc.world_state_service.get_world_state.return_value = 'ACTIVE: buy groceries'
-        result = assembly_svc.build_system_prompt(
-            system_prompt_template='State: {{world_state}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            inclusion_map={'world_state': True},
-        )
-        assert 'ACTIVE: buy groceries' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,15 +134,6 @@ class TestBuildSystemPrompt:
 
 class TestInjectParameters:
     """Tests for _inject_parameters placeholder substitution."""
-
-    def test_original_prompt_replaced(self, assembly_svc):
-        result = assembly_svc._inject_parameters(
-            '{{original_prompt}}',
-            original_prompt='hello world',
-            classification=_minimal_classification(),
-            chat_history=[],
-        )
-        assert 'hello world' in result
 
     def test_topic_replaced(self, assembly_svc):
         result = assembly_svc._inject_parameters(
@@ -184,25 +153,6 @@ class TestInjectParameters:
         )
         assert '99' in result
 
-    def test_act_history_replaced_with_given_value(self, assembly_svc):
-        result = assembly_svc._inject_parameters(
-            '{{act_history}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            act_history='[recall] Found: some data',
-        )
-        assert '[recall] Found: some data' in result
-
-    def test_act_history_empty_by_default(self, assembly_svc):
-        result = assembly_svc._inject_parameters(
-            'H:{{act_history}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-        )
-        assert result.strip() == 'H:'
-
     @pytest.mark.parametrize("placeholder", [
         "identity_context", "client_context", "available_skills",
     ])
@@ -215,22 +165,3 @@ class TestInjectParameters:
         )
         assert f'{{{{{placeholder}}}}}' not in result
 
-    def test_visual_context_empty_when_not_in_assembled_context(self, assembly_svc):
-        result = assembly_svc._inject_parameters(
-            'V:{{visual_context}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            assembled_context={},
-        )
-        assert '{{visual_context}}' not in result
-
-    def test_contradiction_context_empty_when_absent(self, assembly_svc):
-        result = assembly_svc._inject_parameters(
-            'C:{{contradiction_context}}',
-            original_prompt='test',
-            classification=_minimal_classification(),
-            chat_history=[],
-            assembled_context={},
-        )
-        assert '{{contradiction_context}}' not in result

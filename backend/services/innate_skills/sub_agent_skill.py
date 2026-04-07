@@ -39,12 +39,12 @@ _SUB_AGENT_PROMPT = (
 )
 
 
-def handle_sub_agent(topic: str, params: dict) -> str:
+def handle_sub_agent(channel: str, params: dict) -> str:
     """
     Spawn a focused sub-agent to execute a specific task.
 
     Args:
-        topic: Parent conversation topic (used for namespacing)
+        channel: Parent conversation channel (used for namespacing)
         params: {
             goal (str, required): Clear, specific goal for the sub-agent
         }
@@ -56,7 +56,7 @@ def handle_sub_agent(topic: str, params: dict) -> str:
     if not goal:
         return "[SUB AGENT] Error: 'goal' parameter is required."
 
-    logger.info(f"{LOG_PREFIX} Spawning sub-agent for topic={topic!r}: {goal[:80]}")
+    logger.info(f"{LOG_PREFIX} Spawning sub-agent for channel={channel!r}: {goal[:80]}")
 
     try:
         from services.config_service import ConfigService
@@ -82,7 +82,7 @@ def handle_sub_agent(topic: str, params: dict) -> str:
         )
 
         result = orchestrator.run(
-            topic=f"sub_agent_{topic}",
+            channel=f"sub_agent_{channel}",
             text=goal,
             cortex_service=cortex_service,
             act_prompt=act_prompt,
@@ -90,7 +90,7 @@ def handle_sub_agent(topic: str, params: dict) -> str:
             chat_history=[],
             selected_skills=_SUB_AGENT_SKILLS,
             session_id='sub_agent',
-            exchange_id=f"sub_{topic}_{uuid.uuid4().hex[:8]}",
+            exchange_id=f"sub_{channel}_{uuid.uuid4().hex[:8]}",
         )
 
         if result.final_response:

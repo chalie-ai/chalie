@@ -101,7 +101,7 @@ class TestDeleteAll:
 
         required_tables = [
             'episodes', 'knowledge',
-            'threads', 'autobiography', 'scheduled_items',
+            'transcript', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
             'interaction_log', 'cortex_iterations',
         ]
@@ -131,7 +131,7 @@ class TestDataSummary:
         src = inspect.getsource(data_summary)
 
         required_tables = [
-            'episodes', 'knowledge', 'threads',
+            'episodes', 'knowledge', 'transcript',
             'autobiography', 'scheduled_items', 'persistent_tasks',
             'lists', 'place_fingerprints',
             'interaction_log',
@@ -151,7 +151,7 @@ class TestExportData:
 
         required_tables = [
             'episodes', 'knowledge',
-            'threads', 'autobiography', 'scheduled_items',
+            'transcript', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
         ]
         for table in required_tables:

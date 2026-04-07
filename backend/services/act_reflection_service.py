@@ -30,7 +30,7 @@ def _is_ephemeral_tool(tool_name: str) -> bool:
     return False
 
 
-def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
+def enqueue_tool_reflection(act_history: list, channel: str, user_prompt: str):
     """Push tool outputs to MemoryStore for background experience assimilation.
 
     Applies novelty gate layers 1 (ephemeral tool type) and 2 (output size).
@@ -40,7 +40,7 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
         act_history: List of action result dicts from the ACT loop.  Only
             entries with ``status == 'success'`` and non-ephemeral action types
             are considered.
-        topic: Conversation topic identifier for the reflection payload.
+        channel: Conversation channel identifier for the reflection payload.
         user_prompt: Original user message that triggered the ACT loop,
             included in the reflection payload for context.
     """
@@ -68,7 +68,7 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
         from services.memory_client import MemoryClientService
         store = MemoryClientService.create_connection()
         payload = json.dumps({
-            'topic': topic,
+            'topic': channel,
             'user_prompt': user_prompt,
             'tool_outputs': tool_outputs,
             'timestamp': time.time(),
@@ -76,7 +76,7 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
         store.rpush(act_memory_keys.TOOL_REFLECTION_QUEUE, payload)
         store.expire(act_memory_keys.TOOL_REFLECTION_QUEUE, act_memory_keys.TOOL_REFLECTION_TTL)
         logger.debug(
-            f"{LOG_PREFIX} Enqueued reflection for topic '{topic}' "
+            f"{LOG_PREFIX} Enqueued reflection for channel '{channel}' "
             f"({len(tool_outputs)} tool output(s))"
         )
     except Exception as e:

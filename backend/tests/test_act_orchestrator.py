@@ -109,7 +109,7 @@ class TestNoActions:
 
         orchestrator = ACTOrchestrator(config={}, max_iterations=5)
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
             chat_history=[],
         )
@@ -156,7 +156,7 @@ class TestMaxIterationsTermination:
             config={}, max_iterations=5, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
             chat_history=[],
         )
@@ -209,7 +209,7 @@ class TestSameTypeActionsAllowed:
             smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -257,7 +257,7 @@ class TestForcedExitSynthesis:
             config={}, max_iterations=1, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -293,7 +293,7 @@ class TestForcedExitSynthesis:
             config={}, max_iterations=5, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -340,7 +340,7 @@ class TestCallbackTermination:
             config={}, max_iterations=10, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
             on_iteration_complete=cancel_callback,
@@ -384,7 +384,7 @@ class TestMethodologyLearning:
 
         orchestrator = ACTOrchestrator(config={}, max_iterations=5, smart_repetition=False)
         orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -419,7 +419,7 @@ class TestMethodologyLearning:
         with patch('services.act_orchestrator_service.threading') as mock_threading:
             orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
             orchestrator.run(
-                topic='test', text='hello', cortex_service=cortex,
+                channel='test', text='hello', cortex_service=cortex,
                 act_prompt='test', classification={'topic': 't', 'confidence': 10},
                 chat_history=[],
             )
@@ -442,7 +442,7 @@ class TestMethodologyLearning:
         cortex = _make_cortex_service([_make_response(actions=[])])
         orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -483,7 +483,7 @@ class TestConstructorParams:
 
         orch = ACTOrchestrator(config={}, max_iterations=2, smart_repetition=False)
         result = orch.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -517,7 +517,7 @@ class TestConstructorParams:
 
         orch = ACTOrchestrator(config={}, max_iterations=10, smart_repetition=False)
         result = orch.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -664,7 +664,7 @@ class TestAppendMode:
                 config={}, max_iterations=5, smart_repetition=False,
             )
             orchestrator.run(
-                topic='test', text='what is the weather?', cortex_service=cortex,
+                channel='test', text='what is the weather?', cortex_service=cortex,
                 act_prompt='test', classification={'topic': 't', 'confidence': 10},
                 chat_history=[],
             )
@@ -719,7 +719,7 @@ class TestAppendMode:
             config={}, max_iterations=5, smart_repetition=False,
         )
         orchestrator.run(
-            topic='test', text='test', cortex_service=cortex,
+            channel='test', text='test', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -764,7 +764,7 @@ class TestAppendMode:
             config={}, max_iterations=5, smart_repetition=False,
         )
         orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
             chat_history=[],
         )
@@ -809,7 +809,7 @@ class TestOnNarrationCallback:
 
         orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
         orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
             on_narration=lambda text, step: narrations.append((text, step)),
@@ -848,7 +848,7 @@ class TestOnNarrationCallback:
 
         orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
         orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
             on_narration=lambda text, step: narrations.append(text),
@@ -895,7 +895,7 @@ class TestForcedExitFallback:
             config={}, max_iterations=1, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -936,7 +936,7 @@ class TestForcedExitFallback:
             config={}, max_iterations=1, smart_repetition=False, proactive=True,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -979,7 +979,7 @@ class TestForcedExitFallback:
             config={}, max_iterations=1, smart_repetition=False,
         )
         result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )
@@ -1008,7 +1008,7 @@ class TestForcedExitFallback:
 
         orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
         orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
             on_narration=lambda text, step: narrations.append(text),
@@ -1281,7 +1281,7 @@ class TestEdgeCases:
         cortex = _make_cortex_service([_make_response(actions=[])])
         orch = ACTOrchestrator(config={}, smart_repetition=False)
         result = orch.run(
-            topic='', text='hello', cortex_service=cortex,
+            channel='', text='hello', cortex_service=cortex,
             act_prompt='test', classification={},
             chat_history=[],
         )
@@ -1306,7 +1306,7 @@ class TestEdgeCases:
         ])
         orch = ACTOrchestrator(config={}, smart_repetition=False)
         result = orch.run(
-            topic='test', text='hello', cortex_service=cortex,
+            channel='test', text='hello', cortex_service=cortex,
             act_prompt='test', classification={'topic': 't', 'confidence': 10},
             chat_history=[],
         )

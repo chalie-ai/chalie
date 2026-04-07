@@ -38,7 +38,7 @@ def _seed_episode(db, episode_id='ep-1', updated_at='2026-01-01 10:00:00'):
     """Insert a minimal valid episode row for consolidation-timestamp tests."""
     db.execute(
         "INSERT INTO episodes "
-        "(id, intent, context, action, emotion, outcome, gist, salience, topic, updated_at) "
+        "(id, intent, context, action, emotion, outcome, gist, salience, channel, updated_at) "
         "VALUES (?, '{}', '{}', 'test', '{}', 'ok', 'gist', 5, 'test', ?)",
         (episode_id, updated_at),
     )

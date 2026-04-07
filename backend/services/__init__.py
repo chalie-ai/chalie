@@ -9,7 +9,6 @@ from .database_service import DatabaseService
 from .schema_service import SchemaService
 from .episodic_service import EpisodicService
 from .salience_service import SalienceService
-from .session_service import SessionService
 
 
 __all__ = [
@@ -18,5 +17,5 @@ __all__ = [
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',
     'SchemaService', 'EpisodicService',
-    'SalienceService', 'SessionService',
+    'SalienceService',
 ]

@@ -208,14 +208,14 @@ class TestDMNContextGathering:
         # action, outcome, gist, topic are plain TEXT; salience is a 1-10 integer.
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+            "(id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('ep-1', '"query"', '{}', 'searched_weather', '"neutral"', 'success',
              'User asked about weather', 1, 'general', ts),
         )
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+            "(id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('ep-2', '"discuss"', '{}', '', '"neutral"', 'success',
              'Discussed meal plan', 1, 'general', ts),
@@ -343,7 +343,6 @@ class TestDMNProactiveGenerate:
         svc = _make_service(get_shared_db_service(), store)
 
         with patch('workers.digest_singletons.load_configs', return_value=self._base_configs()), \
-             patch('workers.digest_singletons.get_thread_conv_service', return_value=MagicMock()), \
              patch('workers.digest_worker.unified_generate',
                    return_value=({'response': 'DMN_NO_ACTION'}, {})), \
              patch('services.output_service.OutputService') as mock_output_cls:
@@ -365,7 +364,6 @@ class TestDMNProactiveGenerate:
         }
 
         with patch('workers.digest_singletons.load_configs', return_value=self._base_configs()), \
-             patch('workers.digest_singletons.get_thread_conv_service', return_value=MagicMock()), \
              patch('workers.digest_worker.unified_generate',
                    return_value=(response_data, {})), \
              patch('services.output_service.OutputService') as mock_output_cls:

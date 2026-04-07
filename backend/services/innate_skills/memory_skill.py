@@ -114,16 +114,16 @@ def _auto_classify(key: str) -> Tuple[str, str]:
 # ── Entry point ─────────────────────────────────────────────────────
 
 
-def handle_memory(topic: str, params: dict) -> str:
+def handle_memory(channel: str, params: dict) -> str:
     action = params.get("action", "recall")
 
     try:
         if action == "store":
-            return _handle_store(topic, params)
+            return _handle_store(channel, params)
         elif action == "recall":
-            return _handle_recall(topic, params)
+            return _handle_recall(channel, params)
         elif action == "update":
-            return _handle_update(topic, params)
+            return _handle_update(channel, params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
@@ -137,7 +137,7 @@ def handle_memory(topic: str, params: dict) -> str:
 # ── Store ────────────────────────────────────────────────────────────
 
 
-def _handle_store(topic: str, params: dict) -> str:
+def _handle_store(channel: str, params: dict) -> str:
     """Store one or more knowledge entries."""
     entries = params.get("entries", [])
     if not entries:
@@ -177,7 +177,7 @@ def _handle_store(topic: str, params: dict) -> str:
                 kind=kind,
                 decay_class=decay_class,
                 data=data,
-                source=f"skill:memory:store:{topic}",
+                source=f"skill:memory:store:{channel}",
             )
             stored += 1
 
@@ -188,7 +188,7 @@ def _handle_store(topic: str, params: dict) -> str:
                     if new_id:
                         _check_trait_contradiction(
                             ks, new_id, key, str(value), 1.0,
-                            thread_id=topic,
+                            thread_id=channel,
                             source='chat',
                         )
                 except Exception as _ctc_exc:
@@ -211,7 +211,7 @@ def _handle_store(topic: str, params: dict) -> str:
 # ── Recall ───────────────────────────────────────────────────────────
 
 
-def _handle_recall(topic: str, params: dict) -> str:
+def _handle_recall(channel: str, params: dict) -> str:
     query = params.get("query", "")
     if not query:
         return f"{LOG_PREFIX} Error: no query specified for recall."
@@ -226,16 +226,16 @@ def _handle_recall(topic: str, params: dict) -> str:
     layer_status["knowledge"] = status
     results.extend(hits)
 
-    hits, status = _search_episodes(topic, query, limit)
+    hits, status = _search_episodes(channel, query, limit)
     layer_status["episodes"] = status
     results.extend(hits)
 
-    hits, status = _search_transcript(topic, query, limit)
+    hits, status = _search_transcript(channel, query, limit)
     layer_status["transcript"] = status
     results.extend(hits)
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
-    _store_fok_signal(topic, partial)
+    _store_fok_signal(channel, partial)
 
     if not results:
         return _format_empty(["knowledge", "episodes", "transcript"], layer_status, query)
@@ -292,7 +292,7 @@ def _search_knowledge(
 
 
 def _search_episodes(
-    topic: str, query: str, limit: int
+    channel: str, query: str, limit: int
 ) -> Tuple[List[Dict], str]:
     """Search episodic memory via hybrid retrieval."""
     try:
@@ -308,7 +308,7 @@ def _search_episodes(
         )
 
         if not episodes:
-            candidates = _count_episode_candidates(db, topic)
+            candidates = _count_episode_candidates(db, channel)
             return [], f"0 matches ({candidates} candidates evaluated)"
 
         hits = []
@@ -330,15 +330,15 @@ def _search_episodes(
 
 
 def _search_transcript(
-    topic: str, query: str, limit: int
+    channel: str, query: str, limit: int
 ) -> Tuple[List[Dict], str]:
     try:
         from services import transcript_service
 
-        results = transcript_service.search(topic, query, limit=limit)
+        results = transcript_service.search(channel, query, limit=limit)
 
         if not results:
-            return [], f"0 matches (scope: {topic})"
+            return [], f"0 matches (scope: {channel})"
 
         hits = []
         for r in results:
@@ -347,14 +347,14 @@ def _search_transcript(
                 content = content[:300] + "..."
             role = r.get("role", "unknown")
             tool_tag = f" [{r['tool_name']}]" if r.get("tool_name") else ""
-            entry_topic = r.get("topic", topic)
+            entry_channel = r.get("channel", channel)
 
             hits.append({
                 "layer": "transcript",
                 "content": f"[{role}{tool_tag}] {content}",
                 "confidence": r.get("similarity", 0.5),
                 "freshness": str(r.get("created_at", "")),
-                "topic": entry_topic,
+                "channel": entry_channel,
             })
 
         return hits, f"{len(hits)} matches"
@@ -364,14 +364,14 @@ def _search_transcript(
         return [], f"error: {e}"
 
 
-def _count_episode_candidates(db_service, topic: str) -> int:
+def _count_episode_candidates(db_service, channel: str) -> int:
     """Count total episodes to distinguish empty from no-match."""
     try:
         with db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND topic = ?",
-                (topic,),
+                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND channel = ?",
+                (channel,),
             )
             count = cursor.fetchone()[0]
             cursor.close()
@@ -383,7 +383,7 @@ def _count_episode_candidates(db_service, topic: str) -> int:
 # ── Update ───────────────────────────────────────────────────────────
 
 
-def _handle_update(topic: str, params: dict) -> str:
+def _handle_update(channel: str, params: dict) -> str:
     """Update an existing knowledge entry."""
     entity = params.get("entity", "user")
     key = params.get("key")
@@ -450,8 +450,8 @@ def _format_results(results: List[Dict], query: str) -> str:
                 extra = f", certainty={m.get('confidence_label', '')}"
                 if m.get("evidence_count", 1) > 1:
                     extra += f", evidence={m['evidence_count']}"
-            if "topic" in hit:
-                extra += f", topic={hit['topic']}"
+            if "channel" in hit:
+                extra += f", channel={hit['channel']}"
             lines.append(f"    - {content} (confidence={conf:.2f}{extra})")
 
     return "\n".join(lines)
@@ -472,12 +472,12 @@ def _format_empty(
     return "\n".join(lines)
 
 
-def _store_fok_signal(topic: str, partial_match_count: int) -> None:
+def _store_fok_signal(channel: str, partial_match_count: int) -> None:
     """Store partial match count in MemoryStore for introspect's FOK signal."""
     try:
         from services.memory_client import MemoryClientService
 
         store = MemoryClientService.create_connection()
-        store.setex(f"fok:{topic}", 300, str(partial_match_count))
+        store.setex(f"fok:{channel}", 300, str(partial_match_count))
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Failed to store FOK signal: {e}")

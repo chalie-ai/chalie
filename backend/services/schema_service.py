@@ -63,6 +63,12 @@ class SchemaService:
         """
         Initialize database schema from schema.sql (idempotent).
         All CREATE TABLE statements use IF NOT EXISTS.
+
+        On a brand-new database, all existing migration files are stamped as
+        already applied so that ``run_pending_migrations()`` is a no-op.  This
+        prevents migrations written for upgrade paths (which reference old table
+        names) from running against a fresh schema that already has the final
+        table structure.
         """
         if not self._schema_path.exists():
             raise FileNotFoundError(f"Schema file not found: {self._schema_path}")
@@ -74,6 +80,33 @@ class SchemaService:
 
             # Create sqlite-vec virtual tables for vector search
             self._create_vec_tables(conn)
+
+            # Stamp all existing migrations as applied on a fresh install so
+            # upgrade-path migrations don't run against the already-current schema.
+            migrations_dir = self._schema_path.parent / "migrations"
+            if migrations_dir.exists():
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT UNIQUE NOT NULL,
+                        applied_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                cursor.execute("SELECT COUNT(*) FROM schema_migrations")
+                migration_count = cursor.fetchone()[0]
+                if migration_count == 0:
+                    # Fresh database — stamp all migrations as already applied
+                    for migration_file in sorted(migrations_dir.glob("*.sql")):
+                        try:
+                            cursor.execute(
+                                "INSERT OR IGNORE INTO schema_migrations (filename) VALUES (?)",
+                                (migration_file.name,)
+                            )
+                        except Exception:
+                            pass
+                    logger.info("Fresh install — stamped all migrations as applied")
+                cursor.close()
 
             logger.info("Schema initialized successfully")
 

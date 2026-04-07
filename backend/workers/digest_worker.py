@@ -16,9 +16,7 @@ response cycle: topic classification, context assembly, unified generation
 and output delivery.
 
 It also provides lightweight helpers used by cron-tool and other workers for
-interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``)
-and a lazy singleton accessor for the shared ``ContextAssemblyService``
-(``get_context_assembly_service``).
+interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``).
 """
 
 import json
@@ -33,19 +31,14 @@ from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
-from services.mode_router_service import collect_routing_signals, compute_nlp_signals
-from services.thread_service import get_thread_service
-from services.thread_conversation_service import ThreadConversationService
+from services.mode_router_service import compute_nlp_signals
 from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # Singleton getters — canonical implementations live in digest_singletons.py;
 # re-exported here so existing ``from workers.digest_worker import get_*`` still works.
 from workers.digest_singletons import (          # noqa: F401
     get_context_relevance_service,
-    get_context_assembly_service,
     get_orchestrator,
-    get_thread_conv_service,
-    get_session_service,
     get_mode_router,
     load_configs,
 )
@@ -77,8 +70,10 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
         timeout: Maximum seconds to wait per image before giving up.
 
     Returns:
-        List of image context dicts (``description``, ``ocr_text``, etc.).
-        Images that time out or fail to parse are silently skipped.
+        List of image context dicts (``ocr_text``, ``has_text``,
+        ``analysis_time_ms``, ``error``).  Always same length as *image_ids*
+        in the same order.  Timed-out or unparseable images get an ``error``
+        key describing what happened.
     """
     if not image_ids:
         return []
@@ -88,20 +83,94 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
     for img_id in image_ids:
         key = f'chat_image_result:{img_id}'
         deadline = time.time() + timeout
+        resolved = False
         while time.time() < deadline:
             raw = store.get(key)
             if raw:
                 try:
                     contexts.append(json.loads(raw))
                 except json.JSONDecodeError as e:
+                    contexts.append({'error': f'failed to parse analysis result: {e}'})
                     logger.debug(f"[DIGEST] Failed to parse image context JSON for {img_id!r}: {e}", exc_info=True)
+                resolved = True
                 break
             time.sleep(1)
-        else:
-            logging.debug(f"[DIGEST] Image resolution timed out for {img_id!r} after {timeout}s")
+        if not resolved:
+            contexts.append({'error': f'timed out trying to process image after {timeout} seconds'})
+            logging.info(f"[DIGEST] Image resolution timed out for {img_id!r} after {timeout}s")
     return contexts
 
 
+
+
+def _store_image_tool_calls(transcript_id: int, image_ids: list, image_contexts: list) -> list:
+    """Store a tool_call row for each uploaded image, linking it to the transcript entry.
+
+    Fetches document metadata (mime_type, file_path) from the documents table and
+    pairs it with the analysis results from image_contexts (ocr_text, has_text,
+    analysis_time_ms).  The result is a pre-formatted [file()] tag that
+    UserPromptAssemblyService renders verbatim.
+
+    Returns the list of [file()] tag strings so the caller can inject them into
+    the current turn without a DB round-trip.
+    """
+    from urllib.parse import quote
+    from services.time_utils import utc_now
+
+    tags = []
+    try:
+        from services.database_service import get_shared_db_service
+        from services.document_service import DocumentService
+
+        db = get_shared_db_service()
+        doc_svc = DocumentService(db)
+
+        # Build a lookup from image_id → analysis context.
+        # _resolve_image_contexts iterates image_ids sequentially, preserving
+        # order, but skips timed-out images — so the list may be shorter.
+        # Include the image_id in each context dict for safe correlation.
+        ctx_by_id = {}
+        for img_id, ctx in zip(image_ids, image_contexts):
+            ctx_by_id[img_id] = ctx
+
+        # Fetch all document records before opening the write connection
+        docs_by_id = {}
+        for img_id in image_ids:
+            docs_by_id[img_id] = doc_svc.get_document(img_id)
+
+        now = utc_now().isoformat()
+
+        with db.connection() as conn:
+            for img_id in image_ids:
+                doc = docs_by_id.get(img_id)
+                ctx = ctx_by_id.get(img_id)
+
+                # Build description from all available analysis features
+                if ctx is None:
+                    description = 'image failed to process'
+                elif ctx.get('error'):
+                    description = ctx['error']
+                else:
+                    ocr = ctx.get('ocr_text', '').strip()
+                    description = f"Contains text: {ocr}" if ocr else 'image'
+
+                mime = doc.get('mime_type', 'image/unknown') if doc else 'image/unknown'
+                path = quote(doc.get('file_path', ''), safe='/') if doc else ''
+
+                tag = f"[file(id:{img_id},type:{mime},path:{path})] {description}"
+                tags.append(tag)
+
+                conn.execute(
+                    "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, created_at) "
+                    "VALUES (?, 'file', '{}', ?, 'system', ?)",
+                    (transcript_id, tag, now),
+                )
+            conn.commit()
+
+    except Exception as e:
+        logging.info(f"[DIGEST] Failed to store image tool_calls: {e}", exc_info=True)
+
+    return tags
 
 
 def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_id: str = None):
@@ -368,25 +437,13 @@ def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool
     return warmth
 
 
-def _format_visual_context(image_contexts: list) -> str:
-    """Format image analysis results as a markdown section for the prompt."""
-    parts = []
-    for i, ctx in enumerate(image_contexts, 1):
-        label = f"Image {i}" if len(image_contexts) > 1 else "Attached image"
-        desc = ctx.get('description', '').strip()
-        ocr = ctx.get('ocr_text', '').strip()
-        part = f"**{label}:** {desc}" if desc else f"**{label}:** (no description)"
-        if ocr:
-            part += f"\n> Extracted text: {ocr[:500]}"
-        parts.append(part)
-    return "\n\n".join(parts)
 
 
-def unified_generate(topic, text, classification, thread_conv_service,
+def unified_generate(channel, text, classification, thread_conv_service,
                      cortex_config, cortex_prompt_map, signals,
                      metadata=None, thread_id=None,
                      returning_from_silence=False, message_embedding=None,
-                     topic_context=None, proactive: bool = False):
+                     proactive: bool = False):
     """
     Unified generation — single LLM call with all innate skills available.
 
@@ -421,35 +478,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     except Exception as e:
         logging.warning(f"[UNIFIED] Context relevance computation failed: {e}, proceeding without inclusion_map")
 
-    # Assemble context
-    assembled_context = None
-    try:
-        assembled_context = get_context_assembly_service().assemble(
-            prompt=text,
-            topic=topic,
-            thread_id=thread_id,
-            message_embedding=message_embedding,
-            context=topic_context,
-        )
-        if topic_context and topic_context.failed_sections:
-            logging.warning(
-                f"[UNIFIED] Context assembly had failures: {topic_context.failed_sections}"
-            )
-    except Exception as e:
-        logging.warning(f"[UNIFIED] Context assembly failed: {e}")
-
-    # Inject visual context from attached images
-    image_contexts = (metadata or {}).get('image_contexts', [])
-    if image_contexts:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['visual_context'] = _format_visual_context(image_contexts)
-
-    # Propagate message embedding for WorldStateService semantic scoring
-    if message_embedding is not None:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['message_embedding'] = message_embedding
+    assembled_context = {'message_embedding': message_embedding} if message_embedding is not None else None
 
     cortex_service = FrontalCortexService(config)
 
@@ -473,22 +502,14 @@ def unified_generate(topic, text, classification, thread_conv_service,
         inclusion_map=inclusion_map,
     )
 
-    # Voice mode: inject plain-text-only instruction for TTS-friendly responses
     system_prompt = system_prompt_svc.to_provider()
-    if (metadata or {}).get('source') == 'voice':
-        system_prompt = system_prompt.replace('{{voice_mode_instruction}}',
-            '\n\nIMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
-            'Respond in plain conversational text only. No markdown formatting, code blocks, '
-            'tables, bullet lists, links, or structured formatting. Write as you would speak.')
-    else:
-        system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
 
     # ── User prompt (per-turn, never cached) ──────────────────────
     from services.user_prompt_assembly_service import UserPromptAssemblyService
     user_prompt_svc = UserPromptAssemblyService()
     user_prompt_svc.build(
         user_message=text,
-        topic=topic,
+        channel=channel,
         thread_id=thread_id,
         metadata=metadata,
     )
@@ -508,7 +529,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
                     'skills': all_skills,
                     'tool_count': len(native_tools),
                 },
-                topic=topic,
+                topic=channel,
                 exchange_id=(metadata or {}).get('exchange_id'),
                 source='unified_generate',
                 metadata=metadata,
@@ -609,7 +630,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
             logging.error(f"[UNIFIED] Narration publish failed: {_e}", exc_info=True)
 
     result = orchestrator.run(
-        topic=topic,
+        channel=channel,
         text=text,
         cortex_service=cortex_service,
         act_prompt=prompt,  # Unified prompt (not ACT-specific)
@@ -676,7 +697,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     # Enqueue tool reflection
     try:
         from services.act_reflection_service import enqueue_tool_reflection
-        enqueue_tool_reflection(result.act_history, topic, text)
+        enqueue_tool_reflection(result.act_history, channel, text)
     except Exception as _e:
         logging.debug(f"[UNIFIED] Reflection enqueue skipped: {_e}")
 
@@ -720,16 +741,11 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         cortex_config = configs['cortex']['config']
         cortex_prompt_map = configs['cortex']['prompt_map']
 
-        topic = f'tool_dialog:{tool_name}'
-
-        thread_service = get_thread_service()
-        resolution = thread_service.resolve_thread('default',f'tool_dialog:{tool_name}')
-        thread_id = resolution.thread_id
-
-        thread_conv_service = get_thread_conv_service()
+        channel = f'tool_dialog:{tool_name}'
+        thread_id = channel
 
         classification = {
-            'topic': topic,
+            'topic': channel,
             'confidence': 10,
             'similar_topic': '',
             'topic_update': '',
@@ -737,18 +753,6 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
 
         # Build minimal routing signals -- tool dialogs don't need full signal collection
         signals = {'_prompt_text': text}
-
-        try:
-            from services.topic_context import TopicContext
-            _tool_ctx = TopicContext(topic=topic, thread_id=thread_id)
-            get_context_assembly_service().assemble(
-                prompt=text, topic=topic, thread_id=thread_id,
-                context=_tool_ctx,
-            )
-            if _tool_ctx.failed_sections:
-                logging.warning(f"[TOOL DIALOG] Context assembly had failures: {_tool_ctx.failed_sections}")
-        except Exception as e:
-            logging.warning(f"[TOOL DIALOG] Context assembly failed for '{tool_name}': {e}")
 
         # Trait extraction -- runs in background thread, non-blocking
         enqueue_trait_extraction(
@@ -760,10 +764,10 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         # Generate response via unified pipeline (may engage ACT loop)
         # metadata=None means orchestrator does NOT deliver to user
         response_data, _ = unified_generate(
-            topic=topic,
+            channel=channel,
             text=text,
             classification=classification,
-            thread_conv_service=thread_conv_service,
+            thread_conv_service=None,
             cortex_config=cortex_config,
             cortex_prompt_map=cortex_prompt_map,
             signals=signals,
@@ -773,18 +777,7 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
             message_embedding=None,
         )
 
-        # Store response in conversation history
-        thread_conv_service.add_response(
-            thread_id,
-            response_data['response'],
-            response_data['generation_time']
-        )
-
         response = response_data.get('response', '')
-
-        # Store response in conversation history (weak signal)
-        if thread_id:
-            thread_conv_service.add_response(thread_id, response, response_data.get('generation_time', 0.0))
 
         logging.info(
             f"[TOOL DIALOG] '{tool_name}' processed: mode={response_data.get('mode')} "
@@ -831,7 +824,7 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
 def _run_response_pipeline(
     *,
     text,
-    topic,
+    channel,
     classification,
     thread_id,
     metadata,
@@ -855,7 +848,7 @@ def _run_response_pipeline(
 
     Args:
         text: The prompt text for generation.
-        topic: Topic key for context assembly and orchestrator.
+        channel: Channel key for context assembly and orchestrator.
         classification: Classification dict for context/generation.
         thread_id: Resolved thread ID.
         metadata: Full metadata dict (passed to orchestrator).
@@ -869,15 +862,13 @@ def _run_response_pipeline(
         log_source: Source string for interaction log.
         log_tag: Tag for log messages (e.g. 'CRON TOOL', 'PROACTIVE').
         working_memory: Optional WorkingMemoryService instance for WM append.
-        wm_key: Key for working memory append (defaults to ``thread_id or topic``).
+        wm_key: Key for working memory append (defaults to ``thread_id or channel``).
 
     Returns:
         tuple: (response_data dict, is_empty bool) where is_empty is True
             when the LLM produced an empty response and the caller should
             return an early-exit status string.
     """
-    thread_conv_service = get_thread_conv_service()
-
     # Context relevance
     inclusion_map = None
     try:
@@ -886,20 +877,6 @@ def _run_response_pipeline(
         )
     except Exception as e:
         logging.warning(f"[{log_tag}] Context relevance failed: {e}")
-
-    # Context assembly
-    assembled_context = None
-    try:
-        from services.topic_context import TopicContext
-        _ctx = TopicContext(topic=topic, thread_id=thread_id)
-        assembled_context = get_context_assembly_service().assemble(
-            prompt=text, topic=topic, thread_id=thread_id,
-            context=_ctx,
-        )
-        if _ctx.failed_sections:
-            logging.warning(f"[{log_tag}] Context assembly had failures: {_ctx.failed_sections}")
-    except Exception as e:
-        logging.warning(f"[{log_tag}] Context assembly failed: {e}")
 
     # ── System prompt (stable) ──────────────────────────────────────
     from services.system_prompt_assembly_service import SystemPromptAssemblyService
@@ -911,12 +888,11 @@ def _run_response_pipeline(
         inclusion_map=inclusion_map,
     )
     system_prompt = system_prompt_svc.to_provider()
-    system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
 
     # ── User prompt (per-turn) ────────────────────────────────────
     from services.user_prompt_assembly_service import UserPromptAssemblyService
     user_prompt_svc = UserPromptAssemblyService()
-    user_prompt_svc.build(user_message=text, topic=topic, thread_id=thread_id)
+    user_prompt_svc.build(user_message=text, channel=channel, thread_id=thread_id)
     user_prompt = user_prompt_svc.to_provider()
 
     # Generation
@@ -929,7 +905,6 @@ def _run_response_pipeline(
         chat_history=[],
         thread_id=thread_id,
         inclusion_map=inclusion_map,
-        assembled_context=assembled_context,
     )
 
     # Force UNIFIED mode (both cron and proactive bypass mode routing)
@@ -942,20 +917,14 @@ def _run_response_pipeline(
 
     # Working memory append
     if working_memory is not None:
-        _wm_key = wm_key or thread_id or topic
+        _wm_key = wm_key or thread_id or channel
         working_memory.append_turn(_wm_key, 'assistant', response_data['response'])
-
-    # Store response in conversation history
-    if thread_id:
-        thread_conv_service.add_response(
-            thread_id, response_data['response'], response_data.get('generation_time', 0.0)
-        )
 
     # Orchestrator routing
     try:
         orchestrator = get_orchestrator()
         context = {
-            'topic': topic,
+            'topic': channel,
             'response': response_data['response'],
             'confidence': response_data.get('confidence', 0.5),
             'generation_time': response_data.get('generation_time', 0.0),
@@ -991,7 +960,7 @@ def _run_response_pipeline(
             log_service.log_event(
                 event_type=log_event_type,
                 payload=payload,
-                topic=topic,
+                topic=channel,
                 source=log_source or log_tag.lower(),
                 metadata=metadata,
             )
@@ -1014,13 +983,8 @@ def _handle_persistent_task_result(text: str, metadata: dict) -> str:
         cortex_config = configs['cortex']['config']
 
         task_id = metadata.get('task_id')
-        thread_id = metadata.get('thread_id')
+        thread_id = metadata.get('thread_id') or 'persistent_task'
         goal = metadata.get('goal', '')
-
-        thread_service = get_thread_service()
-        if not thread_id:
-            resolution = thread_service.resolve_thread('default', 'persistent_task')
-            thread_id = resolution.thread_id
 
         working_memory = WorkingMemoryService(
             max_turns=cortex_config.get('max_working_memory_turns', 10)
@@ -1033,9 +997,9 @@ def _handle_persistent_task_result(text: str, metadata: dict) -> str:
 
         prompt_template = ConfigService.get_agent_prompt("frontal-cortex-scheduled-tool")
 
-        topic = f'persistent_task:{task_id}'
+        channel = f'persistent_task:{task_id}'
         classification = {
-            'topic': topic,
+            'topic': channel,
             'confidence': 10,
             'similar_topic': '',
             'topic_update': '',
@@ -1045,7 +1009,7 @@ def _handle_persistent_task_result(text: str, metadata: dict) -> str:
 
         response_data, is_empty = _run_response_pipeline(
             text=injected_text,
-            topic=topic,
+            channel=channel,
             classification=classification,
             thread_id=thread_id,
             metadata=metadata,
@@ -1059,7 +1023,7 @@ def _handle_persistent_task_result(text: str, metadata: dict) -> str:
             log_source='persistent_task',
             log_tag='PERSISTENT TASK',
             working_memory=working_memory,
-            wm_key=thread_id or topic,
+            wm_key=thread_id or channel,
         )
 
         if is_empty:
@@ -1089,13 +1053,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         priority = metadata.get('priority', 'normal')
         destination = metadata.get('destination', 'web')
 
-        # Resolve thread
-        thread_service = get_thread_service()
-        thread_id = metadata.get('thread_id')
-        if not thread_id:
-            platform = metadata.get('source', 'cron_tool')
-            resolution = thread_service.resolve_thread('default',platform)
-            thread_id = resolution.thread_id
+        thread_id = metadata.get('thread_id') or metadata.get('source', 'cron_tool')
 
         working_memory = WorkingMemoryService(
             max_turns=cortex_config.get('max_working_memory_turns', 10)
@@ -1109,9 +1067,9 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
             logging.warning(f"[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config: {e}")
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
 
-        topic = f'cron_tool:{tool_name}'
+        channel = f'cron_tool:{tool_name}'
         classification = {
-            'topic': topic,
+            'topic': channel,
             'confidence': 10,
             'similar_topic': '',
             'topic_update': '',
@@ -1119,7 +1077,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
         response_data, is_empty = _run_response_pipeline(
             text=text,
-            topic=topic,
+            channel=channel,
             classification=classification,
             thread_id=thread_id,
             metadata=metadata,
@@ -1139,7 +1097,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
             log_source='cron_tool',
             log_tag='CRON TOOL',
             working_memory=working_memory,
-            wm_key=thread_id or topic,
+            wm_key=thread_id or channel,
         )
 
         if is_empty:
@@ -1199,20 +1157,19 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             f"[DIGEST] Resolved {len(_image_contexts)}/{len(_image_ids)} image(s) from MemoryStore"
         )
 
-    # Step 2: Resolve thread
-    thread_service = get_thread_service()
-    platform = metadata.get('source', 'unknown')
-    thread_resolution = thread_service.resolve_thread('default',platform)
-    thread_id = thread_resolution.thread_id
+    # Step 2: Resolve channel
+    from services.memory_client import MemoryClientService
+    _channel_store = MemoryClientService.create_connection()
+    thread_id = _channel_store.get('active_channel:default') or 'web:default:1'
+    if isinstance(thread_id, bytes):
+        thread_id = thread_id.decode()
     metadata['thread_id'] = thread_id
 
-    # Mark thread as busy — prevents observer from trimming WM mid-response
-    from services.memory_client import MemoryClientService
-    _busy_store = MemoryClientService.create_connection()
+    # Mark channel as busy — prevents observer from trimming WM mid-response
+    _busy_store = _channel_store
     _busy_store.setex(f"thread_busy:{thread_id}", 30, "1")
 
     # Step 2a: Initialize services
-    thread_conv_service = ThreadConversationService()
     world_state_service = WorldStateService()
 
     # Initialize working memory (keyed by thread_id)
@@ -1249,24 +1206,51 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     source = metadata.get('source', 'unknown') if metadata else 'unknown'
 
     # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
-    # If images are attached, annotate the turn with their visual descriptions so
-    # subsequent turns have context about what was shared.
-    _image_ctxs_wm = (metadata or {}).get('image_contexts', [])
-    _wm_text = text
-    if _image_ctxs_wm:
-        _visual_note = '; '.join(
-            ctx.get('description', '') for ctx in _image_ctxs_wm if ctx.get('description')
-        )
-        if _visual_note:
-            _wm_text = f"{text}\n[Attached: {_visual_note}]" if text else f"[Attached: {_visual_note}]"
-    working_memory.append_turn(thread_id, 'user', _wm_text)
+    working_memory.append_turn(thread_id, 'user', text)
 
     # Persist user turn to topic transcript (durable, searchable)
+    _user_transcript_id = None
     try:
         from services import transcript_service
-        transcript_service.append(context_topic, 'user', _wm_text)
+        _user_transcript_id = transcript_service.append(context_topic, 'user', text)
     except Exception as e:
         logging.debug(f"[DIGEST] Transcript append (user) failed: {e}", exc_info=True)
+
+    # Store uploaded images as tool_calls linked to this transcript entry.
+    # Each image is already persisted in the documents table (source_type='chat_image')
+    # by the /chat/image endpoint.  We record a tool_call so UserPromptAssemblyService
+    # renders the [file()] tag alongside the user's message.
+    # Tags are also returned so we can inject them into the current turn directly
+    # (the tool_calls DB round-trip only serves previous turns).
+    _file_tags = []
+    if _user_transcript_id and _image_ids:
+        _file_tags = _store_image_tool_calls(_user_transcript_id, _image_ids, _image_contexts)
+    if _file_tags:
+        metadata['file_tags'] = _file_tags
+
+    # Onboarding nudge — check if we should prompt the LLM to elicit a missing trait.
+    # Stored as a tool_call so it appears in previous turns, and passed via metadata
+    # for the current turn.
+    if _user_transcript_id:
+        try:
+            from services.prompt_assembly_service import PromptAssemblyService
+            from services.time_utils import utc_now
+            _nudge_svc = PromptAssemblyService(cortex_config)
+            _nudge_text = _nudge_svc._get_onboarding_nudge(thread_id)
+            if _nudge_text:
+                _nudge_tag = f"[nudge] {_nudge_text}"
+                metadata['nudge_tag'] = _nudge_tag
+                from services.database_service import get_shared_db_service
+                _db = get_shared_db_service()
+                with _db.connection() as conn:
+                    conn.execute(
+                        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, created_at) "
+                        "VALUES (?, 'nudge', '{}', ?, 'system', ?)",
+                        (_user_transcript_id, _nudge_tag, utc_now().isoformat()),
+                    )
+                    conn.commit()
+        except Exception as e:
+            logging.debug(f"[DIGEST] Onboarding nudge failed: {e}", exc_info=True)
 
     # Situational intelligence — update conversation phase and situation model for this
     # user message.  Both calls are non-blocking, fail-open, and write to MemoryStore
@@ -1380,11 +1364,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         logging.debug(f"[DIGEST] Embedding computation failed: {e}")
     embedding_time = time.time() - _embed_start
 
-    # Use thread_id as the topic key; supply static defaults for downstream signal consumers
-    topic = thread_id
+    # Use thread_id as the channel key; supply static defaults for downstream signal consumers
+    channel = thread_id
     classification_result = {'confidence': 1.0, 'is_new_topic': False}
     classification = {
-        'topic': topic,
+        'topic': channel,
         'confidence': 10,
         'similar_topic': '',
         'topic_update': '',
@@ -1394,83 +1378,48 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     metrics.record_timing(trace_id, 'embedding', embedding_time * 1000)
     metrics.record_counter('embeddings_total')
 
-    # Step 6b: Create TopicContext — single source of truth for this message's topic identity
-    from services.topic_context import TopicContext
-    topic_ctx = TopicContext(topic=topic, thread_id=thread_id, message_embedding=msg_embedding)
-
-    # Step 7: Add exchange to thread conversation
-    exchange_id = thread_conv_service.add_exchange(thread_id, topic, {
-        "message": text,
-        "embedding_time": embedding_time,
-    })
+    # Step 7: Generate exchange_id for this turn
+    import uuid as _uuid_mod
+    exchange_id = str(_uuid_mod.uuid4())
 
     # Inject exchange_id into metadata so it flows through to SSE output
     metadata['exchange_id'] = exchange_id
 
-    # Update thread with current topic
-    thread_service.update_topic(thread_id, topic)
-    thread_service.increment_exchange_count(thread_id)
-
-    # Step 7a: Log classification event (with resolved topic)
+    # Step 7a: Log classification event (with resolved channel)
     if interaction_log:
         interaction_log.log_event(
             event_type='classification',
             payload=classification,
-            topic=topic,
+            topic=channel,
             exchange_id=exchange_id,
             source=source,
             metadata={'embedding_time': embedding_time}
         )
 
-    # Step 9: Track session and check for episode generation
-    session_service = get_session_service()
-    session_service.set_thread(thread_id)
-
-    # Returning-from-silence detection — must be BEFORE track_classification()
-    # updates last_activity_time so the gap is measured against prior activity.
-    _session_silence = session_service.is_returning_from_silence(threshold_seconds=2700)
-    # silence_seconds > 0 means returning; keep raw value for future tiered-warmth use
-    silence_seconds = _session_silence if _session_silence > 0 else 0.0
-    returning_from_silence = silence_seconds > 0
-    if returning_from_silence:
-        logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")
-
-    is_new_topic = classification.get('is_new_topic', False)
-    session_service.track_classification(topic, is_new_topic, time.time())
-
-    exchange_data = {
-        'exchange_id': exchange_id,
-        'prompt': {'message': text},
-        'timestamp': time.time()
-    }
-
-    if session_service.check_topic_switch(topic):
-        session_service.reset_session()
-        session_service.mark_topic_switch(topic)
-
-        # Conditional WM reset: full clear if old topic consolidated, else keep 2-turn bridge
+    # Step 9: Returning-from-silence detection via MemoryStore last activity timestamp
+    _last_activity_raw = _busy_store.get('last_activity_ts')
+    returning_from_silence = False
+    silence_seconds = 0.0
+    if _last_activity_raw:
         try:
-            from services.memory_client import MemoryClientService
-            _wm_store = MemoryClientService.create_connection()
-            wm_identifier = thread_id or topic
-            consolidation_ts = _wm_store.get(f"last_consolidation:{wm_identifier}")
-            if consolidation_ts is not None:
-                working_memory.clear(wm_identifier)
-                logging.info(f"[DIGEST] Full WM clear on topic switch (consolidated) for '{wm_identifier}'")
-            else:
-                wm_key = working_memory._get_memory_key(wm_identifier)
-                working_memory.store.ltrim(wm_key, -4, -1)  # Keep last 2 turns (4 entries)
-                logging.info(f"[DIGEST] WM trimmed to 2-turn bridge on topic switch for '{wm_identifier}'")
-        except Exception as _wm_e:
-            logging.debug(f"[DIGEST] WM topic-switch reset failed (non-fatal): {_wm_e}")
+            from services.time_utils import parse_utc, utc_now as _utc_now_silence
+            _last_ts = parse_utc(_last_activity_raw.decode() if isinstance(_last_activity_raw, bytes) else _last_activity_raw)
+            silence_seconds = (_utc_now_silence() - _last_ts).total_seconds()
+            returning_from_silence = silence_seconds > 2700
+            if returning_from_silence:
+                logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")
+        except Exception as _sil_e:
+            logging.debug(f"[DIGEST] Silence detection failed: {_sil_e}")
+    try:
+        from services.time_utils import utc_now as _utc_now_act
+        _busy_store.set('last_activity_ts', _utc_now_act().isoformat())
+    except Exception:
+        pass
 
-    # Tool relevance scoring removed — handled by ACT loop
-
-    # Step 9c: Compute memory_confidence before intent classifier
+    # Step 9c: Compute memory_confidence
     # Use FOK + context warmth + working memory depth as density proxy
-    from services.memory_client import MemoryClientService
-    store = MemoryClientService.create_connection()
-    raw_fok = store.get(f"fok:{topic}") if topic else None
+    store = _busy_store
+    raw_fok = store.get(f"fok:{channel}") if channel else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
@@ -1504,7 +1453,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'world_state_present': bool(world_state and world_state.strip()),
             'topic_confidence': classification_result.get('confidence', 0.5),
             'is_new_topic': classification_result.get('is_new_topic', False),
-            'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+            'session_exchange_count': 0,
             'memory_confidence': memory_confidence,
         }
         _signals.update(_nlp)
@@ -1513,12 +1462,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _store_adaptive_signals(thread_id, text, signals=_signals)
 
         response_data, routing_result = unified_generate(
-            topic, text, classification, thread_conv_service,
+            channel, text, classification, None,
             cortex_config, cortex_prompt_map, _signals,
             metadata=metadata, thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             message_embedding=msg_embedding,
-            topic_context=topic_ctx,
         )
 
     except Exception as _gen_ex:
@@ -1540,20 +1488,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'scores': {},
         }
 
-    # Store response in thread conversation history
-    thread_conv_service.add_response(
-        thread_id,
-        response_data['response'],
-        response_data['generation_time']
-    )
-
     # Route through orchestrator (delivers response to WebSocket / output queue)
     if metadata:
         try:
             orchestrator = get_orchestrator()
 
             context = {
-                'topic': topic,
+                'topic': channel,
                 'response': response_data.get('response', ''),
                 'confidence': response_data.get('confidence', 0.0),
                 'generation_time': response_data.get('generation_time', 0.0),
@@ -1574,7 +1515,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 try:
                     from services.output_service import OutputService
                     OutputService().enqueue_text(
-                        topic=topic,
+                        topic=channel,
                         response=response_data.get('response') or "I ran into an issue. Please try again.",
                         mode='UNIFIED',
                         confidence=response_data.get('confidence', 0.0),
@@ -1593,7 +1534,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         try:
             from services.output_service import OutputService
             OutputService().enqueue_text(
-                topic=topic,
+                topic=channel,
                 response='',
                 mode='ACT',
                 confidence=response_data.get('confidence', 1.0),
@@ -1603,14 +1544,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             )
         except Exception as e:
             logging.warning(f"[IGNORE] Failed to publish empty-text message event: {e}")
-
-    # Add response to exchange data
-    exchange_data['response'] = {'message': response_data['response']}
-    if response_data.get('actions'):
-        exchange_data['steps'] = response_data['actions']
-
-    # Add complete exchange to session
-    session_service.add_exchange(exchange_data)
 
     # ═══════════════════════════════════════════════════════════
     # PHASE D: POST-RESPONSE COMMIT
@@ -1622,7 +1555,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Persist assistant turn to topic transcript (durable, searchable)
     try:
         from services import transcript_service
-        transcript_service.append(topic, 'assistant', response_data['response'])
+        transcript_service.append(channel, 'assistant', response_data['response'])
     except Exception as e:
         logging.debug(f"[DIGEST] Transcript append (assistant) failed: {e}", exc_info=True)
 
@@ -1637,7 +1570,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _ctx_budget = min(int(_ctx_limit * 0.6), 150_000)
         except Exception as e:
             logger.debug(f"[DIGEST] Context limit resolution failed, using default: {e}", exc_info=True)
-        compaction_service.check_and_compact(topic, _ctx_budget)
+        compaction_service.check_and_compact(channel, _ctx_budget)
     except Exception as e:
         logging.debug(f"[DIGEST] Compaction check failed: {e}", exc_info=True)
 
@@ -1646,7 +1579,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services.conversation_phase_service import get_conversation_phase_service
         _phase_svc_resp = get_conversation_phase_service()
-        _phase_svc_resp.update(thread_id, response_data['response'], is_user=False, topic=topic)
+        _phase_svc_resp.update(thread_id, response_data['response'], is_user=False, topic=channel)
     except Exception as e:
         logger.debug(f"[DIGEST] Conversation phase update (assistant response) failed: {e}", exc_info=True)
 
@@ -1660,7 +1593,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 'confidence': response_data.get('confidence', 0.0),
                 'generation_time': response_data.get('generation_time', 0.0)
             },
-            topic=topic,
+            topic=channel,
             exchange_id=exchange_id,
             source=source,
             metadata=metadata,
@@ -1680,11 +1613,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 _image_saveable = {'content_type': 'image_document', 'topic': 'Captured document'}
                 break
         _saveable = _image_saveable or _save_svc.detect_saveable_content(
-            response_data['response'], topic, thread_id,
+            response_data['response'], channel, thread_id,
         )
         if _saveable:
             _save_svc.flag_saveable(
-                thread_id, topic, _saveable['content_type'], exchange_id,
+                thread_id, channel, _saveable['content_type'], exchange_id,
             )
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
@@ -1695,7 +1628,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Print the actual response to stdout for the user
     logging.info(f"\n{'='*60}")
-    logging.info(f"Topic: {topic}")
+    logging.info(f"Channel: {channel}")
     _rc = routing_result.get('router_confidence', 0.0) if routing_result else 0.0
     logging.info(f"Mode: {response_data['mode']} (router confidence: {_rc:.3f})")
     logging.info(f"{'='*60}")
@@ -1713,4 +1646,4 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as e:
         logger.debug(f"[DIGEST] Failed to clear thread-busy flag: {e}", exc_info=True)
 
-    return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"
+    return f"Channel '{channel}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"

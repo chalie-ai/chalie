@@ -89,7 +89,7 @@ def _insert_autobiography(db_service, version=1, narrative="Test narrative",
     return aid
 
 
-def _insert_episode(db_service, gist="test episode", salience=5, topic="general",
+def _insert_episode(db_service, gist="test episode", salience=5, channel="general",
                     emotion="{}", outcome="ok", created_at=None):
     """Insert a minimal episode row."""
     eid = str(uuid.uuid4())
@@ -97,9 +97,9 @@ def _insert_episode(db_service, gist="test episode", salience=5, topic="general"
         conn.execute(
             """INSERT INTO episodes
                (id, intent, context, action, emotion, outcome, gist,
-                salience, topic, created_at)
+                salience, channel, created_at)
                VALUES (?, '{}', '{}', 'act', ?, ?, ?, ?, ?, ?)""",
-            (eid, emotion, outcome, gist, salience, topic,
+            (eid, emotion, outcome, gist, salience, channel,
              created_at or "2026-01-15T12:00:00")
         )
     return eid
@@ -385,7 +385,7 @@ class TestBuildSynthesisPrompt:
     def test_fresh_synthesis_includes_new_episodes_header(self, service):
         """First synthesis (no current) uses 'New Episodes' header."""
         inputs = {"episodes": [{"gist": "first day", "emotion": "excited",
-                                 "topic": "onboarding"}],
+                                 "channel": "onboarding"}],
                   "traits": [], "concepts": [], "relationships": [],
                   "constraint_episodes": []}
 
@@ -398,7 +398,7 @@ class TestBuildSynthesisPrompt:
     def test_incremental_synthesis_includes_current_narrative(self, service):
         """Incremental update includes current narrative and 'Since Last Synthesis' header."""
         inputs = {"episodes": [{"gist": "latest event", "emotion": "neutral",
-                                 "topic": "work"}],
+                                 "channel": "work"}],
                   "traits": [], "concepts": [], "relationships": [],
                   "constraint_episodes": []}
         current = {"narrative": "Previously synthesized text", "version": 1}
@@ -412,7 +412,7 @@ class TestBuildSynthesisPrompt:
     def test_includes_traits_and_concepts(self, service):
         """Prompt includes formatted traits and concepts sections."""
         inputs = {
-            "episodes": [{"gist": "ep", "emotion": "happy", "topic": "t"}],
+            "episodes": [{"gist": "ep", "emotion": "happy", "channel": "t"}],
             "traits": [{"key": "likes_coffee", "value": "true",
                         "confidence": 0.95, "category": "preference"}],
             "concepts": [{"name": "REST", "definition": "API style",

@@ -53,7 +53,7 @@ def data_summary():
         # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
-                "episodes", "knowledge", "threads",
+                "episodes", "knowledge", "transcript",
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
@@ -92,12 +92,12 @@ def export_data():
 
     user_data_tables = [
         "episodes", "knowledge",
-        "threads", "autobiography",
+        "transcript", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
         "place_fingerprints",
         "interaction_log", "cortex_iterations",
-        "topics", "user_tool_preferences",
+        "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
     ]
 
@@ -287,7 +287,8 @@ def delete_all():
                 # User-personal data (critical)
                 "episodes",
                 "knowledge",
-                "threads",
+                "transcript",
+                "compactions",
                 "autobiography",
                 "scheduled_items",
                 "persistent_tasks",
@@ -306,7 +307,6 @@ def delete_all():
                 # Behavioral/derived data
                 "interaction_log",
                 "cortex_iterations",
-                "topics",
                 "tool_performance_metrics",
                 "user_tool_preferences",
             ]:

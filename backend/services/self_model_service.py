@@ -217,13 +217,13 @@ class SelfModelService:
         Returns:
             dict: Mapping of epistemic signal names to their current values.
         """
-        topic = "general"
+        channel = "general"
 
-        wm_depth = self._get_working_memory_depth(topic)
+        wm_depth = self._get_working_memory_depth(channel)
 
         # Context warmth: driven by working memory depth and FOK
         wm_score = min(1.0, wm_depth / 4.0)
-        fok_signal = self._get_fok_signal(topic)
+        fok_signal = self._get_fok_signal(channel)
         fok_score = min(1.0, fok_signal / 5.0)
         context_warmth = round(
             (wm_score * 0.6) + (fok_score * 0.4), 3
@@ -233,29 +233,29 @@ class SelfModelService:
             "context_warmth": context_warmth,
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
-            "recall_failure_rate": self._get_recall_failure_rate(topic),
+            "recall_failure_rate": self._get_recall_failure_rate(channel),
             "focus_active": False,
             "skill_reliability": self._get_skill_reliability(),
         }
 
-    def _get_working_memory_depth(self, topic: str) -> int:
+    def _get_working_memory_depth(self, channel: str) -> int:
         try:
-            return self._store.llen(f"working_memory:{topic}")
+            return self._store.llen(f"working_memory:{channel}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get working memory depth: {e}", exc_info=True)
             return 0
 
-    def _get_fok_signal(self, topic: str) -> int:
+    def _get_fok_signal(self, channel: str) -> int:
         """Feeling-of-Knowing: partial match count from last recall."""
         try:
-            value = self._store.get(f"fok:{topic}")
+            value = self._store.get(f"fok:{channel}")
             return int(value) if value else 0
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get FOK signal: {e}", exc_info=True)
             return 0
 
-    def _get_recall_failure_rate(self, topic: str) -> float:
-        """Per-topic recall failure rate from procedural memory."""
+    def _get_recall_failure_rate(self, channel: str) -> float:
+        """Per-channel recall failure rate from procedural memory."""
         try:
             from services.knowledge_service import KnowledgeService
             db = self._get_db()
@@ -268,10 +268,10 @@ class SelfModelService:
                 except Exception:
                     data = {}
             context_stats = data.get("context_stats") or {}
-            if topic in context_stats:
-                topic_stats = context_stats[topic]
-                total = topic_stats.get("total", 0)
-                failures = topic_stats.get("failures", 0)
+            if channel in context_stats:
+                channel_stats = context_stats[channel]
+                total = channel_stats.get("total", 0)
+                failures = channel_stats.get("failures", 0)
                 if total > 0:
                     return round(failures / total, 3)
             return 0.0
@@ -524,13 +524,13 @@ class SelfModelService:
                 # warning fires iff compaction would actually trigger.
                 _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
-                    SELECT tt.topic,
+                    SELECT tt.channel,
                            COUNT(tt.id) as entries,
                            SUM(LENGTH(tt.content)) as total_chars
-                    FROM topic_transcript tt
-                    LEFT JOIN topic_compactions tc ON tc.topic = tt.topic
-                    WHERE tc.topic IS NULL
-                    GROUP BY tt.topic
+                    FROM transcript tt
+                    LEFT JOIN compactions tc ON tc.channel = tt.channel
+                    WHERE tc.channel IS NULL
+                    GROUP BY tt.channel
                     HAVING total_chars >= ?
                     ORDER BY total_chars DESC LIMIT 1
                 """, (_COMPACTION_WARN_CHARS,)).fetchone()
@@ -605,20 +605,7 @@ class SelfModelService:
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Proactive rejection rate check failed: {e}", exc_info=True)
 
-                # 6. Orphaned episodes: topic_id not in topics
-                try:
-                    orphans = conn.execute("""
-                        SELECT COUNT(*) FROM episodes
-                        WHERE topic_id IS NOT NULL
-                          AND topic_id NOT IN (SELECT id FROM topics)
-                    """).fetchone()[0]
-                    if orphans > 10:
-                        checks.append({
-                            'signal': f"{orphans} orphaned episodes (topic_id not in topics)",
-                            'severity': 0.3,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Orphaned episodes check failed: {e}", exc_info=True)
+                # Orphaned episodes check removed — topics table dropped in migration 035
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")

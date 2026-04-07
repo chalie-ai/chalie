@@ -19,7 +19,7 @@ import logging
 import math
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, TYPE_CHECKING
+from typing import Optional, List, Dict
 
 try:
     import nltk
@@ -29,9 +29,6 @@ try:
     _NLTK_AVAILABLE = True
 except ImportError:
     _NLTK_AVAILABLE = False
-
-if TYPE_CHECKING:
-    from services.topic_context import TopicContext
 
 from services.database_service import DatabaseService, DictCursor
 from services.embedding_utils import pack_embedding
@@ -81,7 +78,7 @@ class EpisodicService:
             ValueError: If any required field is missing.
         """
         required_fields = ['intent', 'context', 'action', 'emotion', 'outcome',
-                          'gist', 'salience', 'topic']
+                          'gist', 'salience', 'channel']
         for field in required_fields:
             if field not in episode_data:
                 raise ValueError(f"Missing required field: {field}")
@@ -125,7 +122,7 @@ class EpisodicService:
                 cursor.execute("""
                     INSERT INTO episodes (
                         id, intent, context, action, emotion, outcome, gist,
-                        salience, topic,
+                        salience, channel,
                         salience_factors, open_loops,
                         transcript_ids, transcript_id_start, transcript_id_end,
                         entities, goal_tags, emotional_valence, emotional_arousal,
@@ -141,7 +138,7 @@ class EpisodicService:
                     episode_data['outcome'],
                     episode_data['gist'],
                     episode_data['salience'],
-                    episode_data['topic'],
+                    episode_data['channel'],
                     json.dumps(episode_data.get('salience_factors', {})),
                     json.dumps(episode_data.get('open_loops', [])),
                     json.dumps(episode_data.get('transcript_ids', [])),
@@ -162,7 +159,7 @@ class EpisodicService:
 
                 cursor.close()
 
-                logging.info(f"Stored episode {episode_id} for topic '{episode_data['topic']}'")
+                logging.info(f"Stored episode {episode_id} for channel '{episode_data['channel']}'")
 
                 return episode_id
 
@@ -278,7 +275,7 @@ class EpisodicService:
 
                 cursor.execute("""
                     SELECT id, intent, context, action, emotion, outcome, gist,
-                           salience, topic,
+                           salience, channel,
                            created_at, updated_at, last_accessed_at, access_count,
                            salience_factors, open_loops,
                            transcript_ids, transcript_id_start, transcript_id_end,
@@ -307,7 +304,7 @@ class EpisodicService:
                     'outcome': row[5],
                     'gist': row[6],
                     'salience': row[7],
-                    'topic': row[8],
+                    'channel': row[8],
                     'created_at': row[9],
                     'updated_at': row[10],
                     'last_accessed_at': row[11],
@@ -444,7 +441,7 @@ class EpisodicService:
                         'outcome': correction,
                         'gist': f"Corrected: {correction[:120]}",
                         'salience': episode.get('salience', 5),
-                        'topic': episode.get('topic', ''),
+                        'channel': episode.get('channel', ''),
                         'open_loops': open_loops,
                         'salience_factors': {'source': 'reconsolidation', 'original_episode': episode_id},
                         'storage_strength': 1.0,
@@ -620,7 +617,7 @@ class EpisodicService:
                 vector_ceiling = 200
                 vector_query = """
                     SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                           e.salience, e.topic, e.created_at,
+                           e.salience, e.channel, e.created_at,
                            e.last_accessed_at, e.salience_factors, e.open_loops,
                            COALESCE(e.retrieval_weight, 1.0) AS retrieval_weight,
                            v.distance AS vector_distance,
@@ -648,7 +645,7 @@ class EpisodicService:
                 if fts_terms:
                     fts_query = """
                         SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                               e.salience, e.topic, e.created_at,
+                               e.salience, e.channel, e.created_at,
                                e.last_accessed_at, e.salience_factors, e.open_loops,
                                COALESCE(e.retrieval_weight, 1.0) AS retrieval_weight,
                                episodes_fts.rank AS text_rank,
@@ -691,7 +688,7 @@ class EpisodicService:
                     'outcome': row['outcome'],
                     'gist': row['gist'],
                     'salience': row['salience'],
-                    'topic': row['topic'],
+                    'channel': row['channel'],
                     'created_at': row['created_at'],
                     'retrieval_weight': row.get('retrieval_weight', 1.0),
                     'last_accessed_at': row['last_accessed_at'],
@@ -719,7 +716,7 @@ class EpisodicService:
                     'outcome': row['outcome'],
                     'gist': row['gist'],
                     'salience': row['salience'],
-                    'topic': row['topic'],
+                    'channel': row['channel'],
                     'created_at': row['created_at'],
                     'retrieval_weight': row.get('retrieval_weight', 1.0),
                     'last_accessed_at': row['last_accessed_at'],
@@ -960,7 +957,7 @@ def backfill_episode_transcript_ids() -> int:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT id, topic, created_at
+                SELECT id, channel, created_at
                 FROM episodes
                 WHERE deleted_at IS NULL
                   AND (transcript_ids IS NULL OR transcript_ids = '[]')
@@ -973,15 +970,15 @@ def backfill_episode_transcript_ids() -> int:
                 return 0
 
             updated = 0
-            for ep_id, topic, created_at_str in episodes_to_backfill:
+            for ep_id, channel, created_at_str in episodes_to_backfill:
                 try:
                     cursor.execute("""
-                        SELECT id FROM topic_transcript
-                        WHERE topic = ?
+                        SELECT id FROM transcript
+                        WHERE channel = ?
                           AND created_at BETWEEN datetime(?, '-5 minutes')
                                              AND datetime(?, '+5 minutes')
                         ORDER BY id ASC
-                    """, (topic, created_at_str, created_at_str))
+                    """, (channel, created_at_str, created_at_str))
                     matching = cursor.fetchall()
                     if not matching:
                         continue

@@ -242,8 +242,7 @@ class PromptAssemblyService:
             classification: Classification result dict.
             chat_history: Previous exchanges (unused — kept for compatibility).
             act_history: ACT loop history string (defaults to empty).
-            assembled_context: Pre-assembled context dict from
-                :class:`~services.context_assembly_service.ContextAssemblyService`.
+            assembled_context: Optional context dict (e.g. message_embedding).
             relevant_tools: Tools scored by embedding relevance.
             selected_tools: Triage-selected tool names.
             selected_skills: Triage-selected innate skill names.
@@ -268,9 +267,7 @@ class PromptAssemblyService:
         def _include(node):
             return (inclusion_map or {}).get(node, True)
 
-        _ctx = assembled_context or {}
-        working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
-        _msg_emb = _ctx.get('message_embedding') if _ctx else None
+        _msg_emb = (assembled_context or {}).get('message_embedding')
         world_state = (
             self.world_state_service.get_world_state(
                 topic, thread_id=thread_id, message_embedding=_msg_emb
@@ -295,111 +292,8 @@ class PromptAssemblyService:
         result = template.replace('{{current_datetime}}', _current_datetime)
         result = result.replace('{{current_date}}', _current_date)
 
-        # Consolidated user state (identity + telemetry) — always injected
-        user_state = self._get_user_state()
-        result = result.replace('{{user_state}}', user_state)
-        result = result.replace('{{original_prompt}}', original_prompt)
         result = result.replace('{{topic}}', str(topic))
         result = result.replace('{{confidence}}', str(confidence))
-        result = result.replace('{{world_state}}', world_state if _include('world_state') else '')
-        # Situation directive — plain-language behavioral guidance derived from the
-        # situation model.  Returns None when the situation is unremarkable; the
-        # placeholder is then replaced with empty string so zero tokens are added.
-        situation_directive = ''
-        if '{{situation}}' in result:
-            try:
-                from services.situation_model_service import get_situation_model_service
-                _directive = get_situation_model_service().get_directive()
-                if _directive:
-                    situation_directive = f"## Situation\n{_directive}"
-            except Exception:
-                pass
-            result = result.replace('{{situation}}', situation_directive)
-        result = result.replace('{{act_history}}', act_history)
-        result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
-
-        goal_context = ''
-        if _include('active_goals'):
-            goal_context = self._get_goal_context()
-        result = result.replace('{{active_goals}}', goal_context)
-
-        # Phase 3 — Response weaving: inject contradiction context when flagged
-        contradiction_ctx = _ctx.get('contradiction_context')
-        if contradiction_ctx and '{{contradiction_context}}' in result:
-            mem_a = contradiction_ctx.get('memory_a_text', '')
-            mem_b = contradiction_ctx.get('memory_b_text', '')
-            classification = contradiction_ctx.get('classification', '')
-            reasoning = contradiction_ctx.get('reasoning', '')
-            if mem_a and mem_b:
-                hint = (
-                    f"\n\n## Memory Conflict Detected\n"
-                    f"The current message may contradict an existing memory:\n"
-                    f"- Existing: {mem_b}\n"
-                    f"- Current context suggests: {mem_a}\n"
-                    f"- Classification: {classification}\n"
-                    f"- Reasoning: {reasoning}\n\n"
-                    f"When information in the current conversation contradicts stored knowledge, "
-                    f"always prefer the conversation — it represents the user correcting a stale fact. "
-                    f"If relevant to the response, weave this naturally into your reply "
-                    f"(e.g. noting a change, gently asking for clarification). "
-                    f"Do NOT present it as a system alert. Omit entirely if not relevant."
-                )
-            else:
-                hint = ''
-            result = result.replace('{{contradiction_context}}', hint)
-        else:
-            result = result.replace('{{contradiction_context}}', '')
-
-        # Inject visual context from attached images
-        visual_context_raw = _ctx.get('visual_context', '')
-        if visual_context_raw:
-            visual_block = f"\n\n## Visual Context (attached images)\n{visual_context_raw}"
-        else:
-            visual_block = ''
-        result = result.replace('{{visual_context}}', visual_block)
-
-        # Template integrity guard — warn when skills were selected but template has no placeholder
-        if selected_skills and '{{injected_skills}}' not in template:
-            logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
-
-        # Inject skill docs for the provided list.
-        # When native tool calling is active (append mode with all skills), inject
-        # a minimal note instead of full docs — the tool definitions are in the
-        # `tools` API parameter and shouldn't be duplicated in the prompt text.
-        _use_native_tools = self.config.get('append_mode', False) and selected_skills
-        if _use_native_tools and len(selected_skills or []) > 4:
-            # All skills available as native tools — don't repeat docs in prompt
-            injected_skills = (
-                "All cognitive skills are available as callable tools. "
-                "Call them directly by name — their descriptions and parameters "
-                "are provided via the tools interface."
-            )
-        else:
-            injected_skills = self._get_injected_skills(selected_skills or [])
-        result = result.replace('{{injected_skills}}', injected_skills)
-
-        # Inject registered tool name index (lightweight, no docs)
-        if '{{registered_tool_names}}' in result:
-            tool_names = self._get_registered_tool_names()
-            result = result.replace('{{registered_tool_names}}', tool_names)
-
-        # Methodology guidance from learned goal-cluster patterns
-        methodology_guidance = ''
-        if _include('strategy_hints'):
-            methodology_guidance = self._get_methodology_guidance(original_prompt)
-        result = result.replace('{{strategy_hints}}', methodology_guidance)
-
-        # Constraint context — gate rejection patterns visible to LLM
-        constraint_context = ''
-        if _include('constraint_context') and '{{constraint_context}}' in result:
-            try:
-                from services.constraint_memory_service import ConstraintMemoryService
-                cms = ConstraintMemoryService()
-                mode_name = classification.get('mode', 'respond').lower()
-                constraint_context = cms.format_for_prompt(mode=mode_name)
-            except Exception:
-                pass
-        result = result.replace('{{constraint_context}}', constraint_context)
 
         # Identity modulation (voice mapper)
         if _include('identity_modulation'):
@@ -407,13 +301,6 @@ class PromptAssemblyService:
         else:
             identity_modulation = ''
         result = result.replace('{{identity_modulation}}', identity_modulation)
-
-        # Onboarding nudge — elicit missing identity traits progressively
-        if _include('onboarding_nudge'):
-            onboarding_nudge = self._get_onboarding_nudge(thread_id, classification)
-        else:
-            onboarding_nudge = ''
-        result = result.replace('{{onboarding_nudge}}', onboarding_nudge)
 
         # User traits (known facts about the user)
         # Lower injection threshold when returning from silence to surface more context
@@ -435,13 +322,6 @@ class PromptAssemblyService:
         else:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
-
-        # Self-awareness (interoception — only injected when noteworthy)
-        if _include('self_awareness'):
-            self_awareness = self._get_self_awareness()
-        else:
-            self_awareness = ''
-        result = result.replace('{{self_awareness}}', self_awareness)
 
         # Legacy placeholders — still present in old UNIFIED/ACT templates used by background workers
         for legacy in ('{{identity_context}}', '{{client_context}}', '{{available_skills}}',

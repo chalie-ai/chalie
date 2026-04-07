@@ -516,7 +516,7 @@ class ToolRegistryService:
         track(name=tool_name, success=True, latency_ms=elapsed_ms)
         return f"[TOOL:{tool_name}] {output} [/TOOL]"
 
-    def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
+    def invoke(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> str:
         """
         Invoke a tool by name.
 
@@ -576,7 +576,7 @@ class ToolRegistryService:
         success = False
         try:
             result = handler(
-                topic=topic,
+                topic=channel,
                 params=validated_params,
                 config=settings,
                 telemetry=flattened_telemetry,
@@ -585,7 +585,7 @@ class ToolRegistryService:
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
-            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class="internal")
+            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class="internal")
             return (
                 f"[TOOL:{tool_name}] Error: {str(e)[:200]} "
                 f"(cost: {elapsed_ms}ms) [/TOOL]"
@@ -613,7 +613,7 @@ class ToolRegistryService:
         if result_error:
             output = f"[TOOL:{tool_name}] Error: {result_error} (cost: {elapsed_ms}ms) [/TOOL]"
             tool_failure_class = result.get("failure_class", "internal") if isinstance(result, dict) else "internal"
-            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class=tool_failure_class)
+            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class=tool_failure_class)
             return output
 
         # Clean tool output via the shared text extraction pipeline (same service used by doc processor).
@@ -638,7 +638,7 @@ class ToolRegistryService:
             f" [/TOOL]"
         )
 
-        self._log_outcome(tool_name, success, topic, elapsed_ms)
+        self._log_outcome(tool_name, success, channel, elapsed_ms)
         return output
 
     def _validate_params(self, params: dict, schema: dict) -> dict:
@@ -714,14 +714,14 @@ class ToolRegistryService:
         from services.tool_output_utils import format_tool_result
         return format_tool_result(result)
 
-    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
+    def _log_outcome(self, tool_name: str, success: bool, channel: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
         """Log tool invocation outcome via unified tracker."""
         from services.invocation_tracker import track
         track(
             name=tool_name,
             success=success,
             latency_ms=elapsed_ms,
-            topic=topic,
+            channel=channel,
             exchange_id=exchange_id,
             failure_class=failure_class,
         )

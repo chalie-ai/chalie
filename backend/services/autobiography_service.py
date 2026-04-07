@@ -147,7 +147,7 @@ class AutobiographyService:
                 # Gather episodes (<=50, sorted by salience DESC)
                 if since_cursor:
                     query = text("""
-                        SELECT gist, action, outcome, emotion, salience, topic, created_at
+                        SELECT gist, action, outcome, emotion, salience, channel, created_at
                         FROM episodes
                         WHERE created_at > :cursor AND deleted_at IS NULL
                         ORDER BY salience DESC
@@ -156,7 +156,7 @@ class AutobiographyService:
                     params = {"cursor": since_cursor}
                 else:
                     query = text("""
-                        SELECT gist, action, outcome, emotion, salience, topic, created_at
+                        SELECT gist, action, outcome, emotion, salience, channel, created_at
                         FROM episodes
                         WHERE deleted_at IS NULL
                         ORDER BY salience DESC
@@ -182,7 +182,7 @@ class AutobiographyService:
                         "outcome": row[2],
                         "emotion": row[3],
                         "salience": row[4],
-                        "topic": row[5],
+                        "channel": row[5],
                         "created_at": created_at
                     })
 
@@ -498,7 +498,7 @@ class AutobiographyService:
             lines.append("## New Episodes\n")
 
         for ep in inputs["episodes"]:
-            lines.append(f"- {ep['gist']} (emotion: {ep['emotion']}, topic: {ep['topic']})")
+            lines.append(f"- {ep['gist']} (emotion: {ep['emotion']}, channel: {ep['channel']})")
 
         if inputs["traits"]:
             lines.append("\n## Observed Traits\n")

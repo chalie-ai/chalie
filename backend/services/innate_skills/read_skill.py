@@ -92,12 +92,12 @@ _MAX_LINKS = 15
 
 # ─── Public handler ───────────────────────────────────────────────────────────
 
-def handle_read(topic: str, params: dict) -> str:
+def handle_read(channel: str, params: dict) -> str:
     """
     Read and extract clean text from a URL or local file.
 
     Args:
-        topic: Current conversation topic (unused but required by skill contract)
+        channel: Current conversation channel (unused but required by skill contract)
         params: {
             source (str, required): URL or filesystem path
             url    (str, alias):    Accepted as alias for 'source' (backward compat)

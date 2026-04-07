@@ -91,7 +91,7 @@ class IdentityService:
             logger.error(f"[IDENTITY] Failed to load vectors: {e}")
         return vectors
 
-    def update_activation(self, vector_name: str, emotion_signal: float, reward_signal: float, topic: str = None):
+    def update_activation(self, vector_name: str, emotion_signal: float, reward_signal: float, channel: str = None):
         """
         Apply a dual-channel reinforcement update to an identity vector.
 
@@ -110,7 +110,7 @@ class IdentityService:
             emotion_signal: Emotion-channel signal in any float range.
                 Positive values reinforce the vector; negative values suppress it.
             reward_signal: Reward-channel signal (outcome quality) in any float range.
-            topic: Optional topic string stored in the event log for observability.
+            channel: Optional channel string stored in the event log for observability.
         """
         try:
             with self.db.connection() as conn:
@@ -158,7 +158,7 @@ class IdentityService:
                 # Log event
                 if abs(new_activation - old_activation) > 0.001:
                     self._log_event(cursor, vector_name, old_activation, new_activation,
-                                    'reinforcement', total_signal, topic)
+                                    'reinforcement', total_signal, channel)
 
                 cursor.close()
 
@@ -413,7 +413,7 @@ class IdentityService:
 
     def _log_event(self, cursor, vector_name: str, old_activation: float,
                    new_activation: float, signal_source: str,
-                   signal_value: float = None, topic: str = None):
+                   signal_value: float = None, channel: str = None):
         """Append a structured entry to the ``identity_events`` audit table.
 
         Args:
@@ -424,13 +424,13 @@ class IdentityService:
             signal_source: Change cause label (``'reinforcement'``, ``'inertia'``,
                 ``'drift'``, or ``'coherence'``).
             signal_value: Optional numeric magnitude of the change signal.
-            topic: Optional conversation topic associated with the change.
+            channel: Optional conversation channel associated with the change.
         """
         try:
             cursor.execute("""
                 INSERT INTO identity_events
-                    (vector_name, old_activation, new_activation, signal_source, signal_value, topic)
+                    (vector_name, old_activation, new_activation, signal_source, signal_value, channel)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (vector_name, old_activation, new_activation, signal_source, signal_value, topic))
+            """, (vector_name, old_activation, new_activation, signal_source, signal_value, channel))
         except Exception as e:
             logger.debug(f"[IDENTITY] Event logging failed: {e}")

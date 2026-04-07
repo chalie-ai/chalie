@@ -16,10 +16,7 @@ Key operations:
 """
 
 import logging
-from typing import Optional, Dict, List, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from services.topic_context import TopicContext
+from typing import Optional, Dict, List
 
 from services.llm_service import estimate_tokens
 from services.time_utils import utc_now
@@ -60,26 +57,26 @@ Do NOT preserve:
 Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."""
 
 
-def check_and_compact(topic: str, context_budget: int, _context: 'TopicContext' = None) -> bool:
-    """Check if compaction is needed for a topic and run it if so.
+def check_and_compact(channel: str, context_budget: int, _context=None) -> bool:
+    """Check if compaction is needed for a channel and run it if so.
 
     Args:
-        topic: The conversation topic to check.
+        channel: The conversation channel to check.
         context_budget: Maximum token budget for the context window.
 
     Returns:
         True if compaction was performed, False otherwise.
     """
-    if not topic:
+    if not channel:
         return False
 
     # Get current compaction state
-    compaction = get_compaction(topic, _context=_context)
+    compaction = get_compaction(channel, _context=_context)
     compacted_tokens = compaction['token_count'] if compaction else 0
     watermark = compaction['compacted_up_to_id'] if compaction else 0
 
     # Get transcript entries since watermark
-    entries = get_entries_since(topic, watermark)
+    entries = get_entries_since(channel, watermark)
     if len(entries) < _MIN_ENTRIES_TO_COMPACT:
         return False
 
@@ -95,23 +92,23 @@ def check_and_compact(topic: str, context_budget: int, _context: 'TopicContext' 
 
     if total <= threshold:
         logger.debug(
-            f"{LOG_PREFIX} {topic}: {total} tokens "
+            f"{LOG_PREFIX} {channel}: {total} tokens "
             f"(compacted={compacted_tokens} + new={entries_tokens}) "
             f"<= threshold {threshold} — no compaction needed"
         )
         return False
 
     logger.info(
-        f"{LOG_PREFIX} {topic}: {total} tokens exceeds threshold {threshold} "
+        f"{LOG_PREFIX} {channel}: {total} tokens exceeds threshold {threshold} "
         f"({len(entries)} entries since watermark {watermark}) — compacting"
     )
 
     previous_text = compaction['compacted_text'] if compaction else ''
-    return _run_compaction(topic, previous_text, entries, _context=_context)
+    return _run_compaction(channel, previous_text, entries, _context=_context)
 
 
-def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict]:
-    """Retrieve the stored compaction for a topic.
+def get_compaction(channel: str, _context=None) -> Optional[Dict]:
+    """Retrieve the stored compaction for a channel.
 
     Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at.
     Returns None if no compaction exists.
@@ -125,10 +122,10 @@ def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict
             cursor.execute(
                 """
                 SELECT compacted_text, compacted_up_to_id, token_count, updated_at
-                FROM topic_compactions
-                WHERE topic = ?
+                FROM compactions
+                WHERE channel = ?
                 """,
-                (topic,),
+                (channel,),
             )
             row = cursor.fetchone()
             cursor.close()
@@ -144,26 +141,24 @@ def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict
         }
 
     except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Failed to get compaction for {topic}: {e}")
-        if _context is not None:
-            _context.record_failure('compaction_read', e)
+        logger.warning(f"{LOG_PREFIX} Failed to get compaction for {channel}: {e}")
         return None
 
 
-def get_entries_since(topic: str, watermark: int = 0, limit: int = 500) -> List[Dict]:
+def get_entries_since(channel: str, watermark: int = 0, limit: int = 500) -> List[Dict]:
     """Get transcript entries since a compaction watermark.
 
     Returns entries in chronological order (oldest first).
     """
     from services import transcript_service
-    return transcript_service.get_recent(topic, limit=limit, since_id=watermark)
+    return transcript_service.get_recent(channel, limit=limit, since_id=watermark)
 
 
-def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _context: 'TopicContext' = None) -> bool:
+def _run_compaction(channel: str, previous_text: str, entries: List[Dict], _context=None) -> bool:
     """Execute the compaction LLM call and store the result.
 
     Args:
-        topic: The conversation topic.
+        channel: The conversation channel.
         previous_text: The previous compaction text (may be empty for first compaction).
         entries: New transcript entries to incorporate.
 
@@ -195,11 +190,11 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _contex
         compacted_text = response.text.strip()
 
         if not compacted_text:
-            logger.warning(f"{LOG_PREFIX} LLM returned empty compaction for {topic}")
+            logger.warning(f"{LOG_PREFIX} LLM returned empty compaction for {channel}")
             return False
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Compaction LLM call failed for {topic}: {e}")
+        logger.error(f"{LOG_PREFIX} Compaction LLM call failed for {channel}: {e}")
         if _context is not None:
             _context.record_failure('compaction_llm', e)
         return False
@@ -217,26 +212,24 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _contex
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at)
+                INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(topic) DO UPDATE SET
+                ON CONFLICT(channel) DO UPDATE SET
                     compacted_text = excluded.compacted_text,
                     compacted_up_to_id = excluded.compacted_up_to_id,
                     token_count = excluded.token_count,
                     updated_at = excluded.updated_at
                 """,
-                (topic, compacted_text, watermark, token_count, utc_now().isoformat()),
+                (channel, compacted_text, watermark, token_count, utc_now().isoformat()),
             )
             cursor.close()
 
         logger.info(
-            f"{LOG_PREFIX} Compacted {topic}: "
+            f"{LOG_PREFIX} Compacted {channel}: "
             f"{len(entries)} entries → {token_count} tokens, watermark={watermark}"
         )
         return True
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Failed to store compaction for {topic}: {e}")
-        if _context is not None:
-            _context.record_failure('compaction_store', e)
+        logger.error(f"{LOG_PREFIX} Failed to store compaction for {channel}: {e}")
         return False

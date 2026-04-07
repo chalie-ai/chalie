@@ -16,21 +16,16 @@ their original semantics: create-on-first-access, reuse for process lifetime.
 import json
 import logging
 
-from services import ConfigService, OrchestratorService, SessionService
+from services import ConfigService, OrchestratorService
 from services.mode_router_service import ModeRouterService
-from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
-from services.context_assembly_service import ContextAssemblyService
 
 logger = logging.getLogger(__name__)
 
 # ── Module-level singleton slots ──────────────────────────────────────────────
 
 _context_relevance_service = None
-_context_assembly_service = None
 _orchestrator = None
-_thread_conv_service = None
-_session_service = None
 _mode_router = None
 
 
@@ -44,47 +39,12 @@ def get_context_relevance_service():
     return _context_relevance_service
 
 
-def get_context_assembly_service():
-    """Return the module-level singleton ``ContextAssemblyService`` instance.
-
-    The service is created lazily on first access and reused for the lifetime
-    of the worker process, avoiding repeated initialisation overhead across
-    queue items.
-
-    Returns:
-        ContextAssemblyService: Shared context assembly service instance
-            initialised with an empty configuration override dict.
-    """
-    global _context_assembly_service
-    if _context_assembly_service is None:
-        _context_assembly_service = ContextAssemblyService({})
-    return _context_assembly_service
-
-
 def get_orchestrator():
     """Get or create global OrchestratorService instance."""
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = OrchestratorService()
     return _orchestrator
-
-
-def get_thread_conv_service() -> ThreadConversationService:
-    """Get or create global ThreadConversationService instance."""
-    global _thread_conv_service
-    if _thread_conv_service is None:
-        _thread_conv_service = ThreadConversationService()
-    return _thread_conv_service
-
-
-def get_session_service():
-    """Get or create global session service instance."""
-    global _session_service
-    if _session_service is None:
-        episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        inactivity_timeout = episodic_config.get('inactivity_timeout', 600)
-        _session_service = SessionService(inactivity_timeout=inactivity_timeout)
-    return _session_service
 
 
 def get_mode_router():
@@ -113,15 +73,13 @@ def get_mode_router():
 
 def load_configs():
     """Load frontal cortex mode-specific prompts and configurations."""
-    soul_prompt = ConfigService.get_agent_prompt("soul")
     identity_prompt = ConfigService.get_agent_prompt("identity-core")
     cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
 
-    # Mode-specific prompts: soul -> identity -> mode prompt (instincts + context + contract)
-    # Ordering: values first, then voice, then behavioral nudges closest to generation
+    # Identity + mode prompt (values + voice + behavioral contract)
     # ACT does NOT get identity -- reasoning stays pure
     act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
-    unified_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
+    unified_prompt = identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
 
     return {
         'cortex': {

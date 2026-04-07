@@ -68,7 +68,7 @@ def _parse_extracted_metadata(raw) -> dict:
     return {}
 
 
-def handle_document(topic: str, params: dict) -> str:
+def handle_document(channel: str, params: dict) -> str:
     """
     Search and manage the document library.
 
@@ -81,7 +81,7 @@ def handle_document(topic: str, params: dict) -> str:
     - create:   Create a new document from text content
 
     Args:
-        topic: Current conversation topic
+        channel: Current conversation channel
         params: Action parameters dict
 
     Returns:
@@ -95,26 +95,26 @@ def handle_document(topic: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = DocumentService(db)
-        return _dispatch(service, action, params, topic)
+        return _dispatch(service, action, params, channel)
 
     except Exception as e:
         logger.error(f"[DOCUMENT SKILL] Error: {e}", exc_info=True)
         return f"[DOCUMENT] Error: {e}"
 
 
-def _dispatch(service, action: str, params: dict, topic: str) -> str:
+def _dispatch(service, action: str, params: dict, channel: str) -> str:
     if action == 'search':
-        return _handle_search(service, params, topic)
+        return _handle_search(service, params, channel)
     elif action == 'list':
-        return _handle_list(service, topic)
+        return _handle_list(service, channel)
     elif action == 'view':
-        return _handle_view(service, params, topic)
+        return _handle_view(service, params, channel)
     elif action == 'delete':
-        return _handle_delete(service, params, topic)
+        return _handle_delete(service, params, channel)
     elif action == 'restore':
-        return _handle_restore(service, params, topic)
+        return _handle_restore(service, params, channel)
     elif action == 'create':
-        return _handle_create(service, params, topic)
+        return _handle_create(service, params, channel)
     else:
         valid = 'search, list, view, delete, restore, create'
         return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
@@ -137,7 +137,7 @@ def _resolve_document(service, params: dict) -> Optional[dict]:
     return None
 
 
-def _handle_search(service, params: dict, topic: str) -> str:
+def _handle_search(service, params: dict, channel: str) -> str:
     """
     Phase 1: Identify which documents are relevant.
 
@@ -200,7 +200,7 @@ def _handle_search(service, params: dict, topic: str) -> str:
         return f"[DOCUMENT] Search failed: {e}"
 
 
-def _handle_list(service, topic: str) -> str:
+def _handle_list(service, channel: str) -> str:
     """List all confirmed (ready) documents."""
     docs = service.get_all_documents()
     docs = [d for d in docs if d.get('status') == 'ready']
@@ -236,7 +236,7 @@ def _handle_list(service, topic: str) -> str:
     return '\n'.join(lines)
 
 
-def _handle_view(service, params: dict, topic: str) -> str:
+def _handle_view(service, params: dict, channel: str) -> str:
     """
     Phase 2: Load full document content for analysis.
 
@@ -302,7 +302,7 @@ def _handle_view(service, params: dict, topic: str) -> str:
     return '\n'.join(lines)
 
 
-def _handle_delete(service, params: dict, topic: str) -> str:
+def _handle_delete(service, params: dict, channel: str) -> str:
     """Soft-delete a document."""
     doc = _resolve_document(service, params)
     if not doc:
@@ -314,7 +314,7 @@ def _handle_delete(service, params: dict, topic: str) -> str:
     return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
 
 
-def _handle_restore(service, params: dict, topic: str) -> str:
+def _handle_restore(service, params: dict, channel: str) -> str:
     """Restore a soft-deleted document."""
     doc_id = params.get('id', '').strip()
     name = params.get('name', '').strip()
@@ -341,7 +341,7 @@ def _handle_restore(service, params: dict, topic: str) -> str:
     return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
 
 
-def _handle_create(service, params: dict, topic: str) -> str:
+def _handle_create(service, params: dict, channel: str) -> str:
     """Create a new document from text content.
 
     Required params:

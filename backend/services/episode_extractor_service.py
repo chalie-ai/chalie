@@ -55,13 +55,13 @@ class EpisodeExtractorService:
         self._llm = create_llm_service(config)
         self._prompt_template = ConfigService.get_agent_prompt("episode-extraction")
 
-    def extract(self, entries: list[dict], topic: str) -> list[dict]:
+    def extract(self, entries: list[dict], channel: str) -> list[dict]:
         """
         Extract episodes from a window of transcript entries.
 
         Args:
             entries: List of dicts with keys: id, role, content, created_at, tool_name
-            topic: The topic/thread these entries belong to
+            channel: The channel/thread these entries belong to
 
         Returns:
             List of episode dicts. Each episode has:
@@ -89,7 +89,7 @@ class EpisodeExtractorService:
 
         transcript_window = self._format_entries(entries)
         prompt = self._prompt_template.replace('{{transcript_window}}', transcript_window)
-        prompt = prompt.replace('{{topic}}', topic)
+        prompt = prompt.replace('{{topic}}', channel)
 
         try:
             response = self._llm.send_message("", prompt)

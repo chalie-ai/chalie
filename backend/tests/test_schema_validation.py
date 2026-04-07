@@ -132,7 +132,7 @@ class TestSchemaValidation:
         ep_id = str(uuid.uuid4())
         schema_db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, topic) "
+            "(id, intent, context, action, emotion, outcome, gist, salience, channel) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ep_id, '{}', '{}', 'test', '{}', 'test', 'test gist', 5, 'test-topic')
         )

@@ -37,10 +37,10 @@ def _seed_trait(db, key, value, confidence, evidence_count, category='preference
 
 
 def _seed_topic_transcript(db, topic, count, last_ts="2026-03-24T10:00:00"):
-    """Insert `count` user transcript rows for a given topic."""
+    """Insert `count` user transcript rows for a given channel."""
     for i in range(count):
         db.execute(
-            """INSERT INTO topic_transcript (topic, role, content, created_at)
+            """INSERT INTO transcript (channel, role, content, created_at)
                VALUES (?, 'user', ?, ?)""",
             (topic, f"message {i}", last_ts),
         )

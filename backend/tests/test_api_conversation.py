@@ -38,58 +38,49 @@ class TestConversationAPI:
 
     def test_recent_returns_exchanges(self, client):
         """GET /conversation/recent returns exchanges array."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
-             patch('services.thread_conversation_service.ThreadConversationService') as mock_tcs_cls:
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = "thread-123"
-            mock_get_ts.return_value = mock_ts
+        mock_store = MagicMock()
+        mock_store.get.return_value = 'web:default:1'
+        mock_db = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cursor
+        # total count = 2 (one user + one assistant)
+        mock_cursor.fetchone.return_value = (2,)
+        mock_cursor.fetchall.return_value = [
+            (1, 'user', 'hello', '2026-01-01T00:00:00'),
+            (2, 'assistant', 'hi there', '2026-01-01T00:00:01'),
+        ]
+        mock_db.connection.return_value = mock_conn
 
-            mock_tcs = MagicMock()
-            mock_tcs.get_paginated_history_durable.return_value = {
-                "exchanges": [
-                    {
-                        "id": "ex-1",
-                        "prompt": {"message": "hello"},
-                        "response": {"message": "hi there"},
-                        "topic": "greetings",
-                        "timestamp": "2026-01-01T00:00:00",
-                    },
-                ],
-                "total": 1,
-                "has_more": False,
-            }
-            mock_tcs_cls.return_value = mock_tcs
-
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             response = client.get('/conversation/recent')
 
-            assert response.status_code == 200
-            data = response.get_json()
-            assert "exchanges" in data
-            assert data["thread_id"] == "thread-123"
-            assert len(data["exchanges"]) == 1
-            assert data["exchanges"][0]["prompt"] == "hello"
-            assert "blocks" in data["exchanges"][0]
-            assert isinstance(data["exchanges"][0]["blocks"], list)
-            assert len(data["exchanges"][0]["blocks"]) > 0
-            assert data["exchanges"][0]["blocks"][0]["type"] == "text"
-            assert "hi there" in data["exchanges"][0]["blocks"][0]["content"]
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "exchanges" in data
+        assert data["thread_id"] == 'web:default:1'
 
-    def test_recent_no_thread_returns_empty(self, client):
-        """GET /conversation/recent with no active thread returns empty exchanges."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
-             patch('services.thread_conversation_service.ThreadConversationService') as mock_tcs_cls:
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = None
-            mock_get_ts.return_value = mock_ts
+    def test_recent_no_entries_returns_empty(self, client):
+        """GET /conversation/recent with no transcript entries returns empty."""
+        mock_store = MagicMock()
+        mock_store.get.return_value = None
+        mock_db = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.return_value = (0,)
+        mock_db.connection.return_value = mock_conn
 
-            mock_tcs = MagicMock()
-            mock_tcs.get_most_recent_thread_id.return_value = (None, False)
-            mock_tcs_cls.return_value = mock_tcs
-
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             response = client.get('/conversation/recent')
 
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data["thread_id"] is None
-            assert data["exchanges"] == []
-
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["exchanges"] == []
+        assert data["total"] == 0

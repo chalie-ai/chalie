@@ -196,7 +196,7 @@ class DMNService:
             with self._db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT topic FROM topic_transcript "
+                    "SELECT channel FROM transcript "
                     "ORDER BY created_at DESC LIMIT 1"
                 )
                 row = cursor.fetchone()
@@ -232,7 +232,7 @@ class DMNService:
         prompt = self._build_prompt(mode, context)
 
         try:
-            from workers.digest_singletons import load_configs, get_thread_conv_service
+            from workers.digest_singletons import load_configs
             from workers.digest_worker import unified_generate
             from services.output_service import OutputService
 
@@ -251,7 +251,7 @@ class DMNService:
                 topic=topic,
                 text=prompt,
                 classification={},
-                thread_conv_service=get_thread_conv_service(),
+                thread_conv_service=None,
                 cortex_config=cortex_config,
                 cortex_prompt_map=cortex_prompt_map,
                 signals={},

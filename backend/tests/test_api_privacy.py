@@ -50,7 +50,7 @@ class TestPrivacyAPI:
             # Table counts should be present (all 0 from empty test DB)
             assert "episodes" in data
             assert "knowledge" in data
-            assert "threads" in data
+            assert "transcript" in data
             assert "autobiography" in data
             assert "persistent_tasks" in data
             assert "place_fingerprints" in data
@@ -86,7 +86,7 @@ class TestPrivacyAPI:
 
         # Seed some data to verify it gets deleted
         db.execute(
-            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic) "
+            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("ep1", '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 'test'),
         )

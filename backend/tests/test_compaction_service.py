@@ -16,7 +16,7 @@ def _insert_entries(conn, topic, count, content_template='Message {}'):
     for i in range(count):
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO topic_transcript (topic, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
             (topic, 'user' if i % 2 == 0 else 'assistant', content_template.format(i)),
         )
         ids.append(cursor.lastrowid)
@@ -37,7 +37,7 @@ class TestGetCompaction:
         watermark = ids[-1]
 
         db.execute(
-            "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
+            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ('test-topic', 'Summary of conversation', watermark, 50, '2026-03-20T10:00:00+00:00'),
         )
@@ -132,7 +132,7 @@ class TestRunCompaction:
 
         # Verify stored in database
         cursor = db.cursor()
-        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
+        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM compactions WHERE channel = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row is not None
@@ -148,7 +148,7 @@ class TestRunCompaction:
 
         # Insert initial compaction covering old entries
         db.execute(
-            "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
+            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ('test-topic', 'Old summary', old_ids[-1], 20, '2026-03-20T09:00:00'),
         )
@@ -168,7 +168,7 @@ class TestRunCompaction:
         assert result is True
 
         cursor = db.cursor()
-        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
+        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM compactions WHERE channel = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row[0] == 'Updated summary with new info'
@@ -237,32 +237,8 @@ class TestRunCompaction:
 
 
 class TestCompactionTopicContext:
-    def test_get_compaction_accepts_topic_context(self, db):
-        """get_compaction works when a TopicContext is passed."""
-        from services.compaction_service import get_compaction
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test-topic')
-        result = get_compaction('nonexistent', _context=ctx)
-        assert result is None
-        assert ctx.failed_sections == []
-
-    def test_get_compaction_records_failure_to_context(self):
-        """When DB fails, the failure is recorded on TopicContext."""
-        from services.compaction_service import get_compaction
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test')
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
-            result = get_compaction('test', _context=ctx)
-
-        assert result is None
-        assert len(ctx.failed_sections) == 1
-        assert ctx.failed_sections[0][0] == 'compaction_read'
-        assert 'db locked' in ctx.failed_sections[0][1]
-
     def test_backward_compat_without_context(self, db):
-        """get_compaction still works without _context (backward compat)."""
+        """get_compaction still works without _context."""
         from services.compaction_service import get_compaction
         result = get_compaction('nonexistent')
         assert result is None

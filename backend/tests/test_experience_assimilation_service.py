@@ -156,7 +156,7 @@ class TestStoreEpisode:
             )
 
         call_args = mock_storage.store_episode.call_args[0][0]
-        assert call_args['topic'] == 'python'
+        assert call_args['channel'] == 'python'
         assert call_args['salience'] == 6  # stable -> 6
         assert 'embedding' in call_args
 

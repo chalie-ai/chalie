@@ -167,7 +167,7 @@ class ActLoopService:
 
         When the full history exceeds max_history_tokens (estimated via word_count * 1.3),
         older entries are dropped with a count note. Full content is preserved in
-        topic_transcript (transcript is always searched during recall).
+        transcript (always searched during recall).
 
         Returns:
             Formatted history string showing executed actions
@@ -229,14 +229,14 @@ class ActLoopService:
 
         return full_text
 
-    def execute_actions(self, topic: str, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def execute_actions(self, channel: str, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Execute actions via dispatcher. Multiple actions run sequentially with output chaining.
         Fire-and-forget actions (memorize, focus) dispatch to background threads and return
         a synthetic success immediately — they never block the next iteration.
 
         Args:
-            topic: Current conversation topic
+            channel: Current conversation channel
             actions: List of action specifications
 
         Returns:
@@ -261,7 +261,7 @@ class ActLoopService:
             # Fire-and-forget: dispatch to background, return synthetic result immediately
             if action_type in FIRE_AND_FORGET:
                 enriched = {**self.context_extras, **action}
-                self._dispatch_async(topic, enriched)
+                self._dispatch_async(channel, enriched)
                 results.append({
                     'action_type': action_type,
                     'status': 'success',
@@ -280,7 +280,7 @@ class ActLoopService:
                     enriched[field] = value
 
             logging.debug(f"[MODE:ACT] [ACT LOOP] Step {i+1}/{len(actions)} → {action.get('type', 'unknown')}")
-            result = self._dispatcher.dispatch_action(topic, enriched)
+            result = self._dispatcher.dispatch_action(channel, enriched)
             results.append(result)
 
             logging.info(
@@ -303,11 +303,11 @@ class ActLoopService:
 
         return results
 
-    def _dispatch_async(self, topic: str, action: Dict[str, Any]) -> None:
+    def _dispatch_async(self, channel: str, action: Dict[str, Any]) -> None:
         """Dispatch an action to a background daemon thread (fire-and-forget)."""
         def _run():
             try:
-                self._dispatcher.dispatch_action(topic, action)
+                self._dispatcher.dispatch_action(channel, action)
             except Exception as e:
                 logging.warning(f"[MODE:ACT] [ACT LOOP] Fire-and-forget {action.get('type')} failed: {e}")
 

@@ -160,6 +160,15 @@ DROP TABLE IF EXISTS temporal_aggregate;
 ALTER TABLE temporal_aggregate_new RENAME TO temporal_aggregate;
 
 -- ── threads ──────────────────────────────────────────────────────────────────
+-- On fresh installs schema.sql no longer creates threads (dropped by 035).
+-- Create a stub so the INSERT copies zero rows and the migration is a no-op.
+CREATE TABLE IF NOT EXISTS threads (
+    thread_id TEXT PRIMARY KEY,
+    channel_id TEXT, platform TEXT, state TEXT, current_topic TEXT,
+    topic_history TEXT, exchange_count INTEGER, created_at TEXT,
+    last_activity TEXT, expired_at TEXT, summary TEXT
+);
+
 CREATE TABLE IF NOT EXISTS threads_new (
     thread_id TEXT PRIMARY KEY,
     channel_id TEXT NOT NULL,

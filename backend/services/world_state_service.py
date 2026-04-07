@@ -93,6 +93,11 @@ class WorldStateService:
         """
         items = []
 
+        # 0. User telemetry (time, location, device, energy, attention, mobility)
+        telemetry_line = self._get_user_telemetry()
+        if telemetry_line:
+            items.append({'label': telemetry_line, 'salience': 100})
+
         # 1. Active ACT steps (always high salience when present)
         if thread_id:
             items.extend(self._get_active_steps(thread_id))
@@ -912,24 +917,7 @@ class WorldStateService:
 
     def _get_active_steps(self, thread_id: str) -> list:
         """Get in-flight ACT loop steps — always treated as maximally salient."""
-        try:
-            from services.thread_conversation_service import ThreadConversationService
-            conv_service = ThreadConversationService()
-            active_steps = conv_service.get_active_steps(thread_id)
-            return [
-                {
-                    'type': 'active_step',
-                    'label': (
-                        f"[{s.get('status', 'pending').upper()}] "
-                        f"{s.get('type', 'task')}: {s.get('description', 'Unknown')}"
-                    ),
-                    'salience': 1.0,
-                }
-                for s in (active_steps or [])
-            ]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Active steps unavailable: {e}")
-            return []
+        return []
 
     def _get_salient_scheduled_items(self, message_embedding: list = None) -> list:
         """Retrieve scheduled items scored by temporal + semantic salience."""
@@ -1298,6 +1286,74 @@ class WorldStateService:
                 return f"in {int(hours)}h"
             days = hours / 24
             return f"in {int(days)}d"
+
+    @staticmethod
+    def _get_user_telemetry() -> str:
+        """Build user telemetry line — time, location, device, energy, attention, mobility.
+
+        Returns middle-dot-joined string or empty string when no client context available.
+        """
+        try:
+            from services.client_context_service import ClientContextService
+            from services.ambient_inference_service import AmbientInferenceService
+            from services.place_learning_service import PlaceLearningService
+            from services.database_service import DatabaseService
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+
+            ctx = ClientContextService().get()
+            if not ctx:
+                return ''
+
+            parts = []
+
+            if timezone := ctx.get('timezone'):
+                user_dt = datetime.now(ZoneInfo(timezone))
+                parts.append(f"{user_dt.strftime('%a %d %b')}, {user_dt.strftime('%H:%M')} {user_dt.strftime('%Z') or timezone.split('/')[-1]}")
+
+            device = ctx.get('device', {})
+            if device_class := device.get('class'):
+                battery = ctx.get('battery', {})
+                battery_level = battery.get('level') if isinstance(battery, dict) else None
+                if battery_level is not None:
+                    parts.append(f"{device_class} {int(battery_level)}%")
+                else:
+                    parts.append(device_class)
+
+            location_name = ctx.get('location_name', '')
+            db = DatabaseService()
+            inferences = AmbientInferenceService(
+                place_learning_service=PlaceLearningService(db)
+            ).infer(ctx)
+
+            place = inferences.get('place')
+            if location_name and place:
+                parts.append(f"{location_name} ({place})")
+            elif location_name:
+                parts.append(location_name)
+            elif place:
+                parts.append(place)
+
+            if energy := inferences.get('energy'):
+                parts.append(f"Energy: {energy}")
+
+            attention_labels = {
+                'deep_focus': 'Focus: deep', 'focused': 'Focus: active',
+                'casual': 'Casual', 'distracted': 'Distracted', 'away': 'Away',
+            }
+            if attention := inferences.get('attention'):
+                if label := attention_labels.get(attention):
+                    parts.append(label)
+
+            if mobility := inferences.get('mobility'):
+                if mobility != 'stationary':
+                    parts.append(mobility.capitalize())
+
+            return ' \u00b7 '.join(parts) if parts else ''
+
+        except Exception as e:
+            logger.debug(f"[WORLD STATE] User telemetry unavailable: {e}")
+            return ''
 
     @staticmethod
     def _format_world_state(items: list) -> str:

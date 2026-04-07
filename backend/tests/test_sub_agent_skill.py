@@ -210,8 +210,8 @@ class TestHandleSubAgentOrchestration:
         handle_sub_agent('parent-topic-xyz', {'goal': 'Do work'})
 
         run_kwargs = mock_orchestrator.run.call_args.kwargs
-        assert 'parent-topic-xyz' in run_kwargs['topic']
-        assert run_kwargs['topic'].startswith('sub_agent_')
+        assert 'parent-topic-xyz' in run_kwargs['channel']
+        assert run_kwargs['channel'].startswith('sub_agent_')
 
 
 # ── handle_sub_agent — error handling ────────────────────────────────

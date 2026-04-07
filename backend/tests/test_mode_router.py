@@ -140,9 +140,6 @@ class TestModeRouter:
         fs.get_all_facts.return_value = [{'key': 'name', 'value': 'test'}]
         ws = MagicMock()
         ws.get_world_state.return_value = ""
-        ss = MagicMock()
-        ss.topic_exchange_count = 3
-
         signals = collect_routing_signals(
             text="Hello?",
             topic="test-topic",
@@ -150,7 +147,6 @@ class TestModeRouter:
             working_memory=wm,
             world_state_service=ws,
             classification_result={'confidence': 0.8, 'is_new_topic': False},
-            session_service=ss,
         )
 
         expected_keys = {
@@ -177,16 +173,12 @@ class TestComputeNlpSignals:
         fs.get_all_facts.return_value = []
         ws = MagicMock()
         ws.get_world_state.return_value = ""
-        ss = MagicMock()
-        ss.topic_exchange_count = 0
-
         text = "What is the weather today?"
 
         full_signals = collect_routing_signals(
             text=text, topic="test", context_warmth=0.5,
             working_memory=wm,
             world_state_service=ws, classification_result={'confidence': 0.5, 'is_new_topic': False},
-            session_service=ss,
         )
         nlp_only = compute_nlp_signals(text)
 

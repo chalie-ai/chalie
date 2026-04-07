@@ -341,7 +341,7 @@ class SituationModelService:
             return defaults
 
     def _collect_thread(self, thread_id: Optional[str]) -> dict:
-        """Read exchange count and thread age from ThreadConversationService + threads table."""
+        """Read exchange count for the current channel from the transcript table."""
         defaults = {
             "exchange_count": 0,
             "age_minutes": 0.0,
@@ -350,29 +350,33 @@ class SituationModelService:
         if not thread_id:
             return defaults
         try:
-            from services.thread_conversation_service import ThreadConversationService
             from services.database_service import get_shared_db_service
             from services.time_utils import parse_utc
 
-            svc = ThreadConversationService()
-            exchange_count = svc.get_exchange_count(thread_id)
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM transcript WHERE channel = ? AND role = 'user'",
+                    (thread_id,),
+                )
+                row = cursor.fetchone()
+                exchange_count = row[0] if row else 0
 
-            age_minutes = 0.0
-            try:
-                db = get_shared_db_service()
-                with db.connection() as conn:
-                    cursor = conn.cursor()
+                # Approximate age from first transcript entry for this channel
+                age_minutes = 0.0
+                try:
                     cursor.execute(
-                        "SELECT created_at FROM threads WHERE thread_id = ?",
+                        "SELECT created_at FROM transcript WHERE channel = ? ORDER BY id ASC LIMIT 1",
                         (thread_id,),
                     )
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        created_at = parse_utc(row[0])
+                    first_row = cursor.fetchone()
+                    if first_row and first_row[0]:
+                        created_at = parse_utc(first_row[0])
                         now = utc_now()
                         age_minutes = (now - created_at).total_seconds() / 60.0
-            except Exception as e:
-                logger.debug(f"{LOG_PREFIX} Thread age query failed: {e}")
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Channel age query failed: {e}")
 
             return {
                 "exchange_count": exchange_count,

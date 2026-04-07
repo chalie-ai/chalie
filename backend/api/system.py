@@ -777,20 +777,31 @@ def reset_thread():
     Body (optional): {"channel": "default"}
     """
     try:
-        from services.thread_service import ThreadService
+        from services.memory_client import MemoryClientService
+        import uuid as _uuid
 
         data = request.get_json(silent=True) or {}
         channel_id = data.get('channel', 'default')
 
-        ts = ThreadService()
-        thread_id = ts.get_active_thread_id(channel_id)
+        store = MemoryClientService.create_connection()
+        current = store.get(f'active_channel:{channel_id}')
+        if isinstance(current, bytes):
+            current = current.decode()
 
-        if not thread_id:
-            return jsonify({'ok': True, 'message': 'No active thread', 'expired': None}), 200
+        if not current:
+            return jsonify({'ok': True, 'message': 'No active channel', 'expired': None}), 200
 
-        ts.expire_thread(thread_id)
-        logger.info(f"[RESET-THREAD] Expired thread {thread_id} for channel {channel_id}")
-        return jsonify({'ok': True, 'expired': thread_id}), 200
+        # Create a new channel key — increment sequence so next turn starts fresh
+        parts = current.rsplit(':', 1)
+        try:
+            seq = int(parts[-1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+        new_channel = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
+        store.set(f'active_channel:{channel_id}', new_channel)
+
+        logger.info(f"[RESET-THREAD] Channel reset: {current} → {new_channel}")
+        return jsonify({'ok': True, 'expired': current, 'new_channel': new_channel}), 200
     except Exception as e:
         logger.error(f"[REST API] reset-thread error: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 500

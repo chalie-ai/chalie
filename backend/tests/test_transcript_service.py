@@ -22,9 +22,9 @@ class TestAppend:
 
         # Verify the entry is in the database
         cursor = db.cursor()
-        cursor.execute("SELECT topic, role, content FROM topic_transcript WHERE id = ?", (rowid,))
+        cursor.execute("SELECT channel, role, content FROM transcript WHERE id = ?", (rowid,))
         row = cursor.fetchone()
-        assert row['topic'] == 'test-topic'
+        assert row['channel'] == 'test-topic'
         assert row['role'] == 'user'
         assert row['content'] == 'Hello, world!'
 
@@ -38,7 +38,7 @@ class TestAppend:
             )
         cursor = db.cursor()
         cursor.execute(
-            "SELECT tool_call_id, tool_name FROM topic_transcript WHERE id = ?",
+            "SELECT tool_call_id, tool_name FROM transcript WHERE id = ?",
             (rowid,),
         )
         row = cursor.fetchone()
@@ -51,7 +51,7 @@ class TestAppend:
         with patch('services.transcript_service._embed_entry'):
             rowid = append('test-topic', 'internal', 'Working notes', internal=True)
         cursor = db.cursor()
-        cursor.execute("SELECT internal FROM topic_transcript WHERE id = ?", (rowid,))
+        cursor.execute("SELECT internal FROM transcript WHERE id = ?", (rowid,))
         assert cursor.fetchone()[0] == 1
 
     def test_append_empty_content_returns_none(self, db):
@@ -77,7 +77,7 @@ class TestAppendBatch:
         assert count == 3
 
         cursor = db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM topic_transcript WHERE topic = 'test'")
+        cursor.execute("SELECT COUNT(*) FROM transcript WHERE channel = 'test'")
         assert cursor.fetchone()[0] == 3
 
     def test_batch_skips_empty(self, db):
@@ -217,29 +217,21 @@ class TestKeywordSearch:
 
 
 class TestGetRecentTopicContext:
-    def test_get_recent_accepts_topic_context(self, db):
-        """get_recent works when a TopicContext is passed."""
+    def test_get_recent_works(self, db):
+        """get_recent retrieves entries correctly."""
         from services.transcript_service import append, get_recent
-        from services.topic_context import TopicContext
 
-        ctx = TopicContext(topic='test')
         with patch('services.transcript_service._embed_entry'):
             append('test', 'user', 'Hello')
 
-        results = get_recent('test', _context=ctx)
+        results = get_recent('test')
         assert len(results) == 1
-        assert ctx.failed_sections == []
 
-    def test_get_recent_records_failure_to_context(self):
-        """When DB fails, the failure is recorded on TopicContext."""
+    def test_get_recent_returns_empty_on_db_failure(self):
+        """When DB fails, get_recent returns empty list."""
         from services.transcript_service import get_recent
-        from services.topic_context import TopicContext
 
-        ctx = TopicContext(topic='test')
         with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
-            results = get_recent('test', _context=ctx)
+            results = get_recent('test')
 
         assert results == []
-        assert len(ctx.failed_sections) == 1
-        assert ctx.failed_sections[0][0] == 'transcript_recent'
-        assert 'db locked' in ctx.failed_sections[0][1]

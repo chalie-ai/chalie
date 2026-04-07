@@ -118,7 +118,7 @@ class TestGetSnapshot:
         for i in range(42):
             db.execute(
                 "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
-                " gist, salience, topic)"
+                " gist, salience, channel)"
                 " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
                 " ?, ?, 'test')",
                 (f"ep-{i}", f"gist {i}", 5),

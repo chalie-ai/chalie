@@ -48,7 +48,7 @@ TOOL_SCHEMA = {
 }
 
 
-def handle_autobiography(topic: str, params: dict) -> str:
+def handle_autobiography(channel: str, params: dict) -> str:
     """
     Retrieve Chalie's self-narrative.
 

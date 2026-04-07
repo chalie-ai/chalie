@@ -123,7 +123,7 @@ class ACTOrchestrator:
 
     def run(
         self,
-        topic: str,
+        channel: str,
         text: str,
         cortex_service,
         act_prompt: str,
@@ -145,7 +145,7 @@ class ACTOrchestrator:
         Execute the unified ACT loop.
 
         Args:
-            topic: Conversation topic
+            channel: Conversation channel
             text: Original user prompt
             cortex_service: FrontalCortexService for LLM calls
             act_prompt: ACT mode prompt template
@@ -154,7 +154,7 @@ class ACTOrchestrator:
             relevant_tools: Tools scored by embedding relevance
             selected_skills: Triage-selected innate skills
             selected_tools: Triage-selected tools
-            assembled_context: Pre-assembled context from ContextAssemblyService
+            assembled_context: Optional context dict (e.g. message_embedding)
             inclusion_map: Context relevance inclusion map
             on_iteration_complete: Optional callback(act_loop, iteration_start, actions_executed,
                 termination_reason) -> Optional[str]. Return a termination reason string
@@ -442,7 +442,7 @@ class ACTOrchestrator:
 
             # ── Execute actions ─────────────────────────────────────────
             actions_executed = act_loop.execute_actions(
-                topic=topic,
+                topic=channel,
                 actions=actions,
             )
 
@@ -519,7 +519,7 @@ class ACTOrchestrator:
                         _result = str(_result)
                     if _result:
                         transcript_service.append(
-                            topic, 'tool', _result[:80000],
+                            channel, 'tool', _result[:80000],
                             tool_name=_atype,
                         )
             except Exception as e:
@@ -616,7 +616,7 @@ class ACTOrchestrator:
                 try:
                     iteration_service.log_iterations_batch(
                         loop_id=loop_id,
-                        topic=topic,
+                        channel=channel,
                         exchange_id=exchange_id,
                         session_id=session_id,
                         iterations=act_loop.iteration_logs,
@@ -649,7 +649,7 @@ class ACTOrchestrator:
             _tel_log.log_event(
                 event_type='act_loop_telemetry',
                 payload=loop_telemetry,
-                topic=topic,
+                channel=channel,
                 source='act_loop',
             )
         except Exception as e:
@@ -933,11 +933,11 @@ class ACTOrchestrator:
     ) -> str | None:
         """Send critic escalation to user and block until they respond or timeout."""
         import time as _time
-        topic = act_loop.context_extras.get('topic', '')
+        _esc_channel = act_loop.context_extras.get('topic', act_loop.context_extras.get('channel', ''))
         try:
             from services.output_service import OutputService
             OutputService().enqueue_text(
-                topic=topic, response=escalation_text, mode='ACT',
+                topic=_esc_channel, response=escalation_text, mode='ACT',
                 confidence=0.0, generation_time=0.0,
                 original_metadata={'source': 'critic_escalation', 'exchange_id': exchange_id},
             )

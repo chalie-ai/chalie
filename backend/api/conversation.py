@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
 
 
+WORKING_MEMORY_SIZE = 12
+
 
 @conversation_bp.route('/conversation/recent', methods=['GET'])
 @require_session
 def conversation_recent():
-    """Return paginated conversation from the current (or most recently expired) thread."""
+    """Return paginated conversation from the transcript table."""
     try:
-        from services.thread_service import get_thread_service
-        from services.thread_conversation_service import ThreadConversationService
-
-        WORKING_MEMORY_SIZE = 12
+        from services.database_service import get_shared_db_service
+        from services.memory_client import MemoryClientService
 
         # Parse and clamp query params
         try:
@@ -38,18 +38,29 @@ def conversation_recent():
         except (ValueError, TypeError):
             offset = 0
 
-        ts = get_thread_service()
-        thread_id = ts.get_active_thread_id("default")
+        # Resolve active channel
+        store = MemoryClientService.create_connection()
+        channel = store.get('active_channel:default')
+        if isinstance(channel, bytes):
+            channel = channel.decode()
+        if not channel:
+            channel = 'web:default:1'
 
-        tcs = ThreadConversationService()
-        from_expired = False
+        db = get_shared_db_service()
 
-        # Resolve thread: MemoryStore pointer first, then SQLite
-        if not thread_id:
-            thread_id, from_expired = tcs.get_most_recent_thread_id()
-            if not thread_id:
+        with db.connection() as conn:
+            cursor = conn.cursor()
+
+            # Total count for this channel
+            cursor.execute(
+                "SELECT COUNT(*) FROM transcript WHERE channel = ? AND internal = 0 AND role IN ('user', 'assistant')",
+                (channel,),
+            )
+            total = cursor.fetchone()[0]
+
+            if total == 0:
                 return jsonify({
-                    "thread_id": None,
+                    "thread_id": channel,
                     "exchanges": [],
                     "total": 0,
                     "has_more": False,
@@ -57,42 +68,65 @@ def conversation_recent():
                     "from_expired": False,
                 }), 200
 
-        # Always read from SQLite — survives restarts, no MemoryStore dependency
-        page = tcs.get_paginated_history_durable(thread_id, limit=limit, offset=offset)
-        total = page["total"]
-        exchanges_raw = page["exchanges"]
-        has_more = page["has_more"]
+            # Fetch paginated rows — order by id DESC, then reverse to chronological
+            cursor.execute(
+                """
+                SELECT id, role, content, created_at
+                FROM transcript
+                WHERE channel = ? AND internal = 0 AND role IN ('user', 'assistant')
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (channel, limit, offset),
+            )
+            rows = list(reversed(cursor.fetchall()))
 
+        # Pair user+assistant turns into exchange-like objects
         formatted = []
-        for i, ex in enumerate(exchanges_raw):
-            prompt = ex.get("prompt", {}) or {}
-            response = ex.get("response", {}) or {}
+        i = 0
+        pair_index = 0
+        while i < len(rows):
+            row = rows[i]
+            row_id, role, content, created_at = row[0], row[1], row[2], row[3]
 
-            # Distance from the end of the full history for this exchange in the slice
-            distance_from_end = total - (offset + i + 1)
-            in_working_memory = (not from_expired) and (distance_from_end < WORKING_MEMORY_SIZE)
+            if role == 'user':
+                # Look ahead for matching assistant turn
+                response_text = ''
+                response_time = ''
+                if i + 1 < len(rows) and rows[i + 1][1] == 'assistant':
+                    response_text = rows[i + 1][2]
+                    response_time = rows[i + 1][3]
+                    i += 2
+                else:
+                    i += 1
 
-            response_text = response.get("message", "") if isinstance(response, dict) else ""
-            formatted.append({
-                "id": ex.get("id", ""),
-                "prompt": prompt.get("message", "") if isinstance(prompt, dict) else "",
-                "blocks": _blocks_svc.from_markdown(response_text) if response_text else [],
-                "topic": ex.get("topic", ""),
-                "timestamp": prompt.get("time", "") if isinstance(prompt, dict) else "",
-                "in_working_memory": in_working_memory,
-            })
+                distance_from_end = total - (offset + pair_index + 1)
+                in_working_memory = distance_from_end < WORKING_MEMORY_SIZE
+
+                formatted.append({
+                    "id": str(row_id),
+                    "prompt": content,
+                    "blocks": _blocks_svc.from_markdown(response_text) if response_text else [],
+                    "topic": channel,
+                    "timestamp": created_at,
+                    "in_working_memory": in_working_memory,
+                })
+                pair_index += 1
+            else:
+                # Orphaned assistant turn (no preceding user turn in this page)
+                i += 1
+
+        has_more = (offset + limit) < total
 
         return jsonify({
-            "thread_id": thread_id,
+            "thread_id": channel,
             "exchanges": formatted,
             "total": total,
             "has_more": has_more,
             "working_memory_count": WORKING_MEMORY_SIZE,
-            "from_expired": from_expired,
+            "from_expired": False,
         }), 200
 
     except Exception as e:
         logger.error(f"[REST API] conversation/recent error: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve conversation"}), 500
-
-

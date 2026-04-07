@@ -361,7 +361,7 @@ class EpisodeConsolidationService:
                 cursor.execute("""
                     INSERT INTO episodes (
                         id, intent, context, action, emotion, outcome, gist,
-                        salience, topic,
+                        salience, channel,
                         salience_factors, open_loops,
                         transcript_ids, entities, goal_tags,
                         emotional_valence, emotional_arousal,

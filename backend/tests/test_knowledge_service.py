@@ -640,9 +640,9 @@ class TestProcedural:
         assert abs(data['success_rate'] - 2 / 3) < 0.01
 
     def test_record_procedure_context_stats(self, svc):
-        """Context stats are updated when topic is provided."""
+        """Context stats are updated when channel is provided."""
         svc.record_procedure_outcome(
-            'ctx_action', success=True, reward=0.5, topic='python',
+            'ctx_action', success=True, reward=0.5, channel='python',
         )
 
         result = svc.get('chalie', 'ctx_action')
@@ -661,12 +661,12 @@ class TestProcedural:
         assert ranked[0]['expected_value'] >= ranked[1]['expected_value']
 
     def test_get_ranked_procedures_with_topic(self, svc):
-        """Topic affinity adjusts expected value."""
+        """Channel affinity adjusts expected value."""
         svc.record_procedure_outcome(
-            'topic_skill', success=True, reward=0.5, topic='python',
+            'topic_skill', success=True, reward=0.5, channel='python',
         )
 
-        ranked = svc.get_ranked_procedures(topic='python')
+        ranked = svc.get_ranked_procedures(channel='python')
         assert len(ranked) == 1
         assert ranked[0]['topic_affinity'] == 1.0
 
@@ -762,33 +762,22 @@ class TestValidateTrait:
         assert result == 'topic_slug_too_long'
 
 
-class TestKnowledgeTopicContext:
-    """TopicContext integration tests for KnowledgeService."""
+class TestKnowledgeRecallErrorHandling:
+    """Error handling tests for KnowledgeService.recall()."""
 
-    def test_recall_accepts_topic_context(self, svc):
-        """recall() works when a TopicContext is passed."""
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test')
-        result = svc.recall('nonexistent query', _context=ctx)
+    def test_recall_returns_empty_on_nonexistent_query(self, svc):
+        """recall() returns empty list for a query with no matches."""
+        result = svc.recall('nonexistent query')
         assert result == []
-        assert ctx.failed_sections == []
 
-    def test_recall_records_failure_to_context(self):
-        """When recall fails, failure is recorded on TopicContext."""
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test')
-        # Create a service with a broken db that raises on connection
+    def test_recall_returns_empty_on_db_failure(self):
+        """When recall fails due to DB error, returns empty list."""
         broken_db = MagicMock()
         broken_db.connection.side_effect = Exception('db exploded')
         svc = KnowledgeService(broken_db)
 
-        result = svc.recall('test query', _context=ctx)
+        result = svc.recall('test query')
         assert result == []
-        assert len(ctx.failed_sections) == 1
-        assert ctx.failed_sections[0][0] == 'knowledge_recall'
-        assert 'db exploded' in ctx.failed_sections[0][1]
 
 
 # ── FTS stop word filtering tests ───────────────────────────────────

@@ -51,12 +51,12 @@ _FORMALITY_LABELS = [(8, 'formal'), (6, 'semi-formal'), (5, 'neutral'),
                      (3, 'casual'), (1, 'very casual')]
 
 
-def handle_introspect(topic: str, params: dict) -> str:
+def handle_introspect(channel: str, params: dict) -> str:
     """
     Return a comprehensive natural-language internal state report.
 
     Args:
-        topic: Current conversation topic (unused — all scopes are global)
+        channel: Current conversation channel (unused — all scopes are global)
         params: {} (no parameters required)
 
     Returns:

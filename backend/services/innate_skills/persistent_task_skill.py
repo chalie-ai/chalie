@@ -68,12 +68,12 @@ TOOL_SCHEMA = {
 }
 
 
-def handle_persistent_task(topic: str, params: dict) -> str:
+def handle_persistent_task(channel: str, params: dict) -> str:
     """
     Dispatch persistent task actions based on params['action'].
 
     Args:
-        topic: Conversation topic for context
+        channel: Conversation channel for context
         params: Dict with action and parameters
 
     Returns:
@@ -82,19 +82,19 @@ def handle_persistent_task(topic: str, params: dict) -> str:
     action = params.get("action", "status").lower()
 
     if action == "create":
-        return _create(topic, params)
+        return _create(channel, params)
     elif action == "status":
-        return _status(topic, params)
+        return _status(channel, params)
     elif action == "pause":
-        return _pause(topic, params)
+        return _pause(channel, params)
     elif action == "resume":
-        return _resume(topic, params)
+        return _resume(channel, params)
     elif action == "cancel":
-        return _cancel(topic, params)
+        return _cancel(channel, params)
     elif action == "list":
-        return _list_tasks(topic, params)
+        return _list_tasks(channel, params)
     elif action == "complete":
-        return _complete(topic, params)
+        return _complete(channel, params)
     else:
         return f"Unknown persistent task action: {action}"
 
@@ -120,7 +120,7 @@ def _get_account_id() -> int:
         return 1
 
 
-def _create(topic: str, params: dict) -> str:
+def _create(channel: str, params: dict) -> str:
     """Create a new persistent task (starts immediately in accepted state)."""
     goal = params.get("goal", params.get("query", params.get("text", "")))
     if not goal:
@@ -163,7 +163,7 @@ def _create(topic: str, params: dict) -> str:
     })
 
 
-def _status(topic: str, params: dict) -> str:
+def _status(channel: str, params: dict) -> str:
     """Get status of a task."""
     service = _get_service()
     task_id = params.get("task_id")
@@ -191,7 +191,7 @@ def _status(topic: str, params: dict) -> str:
     return "Active background tasks:\n" + "\n".join(summaries)
 
 
-def _pause(topic: str, params: dict) -> str:
+def _pause(channel: str, params: dict) -> str:
     """Pause an active task."""
     service = _get_service()
     task_id = _resolve_task_id(params)
@@ -202,7 +202,7 @@ def _pause(topic: str, params: dict) -> str:
     return msg if ok else f"Cannot pause: {msg}"
 
 
-def _resume(topic: str, params: dict) -> str:
+def _resume(channel: str, params: dict) -> str:
     """Resume a paused task."""
     service = _get_service()
     task_id = _resolve_task_id(params)
@@ -213,7 +213,7 @@ def _resume(topic: str, params: dict) -> str:
     return msg if ok else f"Cannot resume: {msg}"
 
 
-def _cancel(topic: str, params: dict) -> str:
+def _cancel(channel: str, params: dict) -> str:
     """Cancel a task."""
     service = _get_service()
     task_id = _resolve_task_id(params)
@@ -224,7 +224,7 @@ def _cancel(topic: str, params: dict) -> str:
     return msg if ok else f"Cannot cancel: {msg}"
 
 
-def _list_tasks(topic: str, params: dict) -> str:
+def _list_tasks(channel: str, params: dict) -> str:
     """List all active tasks."""
     service = _get_service()
     account_id = _get_account_id()
@@ -240,7 +240,7 @@ def _list_tasks(topic: str, params: dict) -> str:
     return "Active background tasks:\n" + "\n".join(summaries)
 
 
-def _complete(topic: str, params: dict) -> str:
+def _complete(channel: str, params: dict) -> str:
     """Mark a task as completed with a final result."""
     task_id = _resolve_task_id(params)
     if not task_id:

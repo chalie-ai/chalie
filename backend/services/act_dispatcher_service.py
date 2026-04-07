@@ -92,12 +92,12 @@ class ActDispatcherService:
         from services.innate_skills import register_innate_skills
         register_innate_skills(self)
 
-    def dispatch_action(self, topic: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute single action with timeout enforcement.
 
         Args:
-            topic: Current conversation topic
+            channel: Current conversation channel
             action: Action specification dict
 
         Returns:
@@ -114,7 +114,7 @@ class ActDispatcherService:
         handler = self.handlers.get(action_type)
         if not handler:
             # Try tool registry — handles tools discovered via find_tools
-            tool_result = self._try_tool_registry(topic, action_type, action)
+            tool_result = self._try_tool_registry(channel, action_type, action)
             if tool_result:
                 return tool_result
 
@@ -145,7 +145,7 @@ class ActDispatcherService:
                 action_description = action.get('description', action.get('params', {}).get('query', action_type))
                 gate_result = gate.evaluate(
                     str(action_description),
-                    domain=topic or 'general',
+                    domain=channel or 'general',
                 )
                 if not gate_result['auto_execute']:
                     execution_time = time.time() - start_time
@@ -194,7 +194,7 @@ class ActDispatcherService:
             def target():
                 """Thread target: invoke the action handler and capture the result."""
                 try:
-                    result_container['result'] = handler(topic, action)
+                    result_container['result'] = handler(channel, action)
                 except Exception as e:
                     result_container['error'] = str(e)
 
@@ -208,7 +208,7 @@ class ActDispatcherService:
 
             # Check results
             if thread.is_alive():
-                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='timeout')
+                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='timeout')
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
@@ -219,7 +219,7 @@ class ActDispatcherService:
                 }
 
             if result_container['error']:
-                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='internal')
+                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='internal')
                 return {
                     'action_type': action_type,
                     'status': 'error',
@@ -245,7 +245,7 @@ class ActDispatcherService:
             if _commit_warning:
                 notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
 
-            self._track_skill(action_type, True, elapsed_ms, topic, result=str(raw_result)[:500])
+            self._track_skill(action_type, True, elapsed_ms, channel, result=str(raw_result)[:500])
 
             dispatch_result = {
                 'action_type': action_type,
@@ -263,7 +263,7 @@ class ActDispatcherService:
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self._track_skill(action_type, False, int(execution_time * 1000), topic, failure_class='internal')
+            self._track_skill(action_type, False, int(execution_time * 1000), channel, failure_class='internal')
             logging.exception(f"[ACT DISPATCH] Unexpected error in {action_type}:")
             return {
                 'action_type': action_type,
@@ -275,7 +275,7 @@ class ActDispatcherService:
             }
 
     def _track_skill(self, action_type: str, success: bool, latency_ms: int,
-                     topic: str = '', failure_class: str | None = None, result: str = '') -> None:
+                     channel: str = '', failure_class: str | None = None, result: str = '') -> None:
         """Track innate skill invocations via the unified tracker.
 
         Tools are skipped here — they self-track inside ToolRegistryService.invoke().
@@ -290,14 +290,14 @@ class ActDispatcherService:
                 name=action_type,
                 success=success,
                 latency_ms=latency_ms,
-                topic=topic,
+                topic=channel,
                 failure_class=failure_class,
                 result=result,
             )
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
 
-    def _try_tool_registry(self, topic: str, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
+    def _try_tool_registry(self, channel: str, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Route action to ToolRegistryService if it's a registered tool.
 
         Handles tools discovered via find_tools that aren't innate skills.
@@ -313,7 +313,7 @@ class ActDispatcherService:
             start_time = time.time()
 
             logging.info(f"[ACT DISPATCH] Routing '{action_type}' to tool registry")
-            result_text = registry.invoke(action_type, topic, params)
+            result_text = registry.invoke(action_type, channel, params)
             elapsed = time.time() - start_time
 
             # Determine success from result text

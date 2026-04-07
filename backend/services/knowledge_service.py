@@ -25,10 +25,8 @@ import math
 import re
 import threading
 import time
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional
 
-if TYPE_CHECKING:
-    from services.topic_context import TopicContext
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
@@ -447,7 +445,7 @@ class KnowledgeService:
         entity: str = None,
         limit: int = 10,
         min_confidence: float = 0.0,
-        _context: 'TopicContext' = None,
+        _context=None,
     ) -> List[dict]:
         """
         Hybrid retrieval with 3 signals fused via Reciprocal Rank Fusion (RRF, k=60).
@@ -612,8 +610,6 @@ class KnowledgeService:
 
         except Exception as e:
             logger.error(f"[KNOWLEDGE] recall failed: {e}")
-            if _context is not None:
-                _context.record_failure('knowledge_recall', e)
             return []
 
     def _touch_accessed(self, conn, rowids: list):
@@ -865,7 +861,7 @@ class KnowledgeService:
         action_name: str,
         success: bool,
         reward: float = 0.0,
-        topic: str = None,
+        channel: str = None,
         failure_class: str = None,
     ) -> Optional[dict]:
         """
@@ -956,12 +952,12 @@ class KnowledgeService:
 
                 # Context stats
                 context_stats = data_obj.get('context_stats', {})
-                if topic:
-                    topic_data = context_stats.get(topic, {'attempts': 0, 'successes': 0})
-                    topic_data['attempts'] = topic_data.get('attempts', 0) + 1
+                if channel:
+                    channel_data = context_stats.get(channel, {'attempts': 0, 'successes': 0})
+                    channel_data['attempts'] = channel_data.get('attempts', 0) + 1
                     if success:
-                        topic_data['successes'] = topic_data.get('successes', 0) + 1
-                    context_stats[topic] = topic_data
+                        channel_data['successes'] = channel_data.get('successes', 0) + 1
+                    context_stats[channel] = channel_data
 
                 # Recalculate weight
                 old_weight = data_obj.get('weight', self._DEFAULT_ACTION_WEIGHT)
@@ -1004,11 +1000,11 @@ class KnowledgeService:
 
     # ── Procedural: get ranked ─────────────────────────────────────────
 
-    def get_ranked_procedures(self, topic: str = None, limit: int = 10) -> List[dict]:
+    def get_ranked_procedures(self, channel: str = None, limit: int = 10) -> List[dict]:
         """
         Return procedures ranked by expected value.
 
-        expected_value = success_rate * (1 + clamp(avg_reward)) * topic_affinity
+        expected_value = success_rate * (1 + clamp(avg_reward)) * channel_affinity
         """
         try:
             with self.db.connection() as conn:
@@ -1038,10 +1034,10 @@ class KnowledgeService:
                     total_attempts = data_obj.get('total_attempts', 0)
                     context_stats = data_obj.get('context_stats', {})
 
-                    # Topic affinity
+                    # Channel affinity
                     topic_affinity = 1.0
-                    if topic and topic in context_stats:
-                        td = context_stats[topic]
+                    if channel and channel in context_stats:
+                        td = context_stats[channel]
                         t_attempts = td.get('attempts', 0)
                         t_successes = td.get('successes', 0)
                         if t_attempts > 0:

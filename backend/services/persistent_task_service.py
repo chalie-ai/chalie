@@ -54,7 +54,8 @@ class PersistentTaskService:
         self,
         account_id: int,
         goal: str,
-        thread_id: Optional[int] = None,
+        channel: Optional[str] = None,
+        thread_id: Optional[str] = None,
         scope: Optional[str] = None,
         priority: int = 5,
         deadline: Optional[str] = None,
@@ -66,17 +67,19 @@ class PersistentTaskService:
 
         Returns the created task dict.
         """
+        # thread_id is a deprecated alias for channel
+        resolved_channel = channel or thread_id
         expires_at = (datetime.now(timezone.utc) + timedelta(days=DEFAULT_EXPIRY_DAYS)).isoformat()
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO persistent_tasks
-                    (account_id, thread_id, goal, scope, status, priority,
+                    (account_id, channel, goal, scope, status, priority,
                      max_iterations, fatigue_budget, expires_at, deadline)
                 VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, ?, ?)
             """, (
-                account_id, thread_id, goal, scope, priority,
+                account_id, resolved_channel, goal, scope, priority,
                 max_iterations, fatigue_budget, expires_at,
                 deadline,
             ))
@@ -105,7 +108,7 @@ class PersistentTaskService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, account_id, thread_id, goal, scope, status, priority,
+                SELECT id, account_id, channel, goal, scope, status, priority,
                        progress, result, result_artifact, iterations_used,
                        max_iterations, created_at, updated_at, expires_at,
                        deadline, next_run_after, fatigue_budget
@@ -124,7 +127,7 @@ class PersistentTaskService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, account_id, thread_id, goal, scope, status, priority,
+                SELECT id, account_id, channel, goal, scope, status, priority,
                        progress, result, result_artifact, iterations_used,
                        max_iterations, created_at, updated_at, expires_at,
                        deadline, next_run_after, fatigue_budget
@@ -148,7 +151,7 @@ class PersistentTaskService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, account_id, thread_id, goal, scope, status, priority,
+                SELECT id, account_id, channel, goal, scope, status, priority,
                        progress, result, result_artifact, iterations_used,
                        max_iterations, created_at, updated_at, expires_at,
                        deadline, next_run_after, fatigue_budget
@@ -497,7 +500,7 @@ class PersistentTaskService:
         return {
             'id': row[0],
             'account_id': row[1],
-            'thread_id': row[2],
+            'channel': row[2],
             'goal': row[3],
             'scope': row[4],
             'status': row[5],

@@ -133,7 +133,7 @@ def _insert_tool_result(db_service, domain, created_at=None):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'tool_result', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain, "result": "ok"}), ts),
@@ -148,7 +148,7 @@ def _insert_rejection(db_service, domain, created_at=None):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'action_gate_rejected', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain, "reason": "low_confidence"}), ts),
@@ -163,7 +163,7 @@ def _insert_recent_activity(db_service, domain, days_ago=1):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'message', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain}), ts),

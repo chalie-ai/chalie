@@ -142,17 +142,19 @@ class TestResolveImageContexts:
         assert result[0]['description'] == 'A cat sitting on a mat.'
 
     def test_missing_key_times_out_gracefully(self):
-        """If the result never appears, the image is skipped (no crash, no blocking)."""
+        """If the result never appears, an error context is returned (not skipped)."""
         store = self._make_store({})  # nothing in store
         with self._patch_store(store), patch('time.sleep'):  # skip actual sleeping
             result = _resolve_image_contexts(['missing_id'], timeout=0)
-        assert result == []
+        assert len(result) == 1
+        assert 'timed out' in result[0]['error']
 
-    def test_invalid_json_is_skipped(self):
+    def test_invalid_json_returns_error(self):
         store = self._make_store({'chat_image_result:badid': 'not-json{{'})
         with self._patch_store(store):
             result = _resolve_image_contexts(['badid'])
-        assert result == []
+        assert len(result) == 1
+        assert 'failed to parse' in result[0]['error']
 
     def test_multiple_ids_all_resolved(self):
         ctx_a = {'description': 'Image A', 'ocr_text': ''}
@@ -168,12 +170,13 @@ class TestResolveImageContexts:
         assert 'Image A' in descs
         assert 'Image B' in descs
 
-    def test_partial_resolution_returns_only_found(self):
+    def test_partial_resolution_returns_all_with_error_for_missing(self):
         ctx = {'description': 'Found image', 'ocr_text': ''}
         store = self._make_store({'chat_image_result:found_id': json.dumps(ctx)})
         # Use timeout=5 so found_id resolves on the first poll iteration;
-        # missing_id times out and is skipped.  patch time.sleep to avoid delay.
+        # missing_id times out but still returns an error context.
         with self._patch_store(store), patch('time.sleep'):
             result = _resolve_image_contexts(['found_id', 'missing_id'], timeout=5)
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0]['description'] == 'Found image'
+        assert 'timed out' in result[1]['error']

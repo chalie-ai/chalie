@@ -125,7 +125,7 @@ def _poll_and_fire():
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, item_type, message, due_at, recurrence,
-                       window_start, window_end, topic, created_by_session, group_id,
+                       window_start, window_end, channel, created_by_session, group_id,
                        is_prompt
                 FROM scheduled_items
                 WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
@@ -136,7 +136,7 @@ def _poll_and_fire():
 
             cols = [
                 "id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "topic", "created_by_session", "group_id",
+                "window_start", "window_end", "channel", "created_by_session", "group_id",
                 "is_prompt"
             ]
 
@@ -165,7 +165,7 @@ def _poll_and_fire():
                             cursor.execute("""
                                 INSERT INTO scheduled_items
                                   (id, item_type, message, due_at, recurrence,
-                                   window_start, window_end, status, topic,
+                                   window_start, window_end, status, channel,
                                    created_by_session, created_at, group_id, is_prompt)
                                 VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
                             """, (
@@ -176,7 +176,7 @@ def _poll_and_fire():
                                 next_item["recurrence"],
                                 next_item.get("window_start"),
                                 next_item.get("window_end"),
-                                next_item["topic"],
+                                next_item["channel"],
                                 next_item["created_by_session"],
                                 now_iso,
                                 next_item.get("group_id"),
@@ -205,7 +205,7 @@ def _fire_item(item: dict):
 
     if source == "system":
         # System handler dispatch — capabilities register callbacks
-        handler_key = item.get("topic", "")
+        handler_key = item.get("channel", item.get("topic", ""))
         handler = _SYSTEM_HANDLERS.get(handler_key)
         if handler:
             try:
@@ -241,7 +241,7 @@ def _fire_item(item: dict):
             "destination": "web",
             "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat() if isinstance(item.get("due_at"), datetime) else str(item.get("due_at", "")),
             "scheduled_message": message,
-            "topic": item.get("topic", "general"),
+            "channel": item.get("channel", item.get("topic", "general")),
             "client_context": client_context_text,
         })
         logger.info(f"{LOG_PREFIX} Fired {source} (via LLM) '{item.get('id')}': {message[:80]}")
@@ -250,7 +250,7 @@ def _fire_item(item: dict):
         from services.output_service import OutputService
 
         OutputService().enqueue_text(
-            topic=item.get("topic", "general"),
+            topic=item.get("channel", item.get("topic", "general")),
             response=message,
             mode=source.upper(),
             confidence=1.0,
@@ -295,7 +295,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
         "recurrence": recurrence,
         "window_start": item.get("window_start"),
         "window_end": item.get("window_end"),
-        "topic": item.get("topic"),
+        "channel": item.get("channel", item.get("topic")),
         "created_by_session": item.get("created_by_session"),
         "group_id": item.get("group_id") or item.get("id"),  # inherit group, fall back to own id
         "is_prompt": item.get("item_type", "notification") == "prompt",

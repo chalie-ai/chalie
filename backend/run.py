@@ -181,7 +181,6 @@ def main():
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.experience_assimilation_service import experience_assimilation_worker
-    from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
     from workers.persistent_task_worker import persistent_task_worker
@@ -195,7 +194,6 @@ def main():
     manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
-    manager.register_service("thread-expiry-service", thread_expiry_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)

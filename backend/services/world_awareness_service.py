@@ -109,14 +109,14 @@ class WorldAwarenessService:
             conn = self._db.get_connection()
             cutoff = utc_now().isoformat()
             cursor = conn.execute(
-                """SELECT topic, COUNT(*) as freq,
+                """SELECT channel, COUNT(*) as freq,
                           MAX(created_at) as last_seen
-                   FROM topic_transcript
+                   FROM transcript
                    WHERE created_at >= datetime(?, '-' || ? || ' days')
                      AND role = 'user'
-                     AND topic IS NOT NULL
-                     AND topic != ''
-                   GROUP BY topic
+                     AND channel IS NOT NULL
+                     AND channel != ''
+                   GROUP BY channel
                    ORDER BY freq DESC
                    LIMIT 20""",
                 (cutoff, TOPIC_LOOKBACK_DAYS),

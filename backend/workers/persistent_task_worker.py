@@ -201,7 +201,7 @@ def _execute_with_plan(task: dict, plan: dict):
     )
 
     return orchestrator.run(
-        topic=f"persistent_task_{task['id']}",
+        channel=f"persistent_task_{task['id']}",
         text=task['goal'],
         cortex_service=cortex,
         act_prompt=prompt,

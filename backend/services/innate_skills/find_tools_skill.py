@@ -42,7 +42,7 @@ TOOL_SCHEMA = {
 }
 
 
-def handle_find_tools(topic: str, params: dict) -> dict:
+def handle_find_tools(channel: str, params: dict) -> dict:
     """
     Discover tools by semantic search.
 

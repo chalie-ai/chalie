@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     outcome TEXT NOT NULL,
     gist TEXT NOT NULL,
     salience INTEGER NOT NULL,
-    topic TEXT NOT NULL,
+    channel TEXT NOT NULL,
     created_at TEXT,
     updated_at TEXT,
     last_accessed_at TEXT,
@@ -98,7 +98,7 @@ def _ep(**overrides) -> dict:
         'outcome': 'answered successfully',
         'gist': 'Test conversation',
         'salience': 5,
-        'topic': 'programming',
+        'channel': 'programming',
     }
     base.update(overrides)
     return base

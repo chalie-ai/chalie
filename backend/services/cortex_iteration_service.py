@@ -23,7 +23,7 @@ class CortexIterationService:
         """
         self.db_service = database_service
 
-    def calculate_exploration_bonus(self, topic: str, current_actions: List[str]) -> Dict[str, float]:
+    def calculate_exploration_bonus(self, channel: str, current_actions: List[str]) -> Dict[str, float]:
         """Calculate exploration bonus for a set of action types.
 
         Bonuses:
@@ -34,7 +34,7 @@ class CortexIterationService:
         Total bonus is capped at 0.30 and scaled proportionally when exceeded.
 
         Args:
-            topic: Conversation topic used to scope historical iteration lookup.
+            channel: Conversation channel used to scope historical iteration lookup.
             current_actions: List of action type strings selected in the current iteration.
 
         Returns:
@@ -49,14 +49,14 @@ class CortexIterationService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
-                # Query last 20 iterations for this topic
+                # Query last 20 iterations for this channel
                 cursor.execute("""
                     SELECT actions_executed
                     FROM cortex_iterations
-                    WHERE topic = ?
+                    WHERE channel = ?
                     ORDER BY created_at DESC
                     LIMIT 20
-                """, (topic,))
+                """, (channel,))
 
                 rows = cursor.fetchall()
 
@@ -121,7 +121,7 @@ class CortexIterationService:
     def log_iterations_batch(
         self,
         loop_id: str,
-        topic: str,
+        channel: str,
         exchange_id: str,
         session_id: str,
         iterations: List[Dict[str, Any]]
@@ -131,7 +131,7 @@ class CortexIterationService:
 
         Args:
             loop_id: Unique ID for this ACT loop execution
-            topic: Conversation topic
+            channel: Conversation channel
             exchange_id: Exchange ID from conversation
             session_id: Session ID from session service
             iterations: List of iteration data dicts with all fields
@@ -151,7 +151,7 @@ class CortexIterationService:
                     cursor.execute("""
                         INSERT INTO cortex_iterations (
                             id,
-                            loop_id, topic, exchange_id, session_id,
+                            loop_id, channel, exchange_id, session_id,
                             iteration_number, started_at, completed_at, execution_time_ms,
                             chosen_mode, chosen_confidence, alternative_paths,
                             iteration_cost, diminishing_cost, uncertainty_cost,
@@ -170,7 +170,7 @@ class CortexIterationService:
                     """, (
                         str(uuid.uuid4()),
                         loop_id,
-                        topic,
+                        channel,
                         exchange_id,
                         session_id,
                         iteration['iteration_number'],

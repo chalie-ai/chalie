@@ -626,7 +626,38 @@ class DatabaseService:
                 with open(migration_file, 'r') as f:
                     sql = f.read()
 
-                cursor.executescript(sql)
+                # Migration 035 and any future "idempotent" migration may contain
+                # DDL steps that are safely no-ops on a fresh schema (ALTER TABLE
+                # RENAME COLUMN when column already has the target name, INSERT…SELECT
+                # when source table was never created).  Execute those statement-by-
+                # statement so individual failures can be skipped gracefully.
+                # All other migrations use executescript() unchanged.
+                _idempotent_migrations = {"035_channel_migration.sql"}
+                if filename in _idempotent_migrations:
+                    import re as _re
+                    _idempotent_errors = (
+                        "no such column",          # RENAME COLUMN already done
+                        "no such table",           # source table already dropped
+                        "duplicate column name",   # ADD COLUMN already present
+                        "no such module",          # vec0 extension not loaded
+                    )
+                    # Strip single-line SQL comments, then split on semicolons.
+                    sql_no_comments = _re.sub(r'--[^\n]*', '', sql)
+                    statements = [s.strip() for s in sql_no_comments.split(';') if s.strip()]
+                    for stmt in statements:
+                        try:
+                            cursor.execute(stmt)
+                        except Exception as _stmt_err:
+                            err_msg = str(_stmt_err).lower()
+                            if any(pat in err_msg for pat in _idempotent_errors):
+                                logger.debug(
+                                    f"[migration] Skipping already-applied step in "
+                                    f"{filename}: {_stmt_err}"
+                                )
+                            else:
+                                raise
+                else:
+                    cursor.executescript(sql)
 
                 cursor.execute(
                     "INSERT INTO schema_migrations (filename) VALUES (?)",

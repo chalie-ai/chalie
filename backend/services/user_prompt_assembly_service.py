@@ -38,7 +38,7 @@ class UserPromptAssemblyService(PromptAssemblyContract):
     def __init__(self):
         self._result = ''
 
-    def build(self, user_message: str, topic: str, thread_id: str = None,
+    def build(self, user_message: str, channel: str, thread_id: str = None,
               metadata: dict = None) -> 'UserPromptAssemblyService':
         """Build the full user prompt for a single turn.
 
@@ -47,17 +47,32 @@ class UserPromptAssemblyService(PromptAssemblyContract):
         parts = []
 
         # 1. World state header
-        world_state = self._get_world_state(topic, thread_id)
+        world_state = self._get_world_state(channel, thread_id)
         if world_state:
             parts.append(f"## World State\n{world_state}")
 
+        # 1b. Voice mode instruction (per-turn — user switches between voice and text)
+        if (metadata or {}).get('source') == 'voice':
+            parts.append(
+                'IMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
+                'Respond in plain conversational text only. No markdown formatting, code blocks, '
+                'tables, bullet lists, links, or structured formatting. Write as you would speak.'
+            )
+
         # 2. Previous messages (compaction + transcript + tool calls)
-        conversation = self._get_conversation_context(topic)
+        conversation = self._get_conversation_context(channel)
         if conversation:
             parts.append(conversation)
 
-        # 3. Current turn
-        current_turn = self._build_current_turn(user_message, topic)
+        # 3. System awareness (degradation signals — strong section, before current turn)
+        self_awareness = self._get_self_awareness()
+        if self_awareness:
+            parts.append(f"## System Awareness\n{self_awareness}")
+
+        # 4. Current turn (includes file tags and nudge for this turn)
+        file_tags = (metadata or {}).get('file_tags', [])
+        nudge_tag = (metadata or {}).get('nudge_tag')
+        current_turn = self._build_current_turn(user_message, channel, file_tags, nudge_tag)
         parts.append(current_turn)
 
         self._result = '\n\n'.join(parts)
@@ -68,25 +83,25 @@ class UserPromptAssemblyService(PromptAssemblyContract):
 
     # ── Internal builders ────────────────────────────────────────────
 
-    def _get_world_state(self, topic: str, thread_id: str = None) -> str:
+    def _get_world_state(self, channel: str, thread_id: str = None) -> str:
         try:
             from services.world_state_service import WorldStateService
             svc = WorldStateService()
-            return svc.get_world_state(topic, thread_id=thread_id)
+            return svc.get_world_state(channel, thread_id=thread_id)
         except Exception as e:
-            logger.debug(f"[USER PROMPT] World state unavailable: {e}")
+            logger.info(f"[USER PROMPT] World state unavailable: {e}")
             return ''
 
-    def _get_conversation_context(self, topic: str) -> str:
+    def _get_conversation_context(self, channel: str) -> str:
         """Build conversation context from compaction + recent transcript + tool calls."""
         try:
             from services import compaction_service, transcript_service
             from services.database_service import get_shared_db_service
 
-            compaction = compaction_service.get_compaction(topic)
+            compaction = compaction_service.get_compaction(channel)
             watermark = compaction['compacted_up_to_id'] if compaction else 0
 
-            entries = transcript_service.get_recent(topic, limit=50, since_id=watermark)
+            entries = transcript_service.get_recent(channel, limit=50, since_id=watermark)
 
             parts = []
 
@@ -109,6 +124,8 @@ class UserPromptAssemblyService(PromptAssemblyContract):
                             result = tc.get('result', '')
                             if tool_name == 'memory' and result:
                                 lines.append(f"[memory] {result}")
+                            elif tool_name in ('file', 'nudge') and result:
+                                lines.append(result)
                             elif result:
                                 lines.append(f"[tool:{tool_name}] {result}")
 
@@ -120,7 +137,7 @@ class UserPromptAssemblyService(PromptAssemblyContract):
             return '\n\n'.join(parts)
 
         except Exception as e:
-            logger.debug(f"[USER PROMPT] Conversation context failed: {e}")
+            logger.info(f"[USER PROMPT] Conversation context failed: {e}")
             return ''
 
     def _get_tool_calls_for_entries(self, entries: list) -> Dict[int, List[dict]]:
@@ -155,10 +172,12 @@ class UserPromptAssemblyService(PromptAssemblyContract):
             return grouped
 
         except Exception as e:
-            logger.debug(f"[USER PROMPT] Tool calls fetch failed: {e}")
+            logger.info(f"[USER PROMPT] Tool calls fetch failed: {e}")
             return {}
 
-    def _build_current_turn(self, user_message: str, topic: str) -> str:
+    def _build_current_turn(self, user_message: str, channel: str,
+                            file_tags: list = None,
+                            nudge_tag: str = None) -> str:
         parts = ["# Current Turn"]
 
         memories = self._get_episodic_recall(user_message)
@@ -167,7 +186,23 @@ class UserPromptAssemblyService(PromptAssemblyContract):
 
         parts.append(f"## User Message\n{user_message}")
 
+        if file_tags:
+            for tag in file_tags:
+                parts.append(tag)
+
+        if nudge_tag:
+            parts.append(nudge_tag)
+
         return '\n\n'.join(parts)
+
+    def _get_self_awareness(self) -> str:
+        """Get system health signals — only non-empty when degraded."""
+        try:
+            from services.self_model_service import SelfModelService
+            return SelfModelService().format_for_prompt()
+        except Exception as e:
+            logger.info(f"[USER PROMPT] Self-awareness unavailable: {e}")
+            return ''
 
     def _get_episodic_recall(self, query_text: str) -> str:
         try:
@@ -184,5 +219,5 @@ class UserPromptAssemblyService(PromptAssemblyContract):
             return svc.format_for_prompt(episodes)
 
         except Exception as e:
-            logger.debug(f"[USER PROMPT] Episodic recall failed: {e}")
+            logger.info(f"[USER PROMPT] Episodic recall failed: {e}")
             return ''

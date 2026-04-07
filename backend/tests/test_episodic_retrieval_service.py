@@ -297,12 +297,12 @@ class TestFormatForPrompt:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
                 "VALUES (?, '{}', '', '', '{}', '', 'old gist a', 5, 'test', ?)",
                 (src_id_a, '2026-01-01T00:00:00+00:00')
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
                 "VALUES (?, '{}', '', '', '{}', '', 'old gist b', 5, 'test', ?)",
                 (src_id_b, '2026-01-10T00:00:00+00:00')
             )
@@ -358,7 +358,7 @@ class TestFormatForPrompt:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
                 "VALUES (?, '{}', '', '', '{}', '', 'same day', 5, 'test', ?)",
                 (src_id, '2026-02-14T09:00:00+00:00')
             )
@@ -390,7 +390,7 @@ class TestCountEpisodes:
         with db_conn.connection() as conn:
             for i in range(5):
                 conn.execute(
-                    "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic) "
+                    "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
                     "VALUES (?, '{}', '', '', '{}', '', ?, 5, 'test')",
                     (str(uuid.uuid4()), f'gist {i}')
                 )
@@ -404,12 +404,12 @@ class TestCountEpisodes:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, deleted_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, deleted_at) "
                 "VALUES (?, '{}', '', '', '{}', '', 'deleted ep', 5, 'test', datetime('now'))",
                 (ep_id,)
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
                 "VALUES (?, '{}', '', '', '{}', '', 'live ep', 5, 'test')",
                 (str(uuid.uuid4()),)
             )
@@ -651,12 +651,12 @@ class TestGetConsolidatedDateRange:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
                 "VALUES (?, '{}', '', '', '{}', '', '', 5, 'test', ?)",
                 (id_a, '2026-02-01T00:00:00+00:00')
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, topic, created_at) "
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
                 "VALUES (?, '{}', '', '', '{}', '', '', 5, 'test', ?)",
                 (id_b, '2026-02-28T00:00:00+00:00')
             )

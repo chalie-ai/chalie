@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     outcome TEXT NOT NULL,
     gist TEXT NOT NULL,
     salience INTEGER NOT NULL CHECK (salience BETWEEN 1 AND 10),
-    topic TEXT NOT NULL,
+    channel TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     last_accessed_at TEXT,
@@ -29,9 +29,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     deleted_at TEXT,
     salience_factors TEXT DEFAULT '{}',       -- JSONB
     open_loops TEXT DEFAULT '[]',             -- JSONB
-    transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of topic_transcript.id values this episode covers
-    transcript_id_start INTEGER,              -- lowest topic_transcript.id in this episode's range
-    transcript_id_end INTEGER,                -- highest topic_transcript.id in this episode's range
+    transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of transcript.id values this episode covers
+    transcript_id_start INTEGER,              -- lowest transcript.id in this episode's range
+    transcript_id_end INTEGER,                -- highest transcript.id in this episode's range
     entities TEXT DEFAULT '[]',               -- JSONB: people, places, orgs, products mentioned
     goal_tags TEXT DEFAULT '[]',              -- JSONB: active goal tags detected
     emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
 );
 
-CREATE INDEX IF NOT EXISTS idx_episodes_topic ON episodes(topic) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_episodes_composite ON episodes(topic, retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_composite ON episodes(channel, retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_intent_type ON episodes(json_extract(intent, '$.type'));
 CREATE INDEX IF NOT EXISTS idx_episodes_transcript_range ON episodes(transcript_id_start, transcript_id_end);
 CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_weight DESC);
@@ -57,7 +57,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cortex_iterations (
     id TEXT PRIMARY KEY,
-    topic TEXT NOT NULL,
+    channel TEXT NOT NULL,
     exchange_id TEXT,
     session_id TEXT,
     loop_id TEXT NOT NULL,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS cortex_iterations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_loop ON cortex_iterations(loop_id, iteration_number);
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_topic ON cortex_iterations(topic, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cortex_iterations_channel ON cortex_iterations(channel, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(exchange_id);
 
 -- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
@@ -107,7 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(e
 CREATE TABLE IF NOT EXISTS interaction_log (
     id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
-    topic TEXT,
+    channel TEXT,
     exchange_id TEXT,
     session_id TEXT,
     source TEXT,
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS interaction_log (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_interaction_log_topic_created ON interaction_log(topic, created_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_log_channel_created ON interaction_log(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction_log(event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_exchange ON interaction_log(exchange_id);
@@ -160,21 +160,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
     tokenize='porter unicode61'
 );
 
--- ────────────────────────────────────────────────────────────────
--- TOPICS — semantic attractors
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS topics (
-    topic_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_updated TEXT NOT NULL DEFAULT (datetime('now')),
-    message_count INTEGER NOT NULL DEFAULT 0,
-    avg_salience REAL NOT NULL DEFAULT 0.5,
-    metadata TEXT DEFAULT '{}'               -- JSONB
-);
-
-CREATE INDEX IF NOT EXISTS idx_topics_name ON topics(name);
-CREATE INDEX IF NOT EXISTS idx_topics_last_updated ON topics(last_updated DESC);
+-- topics table removed — dropped by migration 035_channel_migration.sql
 
 -- ────────────────────────────────────────────────────────────────
 -- IDENTITY VECTORS — 6 personality dimensions
@@ -218,7 +204,7 @@ CREATE TABLE IF NOT EXISTS identity_events (
     new_activation REAL NOT NULL,
     signal_source TEXT NOT NULL,
     signal_value REAL,
-    topic TEXT,
+    channel TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -227,49 +213,8 @@ CREATE INDEX IF NOT EXISTS idx_identity_events_vector ON identity_events(vector_
 
 -- user_traits removed — replaced by unified knowledge table.
 
--- ────────────────────────────────────────────────────────────────
--- THREADS — conversation threads
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS threads (
-    thread_id TEXT PRIMARY KEY,
-    channel_id TEXT NOT NULL,
-    platform TEXT NOT NULL DEFAULT 'unknown',
-    state TEXT NOT NULL DEFAULT 'active',
-    current_topic TEXT,
-    topic_history TEXT DEFAULT '[]',          -- JSONB
-    exchange_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    last_activity TEXT DEFAULT (datetime('now')),
-    expired_at TEXT,
-    summary TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_threads_channel ON threads(channel_id);
-CREATE INDEX IF NOT EXISTS idx_threads_state ON threads(state);
-
--- ────────────────────────────────────────────────────────────────
--- THREAD EXCHANGES — durable conversation history
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS thread_exchanges (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL,
-    topic TEXT NOT NULL DEFAULT '',
-    prompt_message TEXT NOT NULL DEFAULT '',
-    prompt_time TEXT NOT NULL,
-    response_message TEXT,
-    response_time TEXT,
-    response_error TEXT,
-    generation_time_ms REAL,
-    steps TEXT DEFAULT '[]',
-    memory_chunk TEXT DEFAULT '{}',
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_thread_exchanges_thread
-    ON thread_exchanges(thread_id, created_at ASC);
-
-CREATE INDEX IF NOT EXISTS idx_thread_exchanges_created
-    ON thread_exchanges(created_at ASC);
+-- threads table removed — dropped by migration 035_channel_migration.sql
+-- thread_exchanges table removed — dropped by migration 035_channel_migration.sql
 
 -- ────────────────────────────────────────────────────────────────
 -- AUTH SESSIONS — durable session storage (survives restarts)
@@ -371,7 +316,7 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     window_start TEXT,
     window_end TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
-    topic TEXT,
+    channel TEXT,
     created_by_session TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_fired_at TEXT,
@@ -540,7 +485,7 @@ CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_h
 CREATE TABLE IF NOT EXISTS persistent_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER REFERENCES master_account(id),
-    thread_id TEXT REFERENCES threads(thread_id),
+    channel TEXT,
     goal TEXT NOT NULL,
     scope TEXT,
     status TEXT DEFAULT 'accepted',
@@ -712,7 +657,7 @@ CREATE TABLE IF NOT EXISTS goals (
     parent_motives TEXT DEFAULT '[]',         -- JSON: aligned CORE_MOTIVES
     identity_links TEXT DEFAULT '[]',         -- JSON: aligned identity dimensions
     lineage_parent_id TEXT,                   -- parent goal for hierarchy
-    thread_id TEXT,                           -- associated conversation thread (optional)
+    channel TEXT,                             -- associated conversation channel (optional)
     last_reinforced_at TEXT,                  -- when goal last received evidence
     last_acted_at TEXT,                       -- when goal was last acted upon
     created_at TEXT DEFAULT (datetime('now')),
@@ -787,36 +732,36 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
 
 -- ────────────────────────────────────────────────────────────────
--- TOPIC TRANSCRIPT — persistent, topic-scoped conversation record
+-- TRANSCRIPT — persistent, channel-scoped conversation record
 -- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS topic_transcript (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic TEXT NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS transcript (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
     tool_call_id TEXT,
-    tool_name TEXT,
-    internal INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    tool_name   TEXT,
+    internal    INTEGER DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_transcript_topic ON topic_transcript(topic, created_at);
-CREATE INDEX IF NOT EXISTS idx_transcript_topic_created_desc ON topic_transcript(topic, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS topic_transcript_vec USING vec0(
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_vec USING vec0(
     embedding float[768]
 );
 
 -- ────────────────────────────────────────────────────────────────
--- TOPIC COMPACTIONS — incremental conversation summarization
+-- COMPACTIONS — incremental conversation summarization
 -- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS topic_compactions (
-    topic TEXT PRIMARY KEY,
-    compacted_text TEXT NOT NULL,
-    compacted_up_to_id INTEGER NOT NULL,
-    token_count INTEGER DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (compacted_up_to_id) REFERENCES topic_transcript(id)
+CREATE TABLE IF NOT EXISTS compactions (
+    channel             TEXT PRIMARY KEY,
+    compacted_text      TEXT NOT NULL,
+    compacted_up_to_id  INTEGER NOT NULL,
+    token_count         INTEGER DEFAULT 0,
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (compacted_up_to_id) REFERENCES transcript(id)
 );
 
 -- ────────────────────────────────────────────────────────────────
@@ -824,12 +769,12 @@ CREATE TABLE IF NOT EXISTS topic_compactions (
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_calls (
     transcript_id INTEGER NOT NULL,
-    tool_name TEXT NOT NULL,
-    params TEXT DEFAULT '{}',
-    result TEXT DEFAULT '',
-    invoked_by TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (transcript_id) REFERENCES topic_transcript(id)
+    tool_name     TEXT NOT NULL,
+    params        TEXT DEFAULT '{}',
+    result        TEXT DEFAULT '',
+    invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_transcript ON tool_calls(transcript_id);
