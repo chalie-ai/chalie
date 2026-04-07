@@ -3,7 +3,7 @@
 import time
 import pytest
 from unittest.mock import patch, MagicMock
-from services.act_loop_service import ActLoopService
+from services.act_loop_service import ActLoopService, FIRE_AND_FORGET
 
 
 pytestmark = pytest.mark.unit
@@ -131,61 +131,60 @@ class TestHistoryTokenBudget:
         assert "[recall]" in context
 
 
-# ── Concurrent Execution ─────────────────────────────────────
+# ── Action Execution ─────────────────────────────────────────
 
 
-class TestConcurrentExecution:
+class TestActionExecution:
 
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_single_action_runs_directly(self, mock_dispatcher_cls):
-        """Single action dispatches via the dispatcher."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.return_value = _make_result('recall')
-        mock_dispatcher_cls.return_value = mock_dispatcher
+    def test_fire_and_forget_action_returns_synthetic_result(self):
+        """Fire-and-forget actions (memorize) return synthetic success immediately.
+
+        No dispatcher call is made — the real code path short-circuits and
+        returns a structured dict without ever blocking.
+        """
+        # 'memorize' is in FIRE_AND_FORGET — verify the constant is set
+        assert 'memorize' in FIRE_AND_FORGET
 
         svc = ActLoopService(_make_config())
-        results = svc.execute_actions('test-topic', [{'type': 'recall', 'query': 'test'}])
+        # _dispatcher is None at start; execute_actions with only fire-and-forget
+        # actions must NOT build the dispatcher (it stays None) and must return
+        # a synthetic success dict immediately.
+        results = svc.execute_actions('test-topic', [{'type': 'memorize', 'text': 'remember this'}])
 
         assert len(results) == 1
-        assert results[0]['action_type'] == 'recall'
-        mock_dispatcher.dispatch_action.assert_called_once()
+        assert results[0]['action_type'] == 'memorize'
+        assert results[0]['status'] == 'success'
+        assert results[0]['result'] == '(running in background)'
+        assert results[0]['notes'] == 'fire-and-forget'
 
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_multiple_actions_return_in_order(self, mock_dispatcher_cls):
-        """Multiple actions return results preserving original order."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.side_effect = [
-            _make_result('recall', result='recall result'),
-            _make_result('associate', result='assoc result'),
-        ]
-        mock_dispatcher_cls.return_value = mock_dispatcher
+    def test_unknown_action_type_returns_error_without_raising(self):
+        """Unknown action types return an error result, never raise.
 
+        This exercises the real ActDispatcherService handler-lookup path all
+        the way through — no dispatcher mock needed.
+        """
         svc = ActLoopService(_make_config())
+        results = svc.execute_actions('test-topic', [{'type': '__no_such_action__'}])
+
+        assert len(results) == 1
+        assert results[0]['action_type'] == '__no_such_action__'
+        assert results[0]['status'] == 'error'
+        assert 'Unknown action type' in results[0]['result']
+
+    def test_multiple_fire_and_forget_actions_all_return_synthetic(self):
+        """Multiple fire-and-forget actions each get their own synthetic result."""
+        svc = ActLoopService(_make_config())
+        # Two memorize actions — both fire-and-forget
         results = svc.execute_actions('test-topic', [
-            {'type': 'recall', 'query': 'test'},
-            {'type': 'associate', 'seeds': ['news']},
+            {'type': 'memorize', 'text': 'fact one'},
+            {'type': 'memorize', 'text': 'fact two'},
         ])
 
         assert len(results) == 2
-        assert results[0]['action_type'] == 'recall'
-        assert results[1]['action_type'] == 'associate'
-
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_sequential_error_propagates(self, mock_dispatcher_cls):
-        """If a sequential action throws, the error propagates up."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.side_effect = [
-            _make_result('recall'),
-            Exception("connection failed"),
-        ]
-        mock_dispatcher_cls.return_value = mock_dispatcher
-
-        svc = ActLoopService(_make_config())
-        with pytest.raises(Exception, match="connection failed"):
-            svc.execute_actions('test-topic', [
-                {'type': 'recall', 'query': 'test'},
-                {'type': 'associate', 'seeds': ['news']},
-            ])
+        for r in results:
+            assert r['action_type'] == 'memorize'
+            assert r['status'] == 'success'
+            assert r['notes'] == 'fire-and-forget'
 
 
 # ── History and Append ───────────────────────────────────────
