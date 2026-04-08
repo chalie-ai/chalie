@@ -495,8 +495,8 @@ class TestToolResultMessageFormat:
         assert len(asst_msgs) == 1
         assert 'tool_calls' in asst_msgs[0]
         tc_entry = asst_msgs[0]['tool_calls'][0]
-        assert tc_entry['type'] == 'function'
-        assert tc_entry['function']['name'] == 'memory'
+        assert tc_entry['name'] == 'memory'
+        assert tc_entry['input'] == {'query': 'x'}
 
 
 class TestDispatcherActionFormat:

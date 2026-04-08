@@ -140,11 +140,8 @@ class MessageProcessor:
                 assistant_msg["tool_calls"] = [
                     {
                         "id": tc.get('id', ''),
-                        "type": "function",
-                        "function": {
-                            "name": tc['name'],
-                            "arguments": json.dumps(tc.get('input', {})),
-                        },
+                        "name": tc['name'],
+                        "input": tc.get('input', {}),
                     }
                     for tc in llm_response.tool_calls
                 ]
