@@ -252,6 +252,7 @@ class OutputService:
 
         # Add to queue
         self.store.lpush(self.queue_name, output_id)
+        self.store.expire(self.queue_name, 3600)
 
         logger.info(
             f"Enqueued ACT output {output_id} for topic '{_channel}' "
@@ -295,6 +296,7 @@ class OutputService:
             if output_type and output.get('type') != output_type:
                 logger.debug(f"Re-queuing output {output_id} (type={output.get('type')}, want={output_type})")
                 self.store.lpush(self.queue_name, output_id)
+                self.store.expire(self.queue_name, 3600)
                 continue
 
             logger.info(f"Dequeued {output.get('type')} output {output_id}")

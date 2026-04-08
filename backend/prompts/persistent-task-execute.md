@@ -11,11 +11,9 @@ You are executing a background task. Work through the plan below.
 
 ## Instructions
 
-Execute the next pending step(s) in the plan. For steps marked
-parallel: true with no unresolved dependencies, use the sub_agent
-skill to run them concurrently.
+Execute the next pending step(s) in the plan.
 
-For sequential steps, execute them directly.
+Work through steps sequentially, respecting dependencies.
 
 When all steps are complete, produce your final synthesis as a
 text response — this is what the user will see.

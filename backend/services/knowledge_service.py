@@ -839,7 +839,7 @@ class KnowledgeService:
                       AND decay_class != 'permanent'
                     LIMIT 20
                 """)
-                pressure_rows = cursor.fetchall()
+                cursor.fetchall()  # drain cursor
 
                 cursor.close()
 

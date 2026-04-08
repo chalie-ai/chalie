@@ -200,10 +200,12 @@ class OnnxInferenceService:
         """Download the shared base ONNX model if missing or outdated."""
         base_dir = self._models_dir / BASE_MODEL_NAME
         onnx_path = base_dir / "model.onnx"
+        optimized_path = base_dir / "model.optimized.onnx"
 
-        if onnx_path.exists():
-            size_mb = onnx_path.stat().st_size / (1024 * 1024)
-            logger.info(f"{LOG_PREFIX} Base model present: {onnx_path} ({size_mb:.0f}MB)")
+        if onnx_path.exists() or optimized_path.exists():
+            present = optimized_path if optimized_path.exists() else onnx_path
+            size_mb = present.stat().st_size / (1024 * 1024)
+            logger.info(f"{LOG_PREFIX} Base model present: {present} ({size_mb:.0f}MB)")
             return
 
         # Download from release — look for qwen2.5-0.5b_base*.onnx asset
@@ -221,15 +223,20 @@ class OnnxInferenceService:
             return
 
         assets = release.get("assets", [])
-        base_url = None
+        # Preference: optimized > quantized > raw
+        candidates = {}
         for asset in assets:
             name = asset.get("name", "")
             if name.startswith("qwen2.5-0.5b_base") and name.endswith(".onnx"):
-                if "quantized" in name:
-                    base_url = asset["browser_download_url"]
-                    break
-                elif base_url is None:
-                    base_url = asset["browser_download_url"]
+                url = asset["browser_download_url"]
+                if "optimized" in name:
+                    candidates["optimized"] = url
+                elif "quantized" in name:
+                    candidates["quantized"] = url
+                else:
+                    candidates.setdefault("raw", url)
+        base_url = candidates.get("optimized") or candidates.get("quantized") or candidates.get("raw")
+        is_optimized = "optimized" in candidates and base_url == candidates["optimized"]
 
         if not base_url:
             logger.warning(f"{LOG_PREFIX} No base model asset found in release")
@@ -241,12 +248,13 @@ class OnnxInferenceService:
                 shutil.rmtree(staging)
             staging.mkdir(parents=True)
 
+            dest_name = "model.optimized.onnx" if is_optimized else "model.onnx"
             logger.info(f"{LOG_PREFIX} Downloading shared base model...")
             req = Request(base_url, headers={"User-Agent": "Chalie/1.0"})
             with urlopen(req, timeout=600) as resp:
-                (staging / "model.onnx").write_bytes(resp.read())
+                (staging / dest_name).write_bytes(resp.read())
 
-            size_mb = (staging / "model.onnx").stat().st_size / (1024 * 1024)
+            size_mb = (staging / dest_name).stat().st_size / (1024 * 1024)
             logger.info(f"{LOG_PREFIX} Base model downloaded ({size_mb:.0f}MB)")
 
             # Save version info
@@ -409,21 +417,31 @@ class OnnxInferenceService:
 
             base_dir = self._models_dir / BASE_MODEL_NAME
             onnx_path = base_dir / "model.onnx"
+            optimized_path = base_dir / "model.optimized.onnx"
 
-            if not onnx_path.exists():
+            if not onnx_path.exists() and not optimized_path.exists():
                 logger.warning(f"{LOG_PREFIX} Shared base model not found: {onnx_path}")
                 return None
 
             try:
                 import onnxruntime as ort
-
                 opts = ort.SessionOptions()
                 opts.intra_op_num_threads = 1
                 opts.inter_op_num_threads = 1
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                opts.enable_mem_pattern = True
+                opts.enable_cpu_mem_arena = True
+
+                if optimized_path.exists():
+                    load_path = optimized_path
+                    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+                    logger.info(f"{LOG_PREFIX} Loading pre-optimized base model")
+                else:
+                    load_path = onnx_path
+                    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    opts.optimized_model_filepath = str(optimized_path)
 
                 session = ort.InferenceSession(
-                    str(onnx_path), sess_options=opts,
+                    str(load_path), sess_options=opts,
                     providers=["CPUExecutionProvider"],
                 )
 
@@ -438,7 +456,7 @@ class OnnxInferenceService:
                 # Load tokenizer
                 self._base_tokenizer = _get_shared_tokenizer(BASE_MODEL_HF)
 
-                size_mb = onnx_path.stat().st_size / (1024 * 1024)
+                size_mb = load_path.stat().st_size / (1024 * 1024)
                 logger.info(f"{LOG_PREFIX} Loaded shared base model ({size_mb:.0f}MB)")
                 return session
 
@@ -550,7 +568,8 @@ class OnnxInferenceService:
             logger.warning(f"{LOG_PREFIX} No .onnx file in {model_dir}")
             return None
 
-        onnx_path = onnx_files[0]
+        raw_path = model_dir / "model.onnx"
+        optimized_path = model_dir / "model.optimized.onnx"
         pruned = meta.get("pruned", False)
         base_model = meta.get("base_model")
 
@@ -560,10 +579,22 @@ class OnnxInferenceService:
             opts = ort.SessionOptions()
             opts.intra_op_num_threads = 1
             opts.inter_op_num_threads = 1
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            opts.enable_mem_pattern = True
+            opts.enable_cpu_mem_arena = True
+
+            if optimized_path.exists():
+                load_path = optimized_path
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            elif raw_path.exists():
+                load_path = raw_path
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                opts.optimized_model_filepath = str(optimized_path)
+            else:
+                load_path = onnx_files[0]
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
             session = ort.InferenceSession(
-                str(onnx_path), sess_options=opts,
+                str(load_path), sess_options=opts,
                 providers=["CPUExecutionProvider"],
             )
         except ImportError:
@@ -596,7 +627,7 @@ class OnnxInferenceService:
 
         logger.info(
             f"{LOG_PREFIX} Loaded legacy {model_name} ({version}): "
-            f"{onnx_path.name}, type={model_type}, pruned={pruned}"
+            f"{load_path.name}, type={model_type}, pruned={pruned}"
         )
 
         return _LegacyModel(

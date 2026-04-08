@@ -3,7 +3,7 @@ Persistent Task Worker — Three-phase background task execution.
 
 Event-driven: blocks on `persistent_task:execute` queue (blpop).
   Phase 1: PLAN    — Single LLM call, structured JSON plan
-  Phase 2: EXECUTE — ACT loop with sub_agent skill, 200 iterations, no timeout
+  Phase 2: EXECUTE — ACT loop, 200 iterations, no timeout
   Phase 3: SURFACE — Inject result into digest worker
 
 Crash-safe: if worker dies mid-execution, task stays IN_PROGRESS.
@@ -19,7 +19,7 @@ EXECUTE_QUEUE_KEY = "persistent_task:execute"
 BLPOP_TIMEOUT = 300  # 5-minute heartbeat fallback
 
 # Skills available in the outer execution loop
-OUTER_SKILLS = ['memory', 'find_tools', 'document', 'read', 'sub_agent']
+OUTER_SKILLS = ['memory', 'find_tools', 'document', 'read']
 
 
 def persistent_task_worker(shared_state):
@@ -161,7 +161,7 @@ def _generate_plan(goal: str) -> dict:
 
 
 def _execute_with_plan(task: dict, plan: dict):
-    """Phase 2: Run ACT loop with plan context and sub_agent skill.
+    """Phase 2: Run ACT loop with plan context.
 
     # TODO: migrate to MessageProcessor tool loop
     # ACTOrchestrator has been deleted. This function needs to be rewired to use

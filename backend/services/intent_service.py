@@ -146,6 +146,7 @@ class IntentService:
 
         # Append to the pending-intents list for this wrapper
         self._store.rpush(list_key, serialized)
+        self._store.expire(list_key, _INTENT_TTL_SECONDS)
 
         # Store individually for O(1) lookup (24-hour TTL)
         self._store.setex(id_key, _INTENT_TTL_SECONDS, serialized)

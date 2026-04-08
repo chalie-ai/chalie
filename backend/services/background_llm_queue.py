@@ -108,6 +108,7 @@ class BackgroundLLMProxy:
 
         try:
             self._store.rpush(QUEUE_KEY, json.dumps(job))
+            self._store.expire(QUEUE_KEY, 600)
         except Exception as e:
             logger.error("BG LLM enqueue failed: %s", e)
             return None

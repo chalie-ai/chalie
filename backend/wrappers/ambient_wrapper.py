@@ -460,7 +460,7 @@ class AmbientWrapper(threading.Thread):
                 if wind is not None:
                     summary += f", wind {wind} km/h"
 
-            metadata = {
+            _ = {
                 "weather_code": weather_code,
                 "temperature_c": temp,
                 "wind_speed_kmh": wind,
@@ -537,8 +537,6 @@ class AmbientWrapper(threading.Thread):
             for holiday in holidays:
                 date_str = holiday.get("date", "")
                 name = holiday.get("name", "Unknown holiday")
-                local_name = holiday.get("localName", name)
-
                 try:
                     from datetime import date as _date
                     holiday_date = _date.fromisoformat(date_str)
@@ -547,13 +545,6 @@ class AmbientWrapper(threading.Thread):
                     continue
 
                 if 0 <= days_away <= 3:
-                    if days_away == 0:
-                        summary = f"Today is {name}"
-                    elif days_away == 1:
-                        summary = f"Tomorrow is {name}"
-                    else:
-                        summary = f"{name} is in {days_away} days ({date_str})"
-
                     logger.info(
                         "[AmbientWrapper] Holiday noted: %s in %d day(s)",
                         name, days_away

@@ -9,7 +9,7 @@ import pytest
 from services.news_service import (
     NewsService, NewsArticle,
     _strip_html, _parse_date, _normalize_title, _levenshtein,
-    _tokenize_title, _jaccard, _derive_domain, FEED_CACHE_TTL,
+    _tokenize_title, _jaccard, _derive_domain,
 )
 
 SAMPLE_RSS = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -436,7 +436,6 @@ class TestFetchGoogleNewsCountryCode:
 
     @patch("services.news_service.requests.get")
     def test_different_country_codes_produce_different_cache_keys(self, mock_get):
-        import hashlib
         mock_resp = MagicMock()
         mock_resp.content = SAMPLE_RSS
         mock_resp.raise_for_status.return_value = None

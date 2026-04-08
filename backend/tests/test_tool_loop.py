@@ -5,7 +5,7 @@ steering injection, tool compounding, and the normalized response contract.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from services.llm_service import LLMResponse
 from services.message_processor import MessageProcessor, MAX_ITERATIONS
@@ -31,8 +31,8 @@ def _tool_call(name='memory', tc_id='tc1', input_=None):
     return {'id': tc_id, 'name': name, 'input': input_ or {}}
 
 
-def _dispatch_result(result='ok'):
-    return {'status': 'ok', 'result': result, 'action_type': name}
+def _dispatch_result(result='ok', action_type='memory'):
+    return {'status': 'ok', 'result': result, 'action_type': action_type}
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ class TestMaxIterations:
             tool_calls=[tc], text=None
         )
 
-        result = processor.send('ask', 'sys', channel='user')
+        processor.send('ask', 'sys', channel='user')
 
         # dispatch_action called at most MAX_ITERATIONS times
         assert mock_dispatcher.dispatch_action.call_count <= MAX_ITERATIONS
@@ -438,8 +438,6 @@ class TestCompoundTools:
             processor.send('ask', 'sys', channel='user')
 
         # send_messages should have received the expanded tools list
-        call_args = mock_providers.send_messages.call_args
-        tools_passed = call_args[1].get('tools') or call_args[0][3] if len(call_args[0]) > 3 else None
         # _compound_tools is called and get_find_tools_results was queried
         mock_tool_call_svc.get_find_tools_results.assert_called()
 

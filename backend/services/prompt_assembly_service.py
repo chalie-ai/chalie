@@ -268,13 +268,9 @@ class PromptAssemblyService:
             return (inclusion_map or {}).get(node, True)
 
         _msg_emb = (assembled_context or {}).get('message_embedding')
-        world_state = (
-            self.world_state_service.get_world_state(
-                topic, thread_id=thread_id, message_embedding=_msg_emb
-            )
-            if _include('world_state')
-            else ''
-        )
+        self.world_state_service.get_world_state(
+            topic, thread_id=thread_id, message_embedding=_msg_emb
+        ) if _include('world_state') else ''
 
         # Replace placeholders — use user's local timezone when available
         try:

@@ -19,7 +19,7 @@ import logging
 import math
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 try:
     import nltk
@@ -459,7 +459,7 @@ class EpisodicService:
                         open_loops = json.loads(open_loops)
                     except Exception:
                         open_loops = []
-                updated_loops = [l for l in open_loops if l not in resolved]
+                updated_loops = [loop for loop in open_loops if loop not in resolved]
                 self.update_episode(episode_id, {"open_loops": updated_loops})
                 logging.info(
                     f"Reconsolidation: episode {episode_id} extended, "
@@ -556,12 +556,20 @@ class EpisodicService:
             try:
                 episode_id = episode.get('id')
 
+                # Debounce: prefer MemoryStore (fast TTL), fall back to DB last_accessed_at
                 if store:
                     debounce_key = f"reconsolidation:{episode_id}"
                     if store.get(debounce_key):
                         logging.debug(f"Skipping reconsolidation for episode {episode_id} (debounced)")
                         continue
                     store.set(debounce_key, "1", ex=debounce_minutes * 60)
+                else:
+                    last_accessed = episode.get('last_accessed_at')
+                    if last_accessed:
+                        last_dt = parse_utc(last_accessed)
+                        if (utc_now() - last_dt).total_seconds() < debounce_minutes * 60:
+                            logging.debug(f"Skipping reconsolidation for episode {episode_id} (DB debounced)")
+                            continue
 
                 self._update_activation_score(episode_id)
                 self.mark_for_reconsolidation(episode_id)
@@ -581,18 +589,23 @@ class EpisodicService:
                 boost_scaled = self.reconsolidation_boost * 10
                 new_salience = min(10, current_salience + boost_scaled)
 
+                now = utc_now()
+                new_access_count = episode.get('access_count', 0) + 1
+
                 self.update_episode(episode_id, {
-                    'salience': new_salience
+                    'salience': new_salience,
+                    'last_accessed_at': now.isoformat(),
+                    'access_count': new_access_count,
                 })
 
                 episode['salience'] = new_salience
-                episode['last_accessed_at'] = utc_now()
-                episode['access_count'] = episode.get('access_count', 0) + 1
+                episode['last_accessed_at'] = now
+                episode['access_count'] = new_access_count
 
                 logging.debug(
                     f"Reconsolidated episode {episode_id}: "
                     f"salience {current_salience} -> {new_salience}, "
-                    f"access_count -> {episode['access_count']}"
+                    f"access_count -> {new_access_count}"
                 )
 
             except Exception as e:

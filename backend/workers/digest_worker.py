@@ -115,7 +115,6 @@ def _store_image_tool_calls(transcript_id: int, image_ids: list, image_contexts:
     the current turn without a DB round-trip.
     """
     from urllib.parse import quote
-    from services.time_utils import utc_now
 
     tags = []
     try:
@@ -137,8 +136,6 @@ def _store_image_tool_calls(transcript_id: int, image_ids: list, image_contexts:
         docs_by_id = {}
         for img_id in image_ids:
             docs_by_id[img_id] = doc_svc.get_document(img_id)
-
-        now = utc_now().isoformat()
 
         for img_id in image_ids:
             doc = docs_by_id.get(img_id)
@@ -475,8 +472,6 @@ def unified_generate(channel, text, classification, thread_conv_service,
         )
     except Exception as e:
         logging.warning(f"[UNIFIED] Context relevance computation failed: {e}, proceeding without inclusion_map")
-
-    assembled_context = {'message_embedding': message_embedding} if message_embedding is not None else None
 
     cortex_service = FrontalCortexService(config)
 
@@ -1079,7 +1074,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     if _user_transcript_id:
         try:
             from services.prompt_assembly_service import PromptAssemblyService
-            from services.time_utils import utc_now
             _nudge_svc = PromptAssemblyService(cortex_config)
             _nudge_text = _nudge_svc._get_onboarding_nudge(thread_id)
             if _nudge_text:
@@ -1135,7 +1129,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 3b.0: Track message pace for proactive timing
     try:
         from services.time_utils import utc_now as _pace_utc_now
-        _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat())
+        _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat(), ex=86400)
         _current_count = int(_busy_store.get('recent_message_count_5min') or 0)
         _busy_store.setex('recent_message_count_5min', 300, str(_current_count + 1))
     except Exception as e:
@@ -1252,7 +1246,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             logging.debug(f"[DIGEST] Silence detection failed: {_sil_e}")
     try:
         from services.time_utils import utc_now as _utc_now_act
-        _busy_store.set('last_activity_ts', _utc_now_act().isoformat())
+        _busy_store.set('last_activity_ts', _utc_now_act().isoformat(), ex=86400)
     except Exception:
         pass
 

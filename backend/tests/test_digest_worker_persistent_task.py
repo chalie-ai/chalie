@@ -8,7 +8,7 @@ Focused on the persistent_task_result shortcut path in digest_worker:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 pytestmark = pytest.mark.unit
@@ -25,7 +25,7 @@ class TestDigestWorkerRouting:
 
         mock_handler.return_value = "Task 5 | Surfaced"
 
-        result = digest_worker(
+        digest_worker(
             text="The research is complete.",
             metadata={
                 'source': 'persistent_task_result',

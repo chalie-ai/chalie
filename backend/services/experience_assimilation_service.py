@@ -141,6 +141,7 @@ class ExperienceAssimilationService:
                 'sessions_today': 0,
                 'session_day': today,
             })
+            self.store.expire(STATE_KEY, 86400)
             return False
 
         return count >= self.max_sessions
@@ -167,6 +168,7 @@ class ExperienceAssimilationService:
             channel: The conversation channel that was just successfully processed.
         """
         self.store.zadd(COOLDOWN_ZSET_KEY, {channel: time.time()})
+        self.store.expire(COOLDOWN_ZSET_KEY, 86400)
 
     def _content_hash(self, tool_outputs: list) -> str:
         """Compute a short MD5 fingerprint of tool outputs for content-level deduplication.
@@ -322,6 +324,7 @@ class ExperienceAssimilationService:
         if stored > 0:
             self._mark_topic_processed(channel)
             self.store.hincrby(STATE_KEY, 'sessions_today', 1)
+            self.store.expire(STATE_KEY, 86400)
             logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for channel '{channel}'")
 
     @staticmethod

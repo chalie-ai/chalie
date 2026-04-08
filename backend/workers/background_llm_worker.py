@@ -246,6 +246,7 @@ def background_llm_worker(shared_state=None):
             )
             try:
                 store.rpush(QUEUE_KEY, json.dumps(job))
+                store.expire(QUEUE_KEY, 600)
             except Exception as rq_err:
                 logger.error("%s Rate-limit re-enqueue failed: %s", LOG_PREFIX, rq_err)
                 try:
@@ -296,6 +297,7 @@ def background_llm_worker(shared_state=None):
                 job["retry_count"] = retry_count + 1
                 try:
                     store.rpush(QUEUE_KEY, json.dumps(job))
+                    store.expire(QUEUE_KEY, 600)
                     metrics["retries"] += 1
                     logger.warning(
                         "%s retry #%d for agent=%s, job=%s — re-queued at back",

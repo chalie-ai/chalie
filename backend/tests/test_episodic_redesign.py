@@ -10,7 +10,6 @@ fixture so migration idempotency issues in the dev environment do not affect the
 """
 
 import json
-import math
 import sqlite3
 import uuid
 import pytest
@@ -615,7 +614,6 @@ class TestExtractorLlmFailure:
 
     def test_llm_exception_returns_empty_list(self):
         """If the LLM call itself raises, extract() must return [] not propagate."""
-        from services.llm_service import LLMResponse
 
         mock_llm = MagicMock()
         mock_llm.send_message.side_effect = RuntimeError("LLM unavailable")

@@ -196,7 +196,6 @@ if __name__ == "__main__":
 
     # Deferred imports
     from workers import rest_api_worker
-    from services.config_service import ConfigService
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.experience_assimilation_service import experience_assimilation_worker

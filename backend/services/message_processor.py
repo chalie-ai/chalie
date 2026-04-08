@@ -16,7 +16,6 @@ Handles two responsibilities:
 Subclasses build the prompts and call self.send().
 """
 
-import json
 import time
 import logging
 

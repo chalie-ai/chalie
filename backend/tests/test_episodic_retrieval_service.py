@@ -3,7 +3,7 @@
 import math
 import pytest
 from datetime import timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.episodic_service import EpisodicService
 from services.database_service import get_shared_db_service
@@ -291,7 +291,8 @@ class TestFormatForPrompt:
         svc = EpisodicService(get_shared_db_service(), config={})
 
         # Insert two source episodes with distinct dates
-        import json, uuid
+        import json
+        import uuid
         src_id_a = str(uuid.uuid4())
         src_id_b = str(uuid.uuid4())
         db_conn = get_shared_db_service()
@@ -353,7 +354,8 @@ class TestFormatForPrompt:
     def test_consolidated_from_same_date_returns_single_date(self, db):
         """When source episodes share the same date, output is a single date, not a range."""
         svc = EpisodicService(get_shared_db_service(), config={})
-        import json, uuid
+        import json
+        import uuid
         src_id = str(uuid.uuid4())
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:

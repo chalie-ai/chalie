@@ -1129,7 +1129,7 @@ class TestDoc2QueryService:
     def test_generate_queries_deduplication(self):
         """Duplicate outputs from the model are deduplicated (case-insensitive)."""
         from services.doc2query_service import Doc2QueryService
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         svc = Doc2QueryService()
         svc._available = True
@@ -1300,7 +1300,6 @@ class TestDoc2QueryWiringAdditional:
     def test_schedule_doc2query_persists_queries_and_resyncs_fts(self, svc, db_service):
         """The background thread writes search_queries to DB and calls _sync_fts."""
         import json
-        import threading
 
         # Store a real entry so a rowid exists
         result = svc.store(
@@ -1326,15 +1325,12 @@ class TestDoc2QueryWiringAdditional:
         mock_d2q.is_available.return_value = True
         mock_d2q.generate_queries.return_value = ['what is the dog name', 'dog named rex']
 
-        done = threading.Event()
-        original_thread_start = threading.Thread.start
-
         with patch('services.doc2query_service.get_doc2query_service', return_value=mock_d2q):
             # Call _schedule_doc2query directly and run the background function inline
             # by re-implementing its fire-and-forget in-thread for test predictability
             svc._schedule_doc2query.__func__  # verify it's a bound method
             # Run synchronously by calling the inner _run logic directly:
-            queries = mock_d2q.generate_queries(f"d2q_persist_test: user has a dog named Rex")
+            queries = mock_d2q.generate_queries("d2q_persist_test: user has a dog named Rex")
             with db_service.connection() as conn:
                 conn.execute(
                     "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
@@ -1365,7 +1361,6 @@ class TestDoc2QueryWiringAdditional:
 
     def test_sync_fts_with_only_rowid_reads_from_db(self, svc, db_service):
         """_sync_fts called with only rowid must read key/value/kind/entity from DB."""
-        import json
 
         svc.store(
             kind='fact', entity='user', key='rowid_only_sync_test',

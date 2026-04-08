@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from workers.persistent_task_worker import (
     EXECUTE_QUEUE_KEY,
@@ -25,16 +25,12 @@ class TestConstants:
         """Heartbeat fallback fires every 5 minutes."""
         assert BLPOP_TIMEOUT == 300
 
-    def test_outer_skills_includes_sub_agent(self):
-        """Outer execution loop must include sub_agent for parallel step execution."""
-        assert 'sub_agent' in OUTER_SKILLS
-
     def test_outer_skills_excludes_persistent_task(self):
         """Prevent recursive persistent task creation from the worker."""
         assert 'persistent_task' not in OUTER_SKILLS
 
     def test_outer_skills_includes_required_tools(self):
-        """Outer loop must have memory, find_tools, document, read alongside sub_agent."""
+        """Outer loop must have memory, find_tools, document, read."""
         for skill in ('memory', 'find_tools', 'document', 'read'):
             assert skill in OUTER_SKILLS
 
@@ -650,7 +646,7 @@ class TestSkillControlActions:
         mock_service.transition.return_value = (True, "Task paused.")
         mock_get_svc.return_value = mock_service
 
-        result = _pause('topic', {'task_id': 3})
+        _pause('topic', {'task_id': 3})
 
         mock_service.transition.assert_called_once_with(3, 'paused')
 
@@ -664,7 +660,7 @@ class TestSkillControlActions:
         mock_service.transition.return_value = (True, "Task resumed.")
         mock_get_svc.return_value = mock_service
 
-        result = _resume('topic', {'task_id': 3})
+        _resume('topic', {'task_id': 3})
 
         mock_service.transition.assert_called_once_with(3, 'in_progress')
 
@@ -678,7 +674,7 @@ class TestSkillControlActions:
         mock_service.transition.return_value = (True, "Task cancelled.")
         mock_get_svc.return_value = mock_service
 
-        result = _cancel('topic', {'task_id': 5})
+        _cancel('topic', {'task_id': 5})
 
         mock_service.transition.assert_called_once_with(5, 'cancelled')
 

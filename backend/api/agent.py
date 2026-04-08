@@ -114,7 +114,7 @@ def agent_message():
                 # Blocks live inside output.metadata.blocks (same as WebSocket handler)
                 metadata = output.get('metadata', {})
                 response_blocks = metadata.get('blocks', [])
-                original_meta = metadata.get('metadata', {})
+                _ = metadata.get('metadata', {})  # reserved for future use
                 response_meta = {
                     'topic': output.get('topic', ''),
                     'mode': metadata.get('mode', ''),

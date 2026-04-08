@@ -98,6 +98,7 @@ class PersistentTaskService:
                 'persistent_task:execute',
                 json.dumps({'task_id': task_id, 'reason': 'created'}),
             )
+            store.expire('persistent_task:execute', 1800)
         except Exception:
             pass  # Non-fatal — worker will pick it up on next heartbeat
 
@@ -207,6 +208,7 @@ class PersistentTaskService:
                     'persistent_task:execute',
                     json.dumps({'task_id': task_id, 'reason': new_status}),
                 )
+                store.expire('persistent_task:execute', 1800)
                 logger.debug(f"{LOG_PREFIX} Pushed execute signal for task {task_id} ({new_status})")
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Failed to push execute signal: {e}")
@@ -331,12 +333,6 @@ class PersistentTaskService:
 
     def complete_task(self, task_id: int, result: str, artifact: Optional[Dict] = None) -> bool:
         """Mark a task as completed with final result."""
-        # Read task before update (for priority check — non-fatal)
-        try:
-            task = self.get_task(task_id)
-        except Exception:
-            task = None
-
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""

@@ -9,7 +9,7 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from services.time_utils import utc_now
 from services.innate_skills.review_tool_calls_skill import handle_review_tool_calls

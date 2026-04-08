@@ -429,6 +429,7 @@ class WorldStateService:
             store.rpush(EXTERNAL_SIGNALS_KEY, entry)
             # Cap the list to prevent unbounded growth
             store.ltrim(EXTERNAL_SIGNALS_KEY, -MAX_EXTERNAL_SIGNALS, -1)
+            store.expire(EXTERNAL_SIGNALS_KEY, 3600)
             logger.debug(
                 f"{LOG_PREFIX} External signal: {signal_type} from {source}"
             )

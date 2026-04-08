@@ -1,7 +1,7 @@
 """Tests for memory_skill — unified store/recall/update entry point."""
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from services.innate_skills.memory_skill import (
     handle_memory,

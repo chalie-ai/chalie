@@ -14,10 +14,9 @@ All tests mock onnxruntime — no real ONNX files are loaded.
 
 import json
 import sys
-import threading
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -981,7 +980,6 @@ class TestEnsureBaseModelAssetSelection:
         Mock urlopen to return successive responses from a list.
         Each entry in `responses` is either bytes (success) or an exception.
         """
-        import io
         call_count = [0]
 
         class _FakeResp:
@@ -1022,7 +1020,6 @@ class TestEnsureBaseModelAssetSelection:
 
         downloaded_urls = []
 
-        import io
 
         class _FakeResp:
             def __init__(self, data):

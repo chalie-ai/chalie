@@ -448,6 +448,7 @@ def _execute_via_proactive_push(goal: Dict[str, Any], style: str) -> Dict[str, A
                 'topic': 'proactive',
             },
         }))
+        store.expire('prompt-queue', 3600)
 
         return {
             'action': 'proactive_push',

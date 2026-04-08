@@ -118,6 +118,7 @@ class DMNService:
             # Prune entries older than 24 h
             cutoff = ts - _24H_S
             self._store.zremrangebyscore(_DELIVERY_ZSET, float('-inf'), cutoff)
+            self._store.expire(_DELIVERY_ZSET, 86400)
         except Exception as exc:
             logger.warning("[DMN] Failed to record delivery: %s", exc)
 

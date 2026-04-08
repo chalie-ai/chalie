@@ -7,7 +7,6 @@ Shared test fixtures — full sandbox isolation.
 No real external connections. MemoryStore IS the production implementation.
 """
 
-import importlib.util
 import shutil
 import sqlite3
 import sys

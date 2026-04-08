@@ -72,6 +72,7 @@ def _get_session_and_tokenizer():
 
         model_dir = _model_dir()
         onnx_path = model_dir / "onnx" / "model.onnx"
+        optimized_path = model_dir / "onnx" / "model.optimized.onnx"
 
         # Download ONNX model if not cached locally
         if not onnx_path.exists():
@@ -87,14 +88,24 @@ def _get_session_and_tokenizer():
                 logger.error(f"[EMBEDDING] Failed to download model: {e}")
                 raise
 
-        # Load ONNX session
+        # Load ONNX session — prefer pre-optimized model if available
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 2
         opts.inter_op_num_threads = 1
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.enable_mem_pattern = True
+        opts.enable_cpu_mem_arena = True
+
+        if optimized_path.exists():
+            load_path = optimized_path
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+            logger.info("[EMBEDDING] Loading pre-optimized model")
+        else:
+            load_path = onnx_path
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            opts.optimized_model_filepath = str(optimized_path)
 
         session = ort.InferenceSession(
-            str(onnx_path),
+            str(load_path),
             sess_options=opts,
             providers=["CPUExecutionProvider"],
         )

@@ -778,7 +778,6 @@ def reset_thread():
     """
     try:
         from services.memory_client import MemoryClientService
-        import uuid as _uuid
 
         data = request.get_json(silent=True) or {}
         channel_id = data.get('channel', 'default')
@@ -798,7 +797,7 @@ def reset_thread():
         except (ValueError, IndexError):
             seq = 1
         new_channel = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
-        store.set(f'active_channel:{channel_id}', new_channel)
+        store.set(f'active_channel:{channel_id}', new_channel, ex=604800)
 
         logger.info(f"[RESET-THREAD] Channel reset: {current} → {new_channel}")
         return jsonify({'ok': True, 'expired': current, 'new_channel': new_channel}), 200

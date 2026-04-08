@@ -96,7 +96,6 @@ class UserPromptAssemblyService(PromptAssemblyContract):
         """Build conversation context from compaction + recent transcript + tool calls."""
         try:
             from services import compaction_service, transcript_service
-            from services.database_service import get_shared_db_service
 
             compaction = compaction_service.get_compaction(channel)
             watermark = compaction['compacted_up_to_id'] if compaction else 0

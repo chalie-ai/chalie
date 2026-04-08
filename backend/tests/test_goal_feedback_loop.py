@@ -1,7 +1,6 @@
 """Tests for H1.3 — Goal feedback loop wiring."""
 
 import pytest
-from unittest.mock import patch
 
 
 @pytest.mark.unit

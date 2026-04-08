@@ -62,7 +62,7 @@ def _get_vapid_keys():
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode('ascii').rstrip('=')
 
     keys = {'public': pub_b64, 'private': priv_b64}
-    store.set(VAPID_KEYS_KEY, json.dumps(keys))
+    store.set(VAPID_KEYS_KEY, json.dumps(keys), ex=86400)
     logger.info("[Push] Generated and stored new VAPID keys (raw base64 format)")
     return keys
 
@@ -90,6 +90,7 @@ def push_subscribe():
         from services.memory_client import MemoryClientService
         store = MemoryClientService.create_connection()
         store.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
+        store.expire(SUBSCRIPTIONS_KEY, 86400 * 30)
         logger.info(f"[Push] Stored subscription: {subscription['endpoint'][:60]}...")
         return jsonify({'ok': True}), 201
     except Exception as e:

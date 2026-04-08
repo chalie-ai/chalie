@@ -92,10 +92,8 @@ def conversation_recent():
             if role == 'user':
                 # Look ahead for matching assistant turn
                 response_text = ''
-                response_time = ''
                 if i + 1 < len(rows) and rows[i + 1][1] == 'assistant':
                     response_text = rows[i + 1][2]
-                    response_time = rows[i + 1][3]
                     i += 2
                 else:
                     i += 1

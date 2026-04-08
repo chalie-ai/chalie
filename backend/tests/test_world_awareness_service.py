@@ -36,8 +36,11 @@ def _seed_trait(db, key, value, confidence, evidence_count, category='preference
     db.commit()
 
 
-def _seed_topic_transcript(db, topic, count, last_ts="2026-03-24T10:00:00"):
+def _seed_topic_transcript(db, topic, count, last_ts=None):
     """Insert `count` user transcript rows for a given channel."""
+    if last_ts is None:
+        from services.time_utils import utc_now
+        last_ts = utc_now().isoformat()
     for i in range(count):
         db.execute(
             """INSERT INTO transcript (channel, role, content, created_at)
