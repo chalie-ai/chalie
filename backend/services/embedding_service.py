@@ -195,7 +195,12 @@ class EmbeddingService:
     """
 
     def __init__(self, config: dict = None):
-        self.config = config or ConfigService.resolve_agent_config("semantic-memory")
+        if config is None:
+            try:
+                config = ConfigService.resolve_agent_config("semantic-memory")
+            except FileNotFoundError:
+                config = {}
+        self.config = config
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
 
     def _cache_get(self, text: str) -> Optional[list]:
