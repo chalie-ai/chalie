@@ -134,7 +134,8 @@ frontend/
 - **`identity_state_service.py`** — Tracks identity state changes and evolution
 
 #### Infrastructure
-- **`database_service.py`** — SQLite connection management (WAL mode) and migrations
+- **`database_service.py`** — SQLite connection management (WAL mode, thread-local connections)
+- **`schema_convergence_service.py`** — Declarative schema management: converges live DB to match `schema.sql` (tables, columns, indexes, virtual tables)
 - **`memory_store.py`** — MemoryStore: thread-safe, in-memory key-value store with Redis-compatible API
 - **`config_service.py`** — JSON file config loader (agent configs, connection names); runtime config (port, host) managed by `runtime_config.py` via CLI args
 - **`output_service.py`** — Output queue management for responses
