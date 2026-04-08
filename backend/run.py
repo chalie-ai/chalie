@@ -66,50 +66,46 @@ def main():
         config["models_dir"] = args.models_dir
     runtime_config.set(config)
 
-    import threading as _threading
-
     # Preload embedding model in a background thread so Flask starts immediately.
     # On first run the model (~438MB) may need to download from HuggingFace;
     # blocking here would prevent the onboarding page from loading for 5+ minutes.
-    # CHALIE_SKIP_EMBEDDING_PRELOAD=1 disables for memory-constrained environments.
-    if os.environ.get('CHALIE_SKIP_EMBEDDING_PRELOAD') != '1':
-        def _preload_embedding_model():
-            try:
-                logger.info("[System] Preloading embedding model (background)...")
-                from services.embedding_service import get_embedding_service
-                svc = get_embedding_service()
-                svc.generate_embedding("warmup")
-                logger.info("[System] Embedding model ready (inference warm)")
-            except Exception as e:
-                import traceback
-                logger.warning(f"[System] Embedding model preload failed: {e}")
-                logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
+    def _preload_embedding_model():
+        try:
+            logger.info("[System] Preloading embedding model (background)...")
+            from services.embedding_service import get_embedding_service
+            svc = get_embedding_service()
+            # Warm the ONNX session — first encode() triggers model load and,
+            # on first run, a ~300MB HuggingFace download. Running here so the
+            # user never hits that delay during an actual conversation.
+            svc.generate_embedding("warmup")
+            logger.info("[System] Embedding model ready (inference warm)")
+        except Exception as e:
+            import traceback
+            logger.warning(f"[System] Embedding model preload failed: {e}")
+            logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
-        _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
-    else:
-        logger.info("[System] Embedding preload skipped (CHALIE_SKIP_EMBEDDING_PRELOAD=1)")
+    import threading as _threading
+    _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
 
     # Download/update ONNX classifiers, then warm the inference path.
-    # CHALIE_SKIP_ONNX_PRELOAD=1 disables for memory-constrained environments.
-    if os.environ.get('CHALIE_SKIP_ONNX_PRELOAD') != '1':
-        def _preload_onnx_models():
-            try:
-                logger.info("[System] Checking ONNX models (background)...")
-                from services.onnx_inference_service import get_onnx_inference_service
-                svc = get_onnx_inference_service()
-                svc.ensure_models()
-                label, _ = svc.predict("mode-tiebreaker", "warmup")
-                if label is not None:
-                    logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
-                else:
-                    logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
-                svc._ready = True
-            except Exception as e:
-                logger.warning(f"[System] ONNX preload failed: {e}")
+    def _preload_onnx_models():
+        try:
+            logger.info("[System] Checking ONNX models (background)...")
+            from services.onnx_inference_service import get_onnx_inference_service
+            svc = get_onnx_inference_service()
+            # Download missing models / version-check existing ones
+            svc.ensure_models()
+            # Warm the mode-tiebreaker — load session + tokenizer + throwaway inference
+            label, _ = svc.predict("mode-tiebreaker", "warmup")
+            if label is not None:
+                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
+            else:
+                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            svc._ready = True
+        except Exception as e:
+            logger.warning(f"[System] ONNX preload failed: {e}")
 
-        _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
-    else:
-        logger.info("[System] ONNX preload skipped (CHALIE_SKIP_ONNX_PRELOAD=1)")
+    _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
 
     # Initialize SQLite database
     from services.database_service import get_shared_db_service
@@ -122,12 +118,20 @@ def main():
     database_service = get_shared_db_service()
     schema_service = SchemaService(database_service, embedding_dimensions)
 
-    if not schema_service.database_exists():
-        logger.info("Initializing database...")
+    # Detect existing database: if tables already exist, run migrations BEFORE
+    # schema.sql so that column renames (e.g. topic→channel) are applied before
+    # CREATE INDEX statements reference the new column names.
+    with database_service.connection() as conn:
+        has_tables = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchone()[0] > 0
 
-    # Always apply schema.sql — every CREATE TABLE/INDEX uses IF NOT EXISTS, so this is
-    # fully idempotent. Running it on every startup ensures new tables added in any commit
-    # are created in existing databases without requiring an explicit migration.
+    if has_tables:
+        logger.info("Existing database detected — running migrations first...")
+        database_service.run_pending_migrations()
+
+    # schema.sql is idempotent (all DDL uses IF NOT EXISTS). On fresh DBs it creates
+    # everything and stamps migrations. On existing DBs it adds any new tables/indexes.
     schema_service.initialize_schema()
     current_version = schema_service.schema_version()
     logger.info(f"Schema applied (version {current_version})")
@@ -135,9 +139,11 @@ def main():
     # Always ensure vec tables exist — idempotent, repairs existing DBs missing new tables
     schema_service.ensure_vec_tables()
 
-    # Run pending migrations
-    logger.info("Checking for pending database migrations...")
-    database_service.run_pending_migrations()
+    if not has_tables:
+        # Fresh install — initialize_schema() stamped all migrations.
+        # Run anyway in case any have runtime effects beyond DDL.
+        logger.info("Checking for pending database migrations...")
+        database_service.run_pending_migrations()
 
     # Clean up expired auth sessions from SQLite
     try:
@@ -328,18 +334,17 @@ def main():
         logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
 
     # Warm search router embedding cache (background thread)
-    if os.environ.get('CHALIE_SKIP_SEARCH_CACHE') != '1':
-        try:
-            def _warm_search_cache():
-                try:
-                    from tools.search.router import _ensure_cache
-                    _ensure_cache()
-                    logger.info("[Startup] Search router cache ready")
-                except Exception as e:
-                    logger.warning(f"[Startup] Search router cache warmup failed: {e}")
-            threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
-        except Exception as e:
-            logger.warning(f"[Startup] Search cache warmup start failed: {e}")
+    try:
+        def _warm_search_cache():
+            try:
+                from tools.search.router import _ensure_cache
+                _ensure_cache()
+                logger.info("[Startup] Search router cache ready")
+            except Exception as e:
+                logger.warning(f"[Startup] Search router cache warmup failed: {e}")
+        threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
+    except Exception as e:
+        logger.warning(f"[Startup] Search cache warmup start failed: {e}")
 
     # Hourly cleanup for stale pending contradictions
     def _pending_contradiction_cleanup_loop():

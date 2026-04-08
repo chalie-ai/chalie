@@ -3,7 +3,6 @@ System blueprint — /health, /metrics, /system/status, /system/observability/* 
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -77,13 +76,10 @@ def readiness_check():
         components['workers'] = {'status': 'error', 'message': str(e)}
 
     # Embedding model — lazy-loaded on first use. Ready once the ONNX session
-    # and tokenizer are initialised. When preload is skipped (memory-constrained
-    # environments), treat as ok — model will load on first use.
+    # and tokenizer are initialised.
     try:
         from services.embedding_service import _session
         if _session is not None:
-            components['embeddings'] = {'status': 'ok'}
-        elif os.environ.get('CHALIE_SKIP_EMBEDDING_PRELOAD') == '1':
             components['embeddings'] = {'status': 'ok'}
         else:
             components['embeddings'] = {'status': 'loading'}
@@ -92,14 +88,11 @@ def readiness_check():
         components['embeddings'] = {'status': 'error', 'message': str(e)}
 
     # ONNX models — preloaded in background thread on boot. Not ready until
-    # ensure_models() + warmup inference have completed. When preload is skipped
-    # (memory-constrained environments), treat as ok — models load on first use.
+    # ensure_models() + warmup inference have completed.
     try:
         from services.onnx_inference_service import get_onnx_inference_service
         onnx_svc = get_onnx_inference_service()
         if onnx_svc.ready:
-            components['onnx'] = {'status': 'ok'}
-        elif os.environ.get('CHALIE_SKIP_ONNX_PRELOAD') == '1':
             components['onnx'] = {'status': 'ok'}
         else:
             components['onnx'] = {'status': 'loading'}
