@@ -92,11 +92,14 @@ def readiness_check():
         components['embeddings'] = {'status': 'error', 'message': str(e)}
 
     # ONNX models — preloaded in background thread on boot. Not ready until
-    # ensure_models() + warmup inference have completed.
+    # ensure_models() + warmup inference have completed. When preload is skipped
+    # (memory-constrained environments), treat as ok — models load on first use.
     try:
         from services.onnx_inference_service import get_onnx_inference_service
         onnx_svc = get_onnx_inference_service()
         if onnx_svc.ready:
+            components['onnx'] = {'status': 'ok'}
+        elif os.environ.get('CHALIE_SKIP_ONNX_PRELOAD') == '1':
             components['onnx'] = {'status': 'ok'}
         else:
             components['onnx'] = {'status': 'loading'}

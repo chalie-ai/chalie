@@ -90,24 +90,26 @@ def main():
         logger.info("[System] Embedding preload skipped (CHALIE_SKIP_EMBEDDING_PRELOAD=1)")
 
     # Download/update ONNX classifiers, then warm the inference path.
-    def _preload_onnx_models():
-        try:
-            logger.info("[System] Checking ONNX models (background)...")
-            from services.onnx_inference_service import get_onnx_inference_service
-            svc = get_onnx_inference_service()
-            # Download missing models / version-check existing ones
-            svc.ensure_models()
-            # Warm the mode-tiebreaker — load session + tokenizer + throwaway inference
-            label, _ = svc.predict("mode-tiebreaker", "warmup")
-            if label is not None:
-                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
-            else:
-                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
-            svc._ready = True
-        except Exception as e:
-            logger.warning(f"[System] ONNX preload failed: {e}")
+    # CHALIE_SKIP_ONNX_PRELOAD=1 disables for memory-constrained environments.
+    if os.environ.get('CHALIE_SKIP_ONNX_PRELOAD') != '1':
+        def _preload_onnx_models():
+            try:
+                logger.info("[System] Checking ONNX models (background)...")
+                from services.onnx_inference_service import get_onnx_inference_service
+                svc = get_onnx_inference_service()
+                svc.ensure_models()
+                label, _ = svc.predict("mode-tiebreaker", "warmup")
+                if label is not None:
+                    logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
+                else:
+                    logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+                svc._ready = True
+            except Exception as e:
+                logger.warning(f"[System] ONNX preload failed: {e}")
 
-    _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
+        _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
+    else:
+        logger.info("[System] ONNX preload skipped (CHALIE_SKIP_ONNX_PRELOAD=1)")
 
     # Initialize SQLite database
     from services.database_service import get_shared_db_service
