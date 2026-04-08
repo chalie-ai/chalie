@@ -324,17 +324,18 @@ def main():
         logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
 
     # Warm search router embedding cache (background thread)
-    try:
-        def _warm_search_cache():
-            try:
-                from tools.search.router import _ensure_cache
-                _ensure_cache()
-                logger.info("[Startup] Search router cache ready")
-            except Exception as e:
-                logger.warning(f"[Startup] Search router cache warmup failed: {e}")
-        threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
-    except Exception as e:
-        logger.warning(f"[Startup] Search cache warmup start failed: {e}")
+    if os.environ.get('CHALIE_SKIP_SEARCH_CACHE') != '1':
+        try:
+            def _warm_search_cache():
+                try:
+                    from tools.search.router import _ensure_cache
+                    _ensure_cache()
+                    logger.info("[Startup] Search router cache ready")
+                except Exception as e:
+                    logger.warning(f"[Startup] Search router cache warmup failed: {e}")
+            threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
+        except Exception as e:
+            logger.warning(f"[Startup] Search cache warmup start failed: {e}")
 
     # Hourly cleanup for stale pending contradictions
     def _pending_contradiction_cleanup_loop():
