@@ -227,6 +227,51 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 
 -- ────────────────────────────────────────────────────────────────
+-- VAULT CONFIG — envelope encryption (AES-256-GCM)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vault_config (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    kdf_salt        BLOB    NOT NULL,
+    kdf_algorithm   TEXT    NOT NULL DEFAULT 'pbkdf2_sha256',
+    kdf_iterations  INTEGER NOT NULL DEFAULT 600000,
+    wrapped_dek     BLOB    NOT NULL,
+    dek_nonce       BLOB    NOT NULL,
+    created_at      TEXT,
+    updated_at      TEXT
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- INTERFACES — external interface registry (bluetooth-style pairing)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS interfaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    signal_token_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'offline',
+    capabilities_hash TEXT,
+    last_seen_at TEXT,
+    paired_at TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS interface_tools (
+    interface_id TEXT NOT NULL REFERENCES interfaces(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    registered_at TEXT NOT NULL,
+    PRIMARY KEY (interface_id, tool_name)
+);
+
+CREATE TABLE IF NOT EXISTS interface_pairing_keys (
+    key_hash TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- TOOL CONFIGS — per-tool key-value configuration
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_configs (
