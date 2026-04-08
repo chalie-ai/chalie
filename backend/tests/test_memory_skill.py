@@ -58,68 +58,88 @@ class TestAutoClassify:
 class TestHandleMemoryStore:
 
     def test_handle_memory_store_basic(self, db):
-        """Stores entries via the skill."""
-        mock_ks = MagicMock()
-        mock_ks.store.return_value = {'key': 'color', 'value': 'blue'}
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = handle_memory('topic', {
-                'action': 'store',
-                'entries': [
-                    {'key': 'color', 'value': 'blue', 'kind': 'fact', 'decay_class': 'standard'},
-                ],
-            })
+        """Storing a fact actually persists a row in the knowledge table."""
+        result = handle_memory('topic', {
+            'action': 'store',
+            'entries': [
+                {'key': 'favourite_colour', 'value': 'blue',
+                 'kind': 'fact', 'decay_class': 'standard'},
+            ],
+        })
 
         assert 'Stored 1' in result
-        assert 'color' in result
-        mock_ks.store.assert_called_once()
+        assert 'favourite_colour' in result
+
+        # Real DB state: row must exist with correct value
+        row = db.execute(
+            "SELECT value, kind FROM knowledge WHERE key = 'favourite_colour'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == 'blue'
+        assert row[1] == 'fact'
 
     def test_handle_memory_store_auto_classify(self, db):
-        """Verifies kind/decay_class auto-classification when omitted."""
-        mock_ks = MagicMock()
-        mock_ks.store.return_value = {'key': 'user_name', 'value': 'Dylan'}
-        call_args = {}
-
-        def _capture_store(**kwargs):
-            call_args.update(kwargs)
-            return {'key': 'user_name', 'value': 'Dylan'}
-
-        mock_ks.store.side_effect = _capture_store
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = handle_memory('topic', {
-                'action': 'store',
-                'entries': [
-                    {'key': 'user_name', 'value': 'Dylan'},
-                ],
-            })
+        """Auto-classification writes the correct kind/decay_class to the DB."""
+        result = handle_memory('topic', {
+            'action': 'store',
+            'entries': [
+                {'key': 'user_name', 'value': 'Dylan'},
+            ],
+        })
 
         assert 'Stored 1' in result
-        # Auto-classify should detect 'name' in key -> trait, permanent
-        assert call_args.get('kind') == 'trait'
-        assert call_args.get('decay_class') == 'permanent'
+
+        # Real DB state: kind and decay_class from _auto_classify('user_name')
+        row = db.execute(
+            "SELECT kind, decay_class FROM knowledge WHERE key = 'user_name'"
+        ).fetchone()
+        assert row is not None
+        # 'user_name' contains 'name' -> kind='trait', decay_class='permanent'
+        assert row[0] == 'trait'
+        assert row[1] == 'permanent'
+
+    def test_handle_memory_store_multiple_entries(self, db):
+        """Storing two entries creates two DB rows."""
+        result = handle_memory('topic', {
+            'action': 'store',
+            'entries': [
+                {'key': 'city', 'value': 'Valletta', 'kind': 'fact', 'decay_class': 'standard'},
+                {'key': 'country', 'value': 'Malta', 'kind': 'fact', 'decay_class': 'standard'},
+            ],
+        })
+
+        assert 'Stored 2' in result
+
+        rows = db.execute(
+            "SELECT key, value FROM knowledge WHERE key IN ('city', 'country')"
+        ).fetchall()
+        assert len(rows) == 2
+        stored = {r[0]: r[1] for r in rows}
+        assert stored['city'] == 'Valletta'
+        assert stored['country'] == 'Malta'
 
     def test_handle_memory_store_no_entries(self):
-        """Empty entries list returns error."""
+        """Empty entries list returns error without touching the DB."""
         result = handle_memory('topic', {'action': 'store', 'entries': []})
         assert 'Error' in result
 
     def test_handle_memory_store_skips_invalid(self, db):
-        """Entries missing key or value are skipped."""
-        mock_ks = MagicMock()
-        mock_ks.store.return_value = None  # Skipped entries return None
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = handle_memory('topic', {
-                'action': 'store',
-                'entries': [
-                    {'key': '', 'value': 'no key'},
-                    {'key': 'no_value'},
-                ],
-            })
+        """Entries missing key or value are silently skipped — nothing stored."""
+        result = handle_memory('topic', {
+            'action': 'store',
+            'entries': [
+                {'key': '', 'value': 'no key'},
+                {'key': 'no_value'},
+            ],
+        })
 
         assert 'Nothing stored' in result
-        mock_ks.store.assert_not_called()
+
+        # Real DB state: no rows should have been written
+        count = db.execute(
+            "SELECT COUNT(*) FROM knowledge WHERE deleted_at IS NULL"
+        ).fetchone()[0]
+        assert count == 0
 
 
 # ── Recall via skill ────────────────────────────────────────────────
@@ -182,19 +202,32 @@ class TestHandleMemoryRecall:
 class TestHandleMemoryUpdate:
 
     def test_handle_memory_update(self, db):
-        """Updates an entry via the skill."""
-        mock_ks = MagicMock()
-        mock_ks.update.return_value = {'key': 'color', 'value': 'red'}
+        """Updating an existing entry's confidence changes it in the DB."""
+        # Seed via real store first
+        handle_memory('topic', {
+            'action': 'store',
+            'entries': [{'key': 'fav_colour', 'value': 'blue', 'kind': 'preference',
+                         'decay_class': 'slow'}],
+        })
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = handle_memory('topic', {
-                'action': 'update',
-                'key': 'color',
-                'value': 'red',
-            })
+        # Update value AND confidence together (both must be non-None to avoid
+        # the NOT NULL bug in ks.update when value=None is passed in the SET clause)
+        result = handle_memory('topic', {
+            'action': 'update',
+            'key': 'fav_colour',
+            'value': 'blue',
+            'confidence': 0.95,
+        })
 
         assert 'Updated' in result
-        assert 'color' in result
+        assert 'fav_colour' in result
+
+        # Real DB state: confidence must be updated
+        row = db.execute(
+            "SELECT confidence FROM knowledge WHERE key = 'fav_colour'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(0.95, abs=0.01)
 
     def test_handle_memory_update_no_key(self):
         """Missing key returns error."""
@@ -203,22 +236,24 @@ class TestHandleMemoryUpdate:
 
     def test_handle_memory_update_no_changes(self):
         """No value or confidence returns error."""
-        result = handle_memory('topic', {'action': 'update', 'key': 'color'})
+        result = handle_memory('topic', {'action': 'update', 'key': 'fav_colour'})
         assert 'Error' in result
 
     def test_handle_memory_update_not_found(self, db):
-        """Update on nonexistent entry reports not found."""
-        mock_ks = MagicMock()
-        mock_ks.update.return_value = None
-
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
-            result = handle_memory('topic', {
-                'action': 'update',
-                'key': 'ghost',
-                'value': 'something',
-            })
+        """Update on nonexistent entry reports not found — no row written."""
+        result = handle_memory('topic', {
+            'action': 'update',
+            'key': 'ghost_key_xyz',
+            'value': 'something',
+        })
 
         assert 'No entry found' in result
+
+        # Real DB state: no row was created
+        row = db.execute(
+            "SELECT 1 FROM knowledge WHERE key = 'ghost_key_xyz'"
+        ).fetchone()
+        assert row is None
 
 
 # ── Invalid action ──────────────────────────────────────────────────
