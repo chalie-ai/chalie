@@ -3,6 +3,7 @@ System blueprint — /health, /metrics, /system/status, /system/observability/* 
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -76,10 +77,13 @@ def readiness_check():
         components['workers'] = {'status': 'error', 'message': str(e)}
 
     # Embedding model — lazy-loaded on first use. Ready once the ONNX session
-    # and tokenizer are initialised.
+    # and tokenizer are initialised. When preload is skipped (memory-constrained
+    # environments), treat as ok — model will load on first use.
     try:
         from services.embedding_service import _session
         if _session is not None:
+            components['embeddings'] = {'status': 'ok'}
+        elif os.environ.get('CHALIE_SKIP_EMBEDDING_PRELOAD') == '1':
             components['embeddings'] = {'status': 'ok'}
         else:
             components['embeddings'] = {'status': 'loading'}
