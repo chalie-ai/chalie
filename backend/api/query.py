@@ -192,8 +192,11 @@ def _slice_relevance(query: str) -> dict:
 
         if episodes:
             top = episodes[0]
-            raw_score = top.get("composite_score") or top.get("score") or 0.0
-            relevance = max(0.0, min(1.0, float(raw_score)))
+            raw_score = float(top.get("composite_score") or top.get("score") or 0.0)
+            # Sigmoid normalization: midpoint ~50, steepness 0.05
+            # Maps composite scores (typical range 0-150) to [0,1]
+            import math
+            relevance = 1.0 / (1.0 + math.exp(-0.05 * (raw_score - 50)))
     except Exception as e:
         logger.debug("[Query API] relevance episodic lookup failed: %s", e)
 

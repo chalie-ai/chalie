@@ -341,7 +341,7 @@ class TestRelevanceEndpoint:
     def test_high_score_recommends_surface_now(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([{"composite_score": 0.9}])
+                stack, _, _ = self._patch_relevance_services([{"composite_score": 80}])
                 with stack:
                     resp = client.get("/api/query/relevance?q=urgent")
         assert resp.get_json()["recommendation"] == "surface_now"
@@ -349,7 +349,7 @@ class TestRelevanceEndpoint:
     def test_mid_score_recommends_surface_soon(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([{"composite_score": 0.55}])
+                stack, _, _ = self._patch_relevance_services([{"composite_score": 55}])
                 with stack:
                     resp = client.get("/api/query/relevance?q=some+topic")
         assert resp.get_json()["recommendation"] == "surface_soon"
@@ -357,7 +357,7 @@ class TestRelevanceEndpoint:
     def test_low_score_recommends_defer(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([{"composite_score": 0.1}])
+                stack, _, _ = self._patch_relevance_services([{"composite_score": 10}])
                 with stack:
                     resp = client.get("/api/query/relevance?q=low+relevance+topic")
         assert resp.get_json()["recommendation"] == "defer"
