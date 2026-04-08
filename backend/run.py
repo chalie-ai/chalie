@@ -66,6 +66,8 @@ def main():
         config["models_dir"] = args.models_dir
     runtime_config.set(config)
 
+    import threading as _threading
+
     # Preload embedding model in a background thread so Flask starts immediately.
     # On first run the model (~438MB) may need to download from HuggingFace;
     # blocking here would prevent the onboarding page from loading for 5+ minutes.
@@ -76,9 +78,6 @@ def main():
                 logger.info("[System] Preloading embedding model (background)...")
                 from services.embedding_service import get_embedding_service
                 svc = get_embedding_service()
-                # Warm the ONNX session — first encode() triggers model load and,
-                # on first run, a ~300MB HuggingFace download. Running here so the
-                # user never hits that delay during an actual conversation.
                 svc.generate_embedding("warmup")
                 logger.info("[System] Embedding model ready (inference warm)")
             except Exception as e:
@@ -86,7 +85,6 @@ def main():
                 logger.warning(f"[System] Embedding model preload failed: {e}")
                 logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
-        import threading as _threading
         _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
     else:
         logger.info("[System] Embedding preload skipped (CHALIE_SKIP_EMBEDDING_PRELOAD=1)")
