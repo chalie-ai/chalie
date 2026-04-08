@@ -20,20 +20,15 @@ import logging
 
 from utils.logger import Logger
 
-# Force numpy to fully initialize before any background thread imports it.
-# Python's import system isn't fully thread-safe for nested imports — concurrent
-# first-imports of numpy from multiple threads cause a circular import in
-# numpy._typing (NDArray not yet available from the partially-initialized module),
-# which poisons sys.modules and makes every subsequent embedding call fail with
-# "maximum recursion depth exceeded".
+# Force numpy/transformers to fully initialize before any background thread
+# imports them. Python's import system isn't fully thread-safe for nested
+# imports — concurrent first-imports from multiple threads cause a circular
+# import in numpy._typing (NDArray not yet available from the
+# partially-initialized module), which poisons sys.modules and makes every
+# subsequent embedding call fail with "maximum recursion depth exceeded".
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
-    import torch  # noqa: F401 — thread-safety warm-up
     import transformers  # noqa: F401 — thread-safety warm-up
-    # These heavy imports must complete in the main thread before any background
-    # thread tries to import them. Python's import system isn't fully thread-safe
-    # for complex nested imports — concurrent first-imports from multiple threads
-    # cause circular import errors in numpy._typing that poison sys.modules.
 except Exception as _e:
     import sys as _sys
     print(f"[BOOT] CRITICAL: import failed: {_e}", file=_sys.stderr, flush=True)
@@ -107,43 +102,13 @@ def main():
 
     _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
 
-    # Initialize SQLite database
+    # Initialize SQLite database — declarative convergence
     from services.database_service import get_shared_db_service
-    from services.schema_service import SchemaService
-    from services.config_service import ConfigService
-
-    episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-    embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
+    from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
-    schema_service = SchemaService(database_service, embedding_dimensions)
-
-    # Detect existing database: if tables already exist, run migrations BEFORE
-    # schema.sql so that column renames (e.g. topic→channel) are applied before
-    # CREATE INDEX statements reference the new column names.
-    with database_service.connection() as conn:
-        has_tables = conn.execute(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchone()[0] > 0
-
-    if has_tables:
-        logger.info("Existing database detected — running migrations first...")
-        database_service.run_pending_migrations()
-
-    # schema.sql is idempotent (all DDL uses IF NOT EXISTS). On fresh DBs it creates
-    # everything and stamps migrations. On existing DBs it adds any new tables/indexes.
-    schema_service.initialize_schema()
-    current_version = schema_service.schema_version()
-    logger.info(f"Schema applied (version {current_version})")
-
-    # Always ensure vec tables exist — idempotent, repairs existing DBs missing new tables
-    schema_service.ensure_vec_tables()
-
-    if not has_tables:
-        # Fresh install — initialize_schema() stamped all migrations.
-        # Run anyway in case any have runtime effects beyond DDL.
-        logger.info("Checking for pending database migrations...")
-        database_service.run_pending_migrations()
+    convergence = SchemaConvergenceService(database_service)
+    convergence.converge()
 
     # Clean up expired auth sessions from SQLite
     try:

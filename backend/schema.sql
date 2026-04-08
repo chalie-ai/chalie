@@ -733,6 +733,11 @@ CREATE INDEX IF NOT EXISTS idx_goal_evidence_type ON goal_evidence(signal_type);
 -- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
 -- ────────────────────────────────────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);

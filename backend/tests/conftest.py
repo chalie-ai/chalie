@@ -1,7 +1,6 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
-# sortedcontainers>=2.4.0 confirmed present in requirements.txt (line 3).
 """
 Shared test fixtures — full sandbox isolation.
 
@@ -57,22 +56,21 @@ _ensure_services_package_loadable()
 
 @pytest.fixture(scope='session')
 def _db_template(tmp_path_factory):
-    """Build a fully-migrated SQLite database file (once per session).
+    """Build a fully-converged SQLite database file (once per session).
 
-    Runs the real production boot sequence — SchemaService.initialize_schema()
-    + DatabaseService.run_pending_migrations() — against a temp file.  The
-    result is a "golden" database that function-scoped fixtures copy cheaply.
+    Runs the real production boot sequence — SchemaConvergenceService.converge()
+    — against a temp file.  The result is a "golden" database that
+    function-scoped fixtures copy cheaply.
     """
     from services.database_service import DatabaseService
-    from services.schema_service import SchemaService
+    from services.schema_convergence_service import SchemaConvergenceService
 
     template_dir = tmp_path_factory.mktemp('db_template')
     template_path = str(template_dir / 'template.db')
 
     db = DatabaseService(template_path)
-    schema = SchemaService(db, embedding_dimensions=256)
-    schema.initialize_schema()
-    db.run_pending_migrations()
+    convergence = SchemaConvergenceService(db, embedding_dimensions=256)
+    convergence.converge()
 
     # Flush WAL into main file so shutil.copy2 gets a self-contained copy
     with db.connection() as conn:

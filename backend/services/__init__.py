@@ -6,7 +6,6 @@ from .frontal_cortex_service import FrontalCortexService
 from .orchestrator_service import OrchestratorService
 from .world_state_service import WorldStateService
 from .database_service import DatabaseService
-from .schema_service import SchemaService
 from .episodic_service import EpisodicService
 from .salience_service import SalienceService
 
@@ -16,6 +15,5 @@ __all__ = [
     'MemoryClientService', 'PromptQueue',
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',
-    'SchemaService', 'EpisodicService',
-    'SalienceService',
+    'EpisodicService', 'SalienceService',
 ]

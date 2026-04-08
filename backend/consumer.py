@@ -195,7 +195,6 @@ if __name__ == "__main__":
     Logger.start()
 
     # Deferred imports
-    from services import SchemaService
     from workers import rest_api_worker
     from services.config_service import ConfigService
     from services.decay_engine_service import decay_engine_worker
@@ -215,31 +214,13 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[System] Embedding model preload failed: {e}")
 
-    # Initialize SQLite database
+    # Initialize SQLite database — declarative convergence
     from services.database_service import get_shared_db_service
-
-    episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-    embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
+    from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
-    schema_service = SchemaService(database_service, embedding_dimensions)
-
-    if not schema_service.database_exists():
-        logging.info("Initializing database...")
-        schema_service.create_database()
-        logging.info("Database initialized")
-    else:
-        current_version = schema_service.schema_version()
-        if current_version == 0:
-            logging.info("Initializing schema...")
-            schema_service.initialize_schema()
-            logging.info("Schema initialized")
-        else:
-            logging.info(f"Schema up to date (version {current_version})")
-
-    # Run pending migrations
-    logging.info("Checking for pending database migrations...")
-    database_service.run_pending_migrations()
+    convergence = SchemaConvergenceService(database_service)
+    convergence.converge()
 
     # Initialize API key
     try:
