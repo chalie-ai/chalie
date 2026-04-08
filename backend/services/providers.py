@@ -41,6 +41,24 @@ class Providers:
         messages = [{"role": "user", "content": user_prompt}]
         return provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
 
+    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True):
+        """Multi-turn send with a pre-built messages array. Returns LLMResponse.
+
+        Used by the tool loop in MessageProcessor to send growing message arrays
+        across iterations without rebuilding them from scratch.
+
+        Args:
+            system_prompt: Assembled system prompt string.
+            messages: Full messages array (role/content dicts).
+            job: Provider job name used to resolve the LLM config.
+            tools: Tool schemas. If None, Providers resolves defaults.
+            cache_prefix: Whether to apply prompt prefix caching.
+        """
+        if tools is None:
+            tools = self._get_tools(job)
+        provider = self._resolve(job)
+        return provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+
     def send_async(self, user_prompt, system_prompt, job='unified', tools=None, callback=None):
         """Fire-and-forget in daemon thread. Calls callback(LLMResponse) when done."""
         def _run():

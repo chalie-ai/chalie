@@ -767,12 +767,14 @@ CREATE TABLE IF NOT EXISTS compactions (
 -- TOOL CALLS — audit log of every tool invocation per transcript turn
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
     transcript_id INTEGER NOT NULL,
     tool_name     TEXT NOT NULL,
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
     invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    ephemeral     INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 

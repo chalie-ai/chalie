@@ -222,186 +222,17 @@ class TestGeneratePlan:
 
 
 # ── _execute_with_plan ────────────────────────────────────────────────
+# TODO: migrate to MessageProcessor tool loop
+# TestExecuteWithPlan tests have been removed because _execute_with_plan
+# was backed by ACTOrchestrator which has been deleted. New tests will be
+# added when _execute_with_plan is rewired to MessageProcessor.send().
 
 class TestExecuteWithPlan:
+    """Tests for _execute_with_plan removed — ACTOrchestrator deleted.
 
-    def _make_act_result(self, final_response='Task done.', iterations=5, reason='max_response'):
-        from services.act_orchestrator_service import ACTResult
-        r = ACTResult()
-        r.final_response = final_response
-        r.iterations_used = iterations
-        r.termination_reason = reason
-        return r
-
-    def _setup_execute_mocks(
-        self,
-        mock_config,
-        mock_cortex_cls,
-        mock_get_db,
-        mock_task_svc_cls,
-        task_status='in_progress',
-        task_id=10,
-    ):
-        mock_config.resolve_agent_config.return_value = {}
-        mock_config.get_agent_prompt.return_value = "Execute: {{goal}} {{plan_json}} {{completed_steps}}"
-        mock_cortex_cls.return_value = MagicMock()
-
-        mock_task_svc = MagicMock()
-        mock_task_svc.get_task.return_value = {'id': task_id, 'status': task_status}
-        mock_task_svc_cls.return_value = mock_task_svc
-        mock_get_db.return_value = MagicMock()
-        return mock_task_svc
-
-    @patch('services.act_orchestrator_service.ACTOrchestrator')
-    @patch('services.persistent_task_service.PersistentTaskService')
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.FrontalCortexService')
-    @patch('services.config_service.ConfigService.get_agent_prompt', return_value="Execute: {{goal}} {{plan_json}} {{completed_steps}}")
-    @patch('services.config_service.ConfigService.resolve_agent_config', return_value={})
-    def test_orchestrator_created_with_200_iterations_no_timeout(
-        self, _mock_resolve, _mock_prompt, mock_cortex_cls, mock_get_db, mock_task_svc_cls, mock_orch_cls
-    ):
-        """ACTOrchestrator must be created with max_iterations=200 and both timeouts=None."""
-        from workers.persistent_task_worker import _execute_with_plan
-
-        mock_cortex_cls.return_value = MagicMock()
-        mock_task_svc = MagicMock()
-        mock_task_svc.get_task.return_value = {'id': 10, 'status': 'in_progress'}
-        mock_task_svc_cls.return_value = mock_task_svc
-        mock_get_db.return_value = MagicMock()
-
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.run.return_value = self._make_act_result()
-        mock_orch_cls.return_value = mock_orchestrator
-
-        task = {'id': 10, 'goal': 'Research topic', 'thread_id': 't1'}
-        plan = {"steps": [{"id": "s1", "action": "Search", "depends_on": [], "parallel": False}]}
-
-        _execute_with_plan(task, plan)
-
-        mock_orch_cls.assert_called_once()
-        ctor_kwargs = mock_orch_cls.call_args.kwargs
-        assert ctor_kwargs['max_iterations'] == 200
-        assert ctor_kwargs['cumulative_timeout'] is None
-        assert ctor_kwargs['per_action_timeout'] is None
-
-    @patch('services.act_orchestrator_service.ACTOrchestrator')
-    @patch('services.persistent_task_service.PersistentTaskService')
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.FrontalCortexService')
-    @patch('services.config_service.ConfigService.get_agent_prompt', return_value="Execute: {{goal}} {{plan_json}} {{completed_steps}}")
-    @patch('services.config_service.ConfigService.resolve_agent_config', return_value={})
-    def test_run_called_with_outer_skills(
-        self, _mock_resolve, _mock_prompt, mock_cortex_cls, mock_get_db, mock_task_svc_cls, mock_orch_cls
-    ):
-        """ACTOrchestrator.run() must receive OUTER_SKILLS as selected_skills."""
-        from workers.persistent_task_worker import _execute_with_plan, OUTER_SKILLS
-
-        mock_cortex_cls.return_value = MagicMock()
-        mock_task_svc = MagicMock()
-        mock_task_svc.get_task.return_value = {'id': 10, 'status': 'in_progress'}
-        mock_task_svc_cls.return_value = mock_task_svc
-        mock_get_db.return_value = MagicMock()
-
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.run.return_value = self._make_act_result()
-        mock_orch_cls.return_value = mock_orchestrator
-
-        task = {'id': 10, 'goal': 'Do work', 'thread_id': 't1'}
-        plan = {"steps": []}
-
-        _execute_with_plan(task, plan)
-
-        run_kwargs = mock_orchestrator.run.call_args.kwargs
-        assert run_kwargs['selected_skills'] == OUTER_SKILLS
-
-    @patch('services.act_orchestrator_service.ACTOrchestrator')
-    @patch('services.persistent_task_service.PersistentTaskService')
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.FrontalCortexService')
-    @patch('services.config_service.ConfigService.get_agent_prompt', return_value="Execute: {{goal}} {{plan_json}} {{completed_steps}}")
-    @patch('services.config_service.ConfigService.resolve_agent_config', return_value={})
-    def test_run_called_with_empty_chat_history(
-        self, _mock_resolve, _mock_prompt, mock_cortex_cls, mock_get_db, mock_task_svc_cls, mock_orch_cls
-    ):
-        """ACT loop runs with clean empty chat_history (no parent context)."""
-        from workers.persistent_task_worker import _execute_with_plan
-
-        mock_cortex_cls.return_value = MagicMock()
-        mock_task_svc = MagicMock()
-        mock_task_svc.get_task.return_value = {'id': 5, 'status': 'in_progress'}
-        mock_task_svc_cls.return_value = mock_task_svc
-        mock_get_db.return_value = MagicMock()
-
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.run.return_value = self._make_act_result()
-        mock_orch_cls.return_value = mock_orchestrator
-
-        task = {'id': 5, 'goal': 'Do something', 'thread_id': 't1'}
-        plan = {"steps": []}
-
-        _execute_with_plan(task, plan)
-
-        run_kwargs = mock_orchestrator.run.call_args.kwargs
-        assert run_kwargs['chat_history'] == []
-
-    def _run_execute_with_plan_capture_callback(self, task_status, task_id=3):
-        """Helper: run _execute_with_plan and capture the on_iteration_complete callback."""
-        from workers.persistent_task_worker import _execute_with_plan
-        from services.act_orchestrator_service import ACTOrchestrator as RealOrchestrator
-
-        captured_callback = []
-
-        mock_task_svc = MagicMock()
-        mock_task_svc.get_task.return_value = (
-            {'id': task_id, 'status': task_status} if task_status else None
-        )
-
-        mock_orchestrator = MagicMock()
-
-        def capture_run(**kwargs):
-            captured_callback.append(kwargs.get('on_iteration_complete'))
-            return self._make_act_result()
-
-        mock_orchestrator.run.side_effect = capture_run
-
-        with patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
-             patch('services.config_service.ConfigService.get_agent_prompt',
-                   return_value="Execute: {{goal}} {{plan_json}} {{completed_steps}}"), \
-             patch('services.FrontalCortexService', return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_svc), \
-             patch('services.act_orchestrator_service.ACTOrchestrator', return_value=mock_orchestrator):
-            task = {'id': task_id, 'goal': 'Some goal', 'thread_id': None}
-            plan = {"steps": []}
-            _execute_with_plan(task, plan)
-
-        return captured_callback, mock_task_svc
-
-    def test_on_iteration_complete_returns_cancelled_when_task_paused(self):
-        """on_iteration_complete callback returns 'cancelled' when task status is 'paused'."""
-        captured_callback, _ = self._run_execute_with_plan_capture_callback('paused', task_id=3)
-        assert captured_callback[0] is not None
-        result = captured_callback[0](MagicMock(), MagicMock(), [], None)
-        assert result == 'cancelled'
-
-    def test_on_iteration_complete_returns_cancelled_when_task_cancelled(self):
-        """on_iteration_complete callback returns 'cancelled' when task status is 'cancelled'."""
-        captured_callback, _ = self._run_execute_with_plan_capture_callback('cancelled', task_id=4)
-        result = captured_callback[0](MagicMock(), MagicMock(), [], None)
-        assert result == 'cancelled'
-
-    def test_on_iteration_complete_returns_none_when_task_in_progress(self):
-        """on_iteration_complete returns None (continue) when task is still in_progress."""
-        captured_callback, _ = self._run_execute_with_plan_capture_callback('in_progress', task_id=5)
-        result = captured_callback[0](MagicMock(), MagicMock(), [], None)
-        assert result is None
-
-    def test_on_iteration_complete_returns_cancelled_when_task_missing(self):
-        """on_iteration_complete returns 'cancelled' when task row no longer exists."""
-        captured_callback, _ = self._run_execute_with_plan_capture_callback(None, task_id=6)
-        result = captured_callback[0](MagicMock(), MagicMock(), [], None)
-        assert result == 'cancelled'
+    Will be re-added when _execute_with_plan is rewired to MessageProcessor.send() tool loop.
+    """
+    pass
 
 
 # ── _surface_via_digest ───────────────────────────────────────────────
@@ -462,8 +293,7 @@ class TestProcessTask:
         }
 
     def _make_act_result(self, final_response='Done.', reason='max_response'):
-        from services.act_orchestrator_service import ACTResult
-        r = ACTResult()
+        r = MagicMock()
         r.final_response = final_response
         r.iterations_used = 10
         r.termination_reason = reason
@@ -617,11 +447,10 @@ class TestProcessTask:
     ):
         """When ACT result has no final_response, a fallback message using termination_reason is used."""
         from workers.persistent_task_worker import _process_task
-        from services.act_orchestrator_service import ACTResult
 
         mock_plan.return_value = {"steps": []}
 
-        act_result = ACTResult()
+        act_result = MagicMock()
         act_result.final_response = ''  # empty
         act_result.iterations_used = 50
         act_result.termination_reason = 'max_iterations'

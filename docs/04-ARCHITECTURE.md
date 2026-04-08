@@ -101,7 +101,7 @@ frontend/
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs
 
 #### Autonomous Behavior
-- **`dmn_service.py`** — Default Mode Network: timer-based proactive intelligence. Fires after 60min idle (recent context — last 50 episodes) and every 6h (salience context — top concepts + active goals + pending tasks). Calls `unified_generate` with `proactive=True` so ACT loop exits silently when LLM decides nothing is worthwhile. Quiet hours (23:00–08:00 local), rate limit (4/24h rolling). Configurable via `CHALIE_DMN_FIRST_IDLE_S` and `CHALIE_DMN_REPEAT_S`.
+- **`dmn_service.py`** — Default Mode Network: timer-based proactive intelligence. Fires after 60min idle (recent context — last 50 episodes) and every 6h (salience context — top concepts + active goals + pending tasks). Calls `unified_generate` with `proactive=True`; exits silently when LLM decides nothing is worthwhile. Quiet hours (23:00–08:00 local), rate limit (4/24h rolling). Configurable via `CHALIE_DMN_FIRST_IDLE_S` and `CHALIE_DMN_REPEAT_S`.
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Ambient Awareness
@@ -111,18 +111,16 @@ frontend/
 
 - **`event_bridge_service.py`** — Connects ambient context changes (place, attention, energy, session) to autonomous actions; enforces stabilization windows (90s), per-event cooldowns, confidence gating, aggregation (60s bundle window), and focus gates; config in `configs/agents/event-bridge.json`
 
-#### ACT Loop & Critic
-- **`act_orchestrator_service.py`** — Unified, parameterized ACT loop runner. Configurable: `critic_enabled`, `smart_repetition` (embedding-based), `escalation_hints`, `deferred_card_context`. Termination model: hard cap (30 iterations), cumulative timeout, semantic repetition, type repetition, no-actions signal. On forced exit (timeout / max iterations), a `_tools_disabled` flag strips tools from the next LLM call so the model produces a plain text response naturally; a static fallback fires only if that final iteration still produces no output.
-- **`act_loop_service.py`** — Cognitive iteration manager with action execution, history tracking, and telemetry. Constructor-injected critic and dispatcher. Generic scalar output chaining between sequential actions.
-- **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
-- **`critic_service.py`** — Post-action verification via lightweight LLM; safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
+#### Tool Loop & Dispatch
+- **`act_dispatcher_service.py`** — Routes tool calls to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
+- **`tool_call_service.py`** — Unified API for all `tool_calls` table writes and reads. Methods: `store()`, `store_batch()`, `get_by_transcript()`, `get_by_timerange()`, `get_find_tools_results()`. `ephemeral` flag controls visibility in Previous Turns (ephemeral records — tool loop results, steers — are excluded; non-ephemeral — file tags, nudges — are included).
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; 5 active tasks max
 
 #### Constants & Registries
 - **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
 - **`services/act_action_categories.py`** — Authoritative frozenset definitions for action behavior categories (`READ_ACTIONS`, `DETERMINISTIC_ACTIONS`, `SAFE_ACTIONS`, `CRITIC_SKIP_READS`, `ACTION_FATIGUE_COSTS`).
-- **`services/act_memory_keys.py`** — Centralized MemoryStore key patterns for the ACT system (deferred cards, tool caches, heartbeat, reflection queue).
+- **`services/act_memory_keys.py`** — Centralized MemoryStore key patterns for the tool system (deferred cards, tool caches, heartbeat, reflection queue).
 
 #### Tool Integration
 - **`tool_registry_service.py`** — Tool discovery, metadata management; loads first-party tools from ToolLibraryService, registers interface tools via HTTP; invokes first-party tools directly in-process
@@ -152,7 +150,7 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-Built-in cognitive skills for the ACT loop:
+Built-in cognitive skills always available to the LLM:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Comprehensive internal state report: 4 natural-language scopes (memory health, skill/tool usage, reasoning state, identity); supports "why did you do that?" via routing audit trail and autonomous action history
@@ -161,11 +159,12 @@ Built-in cognitive skills for the ACT loop:
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`persistent_task_skill.py`** — Multi-session background task management: create, pause, resume, cancel, check status, list (<100ms; create enqueues task for three-phase background execution)
-- **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
+- **`document_skill.py`** — Document search and management: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
-- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
-- **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles
+- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves tool outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
+- **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles; discovered tool names compound across tool loop iterations
 - **`notes_skill.py`** — Search past conversation transcript for on-demand retrieval of older context (renamed to `transcript` skill; `notes` alias preserved for backward compat)
+- **`review_tool_calls_skill.py`** — Re-read raw tool call records from a previous turn; takes `date_time` parameter, returns all records within ±5 minutes from the `tool_calls` table
 
 ## Worker Processes (`backend/workers/`)
 
@@ -188,7 +187,7 @@ Built-in cognitive skills for the ACT loop:
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
-- **Persistent Task Worker** — Runs eligible multi-session background tasks via three-phase execution (30min cycle with ±30% jitter): (1) PLAN — single LLM call generates a 2–6 step guidance plan; (2) EXECUTE — ACTOrchestrator with up to 200 iterations, no timeout; `sub_agent` innate skill available for spawning focused sub-workers (50 iterations each); (3) SURFACE — result injected into digest worker, LLM produces natural summary; outer loop denies `persistent_task` skill, sub-agents deny both `persistent_task` and `sub_agent`
+- **Persistent Task Worker** — Runs eligible multi-session background tasks via three-phase execution (30min cycle with ±30% jitter): (1) PLAN — single LLM call generates a 2–6 step guidance plan; (2) EXECUTE — tool loop with up to 200 iterations, no timeout; `sub_agent` innate skill available for spawning focused sub-workers (50 iterations each); (3) SURFACE — result injected into digest worker, LLM produces natural summary; outer loop denies `persistent_task` skill, sub-agents deny both `persistent_task` and `sub_agent`
 - **Document Worker** — PromptQueue worker for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
 - **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in ``vault_config``; unlocked post-login; migrates legacy Fernet data on first unlock
@@ -206,17 +205,20 @@ Built-in cognitive skills for the ACT loop:
       │    (identity, directives, frontal-cortex-unified template)
       ├─ MessageProcessor.send()
       │    ├─ transcript.append(channel, 'user', ...)
-      │    ├─ Providers.send() → LLM call (frontal-cortex-unified)
-      │    └─ transcript.append(channel, 'assistant', ...)
+      │    ├─ Tool loop (standard tool-calling protocol):
+      │    │    ├─ Providers.send() → LLM call
+      │    │    ├─ if tool_calls → ActDispatcherService.execute()
+      │    │    │    → ToolCallService.store() (ephemeral=True)
+      │    │    │    → append tool_result messages
+      │    │    │    → per-iteration synthesis → WebSocket (ephemeral)
+      │    │    └─ repeat until no tool_calls or cap (30 iter / 15 min)
+      │    └─ transcript.append(channel, 'assistant', final response)
       └─ OutputService.enqueue_text() → pub/sub → WebSocket → client
 
   Background (async, from OutputService):
     → [Transcript Service] (rolling trigger at id % 25)
       → [Episode Extractor] → SQLite episodes table
       → Traits extracted → Knowledge Store
-
-NOTE: ACT loop is parked for user messages (task-ddffe1). Tool calls
-from the LLM are logged and narration text is returned as the response.
 ```
 
 ### Background Processes
@@ -236,7 +238,7 @@ from the LLM are logged and narration text is returned as the response.
 [DMN Service] → timer-based proactive intelligence
     ├─ 60min idle → "recent" (last 50 episodes)
     ├─ 6h cadence → "salience" (top concepts + goals + tasks)
-    └─ unified_generate with proactive=True → ACT loop decides
+    └─ unified_generate with proactive=True → exits silently if nothing worthwhile
 ```
 
 ## Key Architectural Decisions
@@ -268,7 +270,7 @@ from the LLM are logged and narration text is returned as the response.
 - **Knowledge** (SQLite + sqlite-vec) — Unified store for traits, facts, procedures, preferences, rules, metrics; RRF hybrid search (exact + FTS5 + vector KNN); traits extracted from episodes during extraction
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
-Each layer optimized for its timescale; all integrated via `UserPromptAssemblyService`. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
+Each layer optimized for its timescale; all integrated via `UserPromptAssemblyService`. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the `list` innate skill handles mutations.
 
 ### Configuration Precedence
 ```
@@ -303,7 +305,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Speaker confidence** gates trait storage (unknown speakers = 0.3 penalty)
 
 ### Operational Limits
-- **ACT loop**: 60s cumulative timeout, 30 max iterations; post-action critic verification
+- **Tool loop**: 30 max iterations, 15 min cumulative timeout; per-iteration synthesis sent via WebSocket
 - **Persistent tasks**: 5 active max, 14-day auto-expiry; execution bounded by iterations (200 outer, 50 per sub-agent), no wall-clock timeout
 - **Fatigue budget**: 2.5 activation units per 30min
 - **Per-concept cooldown**: 60min (prevents circular rumination)

@@ -161,56 +161,17 @@ def _generate_plan(goal: str) -> dict:
 
 
 def _execute_with_plan(task: dict, plan: dict):
-    """Phase 2: Run ACT loop with plan context and sub_agent skill."""
-    from services.config_service import ConfigService
-    from services import FrontalCortexService
-    from services.act_orchestrator_service import ACTOrchestrator
-    from services.database_service import get_shared_db_service
-    from services.persistent_task_service import PersistentTaskService
+    """Phase 2: Run ACT loop with plan context and sub_agent skill.
 
-    try:
-        config = ConfigService.resolve_agent_config("frontal-cortex-unified")
-    except Exception:
-        config = ConfigService.resolve_agent_config("frontal-cortex")
-
-    prompt_template = ConfigService.get_agent_prompt("persistent-task-execute")
-    prompt = prompt_template.replace('{{goal}}', task['goal'])
-    prompt = prompt.replace('{{plan_json}}', json.dumps(plan, indent=2))
-    prompt = prompt.replace('{{completed_steps}}', 'None yet')
-
-    cortex = FrontalCortexService(config)
-
-    db = get_shared_db_service()
-    task_service = PersistentTaskService(db)
-    task_id = task['id']
-
-    def on_iteration_complete(_act_loop, _iteration_start, _actions_executed, _termination_reason):
-        """Check if task was paused or cancelled between iterations."""
-        refreshed = task_service.get_task(task_id)
-        if not refreshed or refreshed['status'] in ('paused', 'cancelled', 'stalled'):
-            return 'cancelled'
-        return None
-
-    orchestrator = ACTOrchestrator(
-        config=config,
-        max_iterations=200,
-        cumulative_timeout=None,
-        per_action_timeout=None,
-        execution_gate=False,
-        proactive=False,
-    )
-
-    return orchestrator.run(
-        channel=f"persistent_task_{task['id']}",
-        text=task['goal'],
-        cortex_service=cortex,
-        act_prompt=prompt,
-        classification={'topic': f"task_{task['id']}", 'confidence': 10},
-        chat_history=[],
-        selected_skills=OUTER_SKILLS,
-        session_id='persistent_task',
-        exchange_id=f"ptask_{task['id']}",
-        on_iteration_complete=on_iteration_complete,
+    # TODO: migrate to MessageProcessor tool loop
+    # ACTOrchestrator has been deleted. This function needs to be rewired to use
+    # MessageProcessor.send() with the new tool loop. Until then it raises to
+    # surface the task as stalled rather than silently failing.
+    """
+    # TODO: migrate to MessageProcessor tool loop
+    raise NotImplementedError(
+        "ACTOrchestrator has been removed. _execute_with_plan must be rewired "
+        "to use MessageProcessor.send() tool loop."
     )
 
 

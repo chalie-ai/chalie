@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 12 skills + backward-compat aliases).
+register_innate_skills() in __init__.py (currently 13 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -15,6 +15,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'persistent_task', 'document',
     'read', 'find_tools', 'goals',
     'rich_render', 'sub_agent',
+    'review_tool_calls',
 })
 
 # Backward-compat aliases — old names that map to the unified 'memory' skill.
@@ -34,7 +35,7 @@ REFLECTION_FILTER_SKILLS: frozenset = ALL_SKILL_NAMES
 # ── Cognitive primitives: always injected into ACT mode regardless of
 #    triage selection. These are the foundational memory operations. ─────────
 COGNITIVE_PRIMITIVES: frozenset = frozenset({
-    'memory', 'find_tools',
+    'memory', 'find_tools', 'review_tool_calls',
 })
 
 # ── Contextual skills: planning-visible skills minus primitives.
@@ -46,7 +47,7 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 
 # ── Ordered primitives list: used where insertion order matters
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
-COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'find_tools']
+COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'find_tools', 'review_tool_calls']
 
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
@@ -62,6 +63,7 @@ SKILL_DESCRIPTIONS: dict = {
     'goals': 'Create, view, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
     'rich_render': 'Returns block rendering reference for producing rich visual output (metrics, cards, charts, progress, timelines)',
     'sub_agent': 'Spawn a focused worker for a specific task. Blocks until done, returns result.',
+    'review_tool_calls': 'Review raw tool call records from a previous turn by timestamp — drill into details not captured in the synthesis',
     # Backward-compat aliases (for lookup only)
     'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
     'memorize': 'Store information, save a note, remember a fact, keep something for later',
@@ -81,6 +83,7 @@ SKILL_EFFORT: dict = {
     'goals': 'trivial',
     'rich_render': 'trivial',
     'sub_agent': 'deep',
+    'review_tool_calls': 'trivial',
     # Backward-compat aliases
     'recall': 'trivial',
     'memorize': 'trivial',
@@ -100,6 +103,7 @@ SKILL_CATEGORIES: dict = {
     'goals': 'cognition',
     'rich_render': 'presentation',
     'sub_agent': 'task_management',
+    'review_tool_calls': 'cognition',
     # Backward-compat aliases
     'recall': 'memory',
     'memorize': 'memory',

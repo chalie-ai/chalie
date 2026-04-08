@@ -582,7 +582,7 @@ class ResponseGenerationService:
             'downstream_mode': response_data.get('downstream_mode', 'UNIFIED'),
         }
 
-        # Pass through ACT narration fields (used by ACTOrchestrator for live progress)
+        # Pass through narration fields
         if 'narrated' in response_data:
             result['narrated'] = response_data['narrated']
         if 'narration' in response_data:

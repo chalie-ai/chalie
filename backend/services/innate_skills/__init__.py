@@ -27,6 +27,7 @@ from services.innate_skills.find_tools_skill import handle_find_tools
 from services.innate_skills.goals_skill import handle_goals
 from services.innate_skills.rich_render_skill import handle_rich_render
 from services.innate_skills.sub_agent_skill import handle_sub_agent
+from services.innate_skills.review_tool_calls_skill import handle_review_tool_calls
 
 # Backward-compat aliases: old names point to unified memory handler
 handle_recall = handle_memory
@@ -48,6 +49,7 @@ _SKILL_HANDLERS = {
     'goals': handle_goals,
     'rich_render': handle_rich_render,
     'sub_agent': handle_sub_agent,
+    'review_tool_calls': handle_review_tool_calls,
 }
 
 
@@ -76,6 +78,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["goals"] = lambda channel, action: handle_goals(channel, action)
     dispatcher.handlers["rich_render"] = lambda channel, action: handle_rich_render(channel, action)
     dispatcher.handlers["sub_agent"] = lambda channel, action: handle_sub_agent(channel, action)
+    dispatcher.handlers["review_tool_calls"] = lambda channel, action: handle_review_tool_calls(channel, action)
 
     # Backward-compatibility aliases (old name -> unified memory handler)
     dispatcher.handlers["recall"] = lambda channel, action: handle_memory(channel, action)

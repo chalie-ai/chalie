@@ -155,7 +155,7 @@ class UserPromptAssemblyService(PromptAssemblyContract):
                 cursor = conn.cursor()
                 cursor.execute(
                     f"SELECT transcript_id, tool_name, result FROM tool_calls "
-                    f"WHERE transcript_id IN ({placeholders}) ORDER BY created_at",
+                    f"WHERE transcript_id IN ({placeholders}) AND ephemeral = 0 ORDER BY created_at",
                     entry_ids,
                 )
                 rows = cursor.fetchall()

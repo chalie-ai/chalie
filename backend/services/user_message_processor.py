@@ -9,9 +9,9 @@
 """
 UserMessageProcessor — entry point for all user-initiated messages.
 
-Builds user + system prompts, applies voice-mode tool filtering, sends via
-MessageProcessor.send(), parks ACT tool calls (task-ddffe1), and returns
-a normalized result dict.
+Builds user + system prompts, applies voice-mode tool filtering, then sends via
+MessageProcessor.send() which handles transcript persistence, LLM invocation,
+and the full tool-calling loop. Returns a normalized result dict.
 """
 
 import logging
@@ -77,24 +77,37 @@ class UserMessageProcessor(MessageProcessor):
             from services.innate_skills.registry import ALL_SKILL_NAMES
             tools = get_skill_schemas([s for s in ALL_SKILL_NAMES if s != 'rich_render'])
 
-        # 5. Send (MessageProcessor.send handles transcript + LLM call)
+        # 5. Thread request_id and narration callback for tool loop
+        request_id = (metadata or {}).get('uuid')
+
+        def _on_narration(text, step=0):
+            """Publish per-iteration synthesis text to the per-request SSE channel."""
+            if not request_id or not text:
+                return
+            try:
+                from uuid import uuid4
+                import json as _json
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                narration_id = f"narr_{uuid4().hex[:12]}"
+                store.set(f"output:{narration_id}", _json.dumps({
+                    'type': 'act_narration',
+                    'text': text,
+                    'step': step,
+                }), ex=300)
+                store.publish(f"sse:{request_id}", narration_id)
+            except Exception as e:
+                logger.debug(f"[USER MSG] Narration publish failed: {e}")
+
+        # 6. Send (MessageProcessor.send handles transcript + LLM call + tool loop)
         result = self.send(
             user_prompt, system_prompt,
             channel=channel,
             job='frontal-cortex-unified',
             tools=tools,
+            request_id=request_id,
+            on_narration=_on_narration,
         )
-
-        # 6. ACT parked (task-ddffe1): if LLM returned tool calls, log warning
-        #    and return narration text as the response. Tool execution is deferred.
-        if result.get('actions'):
-            logger.warning(
-                f"[USER MSG] LLM returned {len(result['actions'])} tool call(s) "
-                f"but ACT is parked (task-ddffe1). Returning narration as response."
-            )
-            result['response'] = result.get('narration', '') or result.get('response', '')
-            result['actions'] = None
-            result['tool_calls'] = None
 
         result['channel'] = channel
         return result

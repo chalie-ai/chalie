@@ -120,13 +120,16 @@ Single entry point: `python backend/run.py --port=8081 --host=0.0.0.0`. Auto-cre
 User Input (WebSocket)
   ├─ Persist to topic transcript (SQLite, append-only)
   ├─ Retrieve context: compaction summary + recent transcript + semantic memories
-  ├─ Unified LLM call (all innate skills + find_tools for external tools)
-  ├─ Generate response (LLM decides to respond or invoke skills)
-  ├─ Post-response commit (SQLite logging, compaction trigger)
+  ├─ Tool loop in MessageProcessor.send():
+  │    LLM call → if tool_calls → dispatch via ActDispatcherService
+  │    → store results (ephemeral) → append tool_result messages
+  │    → per-iteration synthesis to WebSocket → repeat until done or cap hit
+  │    (30 iterations / 15 min max)
+  ├─ Final response committed to transcript
   └─ Background threads: episode extraction (rolling transcript trigger), decay, consolidation
 ```
 
-User messages go through a single unified LLM call (`unified_generate`). No routing gate — the LLM decides whether to respond directly or invoke skills/tools. `ModeRouterService` remains active for non-user flows (drift, proactive, fallback).
+User messages go through `MessageProcessor.send()` which runs a standard tool-calling loop. No routing gate — the LLM decides whether to respond directly or invoke skills/tools. `ModeRouterService` remains active for non-user flows (drift, proactive, fallback). All tool invocations are audited in the `tool_calls` table; ephemeral records (loop results, steers) are excluded from Previous Turns context.
 
 ### Memory Hierarchy
 - **Topic Transcript** — persistent, append-only per topic; budget-aware filling
@@ -139,7 +142,8 @@ For the full service catalog, worker list, and database schema, see **[docs/04-A
 
 Key subsystems worth knowing about:
 - **DMN Service**: Default Mode Network — timer-based proactive intelligence (60min idle → recent context, 6h cadence → salience context); calls unified_generate with proactive=True
-- **Critic Service**: Post-execution reflection and verification for the ACT loop; never blocks output
+- **Tool Loop**: Standard tool-calling while loop inside `MessageProcessor.send()` — LLM calls, dispatches via `ActDispatcherService`, stores ephemeral results via `ToolCallService`, appends tool_result messages, repeats; safety cap 30 iterations / 15 min
+- **ToolCallService**: Unified API for all `tool_calls` table operations; `ephemeral` flag controls what appears in Previous Turns context
 - **Persistent Task Service**: Multi-session background tasks with state machine; three-phase execution (plan → execute → surface); `sub_agent` skill available during execution for spawning focused workers
 - **Document Service**: Hybrid search (semantic + FTS + keyword boost via RRF), soft delete, duplicate detection
 - **Event Bridge**: Connects ambient context changes to goal signal routing with stabilization windows and focus gates
@@ -147,7 +151,7 @@ Key subsystems worth knowing about:
 
 ### Innate Skills (`backend/services/innate_skills/`)
 Built-in cognitive skills always available to the LLM:
-`memory`, `introspect`, `associate`, `schedule`, `autobiography`, `list`, `persistent_task`, `document`, `read`, `reflect`, `find_tools`, `notes`, `goals`, `rich_render`, `sub_agent`
+`memory`, `introspect`, `associate`, `schedule`, `autobiography`, `list`, `persistent_task`, `document`, `read`, `reflect`, `find_tools`, `notes`, `goals`, `rich_render`, `sub_agent`, `review_tool_calls`
 
 ## Code Organization
 

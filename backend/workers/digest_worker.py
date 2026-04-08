@@ -140,32 +140,30 @@ def _store_image_tool_calls(transcript_id: int, image_ids: list, image_contexts:
 
         now = utc_now().isoformat()
 
-        with db.connection() as conn:
-            for img_id in image_ids:
-                doc = docs_by_id.get(img_id)
-                ctx = ctx_by_id.get(img_id)
+        for img_id in image_ids:
+            doc = docs_by_id.get(img_id)
+            ctx = ctx_by_id.get(img_id)
 
-                # Build description from all available analysis features
-                if ctx is None:
-                    description = 'image failed to process'
-                elif ctx.get('error'):
-                    description = ctx['error']
-                else:
-                    ocr = ctx.get('ocr_text', '').strip()
-                    description = f"Contains text: {ocr}" if ocr else 'image'
+            # Build description from all available analysis features
+            if ctx is None:
+                description = 'image failed to process'
+            elif ctx.get('error'):
+                description = ctx['error']
+            else:
+                ocr = ctx.get('ocr_text', '').strip()
+                description = f"Contains text: {ocr}" if ocr else 'image'
 
-                mime = doc.get('mime_type', 'image/unknown') if doc else 'image/unknown'
-                path = quote(doc.get('file_path', ''), safe='/') if doc else ''
+            mime = doc.get('mime_type', 'image/unknown') if doc else 'image/unknown'
+            path = quote(doc.get('file_path', ''), safe='/') if doc else ''
 
-                tag = f"[file(id:{img_id},type:{mime},path:{path})] {description}"
-                tags.append(tag)
+            tag = f"[file(id:{img_id},type:{mime},path:{path})] {description}"
+            tags.append(tag)
 
-                conn.execute(
-                    "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, created_at) "
-                    "VALUES (?, 'file', '{}', ?, 'system', ?)",
-                    (transcript_id, tag, now),
-                )
-            conn.commit()
+        # Persist all file tags via ToolCallService
+        from services.tool_call_service import ToolCallService
+        _tc_svc = ToolCallService()
+        for tag in tags:
+            _tc_svc.store(transcript_id, 'file', {}, tag, invoked_by='system')
 
     except Exception as e:
         logging.info(f"[DIGEST] Failed to store image tool_calls: {e}", exc_info=True)
@@ -564,157 +562,15 @@ def unified_generate(channel, text, classification, thread_conv_service,
             first_response['response'] = "I understand. Let me think about that."
         return first_response, routing_result
 
-    # Format A — enter ACT loop with unified prompt
-    from services.act_orchestrator_service import ACTOrchestrator
+    # TODO: migrate to MessageProcessor tool loop
+    # ACTOrchestrator has been deleted. digest_worker is a legacy path that will be
+    # removed once all traffic moves through UserMessageProcessor.process().
+    # For now, return the first_response as-is (tool calls unexecuted).
+    logging.warning("[UNIFIED] digest_worker ACT path reached but ACTOrchestrator is gone. Returning direct response.")
+    first_response['mode'] = 'UNIFIED'
+    routing_result['mode'] = 'UNIFIED'
+    return first_response, routing_result
 
-    act_cumulative_timeout = config.get('act_cumulative_timeout', cortex_config.get('act_cumulative_timeout', 60.0))
-    act_per_action_timeout = config.get('act_per_action_timeout', cortex_config.get('act_per_action_timeout', 10.0))
-    max_act_iterations = config.get('max_act_iterations', cortex_config.get('max_act_iterations', 5))
-
-    # Reuse the inclusion_map and assembled_context from the initial call —
-    # UNIFIED mask is already the union of all modes, no need to recompute
-
-    orchestrator = ACTOrchestrator(
-        config=cortex_config,
-        max_iterations=max_act_iterations,
-        cumulative_timeout=act_cumulative_timeout,
-        per_action_timeout=act_per_action_timeout,
-        critic_enabled=True,
-        smart_repetition=True,
-        escalation_hints=True,
-        execution_gate=False,  # User explicitly requested this action — skip autonomous gate
-        proactive=proactive,
-    )
-
-    # Narration callback: stream progress to user via WebSocket
-    request_uuid = (metadata or {}).get('uuid', '')
-
-    def _narration_callback(narration_text, step):
-        """Publish narration to the per-request SSE channel."""
-        logging.info(f"[UNIFIED] Narration callback fired: step={step}, text={narration_text[:60]}")
-        if not request_uuid:
-            logging.warning("[UNIFIED] Narration skipped — no request_uuid")
-            return
-        try:
-            import json as _json
-            from uuid import uuid4
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            narration_id = f"narr_{uuid4().hex[:12]}"
-            store.set(f"output:{narration_id}", _json.dumps({
-                'type': 'act_narration',
-                'text': narration_text,
-                'step': step,
-            }), ex=300)
-            store.publish(f"sse:{request_uuid}", narration_id)
-            logging.info(f"[UNIFIED] Narration published: {narration_id} → sse:{request_uuid[:12]}...")
-
-            # Emit show_narration intent for wrapper contract
-            try:
-                from services.intent_service import IntentService, CognitiveIntent, _make_intent_id
-                intent = CognitiveIntent(
-                    intent_id=_make_intent_id(),
-                    intent_type='show_narration',
-                    target_wrapper='__chat_ui__',
-                    payload={
-                        'request_id': request_uuid,
-                        'text': narration_text,
-                        'step': step,
-                    },
-                )
-                IntentService().emit(intent)
-            except Exception as e:
-                logger.debug(f"[UNIFIED] Intent emit for narration failed (non-critical): {e}", exc_info=True)
-
-        except Exception as _e:
-            logging.error(f"[UNIFIED] Narration publish failed: {_e}", exc_info=True)
-
-    result = orchestrator.run(
-        channel=channel,
-        text=text,
-        cortex_service=cortex_service,
-        act_prompt=prompt,  # Unified prompt (not ACT-specific)
-        classification=classification,
-        chat_history=chat_history,
-        relevant_tools=None,
-        selected_skills=list(ALL_SKILL_NAMES),
-        selected_tools=None,
-        assembled_context=assembled_context,
-        inclusion_map=inclusion_map,
-        on_narration=_narration_callback,
-        session_id='digest_unified',
-        exchange_id=(metadata or {}).get('exchange_id', 'unknown'),
-        request_id=request_uuid,
-    )
-
-    logging.info(
-        f"[UNIFIED] ACT loop complete: {len(result.act_history)} actions, "
-        f"response={len(result.final_response)} chars"
-    )
-
-    # Card-only detection
-    _history = result.act_history
-
-    def _is_card_result(r):
-        rt = r.get('result')
-        return rt == '__CARD_ONLY__' or (isinstance(rt, str) and rt.startswith('__CARD_EMITTED__\n'))
-
-    _all_card_only = (
-        bool(_history)
-        and all(r.get('status') == 'success' for r in _history)
-        and all(_is_card_result(r) for r in _history)
-    )
-
-    _has_card_text = any(
-        isinstance(r.get('result'), str) and r['result'].startswith('__CARD_EMITTED__\n')
-        for r in _history
-    ) if _all_card_only else False
-
-    if _all_card_only and not _has_card_text:
-        logging.info(
-            "[UNIFIED] All actions emitted cards (no text) — skipping text response"
-        )
-        terminal_response = {
-            'mode': 'IGNORE',
-            'modifiers': [],
-            'response': '',
-            'generation_time': 0.0,
-            'actions': None,
-            'confidence': 1.0,
-        }
-    else:
-        # Use the model's final response from the ACT loop — it already has full
-        # context from tool results via native tool calling. No synthesis LLM call needed.
-        terminal_response = {
-            'mode': 'UNIFIED',
-            'modifiers': [],
-            'response': result.final_response if proactive else (result.final_response or "I understand. Let me think about that."),
-            'generation_time': 0.0,
-            'actions': None,
-            'confidence': 0.8,
-        }
-
-    # Enqueue tool reflection
-    try:
-        from services.act_reflection_service import enqueue_tool_reflection
-        enqueue_tool_reflection(result.act_history, channel, text)
-    except Exception as _e:
-        logging.debug(f"[UNIFIED] Reflection enqueue skipped: {_e}")
-
-    # Carry over action history
-    terminal_response['actions'] = [
-        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
-        for r in result.act_history
-    ] if result.act_history else None
-
-    # Extract reply_actions from the last successful skill result (for UI buttons)
-    for entry in reversed(result.act_history):
-        if entry.get('status') == 'success' and entry.get('reply_actions'):
-            terminal_response['reply_actions'] = entry['reply_actions']
-            break
-
-    routing_result['mode'] = terminal_response.get('mode', 'UNIFIED')
-    return terminal_response, routing_result
 
 
 def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
@@ -1229,15 +1085,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             if _nudge_text:
                 _nudge_tag = f"[nudge] {_nudge_text}"
                 metadata['nudge_tag'] = _nudge_tag
-                from services.database_service import get_shared_db_service
-                _db = get_shared_db_service()
-                with _db.connection() as conn:
-                    conn.execute(
-                        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, created_at) "
-                        "VALUES (?, 'nudge', '{}', ?, 'system', ?)",
-                        (_user_transcript_id, _nudge_tag, utc_now().isoformat()),
-                    )
-                    conn.commit()
+                from services.tool_call_service import ToolCallService
+                ToolCallService().store(
+                    _user_transcript_id, 'nudge', {}, _nudge_tag, invoked_by='system'
+                )
         except Exception as e:
             logging.debug(f"[DIGEST] Onboarding nudge failed: {e}", exc_info=True)
 
