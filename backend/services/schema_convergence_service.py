@@ -330,7 +330,7 @@ class SchemaConvergenceService:
             err = str(exc).lower()
             # Orphaned shadow tables from a prior ALTER TABLE RENAME leave behind
             # rows in sqlite_master that block re-creation.
-            if "already exists" in err or "table" in err:
+            if "already exists" in err:
                 logger.warning(
                     f"[convergence] Virtual table {table_name} creation failed, "
                     f"attempting shadow table cleanup: {exc}"
@@ -476,11 +476,13 @@ class SchemaConvergenceService:
         For vec0 tables, replaces the hardcoded dimension with the configured
         ``embedding_dimensions`` (defaults to 768; tests use 256).
         """
+        # Strip SQL comments before regex matching (same as _extract_table_ddl)
+        clean_sql = re.sub(r"--[^\n]*", "", schema_sql)
         pattern = re.compile(
             r"(CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(table_name) + r"[^;]+;)",
             re.IGNORECASE | re.DOTALL,
         )
-        match = pattern.search(schema_sql)
+        match = pattern.search(clean_sql)
         if not match:
             return None
         ddl = match.group(1).strip()
@@ -491,7 +493,13 @@ class SchemaConvergenceService:
 
     def _restore_if_not_exists(self, normalized_ddl: str, obj_type: str) -> str:
         """Re-insert IF NOT EXISTS into a normalized DDL string."""
-        # normalized_ddl has had IF NOT EXISTS stripped; restore it
+        # Handle UNIQUE indexes: "create unique index foo" → "create unique index if not exists foo"
+        if obj_type == "index":
+            for kw in ("unique index", "index"):
+                prefix = f"create {kw} "
+                if normalized_ddl.startswith(prefix):
+                    return f"create {kw} if not exists " + normalized_ddl[len(prefix):]
+            return normalized_ddl
         prefix = f"create {obj_type} "
         if normalized_ddl.startswith(prefix):
             return f"create {obj_type} if not exists " + normalized_ddl[len(prefix):]

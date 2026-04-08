@@ -770,3 +770,13 @@ class TestSchemaConvergence:
 
         assert "idx_foo" in restored
         assert "on bar(col)" in restored
+
+    def test_restore_if_not_exists_handles_unique_index(self, tmp_path):
+        """_restore_if_not_exists() correctly handles CREATE UNIQUE INDEX."""
+        db = _make_db(tmp_path)
+        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+
+        normalized = "create unique index idx_uniq on bar(col)"
+        restored = svc._restore_if_not_exists(normalized, "index")
+
+        assert restored == "create unique index if not exists idx_uniq on bar(col)"
