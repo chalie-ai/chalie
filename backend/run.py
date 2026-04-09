@@ -81,12 +81,11 @@ def main():
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
             svc.ensure_models()
-            label, _ = svc.predict("mode-tiebreaker", "warmup")
-            if label is not None:
-                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
-            else:
-                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            # Base model (~473MB ONNX → ~2GB RSS) is lazy-loaded on first
+            # predict() call.  Loading it here alongside the embedding model
+            # (already ~2.2GB) exceeds the Docker VM limit and triggers OOM.
             svc._ready = True
+            logger.info("[System] ONNX models verified (base model deferred to first use)")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
