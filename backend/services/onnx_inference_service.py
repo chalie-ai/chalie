@@ -429,7 +429,10 @@ class OnnxInferenceService:
                 opts.intra_op_num_threads = 1
                 opts.inter_op_num_threads = 1
                 opts.enable_mem_pattern = True
-                opts.enable_cpu_mem_arena = True
+                # Arena disabled for the base model — pre-allocating a large
+                # contiguous pool alongside the embedding model (~2.2GB)
+                # causes a memory spike that exceeds the Docker VM limit.
+                opts.enable_cpu_mem_arena = False
 
                 if optimized_path.exists():
                     load_path = optimized_path
