@@ -230,7 +230,6 @@ def _fire_item(item: dict):
 
         # Dispatch via ScheduledMessageProcessor in a daemon thread
         item_id = item.get('id', 'unknown')
-        item_channel = item.get('channel') or item.get('topic') or None
 
         def _run():
             _PROMPT_SEMAPHORE.acquire()
@@ -238,7 +237,7 @@ def _fire_item(item: dict):
                 from services.scheduled_message_processor import ScheduledMessageProcessor
                 from services.output_service import OutputService
 
-                result = ScheduledMessageProcessor().process(message, item_id, item_channel)
+                result = ScheduledMessageProcessor().process(message, item_id)
                 response_text = result.get('response', '').strip()
                 if not response_text:
                     response_text = "Scheduled task completed but produced no output."

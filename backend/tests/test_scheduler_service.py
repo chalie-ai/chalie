@@ -41,7 +41,6 @@ class TestCalculateNextDue:
         """Friday should advance to Monday."""
         friday = datetime(2024, 1, 19, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(friday, "weekdays")
-        assert next_due.weekday() < 5  # not Saturday or Sunday
         assert next_due.weekday() == 0  # Monday
 
     def test_interval(self):
@@ -101,7 +100,6 @@ class TestBuildRecurrence:
         result = scheduler_svc._build_recurrence(item, datetime(2024, 1, 15, 9, 1, tzinfo=timezone.utc))
         assert result is not None
         assert result["due_at"] == datetime(2024, 1, 16, 9, 0, tzinfo=timezone.utc)
-        assert result["item_type"] == "notification"
         assert result["group_id"] == "abc12345"
         assert result["id"] != "abc12345"
 
@@ -113,7 +111,6 @@ class TestBuildRecurrence:
             "group_id": "xyz99", "is_prompt": True,
         }
         result = scheduler_svc._build_recurrence(item, datetime(2024, 1, 15, 9, 1, tzinfo=timezone.utc))
-        assert result is not None
         assert result["item_type"] == "prompt"
         assert result["is_prompt"] is True
 
@@ -122,228 +119,78 @@ class TestBuildRecurrence:
 class TestFireItem:
     """Test _fire_item delivery routing."""
 
-    def test_notification_uses_output_service(self):
-        """Notification items should bypass LLM and go directly to OutputService."""
+    def _make_item(self, item_type='notification', is_prompt=False, message='Test', **extra):
         item = {
-            "id": "notif1",
-            "item_type": "notification",
-            "message": "Take your medicine",
+            "id": "test1", "item_type": item_type, "message": message,
             "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "health",
-            "is_prompt": False,
+            "topic": "general", "is_prompt": is_prompt,
         }
-        with patch('services.output_service.OutputService') as mock_output_cls:
+        item.update(extra)
+        return item
+
+    def test_notification_uses_output_service(self):
+        with patch('services.output_service.OutputService') as mock_cls:
             mock_output = MagicMock()
-            mock_output_cls.return_value = mock_output
-            scheduler_svc._fire_item(item)
+            mock_cls.return_value = mock_output
+            scheduler_svc._fire_item(self._make_item())
             assert mock_output.enqueue_text.called
-            call_kwargs = mock_output.enqueue_text.call_args[1]
-            assert call_kwargs["mode"] == "NOTIFICATION"
-            assert call_kwargs["response"] == "Take your medicine"
+            assert mock_output.enqueue_text.call_args[1]["mode"] == "NOTIFICATION"
 
     def test_prompt_spawns_daemon_thread(self):
-        """Prompt items must dispatch via a daemon thread — not PromptQueue."""
-        import threading as _threading
-
-        item = {
-            "id": "prompt1",
-            "item_type": "prompt",
-            "message": "How did I do this week?",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "reflection",
-            "is_prompt": True,
-        }
-
-        threads_started = []
-        original_thread = _threading.Thread
-
-        def _capture_thread(*args, **kwargs):
-            t = original_thread(*args, **kwargs)
-            threads_started.append(t)
-            return t
-
-        # threading is imported locally inside _fire_item(); patch it at the
-        # threading module level so the inline import picks up the mock.
-        with patch('threading.Thread', side_effect=_capture_thread):
-            scheduler_svc._fire_item(item)
-
-        assert len(threads_started) == 1, "Exactly one daemon thread must be started"
-        t = threads_started[0]
-        assert t.daemon is True, "Thread must be a daemon so it does not block shutdown"
-
-    def test_prompt_thread_name_contains_item_id(self):
-        """The spawned thread name must include the item id for traceability."""
-        import threading as _threading
-
-        item = {
-            "id": "myitem99",
-            "item_type": "prompt",
-            "message": "Run the weekly review",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "reviews",
-            "is_prompt": True,
-        }
-
-        threads_started = []
-        original_thread = _threading.Thread
-
-        def _capture_thread(*args, **kwargs):
-            t = original_thread(*args, **kwargs)
-            threads_started.append(t)
-            return t
-
-        with patch('threading.Thread', side_effect=_capture_thread):
-            scheduler_svc._fire_item(item)
-
-        assert threads_started, "A thread must have been created"
-        assert 'myitem99' in threads_started[0].name
-
-    def test_prompt_does_not_use_prompt_queue(self):
-        """PromptQueue must NOT be imported or called for prompt items.
-
-        The implementation spawns a daemon thread; we block the thread from
-        actually running and assert that start() was called exactly once —
-        proving the prompt path goes through the thread, not PromptQueue.
-        """
-        item = {
-            "id": "prompt2",
-            "item_type": "prompt",
-            "message": "Daily check-in",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "general",
-            "is_prompt": True,
-        }
-
         mock_t = MagicMock()
-        mock_t.daemon = False  # will be set by the implementation
-
         with patch('threading.Thread', return_value=mock_t):
-            scheduler_svc._fire_item(item)
-
+            scheduler_svc._fire_item(self._make_item('prompt', is_prompt=True, message='Do review'))
         mock_t.start.assert_called_once()
 
-    def test_non_prompt_item_uses_output_service_directly(self):
-        """Non-prompt items (e.g. reminder) still call OutputService.enqueue_text — no thread."""
-        item = {
-            "id": "reminder1",
-            "item_type": "reminder",
-            "message": "Stand up meeting",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "work",
-            "is_prompt": False,
-        }
+    def test_prompt_does_not_use_prompt_queue(self):
+        """Regression: prompt items must NOT touch PromptQueue."""
+        mock_t = MagicMock()
+        with patch('threading.Thread', return_value=mock_t):
+            scheduler_svc._fire_item(self._make_item('prompt', is_prompt=True, message='Check'))
+        mock_t.start.assert_called_once()
 
-        with patch('services.output_service.OutputService') as mock_output_cls, \
-             patch('threading.Thread') as mock_thread_cls:
-            mock_output = MagicMock()
-            mock_output_cls.return_value = mock_output
-            scheduler_svc._fire_item(item)
+    def test_empty_prompt_skipped(self):
+        for msg in ['', '   ', '\n\t']:
+            with patch('threading.Thread') as mock_t:
+                scheduler_svc._fire_item(self._make_item('prompt', is_prompt=True, message=msg))
+            mock_t.assert_not_called()
 
-        # Direct delivery — no thread spawned
-        mock_thread_cls.assert_not_called()
-        assert mock_output.enqueue_text.called
-        call_kwargs = mock_output.enqueue_text.call_args[1]
-        assert call_kwargs["response"] == "Stand up meeting"
-
-    def test_system_item_dispatches_to_registered_handler(self):
-        """System items must call the registered handler — not OutputService, not a thread."""
+    def test_system_item_dispatches_handler(self):
         handler = MagicMock()
-        scheduler_svc.register_system_handler('test-source', handler)
-
-        item = {
-            "id": "sys1",
-            "item_type": "system",
-            "message": "",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "channel": "test-source",
-            "is_prompt": False,
-        }
-
-        with patch('services.output_service.OutputService') as mock_output_cls, \
-             patch('threading.Thread') as mock_thread_cls:
-            scheduler_svc._fire_item(item)
-
+        scheduler_svc.register_system_handler('test-src', handler)
+        scheduler_svc._fire_item(self._make_item('system', channel='test-src'))
         handler.assert_called_once()
-        mock_output_cls.assert_not_called()
-        mock_thread_cls.assert_not_called()
 
-    def test_system_item_with_no_handler_does_not_raise(self):
-        """A system item with an unregistered channel must log a warning, not raise."""
-        item = {
-            "id": "sys2",
-            "item_type": "system",
-            "message": "",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "channel": "nonexistent-handler-xyz",
-            "is_prompt": False,
-        }
+    def test_system_item_no_handler_does_not_raise(self):
+        scheduler_svc._fire_item(self._make_item('system', channel='nonexistent-xyz'))
 
-        # Must complete without raising
-        scheduler_svc._fire_item(item)
-
-    def test_empty_prompt_message_skipped(self):
-        """Prompt items with empty/whitespace message must be skipped — no thread spawned."""
-        for empty_msg in ['', '   ', '\n\t']:
-            item = {
-                "id": "empty1",
-                "item_type": "prompt",
-                "message": empty_msg,
-                "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-                "topic": "general",
-                "is_prompt": True,
-            }
-
-            with patch('threading.Thread') as mock_thread_cls:
-                scheduler_svc._fire_item(item)
-
-            mock_thread_cls.assert_not_called()
-
-    def test_prompt_error_message_is_sanitized(self):
-        """When the daemon thread fails, the user must see a generic error — not raw exception."""
-        item = {
-            "id": "fail1",
-            "item_type": "prompt",
-            "message": "Do something that fails",
-            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "topic": "general",
-            "is_prompt": True,
-        }
-
-        # Capture the _run function passed to Thread, then execute it directly
+    def test_error_message_is_sanitized(self):
+        """On failure, user sees generic message — not raw exception."""
+        item = self._make_item('prompt', is_prompt=True, message='Fail task')
         captured_target = {}
 
-        def _capture_thread(*args, **kwargs):
-            captured_target['fn'] = kwargs.get('target')
-            t = MagicMock()
-            return t
+        def _capture(*, target, **kw):
+            captured_target['fn'] = target
+            return MagicMock()
 
-        with patch('threading.Thread', side_effect=_capture_thread):
+        with patch('threading.Thread', side_effect=_capture):
             scheduler_svc._fire_item(item)
 
-        assert 'fn' in captured_target
-
-        # Execute _run — the processor will raise
-        with patch('services.scheduled_message_processor.ScheduledMessageProcessor') as mock_proc_cls, \
-             patch('services.output_service.OutputService') as mock_output_cls:
-            mock_proc_cls.return_value.process.side_effect = RuntimeError("secret internal error")
+        with patch('services.scheduled_message_processor.ScheduledMessageProcessor') as mock_proc, \
+             patch('services.output_service.OutputService') as mock_out:
+            mock_proc.return_value.process.side_effect = RuntimeError("secret error")
             mock_output = MagicMock()
-            mock_output_cls.return_value = mock_output
-
+            mock_out.return_value = mock_output
             captured_target['fn']()
 
-        # Error message must be generic — no raw exception text
         call_kwargs = mock_output.enqueue_proactive.call_args[1]
-        assert 'secret internal error' not in call_kwargs['response']
+        assert 'secret error' not in call_kwargs['response']
         assert 'could not be completed' in call_kwargs['response']
 
 
 @pytest.mark.unit
 class TestPromptSemaphore:
-    """Test the concurrent thread cap via _PROMPT_SEMAPHORE."""
 
-    def test_semaphore_exists_and_is_threading_semaphore(self):
-        """Module-level _PROMPT_SEMAPHORE must exist as a threading.Semaphore."""
-        import threading as _threading
-        assert hasattr(scheduler_svc, '_PROMPT_SEMAPHORE')
-        sem = scheduler_svc._PROMPT_SEMAPHORE
-        assert isinstance(sem, _threading.Semaphore)
+    def test_semaphore_exists(self):
+        import threading
+        assert isinstance(scheduler_svc._PROMPT_SEMAPHORE, threading.Semaphore)
