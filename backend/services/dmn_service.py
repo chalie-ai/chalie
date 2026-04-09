@@ -137,23 +137,22 @@ class DMNService:
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT gist, action FROM episodes ORDER BY created_at DESC LIMIT 50"
+                "SELECT gist, action, outcome, salience, emotional_valence, "
+                "entities, open_loops, created_at "
+                "FROM episodes "
+                "WHERE deleted_at IS NULL "
+                "ORDER BY created_at DESC "
+                "LIMIT 50"
             )
             rows = cursor.fetchall()
 
         if not rows:
             return ''
 
-        lines = []
-        for i, (gist, action) in enumerate(rows, 1):
-            entry = gist or ''
-            if action:
-                entry = f"{entry} [{action}]" if entry else action
-            lines.append(f"{i}. {entry}")
-        return '\n'.join(lines)
+        return self._format_episodes(rows)
 
     def _gather_salience_context(self) -> str:
-        """High-confidence concepts + active goals + pending tasks."""
+        """High-confidence concepts + salient episodes + active goals."""
         sections = []
 
         with self._db.connection() as conn:
@@ -171,24 +170,45 @@ class DMNService:
                 if lines:
                     sections.append("High-priority memories:\n" + '\n'.join(lines))
 
-            # Active goals
+            # High-retrieval-weight episodes
             cursor.execute(
-                "SELECT description FROM goals WHERE status = 'active' LIMIT 20"
+                "SELECT gist, action, outcome, salience, emotional_valence, "
+                "entities, open_loops, created_at "
+                "FROM episodes "
+                "WHERE deleted_at IS NULL AND retrieval_weight >= 0.7 "
+                "ORDER BY retrieval_weight DESC "
+                "LIMIT 30"
+            )
+            ep_rows = cursor.fetchall()
+            if ep_rows:
+                sections.append("Notable episodes:\n" + self._format_episodes(ep_rows))
+
+            # Active goals with confidence
+            cursor.execute(
+                "SELECT description, confidence FROM goals WHERE status = 'active' LIMIT 20"
             )
             goals = cursor.fetchall()
             if goals:
-                lines = [f"- {description or ''}" for (description,) in goals]
+                lines = []
+                for description, confidence in goals:
+                    if confidence is not None:
+                        lines.append(f"- {description or ''} (confidence: {int(confidence * 100)}%)")
+                    else:
+                        lines.append(f"- {description or ''}")
                 sections.append("Active goals:\n" + '\n'.join(lines))
 
         return '\n\n'.join(sections)
 
     def _active_topic(self) -> str:
-        """Return the most recently active topic, or 'general'."""
+        """Return the most recently active user-facing channel, or 'general'."""
         try:
             with self._db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT channel FROM transcript "
+                    "WHERE channel NOT LIKE 'goal_pursuit:%' "
+                    "  AND channel NOT LIKE 'scheduled:%' "
+                    "  AND channel NOT LIKE 'cron_tool:%' "
                     "ORDER BY created_at DESC LIMIT 1"
                 )
                 row = cursor.fetchone()
@@ -196,80 +216,81 @@ class DMNService:
         except Exception:
             return 'general'
 
-    def _build_prompt(self, mode: str, context: str) -> str:
-        """Build the proactive prompt for the given mode."""
-        if mode == 'recent':
-            return (
-                "You are reviewing recent interactions. Based on the following episodes, "
-                "is there anything proactive you could do for the user? "
-                "If nothing useful, respond with exactly 'DMN_NO_ACTION'. "
-                "Otherwise, go ahead — respond to the user, set a schedule, create a goal, "
-                "whatever is most useful.\n\nRecent episodes:\n" + context
-            )
-        return (
-            "You are reviewing high-priority memories and active goals. "
-            "Based on the following context, is there anything proactive you could do for the user? "
-            "If nothing useful, respond with exactly 'DMN_NO_ACTION'. "
-            "Otherwise, go ahead — respond to the user, set a schedule, create a goal, "
-            "whatever is most useful.\n\n" + context
-        )
+    def _format_episodes(self, rows) -> str:
+        """Format episode rows into a readable numbered list.
+
+        Each row must be: (gist, action, outcome, salience, emotional_valence,
+        entities, open_loops, created_at)
+        """
+        import json
+
+        lines = []
+        for i, (gist, action, outcome, salience, emotional_valence,
+                entities, open_loops, created_at) in enumerate(rows, 1):
+            # Header: index, timestamp, salience, optional valence
+            ts = (created_at or '')[:16].replace('T', ' ')
+            header = f"{i}. [{ts}] salience:{salience}"
+            if emotional_valence is not None:
+                try:
+                    header += f" valence:{float(emotional_valence):.1f}"
+                except (ValueError, TypeError):
+                    pass
+            lines.append(header)
+
+            # Gist (always present per schema NOT NULL)
+            if gist:
+                lines.append(f"   {gist}")
+
+            if action:
+                lines.append(f"   Action: {action}")
+            if outcome:
+                lines.append(f"   Outcome: {outcome}")
+
+            # Entities (JSONB list)
+            try:
+                entity_list = json.loads(entities) if entities else []
+                if entity_list:
+                    lines.append(f"   Entities: {', '.join(str(e) for e in entity_list)}")
+            except (ValueError, TypeError):
+                pass
+
+            # Open loops (JSONB list)
+            try:
+                loop_list = json.loads(open_loops) if open_loops else []
+                if loop_list:
+                    lines.append(f"   Open loops: {', '.join(str(l) for l in loop_list)}")
+            except (ValueError, TypeError):
+                pass
+
+        return '\n'.join(lines)
 
     def _proactive_generate(self, mode: str, context: str) -> bool:
-        """Run a proactive LLM call through unified_generate with tools.
+        """Run a proactive LLM call through DMNMessageProcessor.
 
         Calls synchronously (this runs in the DMN worker thread).
         Returns True if the LLM produced actionable output, False otherwise.
         """
-        topic = self._active_topic()
-        prompt = self._build_prompt(mode, context)
+        from services.dmn_message_processor import DMNMessageProcessor
+        from services.output_service import OutputService
 
         try:
-            from workers.digest_singletons import load_configs
-            from workers.digest_worker import unified_generate
-            from services.output_service import OutputService
+            channel = self._active_topic()
+            result = DMNMessageProcessor().process(context, mode, channel)
 
-            configs = load_configs()
-            cortex_config = configs['cortex']['config']
-            cortex_prompt_map = configs['cortex']['prompt_map']
-
-            metadata = {
-                'uuid': str(uuid.uuid4()),
-                'source': 'dmn',
-                'destination': 'web',
-                'dmn_mode': mode,
-            }
-
-            response_data, _routing = unified_generate(
-                topic=topic,
-                text=prompt,
-                classification={},
-                thread_conv_service=None,
-                cortex_config=cortex_config,
-                cortex_prompt_map=cortex_prompt_map,
-                signals={},
-                metadata=metadata,
-                proactive=True,
-            )
-
-            response = (response_data.get('response') or '').strip()
+            response = (result.get('response') or '').strip()
             if not response or 'DMN_NO_ACTION' in response:
-                logger.info("[DMN] %s — LLM chose no action", mode)
+                logger.info("[DMN] %s — no action", mode)
                 return False
 
-            # Deliver to user
-            OutputService().enqueue_text(
-                topic=topic,
+            OutputService().enqueue_proactive(
+                topic=channel,
                 response=response,
-                mode='DMN',
-                confidence=response_data.get('confidence', 0.7),
-                generation_time=response_data.get('generation_time', 0.0),
-                original_metadata=metadata,
+                source='dmn',
             )
-            logger.info("[DMN] %s — delivered %d chars to topic '%s'", mode, len(response), topic)
+            logger.info("[DMN] %s — delivered %d chars", mode, len(response))
             return True
-
         except Exception as exc:
-            logger.error("[DMN] Proactive generation failed for %s: %s", mode, exc, exc_info=True)
+            logger.error("[DMN] %s proactive generate failed: %s", mode, exc, exc_info=True)
             return False
 
     def _log_cycle(self, mode: str, produced_output: bool):

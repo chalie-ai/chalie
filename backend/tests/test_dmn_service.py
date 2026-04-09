@@ -1,398 +1,854 @@
-"""Unit tests for DMNService."""
+"""Unit tests for DMNService and DMNMessageProcessor.
+
+Strategy: input → output, not wiring.
+- Real in-memory SQLite via the `db` fixture (full production schema).
+- Real MemoryStore via the `store` fixture.
+- Constructor injection patches are used *only* to wire db+store into the
+  service at instantiation — all subsequent calls hit real objects.
+"""
 
 import json
 import time
+import os
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.unit
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-def _utc(dt: datetime) -> datetime:
-    """Ensure dt is timezone-aware UTC."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _utc_offset(seconds: float) -> datetime:
+    """Return a timezone-aware UTC datetime offset from now by *seconds*."""
+    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-def _make_service(db_service, store):
-    """Instantiate DMNService with injected db + store, bypassing singletons."""
+def _make_service(db, store):
+    """Instantiate DMNService with the test db + store, bypassing process singletons.
+
+    The patches are infrastructure injection only — the returned service object
+    uses real db and store instances for all method calls.
+    """
+    from unittest.mock import patch
     from services.dmn_service import DMNService
-    with patch('services.database_service.get_shared_db_service', return_value=db_service), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+    from services.database_service import get_shared_db_service
+
+    with patch('services.database_service.get_shared_db_service',
+               return_value=get_shared_db_service()), \
+         patch('services.memory_client.MemoryClientService.create_connection',
+               return_value=store):
         svc = DMNService()
     return svc
 
 
-# ---------------------------------------------------------------------------
-# TestDMNOnTurn
-# ---------------------------------------------------------------------------
+def _insert_episode(db, ep_id, gist, action='', outcome='', salience=5,
+                    entities='[]', open_loops='[]', emotional_valence=None,
+                    retrieval_weight=1.0, deleted_at=None):
+    """Insert a minimal episode row into the real database."""
+    from services.time_utils import utc_now
+    ts = utc_now().isoformat()
+    db.execute(
+        "INSERT INTO episodes "
+        "(id, intent, context, action, emotion, outcome, gist, salience, channel, "
+        "created_at, entities, open_loops, emotional_valence, retrieval_weight, deleted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (ep_id, '"query"', '{}', action, '"neutral"', outcome, gist,
+         salience, 'general', ts, entities, open_loops, emotional_valence,
+         retrieval_weight, deleted_at),
+    )
+    db.commit()
 
-class TestDMNOnTurn:
 
-    def test_on_turn_resets_idle_timer(self, db, store):
-        """After calling on_turn, the idle time should be approximately zero."""
-        from services.database_service import get_shared_db_service
+# ── TestFormatEpisodes ─────────────────────────────────────────────────────────
 
-        svc = _make_service(get_shared_db_service(), store)
-        # Wind back the last-turn timestamp by 30 minutes to simulate prior idle
-        svc._last_turn_ts = _utc(datetime.now(timezone.utc) - timedelta(minutes=30))
+class TestFormatEpisodes:
+    """_format_episodes() — direct input/output tests on the formatting logic."""
+
+    def test_basic_fields_appear(self, db, store):
+        """gist, salience, and timestamp appear in output for a minimal row."""
+        svc = _make_service(db, store)
+        rows = [('User asked about weather', 'search', 'success', 7,
+                 None, '[]', '[]', '2026-04-10T14:30:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'User asked about weather' in result
+        assert 'salience:7' in result
+        assert '2026-04-10 14:30' in result
+
+    def test_action_and_outcome_lines(self, db, store):
+        """Non-empty action and outcome each produce a dedicated line."""
+        svc = _make_service(db, store)
+        rows = [('Discussed plans', 'plan_review', 'confirmed', 5,
+                 None, '[]', '[]', '2026-04-10T10:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Action: plan_review' in result
+        assert 'Outcome: confirmed' in result
+
+    def test_empty_action_and_outcome_omitted(self, db, store):
+        """Empty action and outcome strings do not produce lines in the output."""
+        svc = _make_service(db, store)
+        rows = [('Just a gist', '', '', 3, None, '[]', '[]', '2026-04-10T09:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Action:' not in result
+        assert 'Outcome:' not in result
+        assert 'Just a gist' in result
+
+    def test_emotional_valence_included_when_present(self, db, store):
+        """A numeric emotional_valence is formatted to 1 decimal place."""
+        svc = _make_service(db, store)
+        rows = [('Good session', 'exercise', 'done', 6,
+                 0.8, '[]', '[]', '2026-04-10T08:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'valence:0.8' in result
+
+    def test_null_valence_omitted(self, db, store):
+        """A NULL emotional_valence does not produce a valence token in output."""
+        svc = _make_service(db, store)
+        rows = [('Neutral event', '', '', 4, None, '[]', '[]', '2026-04-10T07:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'valence:' not in result
+
+    def test_entities_json_list_rendered(self, db, store):
+        """A valid JSON entities list appears as a comma-separated Entities line."""
+        svc = _make_service(db, store)
+        entities = json.dumps(['Alice', 'Bob'])
+        rows = [('Meeting recap', '', '', 5, None,
+                 entities, '[]', '2026-04-10T11:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Entities: Alice, Bob' in result
+
+    def test_open_loops_json_list_rendered(self, db, store):
+        """A valid JSON open_loops list appears as an Open loops line."""
+        svc = _make_service(db, store)
+        loops = json.dumps(['Follow up on report', 'Check budget'])
+        rows = [('Project update', '', '', 5, None, '[]',
+                 loops, '2026-04-10T12:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Open loops: Follow up on report, Check budget' in result
+
+    def test_empty_entities_list_omitted(self, db, store):
+        """An empty JSON entities list does not produce an Entities line."""
+        svc = _make_service(db, store)
+        rows = [('Brief note', '', '', 3, None, '[]', '[]', '2026-04-10T13:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Entities:' not in result
+
+    def test_malformed_entities_json_skipped_gracefully(self, db, store):
+        """Malformed entities JSON does not raise; the episode still renders."""
+        svc = _make_service(db, store)
+        rows = [('Event with bad json', '', '', 4, None,
+                 'not-valid-json', '[]', '2026-04-10T15:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Event with bad json' in result
+        assert 'Entities:' not in result
+
+    def test_malformed_open_loops_json_skipped_gracefully(self, db, store):
+        """Malformed open_loops JSON does not raise; the episode still renders."""
+        svc = _make_service(db, store)
+        rows = [('Event with bad loops', '', '', 4, None,
+                 '[]', '{bad json}', '2026-04-10T15:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Event with bad loops' in result
+        assert 'Open loops:' not in result
+
+    def test_multiple_episodes_numbered(self, db, store):
+        """Multiple rows produce incrementing 1., 2., 3. prefixes."""
+        svc = _make_service(db, store)
+        rows = [
+            ('First', '', '', 3, None, '[]', '[]', '2026-04-10T01:00:00'),
+            ('Second', '', '', 4, None, '[]', '[]', '2026-04-10T02:00:00'),
+            ('Third', '', '', 5, None, '[]', '[]', '2026-04-10T03:00:00'),
+        ]
+        result = svc._format_episodes(rows)
+
+        assert '1.' in result
+        assert '2.' in result
+        assert '3.' in result
+
+    def test_none_entities_value_handled(self, db, store):
+        """NULL entities column (Python None) does not raise."""
+        svc = _make_service(db, store)
+        rows = [('Null entities', '', '', 5, None, None, None, '2026-04-10T00:00:00')]
+        result = svc._format_episodes(rows)
+
+        assert 'Null entities' in result
+
+
+# ── TestGatherRecentContext ────────────────────────────────────────────────────
+
+class TestGatherRecentContext:
+    """_gather_recent_context() — reads from the real episodes table."""
+
+    def test_returns_empty_string_when_no_episodes(self, db, store):
+        """No episodes → empty string returned, no exception."""
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert result == ''
+
+    def test_single_episode_gist_appears(self, db, store):
+        """A single episode's gist appears in the returned string."""
+        _insert_episode(db, 'ep-1', 'User asked about the weather forecast')
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'User asked about the weather forecast' in result
+        assert result != ''
+
+    def test_multiple_episodes_all_appear(self, db, store):
+        """All inserted episodes appear in the output."""
+        _insert_episode(db, 'ep-a', 'Episode Alpha', action='search')
+        _insert_episode(db, 'ep-b', 'Episode Beta', action='reply')
+        _insert_episode(db, 'ep-c', 'Episode Gamma', outcome='done')
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'Episode Alpha' in result
+        assert 'Episode Beta' in result
+        assert 'Episode Gamma' in result
+
+    def test_deleted_episodes_excluded(self, db, store):
+        """Episodes with a deleted_at timestamp are not included in context."""
+        _insert_episode(db, 'ep-live', 'Active episode')
+        _insert_episode(db, 'ep-dead', 'Deleted episode',
+                        deleted_at='2026-04-09T00:00:00+00:00')
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'Active episode' in result
+        assert 'Deleted episode' not in result
+
+    def test_action_appears_in_output(self, db, store):
+        """A non-empty action value is included in the output for that episode."""
+        _insert_episode(db, 'ep-act', 'Did something', action='web_search')
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'web_search' in result
+
+    def test_salience_value_appears(self, db, store):
+        """The salience integer is visible in the formatted output."""
+        _insert_episode(db, 'ep-sal', 'High salience moment', salience=9)
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'salience:9' in result
+
+    def test_entities_from_db_rendered(self, db, store):
+        """Entities stored as JSON in the DB are rendered in the context string."""
+        _insert_episode(db, 'ep-ent', 'Met with team',
+                        entities=json.dumps(['Alice', 'Bob']))
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert 'Alice' in result
+        assert 'Bob' in result
+
+    def test_episodes_numbered_starting_from_one(self, db, store):
+        """Output starts with '1.' — episodes are numbered."""
+        _insert_episode(db, 'ep-num', 'Some episode')
+
+        svc = _make_service(db, store)
+        result = svc._gather_recent_context()
+
+        assert '1.' in result
+
+
+# ── TestGatherSalienceContext ──────────────────────────────────────────────────
+
+class TestGatherSalienceContext:
+    """_gather_salience_context() — reads concepts, salient episodes, and goals."""
+
+    def test_returns_empty_string_when_all_tables_empty(self, db, store):
+        """Empty knowledge + episodes + goals → empty string, no exception."""
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert result == ''
+
+    def test_concept_key_and_value_appear(self, db, store):
+        """A knowledge concept's key and value appear in the output."""
+        from services.time_utils import utc_now
+        ts = utc_now().isoformat()
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "created_at, updated_at) VALUES ('concept', 'user', ?, ?, 0.9, ?, ?)",
+            ('preferred_language', 'Python', ts, ts),
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'preferred_language' in result
+        assert 'Python' in result
+
+    def test_concept_section_header_present(self, db, store):
+        """'High-priority memories:' section header appears when concepts exist."""
+        from services.time_utils import utc_now
+        ts = utc_now().isoformat()
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "created_at, updated_at) VALUES ('concept', 'user', 'hobby', 'hiking', 0.8, ?, ?)",
+            (ts, ts),
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'High-priority memories:' in result
+
+    def test_active_goal_description_appears(self, db, store):
+        """An active goal's description appears in the salience context."""
+        db.execute(
+            "INSERT INTO goals (id, description, type, status, salience, confidence) "
+            "VALUES (?, ?, 'emergent', 'active', 0.9, 0.85)",
+            ('goal-1', 'Complete the project proposal'),
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'Complete the project proposal' in result
+
+    def test_active_goals_section_header_present(self, db, store):
+        """'Active goals:' section header appears when goals exist."""
+        db.execute(
+            "INSERT INTO goals (id, description, type, status, salience, confidence) "
+            "VALUES ('g-2', 'Learn Mandarin', 'emergent', 'active', 0.7, 0.6)",
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'Active goals:' in result
+
+    def test_goal_confidence_rendered_as_percentage(self, db, store):
+        """Goal confidence (0.0–1.0) is shown as a whole-number percentage."""
+        db.execute(
+            "INSERT INTO goals (id, description, type, status, salience, confidence) "
+            "VALUES ('g-3', 'Meditate daily', 'emergent', 'active', 0.6, 0.75)",
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert '75%' in result
+
+    def test_inactive_goals_excluded(self, db, store):
+        """Goals with status != 'active' do not appear in salience context."""
+        db.execute(
+            "INSERT INTO goals (id, description, type, status, salience, confidence) "
+            "VALUES ('g-4', 'Archived goal', 'emergent', 'completed', 0.5, 0.5)",
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'Archived goal' not in result
+
+    def test_high_retrieval_weight_episode_in_notable_section(self, db, store):
+        """Episodes with retrieval_weight >= 0.7 appear under 'Notable episodes:'."""
+        _insert_episode(db, 'ep-high', 'Big breakthrough moment',
+                        retrieval_weight=0.9)
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'Big breakthrough moment' in result
+        assert 'Notable episodes:' in result
+
+    def test_low_retrieval_weight_episode_excluded(self, db, store):
+        """Episodes with retrieval_weight < 0.7 do not appear in salience context."""
+        _insert_episode(db, 'ep-low', 'Routine note', retrieval_weight=0.5)
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'Routine note' not in result
+
+    def test_non_concept_knowledge_excluded(self, db, store):
+        """Knowledge rows with kind != 'concept' do not appear in salience context."""
+        from services.time_utils import utc_now
+        ts = utc_now().isoformat()
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "created_at, updated_at) VALUES ('fact', 'user', 'birthday', '1990-01-01', 0.9, ?, ?)",
+            (ts, ts),
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        # 'fact' kind rows should not be in the High-priority memories section
+        assert 'birthday' not in result
+
+    def test_all_three_sections_when_data_present(self, db, store):
+        """When concepts, salient episodes, and goals all exist, all 3 sections appear."""
+        from services.time_utils import utc_now
+        ts = utc_now().isoformat()
+
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "created_at, updated_at) VALUES ('concept', 'user', 'skill', 'Python', 0.9, ?, ?)",
+            (ts, ts),
+        )
+        db.execute(
+            "INSERT INTO goals (id, description, type, status, salience, confidence) "
+            "VALUES ('g-all', 'Ship v1', 'emergent', 'active', 0.9, 0.9)",
+        )
+        db.commit()
+        _insert_episode(db, 'ep-notable', 'Key milestone achieved',
+                        retrieval_weight=0.85)
+
+        svc = _make_service(db, store)
+        result = svc._gather_salience_context()
+
+        assert 'High-priority memories:' in result
+        assert 'Notable episodes:' in result
+        assert 'Active goals:' in result
+
+
+# ── TestActiveTopic ────────────────────────────────────────────────────────────
+
+class TestActiveTopic:
+    """_active_topic() — filters background channels, falls back to 'general'."""
+
+    def test_returns_general_when_no_transcript(self, db, store):
+        """Empty transcript → 'general' returned."""
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'general'
+
+    def test_returns_most_recent_user_channel(self, db, store):
+        """The most recent non-background channel is returned."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('work-chat', 'user', 'hello', '2026-04-10T10:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'work-chat'
+
+    def test_goal_pursuit_channel_filtered(self, db, store):
+        """A 'goal_pursuit:*' channel is excluded; falls back to general."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit:abc123', 'assistant', 'working...', '2026-04-10T12:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'general'
+        assert 'goal_pursuit' not in result
+
+    def test_scheduled_channel_filtered(self, db, store):
+        """A 'scheduled:*' channel is excluded; falls back to general."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('scheduled:reminder-42', 'assistant', 'reminder text', '2026-04-10T11:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'general'
+
+    def test_cron_tool_channel_filtered(self, db, store):
+        """A 'cron_tool:*' channel is excluded; falls back to general."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('cron_tool:hourly-check', 'assistant', 'check done', '2026-04-10T09:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'general'
+
+    def test_user_channel_wins_over_background(self, db, store):
+        """User-facing channel wins over background channels in recency order."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('general', 'user', 'hi', '2026-04-10T08:00:00')"
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit:xyz', 'assistant', 'running goal', '2026-04-10T09:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        # goal_pursuit is excluded; the most recent user-facing channel is 'general'
+        assert result == 'general'
+
+    def test_most_recent_among_multiple_user_channels(self, db, store):
+        """When multiple user-facing channels exist, the most recent one is returned."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('finance', 'user', 'budget', '2026-04-10T07:00:00')"
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('cooking', 'user', 'recipe', '2026-04-10T11:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        assert result == 'cooking'
+
+
+# ── TestOnTurn ─────────────────────────────────────────────────────────────────
+
+class TestOnTurn:
+    """on_turn() — resets state so the idle timer restarts and recent_fired clears."""
+
+    def test_resets_idle_timer_to_approximately_now(self, db, store):
+        """After on_turn(), the measured idle time is less than 2 seconds."""
+        from services.time_utils import utc_now
+
+        svc = _make_service(db, store)
+        # Wind back the timer by 30 minutes to simulate past idle
+        svc._last_turn_ts = utc_now() - timedelta(minutes=30)
 
         svc.on_turn()
 
-        from services.time_utils import utc_now
         idle_s = (utc_now() - svc._last_turn_ts).total_seconds()
-        assert idle_s < 2, f"Expected idle ~0s after on_turn, got {idle_s:.2f}s"
+        assert idle_s < 2, f"Expected idle ~0s after on_turn(), got {idle_s:.2f}s"
 
-    def test_on_turn_resets_recent_fired(self, db, store):
-        """on_turn must clear _recent_fired regardless of its prior value."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
+    def test_clears_recent_fired_when_true(self, db, store):
+        """on_turn() sets _recent_fired to False even when it was True."""
+        svc = _make_service(db, store)
         svc._recent_fired = True
 
         svc.on_turn()
 
         assert svc._recent_fired is False
 
-
-# ---------------------------------------------------------------------------
-# TestDMNCheck
-# ---------------------------------------------------------------------------
-
-class TestDMNCheck:
-
-    def test_recent_fires_after_idle_threshold(self, db, store):
-        """check() must call _fire('recent') when idle exceeds FIRST_IDLE_S."""
-        from services.database_service import get_shared_db_service
-        from services.dmn_service import FIRST_IDLE_S
-
-        svc = _make_service(get_shared_db_service(), store)
-        svc._last_turn_ts = _utc(datetime.now(timezone.utc) - timedelta(seconds=FIRST_IDLE_S + 60))
+    def test_recent_fired_remains_false_when_already_false(self, db, store):
+        """on_turn() is idempotent — _recent_fired stays False if already False."""
+        svc = _make_service(db, store)
         svc._recent_fired = False
 
-        with patch.object(svc, '_fire') as mock_fire:
-            svc.check()
+        svc.on_turn()
 
-        mock_fire.assert_called_once_with('recent')
+        assert svc._recent_fired is False
 
-    def test_no_fire_before_threshold(self, db, store):
-        """check() must not call _fire when idle is below FIRST_IDLE_S."""
-        from services.database_service import get_shared_db_service
+
+# ── TestCheck ─────────────────────────────────────────────────────────────────
+
+class TestCheck:
+    """check() — fires 'recent' after FIRST_IDLE_S, fires 'salience' after REPEAT_S.
+
+    These tests verify the time-gating logic by setting internal timestamps
+    directly and confirming which mode _fire() is called with (or not at all).
+    Because _fire() makes LLM calls, we patch only _fire() itself — the
+    time-gating code under test remains real.
+    """
+
+    def test_recent_fires_when_idle_exceeds_threshold(self, db, store):
+        """_fire('recent') is called when idle time >= FIRST_IDLE_S."""
+        from unittest.mock import patch
         from services.dmn_service import FIRST_IDLE_S
+        from services.time_utils import utc_now
 
-        svc = _make_service(get_shared_db_service(), store)
-        svc._last_turn_ts = _utc(datetime.now(timezone.utc) - timedelta(seconds=FIRST_IDLE_S - 120))
+        svc = _make_service(db, store)
+        svc._last_turn_ts = utc_now() - timedelta(seconds=FIRST_IDLE_S + 120)
         svc._recent_fired = False
 
-        with patch.object(svc, '_fire') as mock_fire:
+        fired_modes = []
+        with patch.object(svc, '_fire', side_effect=lambda m: fired_modes.append(m)):
             svc.check()
 
-        mock_fire.assert_not_called()
+        assert 'recent' in fired_modes
 
-    def test_salience_fires_after_repeat(self, db, store):
-        """check() must call _fire('salience') when REPEAT_S has elapsed since last salience."""
-        from services.database_service import get_shared_db_service
-        from services.dmn_service import REPEAT_S
+    def test_recent_does_not_fire_before_threshold(self, db, store):
+        """_fire() is not called when idle time < FIRST_IDLE_S."""
+        from unittest.mock import patch
+        from services.dmn_service import FIRST_IDLE_S
+        from services.time_utils import utc_now
 
-        svc = _make_service(get_shared_db_service(), store)
+        svc = _make_service(db, store)
+        svc._last_turn_ts = utc_now() - timedelta(seconds=FIRST_IDLE_S - 120)
+        svc._recent_fired = False
+
+        fired_modes = []
+        with patch.object(svc, '_fire', side_effect=lambda m: fired_modes.append(m)):
+            svc.check()
+
+        assert fired_modes == []
+
+    def test_recent_does_not_fire_twice(self, db, store):
+        """_fire('recent') is NOT called again once _recent_fired is already True."""
+        from unittest.mock import patch
+        from services.dmn_service import FIRST_IDLE_S
+        from services.time_utils import utc_now
+
+        svc = _make_service(db, store)
+        svc._last_turn_ts = utc_now() - timedelta(seconds=FIRST_IDLE_S + 300)
         svc._recent_fired = True
-        svc._last_salience_ts = _utc(datetime.now(timezone.utc) - timedelta(seconds=REPEAT_S + 60))
+        # Set last_salience_ts to recent so salience won't fire either
+        svc._last_salience_ts = utc_now()
 
-        with patch.object(svc, '_fire') as mock_fire:
+        fired_modes = []
+        with patch.object(svc, '_fire', side_effect=lambda m: fired_modes.append(m)):
             svc.check()
 
-        mock_fire.assert_called_once_with('salience')
+        assert 'recent' not in fired_modes
 
-    def test_salience_does_not_fire_before_repeat(self, db, store):
-        """check() must not fire salience when less than REPEAT_S has elapsed."""
-        from services.database_service import get_shared_db_service
+    def test_salience_fires_when_repeat_interval_elapsed(self, db, store):
+        """_fire('salience') is called when time since last salience >= REPEAT_S."""
+        from unittest.mock import patch
         from services.dmn_service import REPEAT_S
+        from services.time_utils import utc_now
 
-        svc = _make_service(get_shared_db_service(), store)
+        svc = _make_service(db, store)
         svc._recent_fired = True
-        svc._last_salience_ts = _utc(datetime.now(timezone.utc) - timedelta(seconds=REPEAT_S - 120))
+        svc._last_salience_ts = utc_now() - timedelta(seconds=REPEAT_S + 120)
 
-        with patch.object(svc, '_fire') as mock_fire:
+        fired_modes = []
+        with patch.object(svc, '_fire', side_effect=lambda m: fired_modes.append(m)):
             svc.check()
 
-        mock_fire.assert_not_called()
+        assert 'salience' in fired_modes
+
+    def test_salience_does_not_fire_before_repeat_interval(self, db, store):
+        """_fire('salience') is not called when less than REPEAT_S has elapsed."""
+        from unittest.mock import patch
+        from services.dmn_service import REPEAT_S
+        from services.time_utils import utc_now
+
+        svc = _make_service(db, store)
+        svc._recent_fired = True
+        svc._last_salience_ts = utc_now() - timedelta(seconds=REPEAT_S - 120)
+
+        fired_modes = []
+        with patch.object(svc, '_fire', side_effect=lambda m: fired_modes.append(m)):
+            svc.check()
+
+        assert fired_modes == []
+
+    def test_check_updates_recent_fired_after_fire(self, db, store):
+        """After check() fires 'recent', _recent_fired is set to True."""
+        from unittest.mock import patch
+        from services.dmn_service import FIRST_IDLE_S
+        from services.time_utils import utc_now
+
+        svc = _make_service(db, store)
+        svc._last_turn_ts = utc_now() - timedelta(seconds=FIRST_IDLE_S + 60)
+        svc._recent_fired = False
+
+        with patch.object(svc, '_fire'):
+            svc.check()
+
+        assert svc._recent_fired is True
+
+    def test_check_updates_last_salience_ts_after_recent_fire(self, db, store):
+        """After check() fires 'recent', _last_salience_ts is set to a recent time."""
+        from unittest.mock import patch
+        from services.dmn_service import FIRST_IDLE_S
+        from services.time_utils import utc_now
+
+        svc = _make_service(db, store)
+        svc._last_turn_ts = utc_now() - timedelta(seconds=FIRST_IDLE_S + 60)
+        svc._recent_fired = False
+        svc._last_salience_ts = None
+
+        with patch.object(svc, '_fire'):
+            svc.check()
+
+        assert svc._last_salience_ts is not None
+        age_s = (utc_now() - svc._last_salience_ts).total_seconds()
+        assert age_s < 2
 
 
-# ---------------------------------------------------------------------------
-# TestDMNGates
-# ---------------------------------------------------------------------------
+# ── TestRateLimit ──────────────────────────────────────────────────────────────
 
-class TestDMNGates:
+class TestRateLimit:
+    """_rate_limit_exceeded() — uses the real MemoryStore ZSET."""
 
-    def test_quiet_hours_prevents_firing(self, db, store):
-        """_fire must skip generation when the local hour falls in the quiet window."""
-        from services.database_service import get_shared_db_service
-        from zoneinfo import ZoneInfo
+    def test_returns_false_when_no_deliveries(self, db, store):
+        """No entries in the ZSET → rate limit not exceeded."""
+        svc = _make_service(db, store)
 
-        svc = _make_service(get_shared_db_service(), store)
+        assert svc._rate_limit_exceeded() is False
 
-        # Build a UTC time whose local equivalent in UTC+0 is 2 AM (inside quiet hours)
-        quiet_utc = datetime(2026, 1, 15, 2, 0, 0, tzinfo=timezone.utc)
-
-        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
-             patch('services.dmn_service.utc_now', return_value=quiet_utc), \
-             patch.object(svc, '_gather_context') as mock_ctx, \
-             patch.object(svc, '_proactive_generate') as mock_gen:
-            svc._fire('recent')
-
-        # Neither context gathering nor generation should be attempted
-        mock_ctx.assert_not_called()
-        mock_gen.assert_not_called()
-
-    def test_rate_limit_prevents_firing(self, db, store):
-        """_fire must skip generation once MAX_PROACTIVE_PER_DAY deliveries have been recorded."""
-        from services.database_service import get_shared_db_service
+    def test_returns_false_below_max(self, db, store):
+        """Fewer than MAX_PROACTIVE_PER_DAY recent entries → not exceeded."""
         from services.dmn_service import MAX_PROACTIVE_PER_DAY, _DELIVERY_ZSET
 
-        svc = _make_service(get_shared_db_service(), store)
+        svc = _make_service(db, store)
+        now_ts = time.time()
+        for i in range(MAX_PROACTIVE_PER_DAY - 1):
+            store.zadd(_DELIVERY_ZSET, {f'entry-{i}': now_ts - i})
 
-        # Pre-fill the delivery ZSET with MAX_PROACTIVE_PER_DAY entries
+        assert svc._rate_limit_exceeded() is False
+
+    def test_returns_true_at_max(self, db, store):
+        """Exactly MAX_PROACTIVE_PER_DAY recent entries → rate limit exceeded."""
+        from services.dmn_service import MAX_PROACTIVE_PER_DAY, _DELIVERY_ZSET
+
+        svc = _make_service(db, store)
         now_ts = time.time()
         for i in range(MAX_PROACTIVE_PER_DAY):
             store.zadd(_DELIVERY_ZSET, {f'entry-{i}': now_ts - i})
 
-        with patch.object(svc, '_in_quiet_hours', return_value=False), \
-             patch.object(svc, '_gather_context') as mock_ctx, \
-             patch.object(svc, '_proactive_generate') as mock_gen:
-            svc._fire('recent')
+        assert svc._rate_limit_exceeded() is True
 
-        mock_ctx.assert_not_called()
-        mock_gen.assert_not_called()
-
-    def test_rate_limit_does_not_block_under_limit(self, db, store):
-        """_fire must proceed when fewer than MAX_PROACTIVE_PER_DAY deliveries exist."""
-        from services.database_service import get_shared_db_service
+    def test_returns_true_above_max(self, db, store):
+        """More than MAX_PROACTIVE_PER_DAY recent entries → rate limit exceeded."""
         from services.dmn_service import MAX_PROACTIVE_PER_DAY, _DELIVERY_ZSET
 
-        svc = _make_service(get_shared_db_service(), store)
-
-        # Pre-fill with fewer than the limit
+        svc = _make_service(db, store)
         now_ts = time.time()
-        entries_to_add = MAX_PROACTIVE_PER_DAY - 2
-        for i in range(entries_to_add):
+        for i in range(MAX_PROACTIVE_PER_DAY + 2):
             store.zadd(_DELIVERY_ZSET, {f'entry-{i}': now_ts - i})
 
-        with patch.object(svc, '_in_quiet_hours', return_value=False), \
-             patch.object(svc, '_gather_context', return_value='some context') as mock_ctx, \
-             patch.object(svc, '_proactive_generate', return_value=False), \
-             patch.object(svc, '_log_cycle'):
-            svc._fire('recent')
-            # _gather_context was reached, meaning the rate-limit gate passed
-            mock_ctx.assert_called_once_with('recent')
+        assert svc._rate_limit_exceeded() is True
+
+    def test_stale_entries_outside_24h_do_not_count(self, db, store):
+        """Deliveries older than 24 hours are pruned and do not count against the limit."""
+        from services.dmn_service import MAX_PROACTIVE_PER_DAY, _DELIVERY_ZSET, _24H_S
+
+        svc = _make_service(db, store)
+        # Insert exactly MAX entries, all more than 24 h ago
+        old_ts = time.time() - _24H_S - 3600
+        for i in range(MAX_PROACTIVE_PER_DAY):
+            store.zadd(_DELIVERY_ZSET, {f'old-{i}': old_ts - i})
+
+        # _rate_limit_exceeded() prunes stale entries; count should drop to 0
+        assert svc._rate_limit_exceeded() is False
 
 
-# ---------------------------------------------------------------------------
-# TestDMNContextGathering
-# ---------------------------------------------------------------------------
+# ── TestInQuietHours ───────────────────────────────────────────────────────────
 
-class TestDMNContextGathering:
+class TestInQuietHours:
+    """_in_quiet_hours() — returns True during 23:00–08:00 local."""
 
-    def test_recent_context_with_episodes(self, db, store):
-        """_gather_recent_context returns numbered lines for each episode row."""
-        from services.database_service import get_shared_db_service
-        from services.time_utils import utc_now
+    def test_returns_true_at_midnight(self, db, store):
+        """Hour 0 (midnight) is in the quiet window."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
 
-        ts = utc_now().isoformat()
-        # intent, context, emotion are JSONB columns — must be valid JSON strings.
-        # action, outcome, gist, topic are plain TEXT; salience is a 1-10 integer.
-        db.execute(
-            "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ('ep-1', '"query"', '{}', 'searched_weather', '"neutral"', 'success',
-             'User asked about weather', 1, 'general', ts),
-        )
-        db.execute(
-            "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ('ep-2', '"discuss"', '{}', '', '"neutral"', 'success',
-             'Discussed meal plan', 1, 'general', ts),
-        )
-        db.commit()
+        svc = _make_service(db, store)
+        midnight_utc = datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc)
 
-        svc = _make_service(get_shared_db_service(), store)
-        result = svc._gather_recent_context()
-
-        assert result != ''
-        # Both gists must appear
-        assert 'User asked about weather' in result
-        assert 'Discussed meal plan' in result
-        # Action should appear in brackets
-        assert '[searched_weather]' in result
-        # Lines are numbered
-        assert '1.' in result
-        assert '2.' in result
-
-    def test_recent_context_empty_table(self, db, store):
-        """_gather_recent_context returns an empty string when the episodes table is empty."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-        result = svc._gather_recent_context()
-
-        assert result == ''
-
-    def test_salience_context_with_data(self, db, store):
-        """_gather_salience_context includes knowledge, goals, and tasks sections."""
-        from services.database_service import get_shared_db_service
-        from services.time_utils import utc_now
-
-        ts = utc_now().isoformat()
-
-        # Insert a concept into knowledge — kind, entity, key, created_at, updated_at are NOT NULL
-        db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, created_at, updated_at) "
-            "VALUES ('concept', 'user', ?, ?, 0.9, ?, ?)",
-            ('favourite_language', 'Python', ts, ts),
-        )
-        # Insert an active goal — description, type, status, salience, confidence are NOT NULL
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES (?, ?, 'emergent', 'active', 0.8, 0.9)",
-            ('g-1', 'Learn more about astronomy'),
-        )
-        db.commit()
-
-        svc = _make_service(get_shared_db_service(), store)
-        result = svc._gather_salience_context()
-
-        assert 'favourite_language' in result
-        assert 'Python' in result
-        assert 'Learn more about astronomy' in result
-        assert 'High-priority memories:' in result
-        assert 'Active goals:' in result
-
-    def test_salience_context_empty_tables(self, db, store):
-        """_gather_salience_context returns an empty string when all tables are empty."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-        result = svc._gather_salience_context()
-
-        assert result == ''
-
-
-# ---------------------------------------------------------------------------
-# TestDMNBuildPrompt
-# ---------------------------------------------------------------------------
-
-class TestDMNBuildPrompt:
-
-    def test_recent_prompt_contains_context(self, db, store):
-        """The 'recent' prompt embeds the context text and references recent episodes."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-        context = 'Episode alpha\nEpisode beta'
-        prompt = svc._build_prompt('recent', context)
-
-        assert context in prompt
-        assert 'Recent episodes:' in prompt
-        assert 'DMN_NO_ACTION' in prompt
-
-    def test_salience_prompt_contains_context(self, db, store):
-        """The 'salience' prompt embeds the context text and references high-priority memories."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-        context = 'High-priority memories:\n- key: value'
-        prompt = svc._build_prompt('salience', context)
-
-        assert context in prompt
-        assert 'high-priority memories' in prompt.lower()
-        assert 'DMN_NO_ACTION' in prompt
-
-
-# ---------------------------------------------------------------------------
-# TestDMNProactiveGenerate
-# ---------------------------------------------------------------------------
-
-class TestDMNProactiveGenerate:
-
-    def _base_configs(self):
-        return {
-            'cortex': {
-                'config': {'model': 'test'},
-                'prompt_map': {},
-            }
-        }
-
-    def test_proactive_generate_returns_false_on_no_action(self, db, store):
-        """_proactive_generate returns False when the LLM responds with DMN_NO_ACTION."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-
-        with patch('workers.digest_singletons.load_configs', return_value=self._base_configs()), \
-             patch('workers.digest_worker.unified_generate',
-                   return_value=({'response': 'DMN_NO_ACTION'}, {})), \
-             patch('services.output_service.OutputService') as mock_output_cls:
-            result = svc._proactive_generate('recent', 'some context')
-
-        assert result is False
-        mock_output_cls.return_value.enqueue_text.assert_not_called()
-
-    def test_proactive_generate_returns_true_on_output(self, db, store):
-        """_proactive_generate returns True and enqueues output when the LLM produces a response."""
-        from services.database_service import get_shared_db_service
-
-        svc = _make_service(get_shared_db_service(), store)
-
-        response_data = {
-            'response': 'Hello, here is your reminder about the meeting tomorrow.',
-            'confidence': 0.85,
-            'generation_time': 1.2,
-        }
-
-        with patch('workers.digest_singletons.load_configs', return_value=self._base_configs()), \
-             patch('workers.digest_worker.unified_generate',
-                   return_value=(response_data, {})), \
-             patch('services.output_service.OutputService') as mock_output_cls:
-            mock_output_instance = MagicMock()
-            mock_output_cls.return_value = mock_output_instance
-            result = svc._proactive_generate('recent', 'some context')
+        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
+             patch('services.dmn_service.utc_now', return_value=midnight_utc):
+            result = svc._in_quiet_hours()
 
         assert result is True
-        mock_output_instance.enqueue_text.assert_called_once()
-        call_kwargs = mock_output_instance.enqueue_text.call_args
-        assert call_kwargs.kwargs.get('mode') == 'DMN' or call_kwargs.args[2] == 'DMN' \
-            or 'DMN' in str(call_kwargs)
 
-    def test_proactive_generate_catches_exception(self, db, store):
-        """_proactive_generate returns False and does not re-raise when unified_generate raises."""
-        from services.database_service import get_shared_db_service
+    def test_returns_true_at_2am(self, db, store):
+        """Hour 2 is inside the quiet window."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
 
-        svc = _make_service(get_shared_db_service(), store)
+        svc = _make_service(db, store)
+        two_am = datetime(2026, 4, 10, 2, 0, 0, tzinfo=timezone.utc)
 
-        with patch('workers.digest_singletons.load_configs', side_effect=RuntimeError('LLM down')):
-            result = svc._proactive_generate('recent', 'some context')
+        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
+             patch('services.dmn_service.utc_now', return_value=two_am):
+            result = svc._in_quiet_hours()
+
+        assert result is True
+
+    def test_returns_true_at_23h(self, db, store):
+        """Hour 23 (11 PM) is the start of the quiet window."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
+
+        svc = _make_service(db, store)
+        eleven_pm = datetime(2026, 4, 10, 23, 0, 0, tzinfo=timezone.utc)
+
+        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
+             patch('services.dmn_service.utc_now', return_value=eleven_pm):
+            result = svc._in_quiet_hours()
+
+        assert result is True
+
+    def test_returns_false_at_noon(self, db, store):
+        """Hour 12 (noon) is outside the quiet window."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
+
+        svc = _make_service(db, store)
+        noon = datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
+             patch('services.dmn_service.utc_now', return_value=noon):
+            result = svc._in_quiet_hours()
 
         assert result is False
 
+    def test_returns_false_at_8am(self, db, store):
+        """Hour 8 (8 AM) is the first active hour — not in the quiet window."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
 
-# ---------------------------------------------------------------------------
-# TestDMNLogCycle
-# ---------------------------------------------------------------------------
+        svc = _make_service(db, store)
+        eight_am = datetime(2026, 4, 10, 8, 0, 0, tzinfo=timezone.utc)
 
-class TestDMNLogCycle:
+        with patch('services.dmn_service.get_user_tz', return_value=ZoneInfo('UTC')), \
+             patch('services.dmn_service.utc_now', return_value=eight_am):
+            result = svc._in_quiet_hours()
 
-    def test_log_cycle_writes_to_interaction_log(self, db, store):
-        """_log_cycle persists a dmn_fired event row in the interaction_log table."""
-        from services.database_service import get_shared_db_service
+        assert result is False
 
-        svc = _make_service(get_shared_db_service(), store)
+    def test_returns_true_on_exception(self, db, store):
+        """When get_user_tz raises, the method defaults to True (safe/conservative)."""
+        from unittest.mock import patch
+
+        svc = _make_service(db, store)
+
+        with patch('services.dmn_service.get_user_tz', side_effect=RuntimeError('tz error')):
+            result = svc._in_quiet_hours()
+
+        assert result is True
+
+
+# ── TestLogCycle ───────────────────────────────────────────────────────────────
+
+class TestLogCycle:
+    """_log_cycle() — writes a dmn_fired event to the interaction_log table."""
+
+    def test_row_inserted_into_interaction_log(self, db, store):
+        """A dmn_fired row exists in interaction_log after _log_cycle() is called."""
+        svc = _make_service(db, store)
         svc._log_cycle('recent', produced_output=True)
 
         row = db.execute(
@@ -400,10 +856,158 @@ class TestDMNLogCycle:
             "WHERE event_type = 'dmn_fired' LIMIT 1"
         ).fetchone()
 
-        assert row is not None, "Expected a dmn_fired row in interaction_log"
-        event_type, payload_json, source = row
-        assert event_type == 'dmn_fired'
-        assert source == 'dmn'
-        payload = json.loads(payload_json)
-        assert payload['mode'] == 'recent'
+        assert row is not None
+
+    def test_log_row_has_correct_event_type(self, db, store):
+        """The inserted row has event_type = 'dmn_fired'."""
+        svc = _make_service(db, store)
+        svc._log_cycle('salience', produced_output=False)
+
+        row = db.execute(
+            "SELECT event_type FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()
+
+        assert row[0] == 'dmn_fired'
+
+    def test_log_row_source_is_dmn(self, db, store):
+        """The source column in the log row is 'dmn'."""
+        svc = _make_service(db, store)
+        svc._log_cycle('recent', produced_output=False)
+
+        row = db.execute(
+            "SELECT source FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()
+
+        assert row[0] == 'dmn'
+
+    def test_log_payload_contains_mode(self, db, store):
+        """The payload JSON contains the correct mode value."""
+        svc = _make_service(db, store)
+        svc._log_cycle('salience', produced_output=True)
+
+        row = db.execute(
+            "SELECT payload FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()
+
+        payload = json.loads(row[0])
+        assert payload['mode'] == 'salience'
+
+    def test_log_payload_produced_output_true(self, db, store):
+        """produced_output=True is persisted in the payload."""
+        svc = _make_service(db, store)
+        svc._log_cycle('recent', produced_output=True)
+
+        row = db.execute(
+            "SELECT payload FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()
+
+        payload = json.loads(row[0])
         assert payload['produced_output'] is True
+
+    def test_log_payload_produced_output_false(self, db, store):
+        """produced_output=False is persisted in the payload."""
+        svc = _make_service(db, store)
+        svc._log_cycle('recent', produced_output=False)
+
+        row = db.execute(
+            "SELECT payload FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()
+
+        payload = json.loads(row[0])
+        assert payload['produced_output'] is False
+
+    def test_multiple_calls_insert_multiple_rows(self, db, store):
+        """Each call to _log_cycle() produces a distinct row (audit trail is append-only)."""
+        svc = _make_service(db, store)
+        svc._log_cycle('recent', produced_output=False)
+        svc._log_cycle('salience', produced_output=True)
+
+        count = db.execute(
+            "SELECT COUNT(*) FROM interaction_log WHERE event_type = 'dmn_fired'"
+        ).fetchone()[0]
+
+        assert count == 2
+
+
+# ── TestDMNMessageProcessorConstants ──────────────────────────────────────────
+
+class TestDMNMessageProcessorConstants:
+    """DMNMessageProcessor — verify overridden limits and passthrough prompt."""
+
+    def test_max_iterations_is_15(self):
+        """MAX_ITERATIONS must be 15 (stricter than normal MessageProcessor)."""
+        from services.dmn_message_processor import DMNMessageProcessor
+
+        assert DMNMessageProcessor.MAX_ITERATIONS == 15
+
+    def test_max_timeout_is_300(self):
+        """MAX_TIMEOUT must be 300 seconds (5 minutes)."""
+        from services.dmn_message_processor import DMNMessageProcessor
+
+        assert DMNMessageProcessor.MAX_TIMEOUT == 300
+
+    def test_assemble_user_prompt_returns_message_unchanged(self, db, store):
+        """_assemble_user_prompt() passes the pre-built context through unmodified."""
+        from unittest.mock import patch
+        from services.dmn_message_processor import DMNMessageProcessor
+
+        # DMNMessageProcessor inherits from MessageProcessor which uses db+store
+        # singletons at call time; we only need a constructed instance here.
+        with patch('services.database_service.get_shared_db_service'), \
+             patch('services.memory_client.MemoryClientService.create_connection'):
+            proc = DMNMessageProcessor()
+
+        context = "Recent episodes:\n1. [2026-04-10 14:30] salience:7\n   User asked about weather"
+        result = proc._assemble_user_prompt(context, 'general')
+
+        assert result == context
+
+    def test_assemble_user_prompt_ignores_metadata(self, db, store):
+        """_assemble_user_prompt() ignores metadata kwarg and still returns context."""
+        from unittest.mock import patch
+        from services.dmn_message_processor import DMNMessageProcessor
+
+        with patch('services.database_service.get_shared_db_service'), \
+             patch('services.memory_client.MemoryClientService.create_connection'):
+            proc = DMNMessageProcessor()
+
+        context = 'some context string'
+        result = proc._assemble_user_prompt(context, 'general', metadata={'key': 'val'})
+
+        assert result == context
+
+
+# ── TestLoadSystemPrompt ───────────────────────────────────────────────────────
+
+class TestLoadSystemPrompt:
+    """_load_system_prompt() — disk load with fallback on error."""
+
+    def test_loads_non_empty_string_from_disk(self):
+        """The DMN system prompt loads from disk and returns a non-empty string."""
+        from services.dmn_message_processor import _load_system_prompt
+
+        result = _load_system_prompt()
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_prompt_contains_dmn_no_action_sentinel(self):
+        """The loaded prompt instructs the model to emit DMN_NO_ACTION when idle."""
+        from services.dmn_message_processor import _load_system_prompt
+
+        result = _load_system_prompt()
+
+        assert 'DMN_NO_ACTION' in result
+
+    def test_returns_fallback_on_missing_file(self, tmp_path):
+        """When the prompt file is missing, a non-empty fallback string is returned."""
+        from unittest.mock import patch
+        from services.dmn_message_processor import _load_system_prompt
+
+        missing = str(tmp_path / 'does_not_exist.md')
+        with patch('services.dmn_message_processor._PROMPT_PATH', missing):
+            result = _load_system_prompt()
+
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert 'DMN_NO_ACTION' in result
