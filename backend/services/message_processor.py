@@ -203,6 +203,20 @@ class MessageProcessor:
             llm_response, generation_time, tool_loop_ran=(iteration > 0 or timed_out)
         )
 
+    def _assemble_user_prompt(self, message, channel, metadata=None):
+        """Build the user prompt with world state + episodic recall.
+
+        Default implementation runs UserPromptAssemblyService. Subclasses
+        that don't need prompt assembly (e.g. GoalPursuitProcessor) override
+        to return the message unchanged.
+        """
+        from services.user_prompt_assembly_service import UserPromptAssemblyService
+        return UserPromptAssemblyService().build(
+            user_message=message,
+            channel=channel,
+            metadata=metadata,
+        ).to_provider()
+
     def _compound_tools(self, transcript_ids, base_tools):
         """Merge base tools with find_tools results from any of the given transcript IDs."""
         from services.tool_call_service import ToolCallService

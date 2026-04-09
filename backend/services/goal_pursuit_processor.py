@@ -41,6 +41,10 @@ class GoalPursuitProcessor(MessageProcessor):
     MAX_ITERATIONS = 50
     MAX_TIMEOUT = 7200  # 2 hours
 
+    def _assemble_user_prompt(self, message, channel, metadata=None):
+        """Goal pursuits pass the raw goal string — no prompt assembly needed."""
+        return message
+
     def process(self, goal: str, pursuit_id: str) -> dict:
         """Execute the goal in an isolated channel.
 

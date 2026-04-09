@@ -50,16 +50,11 @@ class ScheduledMessageProcessor(MessageProcessor):
         """
         from services.tool_schema_service import get_skill_schemas
         from services.innate_skills.registry import ALL_SKILL_NAMES
-        from services.user_prompt_assembly_service import UserPromptAssemblyService
 
         system_prompt = _load_system_prompt()
         channel = f'scheduled:{item_id}'
 
-        # Build user prompt with world state + episodic recall (same as UserMessageProcessor)
-        user_prompt = UserPromptAssemblyService().build(
-            user_message=message,
-            channel=channel,
-        ).to_provider()
+        user_prompt = self._assemble_user_prompt(message, channel)
 
         tool_names = [s for s in ALL_SKILL_NAMES if s not in _EXCLUDED_SKILLS]
         tools = get_skill_schemas(tool_names)

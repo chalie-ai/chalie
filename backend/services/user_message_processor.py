@@ -51,18 +51,13 @@ class UserMessageProcessor(MessageProcessor):
             dict with keys: response, channel, generation_time, model, provider,
                             tokens_input, tokens_output, stop_reason
         """
-        from services.user_prompt_assembly_service import UserPromptAssemblyService
         from services.system_prompt_assembly_service import SystemPromptAssemblyService
 
         # 1. Channel from metadata (default: 'user')
         channel = (metadata or {}).get('channel', 'user')
 
         # 2. Build user prompt (per-turn, volatile)
-        user_prompt = UserPromptAssemblyService().build(
-            user_message=prompt,
-            channel=channel,
-            metadata=metadata,
-        ).to_provider()
+        user_prompt = self._assemble_user_prompt(prompt, channel, metadata)
 
         # 3. Build system prompt (stable, cacheable)
         system_prompt = SystemPromptAssemblyService().build(
