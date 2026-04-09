@@ -785,6 +785,7 @@ CREATE TABLE IF NOT EXISTS compactions (
     compacted_up_to_id  INTEGER NOT NULL,
     token_count         INTEGER DEFAULT 0,
     updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    overflow_content    TEXT,
     FOREIGN KEY (compacted_up_to_id) REFERENCES transcript(id)
 );
 
@@ -800,6 +801,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     ephemeral     INTEGER NOT NULL DEFAULT 0,
+    tool_call_id  TEXT,
     FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 

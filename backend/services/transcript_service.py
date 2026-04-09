@@ -240,7 +240,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
 
         with db.connection() as conn:
             cursor = conn.cursor()
-            if since_id:
+            if since_id is not None:
                 cursor.execute(
                     """
                     SELECT id, role, content, tool_call_id, tool_name, internal, created_at
@@ -279,7 +279,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
         ]
 
         # Reverse if fetched DESC (no since_id) so oldest is first
-        if not since_id:
+        if since_id is None:
             results.reverse()
 
         return results

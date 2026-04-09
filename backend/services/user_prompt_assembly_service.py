@@ -11,15 +11,17 @@ User Prompt Assembly Service — builds the per-turn user message.
 
 Assembles the full user-facing message sent to the LLM on each turn:
   1. World state header (time, calendar, weather)
-  2. Previous messages (transcript with interleaved tool_calls and memory tags)
-  3. Compaction summary (when older turns have been compacted)
-  4. Current turn: episodic auto-recall + user message
+  2. System awareness (degradation signals)
+  3. Current turn: episodic auto-recall + user message + file tags + nudge
+
+Conversation history is NOT included here. It is constructed directly from
+the database by context_window_service.build_messages() and injected into
+the messages array by MessageProcessor on every iteration.
 
 This content changes every turn and is never cached.
 """
 
 import logging
-from typing import List, Dict
 
 from services.prompt_assembly_contract import PromptAssemblyContract
 
@@ -59,17 +61,12 @@ class UserPromptAssemblyService(PromptAssemblyContract):
                 'tables, bullet lists, links, or structured formatting. Write as you would speak.'
             )
 
-        # 2. Previous messages (compaction + transcript + tool calls)
-        conversation = self._get_conversation_context(channel)
-        if conversation:
-            parts.append(conversation)
-
-        # 3. System awareness (degradation signals — strong section, before current turn)
+        # 2. System awareness (degradation signals — strong section, before current turn)
         self_awareness = self._get_self_awareness()
         if self_awareness:
             parts.append(f"## System Awareness\n{self_awareness}")
 
-        # 4. Current turn (includes file tags and nudge for this turn)
+        # 3. Current turn (includes file tags and nudge for this turn)
         file_tags = (metadata or {}).get('file_tags', [])
         nudge_tag = (metadata or {}).get('nudge_tag')
         current_turn = self._build_current_turn(user_message, channel, file_tags, nudge_tag)
@@ -91,88 +88,6 @@ class UserPromptAssemblyService(PromptAssemblyContract):
         except Exception as e:
             logger.info(f"[USER PROMPT] World state unavailable: {e}")
             return ''
-
-    def _get_conversation_context(self, channel: str) -> str:
-        """Build conversation context from compaction + recent transcript + tool calls."""
-        try:
-            from services import compaction_service, transcript_service
-
-            compaction = compaction_service.get_compaction(channel)
-            watermark = compaction['compacted_up_to_id'] if compaction else 0
-
-            entries = transcript_service.get_recent(channel, limit=50, since_id=watermark)
-
-            parts = []
-
-            if compaction and compaction.get('compacted_text'):
-                parts.append(f"## Context\n{compaction['compacted_text']}")
-
-            if entries:
-                tool_calls = self._get_tool_calls_for_entries(entries)
-                lines = ["## Previous Messages"]
-                for entry in entries:
-                    role = 'User' if entry.get('role') == 'user' else 'System'
-                    created = str(entry.get('created_at', ''))[:16]
-                    content = entry.get('content', '')
-                    lines.append(f"[{created}] {role}: {content}")
-
-                    entry_id = entry.get('id')
-                    if entry_id and entry_id in tool_calls:
-                        for tc in tool_calls[entry_id]:
-                            tool_name = tc.get('tool_name', '')
-                            result = tc.get('result', '')
-                            if tool_name == 'memory' and result:
-                                lines.append(f"[memory] {result}")
-                            elif tool_name in ('file', 'nudge') and result:
-                                lines.append(result)
-                            elif result:
-                                lines.append(f"[tool:{tool_name}] {result}")
-
-                parts.append('\n'.join(lines))
-
-            if not parts:
-                return ''
-
-            return '\n\n'.join(parts)
-
-        except Exception as e:
-            logger.info(f"[USER PROMPT] Conversation context failed: {e}")
-            return ''
-
-    def _get_tool_calls_for_entries(self, entries: list) -> Dict[int, List[dict]]:
-        """Fetch tool_calls rows for the given transcript entries, grouped by transcript_id."""
-        try:
-            from services.database_service import get_shared_db_service
-
-            entry_ids = [e.get('id') for e in entries if e.get('id') is not None]
-            if not entry_ids:
-                return {}
-
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                placeholders = ','.join('?' for _ in entry_ids)
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"SELECT transcript_id, tool_name, result FROM tool_calls "
-                    f"WHERE transcript_id IN ({placeholders}) AND ephemeral = 0 ORDER BY created_at",
-                    entry_ids,
-                )
-                rows = cursor.fetchall()
-
-            grouped: Dict[int, List[dict]] = {}
-            for row in rows:
-                tid = row[0]
-                if tid not in grouped:
-                    grouped[tid] = []
-                grouped[tid].append({
-                    'tool_name': row[1],
-                    'result': row[2],
-                })
-            return grouped
-
-        except Exception as e:
-            logger.info(f"[USER PROMPT] Tool calls fetch failed: {e}")
-            return {}
 
     def _build_current_turn(self, user_message: str, channel: str,
                             file_tags: list = None,

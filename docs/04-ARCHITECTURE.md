@@ -82,15 +82,16 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Message Processing
-- **`user_message_processor.py`** — Entry point for all user-initiated messages. Builds user + system prompts, applies voice-mode tool filtering, sends via `MessageProcessor.send()`, parks ACT tool calls (task-ddffe1), and returns a normalized result dict. Singleton.
-- **`message_processor.py`** — Base class for all message processing pipelines. Handles transcript persistence (user turn in, assistant turn out) and LLM invocation via `Providers`.
+- **`user_message_processor.py`** — Entry point for all user-initiated messages. Builds user + system prompts, applies voice-mode tool filtering, sends via `MessageProcessor.send()` (which handles the full DB-backed tool loop), and returns a normalized result dict. Singleton.
+- **`message_processor.py`** — Base class for all message processing pipelines. Handles transcript persistence (every turn stored to DB immediately) and LLM invocation via `Providers`. The context window is always reconstructed from the database via `context_window_service.build_messages()` — nothing accumulates in memory. Compaction triggers at 80% of the provider's context limit.
+- **`context_window_service.py`** — DB-backed context window construction. `build_messages(channel)` always reconstructs the full LLM messages array from the transcript and tool_calls tables. `check_and_compact(channel, context_limit, job, pending_content, is_tool_triggered)` triggers compaction at 80% of the context limit and handles overflow: if a pending tool result would exceed the hard limit, it compacts first and stores the tool result as `overflow_content` in the compaction record. Overflow content is placed *before* the compacted summary in the reconstructed messages so the compacted text receives higher recency/attention weight. Compaction always uses the same provider job as the conversation.
 - **`providers.py`** — Thin singleton gateway wrapping provider resolution and LLM send. Resolves the correct LLM provider for a given job (e.g. `frontal-cortex-unified`), sends messages, returns a raw `LLMResponse`. No response parsing.
-- **`user_prompt_assembly_service.py`** — Builds the per-turn user message: world state header, conversation context (compaction + recent transcript + tool calls), system awareness, and current turn (episodic auto-recall + user message + file/nudge tags). Changes every turn; not cached.
+- **`user_prompt_assembly_service.py`** — Builds the per-turn user message: world state header, voice-mode guard, system awareness, and current turn (episodic auto-recall + user message + file/nudge tags). Conversation history is **not** assembled here — it is handled by `context_window_service.build_messages()`. Changes every turn; not cached.
 - **`system_prompt_assembly_service.py`** — Builds the stable, cacheable system prompt: identity modulation, adaptive directives, and the frontal-cortex-unified template. Designed for provider-side prompt caching. Previously an empty shell — now fully implemented.
 
 #### Memory System
 - **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
-- **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `compactions` table
+- **`compaction_service.py`** — Incremental LLM-powered summarization used by non-tool-loop paths (background workers, goal pursuit). The primary compaction path for interactive conversations runs through `context_window_service`. `get_compaction()` returns the stored compaction record including the `overflow_content` field.
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`knowledge_service.py`** — Unified knowledge store (traits, concepts, procedures, relationships) with RRF hybrid search (exact + FTS5 porter-stemmed + vector KNN), NLTK stop-word filtering on FTS queries, doc2query expansion at write time, decay management, and prompt injection
 - **`doc2query_service.py`** — Generates potential search queries for knowledge entries at write time using `doc2query/msmarco-t5-small-v1` (77M param T5 via ONNX Runtime directly — no PyTorch/optimum dependency); stored in `search_queries` column and indexed in FTS5 for improved recall; ONNX session unloads after 10 minutes of idle to reclaim ~600MB
@@ -114,7 +115,7 @@ frontend/
 #### Tool Loop & Dispatch
 - **`act_dispatcher_service.py`** — Routes tool calls to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
-- **`tool_call_service.py`** — Unified API for all `tool_calls` table writes and reads. Methods: `store()`, `store_batch()`, `get_by_transcript()`, `get_by_timerange()`, `get_find_tools_results()`. `ephemeral` flag controls visibility in Previous Turns (ephemeral records — tool loop results, steers — are excluded; non-ephemeral — file tags, nudges — are included).
+- **`tool_call_service.py`** — Unified API for all `tool_calls` table writes and reads. Methods: `store()`, `store_batch()`, `get_by_transcript()`, `get_by_transcript_ids()`, `get_by_timerange()`, `get_find_tools_results()`. `store()` and `store_batch()` accept a `tool_call_id` parameter (the LLM-generated call ID from the API response) used to reconstruct tool call lists when rebuilding context. `get_by_transcript_ids()` fetches tool calls grouped by transcript ID for efficient batch loading during context reconstruction. `ephemeral` flag controls visibility in Previous Turns (ephemeral records — tool loop results, steers — are excluded; non-ephemeral — file tags, nudges — are included).
 - **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass that runs a single goal string in a daemon thread with higher limits (50 iterations, 2h timeout); channel-isolated (`goal_pursuit:{uuid}`); surfaces result via `OutputService.enqueue_proactive()`; uses `review_tool_calls` skill to recall prior work if context was compacted
 
 #### Constants & Registries
@@ -201,17 +202,26 @@ Built-in cognitive skills always available to the LLM:
   → [WebSocket handler] spawns daemon thread
     → [UserMessageProcessor.process()]
       ├─ UserPromptAssemblyService.build()
-      │    (world state, transcript, compaction, episodic recall)
+      │    (world state, voice guard, system awareness, episodic recall)
+      │    NOTE: conversation history NOT assembled here
       ├─ SystemPromptAssemblyService.build()
       │    (identity, directives, frontal-cortex-unified template)
       ├─ MessageProcessor.send()
       │    ├─ transcript.append(channel, 'user', ...)
+      │    ├─ context_window_service.check_and_compact() [pre-call]
+      │    ├─ context_window_service.build_messages() → messages array
+      │    │    (always reconstructed from DB — compaction + transcript + tool_calls)
+      │    ├─ Providers.send_messages() → first LLM call
       │    ├─ Tool loop (standard tool-calling protocol):
-      │    │    ├─ Providers.send() → LLM call
-      │    │    ├─ if tool_calls → ActDispatcherService.execute()
-      │    │    │    → ToolCallService.store() (ephemeral=True)
-      │    │    │    → append tool_result messages
-      │    │    │    → per-iteration synthesis → WebSocket (ephemeral)
+      │    │    ├─ transcript.append(channel, 'assistant', ...)
+      │    │    ├─ ActDispatcherService.dispatch_action() per tool call
+      │    │    ├─ context_window_service.check_and_compact()
+      │    │    │    (overflow check: compact before storing if result would exceed limit)
+      │    │    ├─ transcript.append(channel, 'tool', result)
+      │    │    ├─ ToolCallService.store(..., tool_call_id=tc['id'])
+      │    │    ├─ context_window_service.check_and_compact() [post-iter]
+      │    │    ├─ context_window_service.build_messages() → rebuilt array
+      │    │    ├─ Providers.send_messages() → next LLM call
       │    │    └─ repeat until no tool_calls or cap (30 iter / 15 min)
       │    └─ transcript.append(channel, 'assistant', final response)
       └─ OutputService.enqueue_text() → pub/sub → WebSocket → client
@@ -263,8 +273,8 @@ Built-in cognitive skills always available to the LLM:
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; budget-aware filling; `UserPromptAssemblyService` reads compaction summary + up to 50 recent entries above the compaction watermark
-- **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization of older transcript entries; preserves facts/decisions/preferences, discards conversation flow; keyed by `channel`
+- **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; `context_window_service.build_messages()` reads all entries above the compaction watermark on every LLM call (no in-memory accumulation)
+- **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization triggered at 80% of the provider's context limit; stores compacted text, watermark ID, and `overflow_content` (tool result stored when it would exceed the hard limit); keyed by `channel`; compaction always uses the same provider job as the conversation
 - **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries; key: `gist:{channel}`
 - **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
 - **Episodes** (SQLite + sqlite-vec) — Transcript-linked narrative units with power-law retrieval_weight decay and storage_strength that never decreases; created by rolling transcript trigger (id % 25); consolidate into "super episodes" referencing source episodes

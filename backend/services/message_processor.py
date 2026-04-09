@@ -10,10 +10,12 @@
 MessageProcessor — base class for all message processing pipelines.
 
 Handles two responsibilities:
-  1. Transcript persistence (user turn in, assistant turn out)
-  2. LLM invocation via Providers singleton, with full tool loop execution
+  1. Transcript persistence (every turn stored to DB)
+  2. LLM invocation with DB-backed context window construction
 
-Subclasses build the prompts and call self.send().
+The context window is ALWAYS reconstructed from the database. Nothing
+accumulates in memory except transcript IDs. Compaction triggers at 80%
+of the provider's context limit.
 """
 
 import time
@@ -29,22 +31,26 @@ class MessageProcessor:
     """Base class for all message processing pipelines.
 
     Handles: transcript persistence (in + out), LLM invocation via Providers,
-    and the full tool-calling while loop.
+    and the full tool-calling while loop with DB-backed context windows.
     """
 
     def send(self, user_prompt, system_prompt, channel, job='unified', tools=None,
              request_id=None, on_narration=None):
-        """Append user prompt to transcript → send to LLM → run tool loop → append response.
+        """Persist user prompt → build context from DB → send to LLM → run tool loop.
+
+        The context window is always constructed from the database on every
+        iteration. Nothing accumulates in memory. Compaction triggers at 80%
+        of the provider's context limit.
 
         Args:
-            user_prompt: Assembled user-turn content (includes context, world state, etc.)
+            user_prompt: Assembled user-turn content (world state, current message, etc.)
             system_prompt: Assembled system prompt (identity, directives, etc.)
-            channel: Transcript channel identifier (e.g. 'user', 'system', interface name)
+            channel: Transcript channel identifier (e.g. 'user', interface name)
             job: Provider job name used to resolve the LLM config
-            tools: Tool schemas to inject. If None, Providers resolves defaults.
-            request_id: Per-request UUID used for steering queue (metadata['uuid']).
-            on_narration: Optional callback(text, step) invoked when the LLM returns text
-                          alongside tool calls mid-loop. Used to keep the WebSocket alive.
+            tools: Tool schemas to inject. If None, resolved from ALL_SKILL_NAMES.
+            request_id: Per-request UUID used for the steering queue.
+            on_narration: Optional callback(text, step) invoked when the LLM returns
+                          text alongside tool calls mid-loop (keeps WebSocket alive).
 
         Returns:
             dict with keys: response, generation_time, model, provider, tokens_input,
@@ -54,11 +60,12 @@ class MessageProcessor:
         from services import transcript_service
         from services.tool_call_service import ToolCallService
         from services.act_dispatcher_service import ActDispatcherService
+        from services import context_window_service
 
-        # Persist user turn and get the transcript entry ID
+        # 1. Persist user turn
         transcript_id = transcript_service.append(channel, 'user', user_prompt)
 
-        # Resolve base tools once — these are the starting set before compounding
+        # Resolve base tools once
         if tools is None:
             from services.tool_schema_service import get_skill_schemas
             from services.innate_skills.registry import ALL_SKILL_NAMES
@@ -67,15 +74,21 @@ class MessageProcessor:
         base_tools = list(tools)
         current_tools = list(tools)
 
-        # First LLM call (single user message)
+        # Get context limit once for the lifetime of this request
+        context_limit = Providers.instance().get_context_limit(job)
+
+        # 2. Pre-call compaction check
+        context_window_service.check_and_compact(channel, context_limit, job)
+
+        # 3. Build messages from DB and make first LLM call
         start = time.time()
-        llm_response = Providers.instance().send(
-            user_prompt, system_prompt, job=job, tools=current_tools
+        messages = context_window_service.build_messages(channel)
+        llm_response = Providers.instance().send_messages(
+            system_prompt, messages, job=job, tools=current_tools
         )
         generation_time = time.time() - start
 
         if not llm_response.tool_calls:
-            # Direct response — no tool loop needed
             if llm_response.text:
                 transcript_service.append(channel, 'assistant', llm_response.text)
             return self._normalize_response(llm_response, generation_time)
@@ -84,7 +97,8 @@ class MessageProcessor:
         dispatcher = ActDispatcherService(execution_gate=False)
         tool_call_svc = ToolCallService()
 
-        messages = [{"role": "user", "content": user_prompt}]
+        # Track all transcript IDs from this turn (for find_tools compounding)
+        turn_transcript_ids = [transcript_id] if transcript_id else []
         iteration = 0
         timed_out = False
         loop_start = time.time()
@@ -93,26 +107,25 @@ class MessageProcessor:
 
         while llm_response.tool_calls and iteration < max_iter:
             if time.time() - loop_start > max_timeout:
-                logger.warning(f"[TOOL LOOP] Timeout after {iteration} iterations for channel={channel!r}")
+                logger.warning(
+                    f"[TOOL LOOP] Timeout after {iteration} iterations for channel={channel!r}"
+                )
                 timed_out = True
                 break
 
-            # Emit per-iteration synthesis text (keeps WebSocket alive during long loops)
+            # Store assistant response to transcript
+            asst_id = transcript_service.append(channel, 'assistant', llm_response.text or '')
+            if asst_id:
+                turn_transcript_ids.append(asst_id)
+
+            # Narration callback — keeps WebSocket alive during long loops
             if llm_response.text and on_narration:
                 try:
                     on_narration(llm_response.text, iteration)
                 except Exception as e:
-                    logger.debug(f"[TOOL LOOP] on_narration callback failed: {e}")
+                    logger.debug(f"[TOOL LOOP] on_narration failed: {e}")
 
-            # Store synthesis text as ephemeral tool_synthesis if present
-            if llm_response.text and transcript_id:
-                tool_call_svc.store(
-                    transcript_id, 'tool_synthesis', {}, llm_response.text,
-                    invoked_by='llm', ephemeral=True,
-                )
-
-            # Translate LLM tool_calls to dispatcher format and execute
-            dispatch_results = []
+            # Execute tools and persist results
             for tc in llm_response.tool_calls:
                 action = {'type': tc['name'], **tc.get('input', {})}
                 try:
@@ -125,79 +138,77 @@ class MessageProcessor:
                         'result': f'Dispatch failed: {e}',
                         'execution_time': 0.0,
                     }
-                dispatch_results.append(result)
+
+                result_text = str(result.get('result', ''))
                 logger.debug(f"[TOOL LOOP] {tc['name']} → status={result.get('status')}")
 
-            # Store results as ephemeral tool call records
-            if transcript_id:
-                tool_call_svc.store_batch(
-                    transcript_id, llm_response.tool_calls, dispatch_results,
-                    invoked_by='llm', ephemeral=True,
+                # Check for overflow BEFORE storing: would this result exceed the context limit?
+                # If it would, compact now (result stored in overflow_content). After compaction,
+                # the result is stored to transcript (id > watermark) and build_messages() will
+                # emit: [overflow_content, compacted_text, tool_result_entry].
+                # The overflow_content IS the tool result content placed before compacted_text.
+                context_window_service.check_and_compact(
+                    channel, context_limit, job,
+                    pending_content=result_text,
+                    is_tool_triggered=True,
                 )
 
-            # Build assistant message with tool_calls for the messages array
-            assistant_msg = {"role": "assistant", "content": llm_response.text or ""}
-            if llm_response.tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc.get('id', ''),
-                        "name": tc['name'],
-                        "input": tc.get('input', {}),
-                    }
-                    for tc in llm_response.tool_calls
-                ]
-            messages.append(assistant_msg)
+                # Store tool result to transcript
+                tool_tid = transcript_service.append(
+                    channel, 'tool', result_text,
+                    tool_call_id=tc.get('id', ''),
+                    tool_name=tc['name'],
+                )
+                if tool_tid:
+                    turn_transcript_ids.append(tool_tid)
 
-            # Build tool result messages for the messages array
-            for tc, r in zip(llm_response.tool_calls, dispatch_results):
-                result_text = str(r.get('result', ''))
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get('id', ''),
-                    "content": result_text,
-                    "name": tc['name'],  # Gemini requires this field
-                })
+                # Store to tool_calls table linked to the assistant entry
+                if asst_id:
+                    tool_call_svc.store(
+                        asst_id, tc['name'], tc.get('input', {}), result_text,
+                        invoked_by='llm', tool_call_id=tc.get('id'),
+                    )
 
             # Dynamic tool injection: compound find_tools results across iterations
-            if transcript_id:
-                current_tools = self._compound_tools(transcript_id, list(base_tools))
+            current_tools = self._compound_tools(turn_transcript_ids, list(base_tools))
 
             # Steering: drain mid-turn user messages from MemoryStore
             steer = self._drain_steering(request_id)
             if steer:
-                messages.append({"role": "user", "content": steer})
-                if transcript_id:
-                    tool_call_svc.store(
-                        transcript_id, 'user_steer', {}, steer,
-                        invoked_by='system', ephemeral=True,
-                    )
+                steer_id = transcript_service.append(channel, 'user', steer)
+                if steer_id:
+                    turn_transcript_ids.append(steer_id)
                 logger.debug(f"[TOOL LOOP] Steering injected: {steer[:60]!r}")
 
-            # Next LLM call with full growing messages array
+            # Post-iteration compaction check at 80% threshold
+            context_window_service.check_and_compact(channel, context_limit, job)
+
+            # Rebuild messages from DB and send next iteration
+            messages = context_window_service.build_messages(channel)
             llm_response = Providers.instance().send_messages(
                 system_prompt, messages, job=job, tools=current_tools
             )
             iteration += 1
 
         generation_time = time.time() - start
-        logger.info(f"[TOOL LOOP] Completed after {iteration} iteration(s) for channel={channel!r}")
+        logger.info(
+            f"[TOOL LOOP] Completed after {iteration} iteration(s) for channel={channel!r}"
+        )
 
-        # Persist assistant turn (the final text response — not stored in tool_calls)
+        # Store final assistant response
         if llm_response.text:
             transcript_service.append(channel, 'assistant', llm_response.text)
 
-        return self._normalize_response(llm_response, generation_time, tool_loop_ran=(iteration > 0 or timed_out))
+        return self._normalize_response(
+            llm_response, generation_time, tool_loop_ran=(iteration > 0 or timed_out)
+        )
 
-    def _compound_tools(self, transcript_id, base_tools):
-        """Merge base tools with all find_tools results from this transcript.
-
-        Tools list grows as find_tools discovers new capabilities — never shrinks
-        within a turn.
-        """
+    def _compound_tools(self, transcript_ids, base_tools):
+        """Merge base tools with find_tools results from any of the given transcript IDs."""
         from services.tool_call_service import ToolCallService
         from services.tool_schema_service import get_external_tool_schemas
 
-        discovered = ToolCallService().get_find_tools_results(transcript_id)
+        discovered = ToolCallService().get_find_tools_results(transcript_ids)
         if not discovered:
             return base_tools
 
@@ -223,7 +234,7 @@ class MessageProcessor:
                 parts = [s if isinstance(s, str) else s.decode() for s in steers]
                 return '\n'.join(parts)
         except Exception as e:
-            logging.debug(f"[MSG PROCESSOR] Steering check failed: {e}")
+            logger.debug(f"[MSG PROCESSOR] Steering check failed: {e}")
         return None
 
     def _normalize_response(self, llm_response, generation_time, tool_loop_ran=False):

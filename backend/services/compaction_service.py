@@ -110,7 +110,7 @@ def check_and_compact(channel: str, context_budget: int, _context=None) -> bool:
 def get_compaction(channel: str, _context=None) -> Optional[Dict]:
     """Retrieve the stored compaction for a channel.
 
-    Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at.
+    Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content.
     Returns None if no compaction exists.
     """
     try:
@@ -121,7 +121,7 @@ def get_compaction(channel: str, _context=None) -> Optional[Dict]:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT compacted_text, compacted_up_to_id, token_count, updated_at
+                SELECT compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content
                 FROM compactions
                 WHERE channel = ?
                 """,
@@ -138,6 +138,7 @@ def get_compaction(channel: str, _context=None) -> Optional[Dict]:
             'compacted_up_to_id': row[1],
             'token_count': row[2],
             'updated_at': row[3],
+            'overflow_content': row[4],
         }
 
     except Exception as e:

@@ -75,14 +75,13 @@ class TestCheckAndCompact:
             # 5 short entries, well below 85% of 32000
             assert check_and_compact('test', 32000) is False
 
-    def test_absolute_threshold_fires_on_large_context_budget(self, db):
-        """Large model context budget should still trigger compaction at absolute ceiling."""
+    def test_large_budget_fraction_threshold_fires_when_exceeded(self, db):
+        """Large model context budget uses fraction-based threshold (85% of 200K = 170K)."""
         from services.compaction_service import check_and_compact
 
-        # ~30K tokens of content — above _MAX_UNCOMPACTED_TOKENS (24K) but
-        # well below 85% of 200K budget (170K)
-        long_content = 'word ' * 6000  # ~7500 tokens each
-        entries = [{'id': i, 'content': long_content} for i in range(5)]
+        # ~175K tokens of content — above 85% of 200K budget (170K)
+        long_content = 'word ' * 7000  # ~8750 tokens each
+        entries = [{'id': i, 'content': long_content} for i in range(20)]
 
         with patch('services.compaction_service.get_compaction', return_value=None), \
              patch('services.compaction_service.get_entries_since', return_value=entries), \

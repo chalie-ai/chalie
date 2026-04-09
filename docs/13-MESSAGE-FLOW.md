@@ -41,8 +41,13 @@ This document is the single authoritative visual map of how a user message trave
                             │                                           │
                             │  3. MessageProcessor.send()               │
                             │     ├─ 📤 DB  transcript (user turn)      │
-                            │     ├─ 🧠 LLM  Providers.send()          │
+                            │     ├─ 📥 DB  context_window_service      │
+                            │     │         .build_messages() — always  │
+                            │     │         reconstructed from DB       │
+                            │     ├─ 🧠 LLM  Providers.send_messages() │
                             │     │         (frontal-cortex-unified)    │
+                            │     ├─ tool loop: dispatch → store to DB  │
+                            │     │   → compact at 80% → rebuild msgs   │
                             │     └─ 📤 DB  transcript (assistant turn) │
                             └──────────┬────────────────────────────────┘
                                        │ result dict
@@ -57,9 +62,9 @@ This document is the single authoritative visual map of how a user message trave
                             │  WS → Client         │
                             └──────────────────────┘
 
-NOTE: ACT loop is intentionally parked (task-ddffe1). If the LLM returns
-tool calls, they are logged and the narration text is returned as the
-response. Tool execution is deferred to a future release.
+NOTE: Tool calls from the LLM are executed inline by MessageProcessor.send()
+via the DB-backed tool loop (max 30 iterations / 15 min). Context is rebuilt
+from the database on every iteration — nothing accumulates in memory.
 
 BACKGROUND (always running, independent of user messages):
   PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §5)
@@ -71,6 +76,8 @@ BACKGROUND (always running, independent of user messages):
 ## 2. Phase A — Context Assembly (UserPromptAssemblyService)
 
 Runs inside `UserMessageProcessor.process()` on every user message, before the LLM call.
+
+Conversation history is **not** assembled here. It is constructed from the database by `context_window_service.build_messages()` and injected into the messages array by `MessageProcessor.send()` on every iteration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -84,23 +91,34 @@ Runs inside `UserMessageProcessor.process()` on every user message, before the L
 │          If metadata.source == 'voice':                             │
 │          Injects TTS instruction (no markdown/formatting)           │
 │          ─────────────────────────────────────────────────          │
-│  Step 3  Conversation context                     📥 DB             │
-│          compaction_service.get_compaction(channel)                 │
-│          transcript_service.get_recent(channel, limit=50,           │
-│                                        since_id=watermark)          │
-│          → "## Context" (compaction text, if any)                   │
-│          → "## Previous Messages" (transcript entries + tool_calls) │
-│          ─────────────────────────────────────────────────          │
-│  Step 4  System Awareness                         ⚡ DET            │
+│  Step 3  System Awareness                         ⚡ DET            │
 │          SelfModelService.format_for_prompt()                       │
 │          Only non-empty when degradation signals are present        │
 │          ─────────────────────────────────────────────────          │
-│  Step 5  Current Turn                             📥 DB             │
+│  Step 4  Current Turn                             📥 DB             │
 │          EpisodicService.retrieve_episodes(query, radius=0.2)       │
 │          → "### Related Memories" (episodic auto-recall)            │
 │          → "## User Message" (raw user text)                        │
 │          → file tags (images / documents from metadata)             │
 │          → nudge tag (if present in metadata)                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  context_window_service.build_messages()          📥 DB  <20ms     │
+│                                                                     │
+│  Reconstructs the full LLM messages array from DB on every call.   │
+│  Nothing accumulates in memory.                                     │
+│                                                                     │
+│  1. compaction_service.get_compaction(channel)                      │
+│     → watermark ID (entries with id ≤ watermark are summarized)     │
+│  2. transcript_service.get_recent(channel, since_id=watermark)      │
+│     → all entries since watermark (no in-memory limit)              │
+│  3. ToolCallService.get_by_transcript_ids([assistant_ids])          │
+│     → reconstruct tool_calls lists for assistant entries            │
+│  4. Prepend order (if compaction exists):                           │
+│     [overflow_content → compacted_text → transcript entries]        │
+│     overflow_content placed BEFORE compacted text so the compacted  │
+│     summary receives higher recency/attention weight from the LLM   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -185,11 +203,11 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
                            Phase D  (§6)
 ```
 
-### 4b. ACT Mode — Parked (task-ddffe1)
+### 4b. Tool Loop (User Messages)
 
-The ACT loop exists in code but is not executed for user messages. When `UserMessageProcessor` receives tool calls from the LLM, it logs a warning and returns the narration text as the response. Tool execution is deferred.
+Tool calls from user-message LLM responses are executed inline by `MessageProcessor.send()`. The loop runs up to 30 iterations with a 15-minute wall-clock timeout. On each iteration the context window is rebuilt from the database via `context_window_service.build_messages()`. Results are stored to the transcript and tool_calls tables immediately; nothing accumulates in memory.
 
-Background workers (persistent_task_worker) continue to use the ACT orchestrator independently.
+Background workers (persistent_task_worker, goal_pursuit_processor) use the ACT orchestrator independently via their own `MessageProcessor` subclasses.
 
 ---
 
@@ -201,10 +219,10 @@ Runs after every response is generated.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE D: Post-Response Commit                                      │
 │                                                                     │
-│  Step 1  Append to transcript + compaction check  📤 DB              │
-│          transcript table (assistant turn already appended by       │
-│          MessageProcessor.send() before this phase)                 │
-│          Fires compaction if context > 85% of provider budget       │
+│  Step 1  Transcript already appended by MessageProcessor.send()     │
+│          context_window_service.check_and_compact() runs at 80%    │
+│          of provider context limit (both before the first LLM call  │
+│          and after each tool-loop iteration)                        │
 │                         │                                           │
 │  Step 2  Log interaction event                  📤 DB              │
 │          Table: interaction_log                                      │
@@ -381,8 +399,9 @@ concepts                   semantic_consolidation (async)  drift engine, context
 semantic_relationships     semantic_consolidation          drift engine
 user_traits                IIP hook                        identity service
 persistent_tasks           Path D (task worker)            persistent_task_worker
-transcript                 MessageProcessor.send()         UserPromptAssemblyService
-compactions                compaction_service              UserPromptAssemblyService
+transcript                 MessageProcessor.send()         context_window_service.build_messages()
+compactions                context_window_service          context_window_service.build_messages()
+tool_calls                 MessageProcessor.send()         context_window_service.build_messages()
 place_fingerprints         ambient inference               place_learning_service
 ```
 
@@ -396,6 +415,7 @@ Every LLM call in the system, with typical latency and model used.
 Service                          Model            Prompt                   Latency   Triggered by
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 UserMessageProcessor (unified)   primary model    frontal-cortex-unified   ~500ms-2s User path (via UserPromptAssemblyService + SystemPromptAssemblyService)
+context_window_service compact   same as job      inline system prompt     ~500ms-2s At 80% context limit (mid-loop or pre-call); uses same provider as the conversation
 ModeRouterService (tiebreaker)   ONNX             mode-tiebreaker model    ~5ms      Non-user flows only
 FrontalCortexService (UNIFIED)   primary model    soul + unified.md        ~500ms-2s Non-user flows
 ReasoningLoop (thought)          lightweight      cognitive-drift.md       ~100ms    Path E
@@ -444,12 +464,13 @@ Component latency breakdown (unified path, typical):
 
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
-| **Attention is sacred** | User messages go direct to LLM — no routing overhead; ACT parked to prevent runaway tool chains until execution is solid |
-| **Judgment over activity** | Single unified LLM call for user messages; mode router handles non-user flows deterministically |
+| **Attention is sacred** | User messages go direct to LLM — no routing overhead; DB-backed context reconstruction ensures the full conversation is always present without memory growth |
+| **Judgment over activity** | Single unified LLM call per iteration; mode router handles non-user flows deterministically |
 | **Tool agnosticism** | Tool schemas injected at send time via `Providers._get_tools()` — no tool names hardcoded in the pipeline |
-| **Continuity over transactions** | Transcript + compaction + episodes all feed every response; drift gists surface on next user message |
+| **Continuity over transactions** | Transcript + compaction + episodes all feed every response; context_window_service reconstructs the full messages array from DB on every iteration |
 | **System prompt caching** | `SystemPromptAssemblyService` builds stable content (identity, directives) separately from volatile user-turn content |
+| **No memory accumulation** | `context_window_service.build_messages()` reads from DB on every call; only transcript IDs are tracked in memory during the tool loop |
 
 ---
 
-*Last updated: 2026-04-08. See `docs/INDEX.md` for the full documentation map.*
+*Last updated: 2026-04-09. See `docs/INDEX.md` for the full documentation map.*

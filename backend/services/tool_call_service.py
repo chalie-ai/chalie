@@ -17,7 +17,8 @@ LOG_PREFIX = "[TOOL CALLS]"
 class ToolCallService:
     """Unified API for recording tool call audit entries."""
 
-    def store(self, transcript_id, tool_name, params, result, invoked_by='llm', ephemeral=False):
+    def store(self, transcript_id, tool_name, params, result, invoked_by='llm', ephemeral=False,
+              tool_call_id=None):
         """Store a single tool call record.
 
         Args:
@@ -27,6 +28,7 @@ class ToolCallService:
             result: String result from the tool invocation.
             invoked_by: 'llm' or 'system'.
             ephemeral: If True, marks the record as ephemeral (not surfaced in history).
+            tool_call_id: The LLM-generated tool call ID (e.g. Anthropic's tc_id / OpenAI's call_id).
         """
         db = get_shared_db_service()
         params_str = json.dumps(params) if isinstance(params, dict) else (params or '{}')
@@ -37,9 +39,9 @@ class ToolCallService:
             with db.connection() as conn:
                 conn.execute(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_str, result, invoked_by, ephemeral_int, now),
+                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at, tool_call_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (transcript_id, tool_name, params_str, result, invoked_by, ephemeral_int, now, tool_call_id),
                 )
                 conn.commit()
         except Exception:
@@ -74,14 +76,15 @@ class ToolCallService:
                 params_str = json.dumps(tc.get('input', {}))
 
             result_str = str(r.get('result', ''))
-            rows.append((transcript_id, tool_name, params_str, result_str, invoked_by, ephemeral_int, now))
+            tc_id = tc.get('id')
+            rows.append((transcript_id, tool_name, params_str, result_str, invoked_by, ephemeral_int, now, tc_id))
 
         try:
             with db.connection() as conn:
                 conn.executemany(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at, tool_call_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 conn.commit()
@@ -141,24 +144,30 @@ class ToolCallService:
             logger.exception(f"{LOG_PREFIX} Failed to fetch tool calls for timerange center={center_dt}")
             return []
 
-    def get_find_tools_results(self, transcript_id):
+    def get_find_tools_results(self, transcript_ids) -> list:
         """Get all find_tools results for tool compounding.
 
         Args:
-            transcript_id: Transcript entry ID to search within.
+            transcript_ids: A single transcript entry ID (int) or a list of IDs.
 
         Returns:
             Flat deduped list of all discovered tool names from find_tools invocations.
         """
+        if isinstance(transcript_ids, int):
+            transcript_ids = [transcript_ids]
+        if not transcript_ids:
+            return []
+
         db = get_shared_db_service()
+        placeholders = ','.join('?' for _ in transcript_ids)
         sql = (
-            "SELECT params FROM tool_calls "
-            "WHERE transcript_id = ? AND tool_name = 'find_tools'"
+            f"SELECT params FROM tool_calls "
+            f"WHERE transcript_id IN ({placeholders}) AND tool_name = 'find_tools'"
         )
         try:
-            rows = db.fetch_all(sql, (transcript_id,))
+            rows = db.fetch_all(sql, transcript_ids)
         except Exception:
-            logger.exception(f"{LOG_PREFIX} Failed to fetch find_tools results for transcript={transcript_id}")
+            logger.exception(f"{LOG_PREFIX} Failed to fetch find_tools results for transcripts={transcript_ids}")
             return []
 
         discovered = []
@@ -174,3 +183,48 @@ class ToolCallService:
                 continue
 
         return discovered
+
+    def get_by_transcript_ids(self, transcript_ids: list, include_ephemeral=True) -> dict:
+        """Get tool calls grouped by transcript_id for a list of IDs.
+
+        Args:
+            transcript_ids: List of transcript entry IDs to look up.
+            include_ephemeral: If False, only returns non-ephemeral records.
+
+        Returns:
+            Dict mapping transcript_id (int) → list of tool_call dicts.
+        """
+        if not transcript_ids:
+            return {}
+
+        db = get_shared_db_service()
+        placeholders = ','.join('?' for _ in transcript_ids)
+
+        if include_ephemeral:
+            sql = (
+                f"SELECT id, transcript_id, tool_name, params, result, invoked_by, "
+                f"ephemeral, created_at, tool_call_id "
+                f"FROM tool_calls WHERE transcript_id IN ({placeholders}) "
+                f"ORDER BY created_at"
+            )
+        else:
+            sql = (
+                f"SELECT id, transcript_id, tool_name, params, result, invoked_by, "
+                f"ephemeral, created_at, tool_call_id "
+                f"FROM tool_calls WHERE transcript_id IN ({placeholders}) AND ephemeral = 0 "
+                f"ORDER BY created_at"
+            )
+
+        try:
+            rows = db.fetch_all(sql, transcript_ids)
+        except Exception:
+            logger.exception(f"{LOG_PREFIX} Failed to fetch tool calls for transcripts={transcript_ids}")
+            return {}
+
+        grouped: dict = {}
+        for row in rows:
+            tid = row.get('transcript_id')
+            if tid not in grouped:
+                grouped[tid] = []
+            grouped[tid].append(dict(row))
+        return grouped
