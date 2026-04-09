@@ -41,7 +41,7 @@ You can inspect Chalie's memory at any time via the Brain dashboard or the `/sys
 
 ## What LLM providers does Chalie support?
 
-- **Ollama** (local, recommended for privacy) — runs models like `qwen3:8b` entirely on your machine
+- **Ollama** (local, recommended for privacy) — runs models like `gemma4:31b` entirely on your machine
 - **Anthropic** — Claude models via API key
 - **OpenAI** — GPT models via API key
 - **Google Gemini** — Gemini models via API key
@@ -88,7 +88,7 @@ See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the
 
 1. Start Chalie and open `http://localhost:8081/on-boarding/`
 2. Complete onboarding — you'll be asked to configure a provider
-3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull qwen3:8b`), set endpoint to `http://localhost:11434`
+3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull gemma4:31b`), set endpoint to `http://localhost:11434`
 4. For cloud providers: paste your API key — it is encrypted and stored locally
 
 See `docs/02-PROVIDERS-SETUP.md` for full details.

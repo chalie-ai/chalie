@@ -141,6 +141,46 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   4a. Capability Alert Banner
+   -------------------------------------------------------------------------- */
+.capability-alert-banner {
+  position: fixed;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(220, 130, 40, 0.15);
+  border: 1px solid rgba(220, 130, 40, 0.35);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: #e89c50;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.banner-dismiss {
+  background: none;
+  border: none;
+  color: rgba(232, 156, 80, 0.55);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.banner-dismiss:hover {
+  color: #e89c50;
+}
+
+/* --------------------------------------------------------------------------
    4b. Update Banner & Dialog
    -------------------------------------------------------------------------- */
 .update-banner {

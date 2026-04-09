@@ -126,7 +126,7 @@ row = make_trait_row(trait_key='timezone', trait_value='CET')
 episode = make_episode_row(gist='Discussed morning routine')
 
 # 9-element tuple matching providers SELECT
-provider = make_provider_row(platform='ollama', model='qwen3:4b')
+provider = make_provider_row(platform='ollama', model='gemma4:31b')
 ```
 
 ## Mock Strategies

@@ -14,6 +14,7 @@ export class EventRouter {
     this._onBackgroundContent = null;
     this._onTtsChunk = null;
     this._onTtsDone = null;
+    this._onCapabilityAlert = null;
     this._isSendingGetter = () => false;
   }
 
@@ -34,6 +35,9 @@ export class EventRouter {
 
   /** Register handler for TTS stream completion. */
   onTtsDone(cb) { this._onTtsDone = cb; }
+
+  /** Register handler for 'capability_alert' events. */
+  onCapabilityAlert(cb) { this._onCapabilityAlert = cb; }
 
   /**
    * Register handler for background drift/response/escalation content.
@@ -82,6 +86,11 @@ export class EventRouter {
 
     if (data.type === 'image_ready') {
       if (this._onImageReady) this._onImageReady(data);
+      return;
+    }
+
+    if (data.type === 'capability_alert') {
+      if (this._onCapabilityAlert) this._onCapabilityAlert(data);
       return;
     }
 

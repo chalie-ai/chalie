@@ -28,6 +28,7 @@ class ChalieApp {
   constructor() {
     this._backendHost = lsGet('chalie_backend_host') || '';
     this._deferredInstallPrompt = null;
+    this._activeCapabilityAlerts = new Map();
 
     // Core modules
     this.api = new ApiClient(() => this._backendHost);
@@ -167,6 +168,9 @@ class ChalieApp {
 
     // Connection monitor
     this._initConnectionMonitor();
+
+    // Capability alert banner dismiss wiring
+    this._initCapabilityAlertBanner();
 
     // Share target (PWA shared content)
     this._handleSharedContent();
@@ -430,6 +434,14 @@ class ChalieApp {
 
     this._eventRouter.onTtsDone(() => {
       this._voice.handleTtsDone();
+    });
+
+    this._eventRouter.onCapabilityAlert((data) => {
+      if (data.recovered) {
+        this._removeCapabilityAlert(data.cap_id);
+      } else {
+        this._addCapabilityAlert(data.cap_id, data.cap_name, data.error);
+      }
     });
   }
 
@@ -784,6 +796,52 @@ class ChalieApp {
   _hideConnectionBanner() {
     const banner = document.getElementById('connectionBanner');
     banner.classList.add('hidden');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Capability Alert Banner
+  // ---------------------------------------------------------------------------
+
+  _initCapabilityAlertBanner() {
+    document.getElementById('capabilityAlertDismiss')?.addEventListener('click', () => {
+      this._activeCapabilityAlerts.clear();
+      this._syncCapabilityAlertBanner();
+    });
+  }
+
+  _addCapabilityAlert(capId, capName, error) {
+    if (!capId) return;
+    this._activeCapabilityAlerts.set(capId, {
+      capName: capName || capId,
+      error: error || 'unknown error',
+    });
+    this._syncCapabilityAlertBanner();
+  }
+
+  _removeCapabilityAlert(capId) {
+    if (!capId) return;
+    this._activeCapabilityAlerts.delete(capId);
+    this._syncCapabilityAlertBanner();
+  }
+
+  _syncCapabilityAlertBanner() {
+    const banner = document.getElementById('capabilityAlertBanner');
+    const text = document.getElementById('capabilityAlertText');
+    if (!banner || !text) return;
+
+    const count = this._activeCapabilityAlerts.size;
+    if (count === 0) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    if (count === 1) {
+      const [, info] = [...this._activeCapabilityAlerts.entries()][0];
+      text.textContent = `Interface ${info.capName} has degraded — ${info.error}`;
+    } else {
+      text.textContent = `${count} interfaces degraded`;
+    }
+    banner.classList.remove('hidden');
   }
 
   // ---------------------------------------------------------------------------

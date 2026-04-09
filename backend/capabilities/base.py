@@ -244,7 +244,8 @@ class AbstractCapability(ABC):
 
         try:
             self.monitor()
-            if self._backoff_secs and self._failure_alerted:
+            was_degraded = self._backoff_secs and self._failure_alerted
+            if was_degraded:
                 self._send_recovery_alert()
             self._error_count = 0
             self._last_error = None
@@ -276,7 +277,7 @@ class AbstractCapability(ABC):
             pass
 
     def _maybe_send_failure_alert(self) -> None:
-        """Push a user-facing alert when a capability disconnects.
+        """Send a WebSocket status-bar alert when a capability disconnects.
 
         Fires once per disconnection event.  Reset when monitor()
         succeeds again (``_failure_alerted`` cleared on success path).
@@ -291,41 +292,38 @@ class AbstractCapability(ABC):
             import json
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            store.rpush("prompt-queue", json.dumps({
-                "prompt": (
-                    f"[CAPABILITY ALERT] {cap_name} has "
-                    f"disconnected — {err}. "
-                    "Let the user know and suggest "
-                    "reconnecting via settings."
-                ),
-                "metadata": {
-                    "type": "proactive",
-                    "source": f"capability_health:{cap_id}",
-                    "topic": "proactive",
-                },
-            }))
+            payload = {
+                "type": "capability_alert",
+                "cap_id": cap_id,
+                "cap_name": cap_name,
+                "error": err,
+                "recovered": False,
+            }
+            store.publish("output:events", json.dumps(payload))
+            store.setex(
+                f"capability:alert:{cap_id}",
+                1800,
+                json.dumps(payload),
+            )
         except Exception as exc:
             logger.debug("failure alert push: %s", exc)
 
     def _send_recovery_alert(self) -> None:
-        """Push a user-facing message when a degraded capability recovers."""
+        """Send a WebSocket status-bar recovery notification."""
         cap_id = self.get_id()
         cap_name = self.get_manifest().get("name", cap_id)
         try:
             import json
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            store.rpush("prompt-queue", json.dumps({
-                "prompt": (
-                    f"[CAPABILITY RECOVERED] {cap_name} is back "
-                    "online. Sync has resumed normally."
-                ),
-                "metadata": {
-                    "type": "proactive",
-                    "source": f"capability_health:{cap_id}",
-                    "topic": "proactive",
-                },
-            }))
+            payload = {
+                "type": "capability_alert",
+                "cap_id": cap_id,
+                "cap_name": cap_name,
+                "recovered": True,
+            }
+            store.publish("output:events", json.dumps(payload))
+            store.delete(f"capability:alert:{cap_id}")
         except Exception as exc:
             logger.debug("recovery alert push: %s", exc)
 

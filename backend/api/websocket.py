@@ -128,6 +128,24 @@ def register_websocket(sock):
             except Exception as e:
                 logger.debug(f"[WS] Failed to drain buffered notification: {e}")
 
+        # Replay any persisted capability alerts so the banner shows after a page refresh.
+        # Keys are deleted after delivery — if the capability is still down, the next
+        # monitor cycle will recreate the key.
+        try:
+            alert_keys = store.keys('capability:alert:*')
+            for key in alert_keys:
+                raw = store.get(key)
+                if raw:
+                    try:
+                        data = json.loads(raw)
+                        seq = _next_seq()
+                        data['seq'] = seq
+                        _send_json(ws, data)
+                        store.delete(key)
+                    except Exception as e:
+                        logger.debug(f"[WS] Failed to send persisted capability alert: {e}")
+        except Exception as e:
+            logger.debug(f"[WS] Failed to scan capability alerts: {e}")
 
         # Background thread: push drift/output events to the WebSocket
         ws_open = threading.Event()
