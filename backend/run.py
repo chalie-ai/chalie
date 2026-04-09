@@ -287,18 +287,25 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
 
-    # Warm search router embedding cache (background thread)
+    # Verify search routing embeddings are present
     try:
-        def _warm_search_cache():
-            try:
-                from tools.search.router import _ensure_cache
-                _ensure_cache()
+        import os as _os
+        import sqlite3 as _sql
+        _search_db = _os.path.join(
+            _os.path.dirname(__file__), "tools", "search", "assets", "search_tool_providers.sqlite"
+        )
+        if _os.path.exists(_search_db):
+            _c = _sql.connect(_search_db)
+            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            _c.close()
+            if "example_embeddings" in _tables:
                 logger.info("[Startup] Search router cache ready")
-            except Exception as e:
-                logger.warning(f"[Startup] Search router cache warmup failed: {e}")
-        threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
+            else:
+                logger.warning("[Startup] Search embeddings missing — run 'python -m utils.generate_search_cache'")
+        else:
+            logger.warning("[Startup] search_tool_providers.sqlite not found")
     except Exception as e:
-        logger.warning(f"[Startup] Search cache warmup start failed: {e}")
+        logger.warning(f"[Startup] Search cache check failed: {e}")
 
     # Hourly cleanup for stale pending contradictions
     def _pending_contradiction_cleanup_loop():

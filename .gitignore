@@ -7,9 +7,6 @@ backend/.key
 backend/data/
 backend/configs/generated/
 
-# Search tool embedding cache (auto-generated on first boot)
-backend/tools/search/data/providers_cache.sqlite
-
 # Python
 __pycache__/
 *.pyc
