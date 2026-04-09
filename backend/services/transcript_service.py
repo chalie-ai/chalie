@@ -44,7 +44,9 @@ def append(
 
     Returns the rowid of the inserted entry, or None on failure.
     """
-    if not channel or not content:
+    if not channel:
+        return None
+    if not content and role != 'assistant':
         return None
 
     try:

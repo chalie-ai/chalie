@@ -5,15 +5,13 @@ Always constructs the messages array from the database. Nothing accumulates
 in memory. Triggers compaction at 80% of the provider's context limit.
 
 Overflow handling: if a pending tool result would push the context over 100%
-of the limit, compaction runs first, then the tool result is stored with the
-overflow_content field in the compaction record so build_messages() places it
-BEFORE the compacted text (tool result first → compacted context second, giving
-the compacted summary recency/attention weight).
+of the limit, compaction runs first. The tool result is then stored to
+transcript with id > watermark and appears naturally in the next
+build_messages() call.
 """
 
 import json
 import logging
-from typing import Optional
 
 from services.llm_service import estimate_tokens
 
@@ -34,8 +32,7 @@ def build_messages(channel: str) -> list:
          (tool_calls reconstructed from tool_calls table WHERE transcript_id = entry.id
           AND tool_call_id IS NOT NULL)
        - role='tool'      → {"role": "tool", "tool_call_id": ..., "content": content, "name": ...}
-    4. If compaction exists with overflow_content, prepend overflow first then compacted text.
-       Otherwise prepend compacted text alone.
+    4. If compaction exists, prepend compacted text as first user message.
 
     Returns: list of message dicts ready for Providers.send_messages()
     """
@@ -49,12 +46,6 @@ def build_messages(channel: str) -> list:
     entries = transcript_service.get_recent(channel, limit=2000, since_id=watermark)
 
     messages = []
-
-    # Overflow: tool result goes BEFORE compacted context so compacted gets recency weight
-    if compaction and compaction.get('overflow_content'):
-        overflow = compaction['overflow_content']
-        messages.append({"role": "user", "content": overflow})
-        _clear_overflow(channel)
 
     # Prepend compacted context as user message
     if compaction and compaction.get('compacted_text'):
@@ -168,13 +159,11 @@ def check_and_compact(channel: str, context_limit: int, job: str = 'unified',
     return _run_compaction(
         channel, messages, context_limit, job,
         is_tool_triggered=is_tool_triggered or overflow,
-        overflow_content=pending_content if overflow else None,
     )
 
 
 def _run_compaction(channel: str, messages: list, context_limit: int, job: str,
-                    is_tool_triggered: bool = False,
-                    overflow_content: Optional[str] = None) -> bool:
+                    is_tool_triggered: bool = False) -> bool:
     """Execute compaction: summarize the full context via LLM call.
 
     The compaction LLM receives the full context serialised as a user message.
@@ -182,10 +171,9 @@ def _run_compaction(channel: str, messages: list, context_limit: int, job: str,
     highest current transcript ID). After compaction, build_messages() will
     prepend the compacted text to all future context windows.
 
-    For overflow: overflow_content is stored in the compaction record so that
-    build_messages() emits it BEFORE the compacted text — the tool result comes
-    first (lower recency weight) and the compacted context comes second (higher
-    recency weight / more attention from the LLM).
+    When overflow triggers (tool result would exceed limit), compaction runs
+    first, then the tool result is stored to transcript with id > watermark,
+    so it appears naturally in the next build_messages() call.
     """
     from services.llm_service import create_refreshable_llm_service
     from services.database_service import get_shared_db_service
@@ -255,17 +243,16 @@ def _run_compaction(channel: str, messages: list, context_limit: int, job: str,
             conn.execute(
                 """
                 INSERT INTO compactions
-                    (channel, compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (channel, compacted_text, compacted_up_to_id, token_count, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(channel) DO UPDATE SET
                     compacted_text      = excluded.compacted_text,
                     compacted_up_to_id  = excluded.compacted_up_to_id,
                     token_count         = excluded.token_count,
-                    updated_at          = excluded.updated_at,
-                    overflow_content    = excluded.overflow_content
+                    updated_at          = excluded.updated_at
                 """,
                 (channel, compacted_text, watermark, token_count,
-                 utc_now().isoformat(), overflow_content),
+                 utc_now().isoformat()),
             )
     except Exception as e:
         logger.error(f"[CTX WINDOW] Failed to store compaction for {channel!r}: {e}")
@@ -274,23 +261,8 @@ def _run_compaction(channel: str, messages: list, context_limit: int, job: str,
     logger.info(
         f"[CTX WINDOW] Compacted {channel!r}: "
         f"{estimate_messages_tokens(messages)} → {token_count} tokens, watermark={watermark}"
-        + (f", overflow_content={len(overflow_content)} chars" if overflow_content else "")
     )
     return True
-
-
-def _clear_overflow(channel: str) -> None:
-    """Clear overflow_content after it has been consumed by build_messages()."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            conn.execute(
-                "UPDATE compactions SET overflow_content = NULL WHERE channel = ?",
-                (channel,),
-            )
-    except Exception as e:
-        logger.warning(f"[CTX WINDOW] Failed to clear overflow for {channel!r}: {e}")
 
 
 def _safe_json_loads(s):

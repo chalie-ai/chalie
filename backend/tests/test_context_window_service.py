@@ -53,21 +53,20 @@ def _insert_tool_call(db, transcript_id, tool_name, params, result,
 
 
 def _insert_compaction(db, channel, compacted_text, watermark_id,
-                       token_count=10, overflow_content=None):
+                       token_count=10):
     """Insert (or replace) a compaction record."""
     cursor = db.cursor()
     cursor.execute(
         """
         INSERT INTO compactions
-            (channel, compacted_text, compacted_up_to_id, token_count, overflow_content)
-        VALUES (?, ?, ?, ?, ?)
+            (channel, compacted_text, compacted_up_to_id, token_count)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(channel) DO UPDATE SET
             compacted_text     = excluded.compacted_text,
             compacted_up_to_id = excluded.compacted_up_to_id,
-            token_count        = excluded.token_count,
-            overflow_content   = excluded.overflow_content
+            token_count        = excluded.token_count
         """,
-        (channel, compacted_text, watermark_id, token_count, overflow_content),
+        (channel, compacted_text, watermark_id, token_count),
     )
     db.commit()
 
@@ -135,8 +134,8 @@ class TestBuildMessages:
         # Second message is after the watermark, so it should follow
         assert result[1] == {'role': 'user', 'content': 'Second message'}
 
-    def test_overflow_content_appears_before_compacted_text(self, db):
-        """Overflow content is the very first message, before the compacted text."""
+    def test_entries_after_watermark_appear_after_compacted_text(self, db):
+        """Entries added after compaction watermark appear after compacted text."""
         from services.context_window_service import build_messages
 
         watermark = _insert_transcript(db, 'chan-overflow', 'user', 'Earlier turn')
@@ -144,40 +143,17 @@ class TestBuildMessages:
             db, 'chan-overflow',
             compacted_text='Compacted context',
             watermark_id=watermark,
-            overflow_content='Large tool result that caused overflow',
         )
-        _insert_transcript(db, 'chan-overflow', 'user', 'After overflow')
+        # This entry has id > watermark, so it appears after compacted text
+        _insert_transcript(db, 'chan-overflow', 'tool', 'Large tool result',
+                           tool_call_id='tc_overflow', tool_name='big_tool')
 
         result = build_messages('chan-overflow')
 
-        # Order must be: overflow → compacted → entries after watermark
-        assert result[0] == {'role': 'user', 'content': 'Large tool result that caused overflow'}
-        assert result[1] == {'role': 'user', 'content': 'Compacted context'}
-        assert result[2] == {'role': 'user', 'content': 'After overflow'}
-
-    def test_overflow_cleared_after_build_messages(self, db):
-        """build_messages() clears overflow_content from DB after consuming it."""
-        from services.context_window_service import build_messages
-
-        watermark = _insert_transcript(db, 'chan-clear-overflow', 'user', 'Turn')
-        _insert_compaction(
-            db, 'chan-clear-overflow',
-            compacted_text='Summary',
-            watermark_id=watermark,
-            overflow_content='Overflow to be cleared',
-        )
-
-        build_messages('chan-clear-overflow')
-
-        # Verify overflow was cleared in the DB
-        cursor = db.cursor()
-        cursor.execute(
-            "SELECT overflow_content FROM compactions WHERE channel = ?",
-            ('chan-clear-overflow',),
-        )
-        row = cursor.fetchone()
-        assert row is not None
-        assert row[0] is None
+        # Order: compacted text → entries after watermark
+        assert result[0] == {'role': 'user', 'content': 'Compacted context'}
+        assert result[1]['role'] == 'tool'
+        assert result[1]['content'] == 'Large tool result'
 
     def test_assistant_with_tool_calls_reconstructed(self, db):
         """Assistant entries get tool_calls list if matching tool_calls rows exist."""
@@ -423,8 +399,8 @@ class TestCheckAndCompact:
 
         assert result is True
 
-    def test_overflow_content_stored_in_compaction_record(self, db):
-        """When overflow compaction fires, overflow_content is stored in DB."""
+    def test_overflow_compaction_does_not_store_pending_content(self, db):
+        """Overflow compaction stores only the summary, not the pending content itself."""
         from services.context_window_service import check_and_compact
 
         with patch('services.transcript_service._embed_entry'):
@@ -442,14 +418,17 @@ class TestCheckAndCompact:
                 pending_content=pending,
             )
 
+        # pending_content is NOT stored in the compaction record — the caller
+        # stores it to transcript after compaction, where it appears naturally
+        # (id > watermark) in the next build_messages() call.
         cursor = db.cursor()
         cursor.execute(
-            "SELECT overflow_content FROM compactions WHERE channel = ?",
+            "SELECT compacted_text FROM compactions WHERE channel = ?",
             ('chan-overflow-store',),
         )
         row = cursor.fetchone()
         assert row is not None
-        assert row[0] == pending
+        assert row[0] == 'Overflow summary'
 
     def test_returns_false_when_llm_returns_empty_response(self, db):
         """Compaction returns False if LLM gives back empty text."""
