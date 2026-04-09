@@ -13,6 +13,19 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 
 ## Recent
 
+### DB-Backed Context Window Management (2026-04-09)
+- Eliminated in-memory message accumulation in the LLM tool-calling loop; OOM kills in Docker containers no longer occur regardless of tool loop depth
+- New `context_window_service.py` always reconstructs the messages array from the database on every LLM call — nothing accumulates in memory
+- Compaction triggers at 80% of the provider context limit; overflow handling triggers compaction before storing a tool result that would exceed 100% of the limit
+- After overflow compaction, the tool result is stored to transcript (id > watermark) and appears naturally in the next `build_messages()` call
+- Tool-triggered compaction adds a "Current Task State" section to the compaction summary so the model can continue mid-task without context loss
+- Compaction always uses the same provider job as the conversation — LLMs are never mixed within a turn
+- `MessageProcessor.send()` now tracks only transcript IDs in memory; removed `_prune_messages()`, `_resolve_token_budget()`, `_estimate_tokens()`, `MAX_RESULT_CHARS`, `_TOKEN_BUDGET_RATIO`, `_TOKEN_BUDGET_CAP`
+- `UserPromptAssemblyService.build()` no longer injects conversation history; history is handled entirely by `context_window_service.build_messages()`
+- `ToolCallService.store()` and `store_batch()` now accept `tool_call_id` (the LLM-generated call ID); new `get_by_transcript_ids()` method for efficient batch loading during context reconstruction
+- Schema: `tool_calls.tool_call_id TEXT` (migration 038), `compactions.overflow_content TEXT` (migration 039)
+- 44 integration tests in `test_context_window_service.py` using real SQLite
+
 ### Cognitive Reflex Service
 - Learned fast-path that bypasses the full triage pipeline for self-contained queries
 - Heuristic pre-screen (~1ms) + sqlite-vec cosine cluster lookup (~5-20ms)
