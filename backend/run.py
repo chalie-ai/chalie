@@ -68,8 +68,9 @@ def main():
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
-            get_embedding_service()
-            logger.info("[System] Embedding model loaded")
+            svc = get_embedding_service()
+            svc.generate_embedding("warmup")
+            logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
             import traceback
             logger.warning(f"[System] Embedding model preload failed: {e}")
@@ -79,15 +80,19 @@ def main():
     _threading.stack_size(2 * 1024 * 1024)
     _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
 
-    # Download/update ONNX classifiers (no warm-up inference).
+    # Download/update ONNX classifiers, then warm the inference path.
     def _preload_onnx_models():
         try:
             logger.info("[System] Checking ONNX models (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
             svc.ensure_models()
+            label, _ = svc.predict("mode-tiebreaker", "warmup")
+            if label is not None:
+                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
+            else:
+                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
             svc._ready = True
-            logger.info("[System] ONNX models verified")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
