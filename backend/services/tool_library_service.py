@@ -346,7 +346,7 @@ if _BROWSER_AVAILABLE:
             "search filtering, form submission, multi-page navigation. Steps execute "
             "sequentially; stops on first failure with partial results.\n\n"
             "**monitor** — Track page changes over time. Renders a page, extracts "
-            "content, compares against the previous snapshot. Use in persistent tasks "
+            "content, compares against the previous snapshot. Use in goal pursuits "
             "to watch prices, availability, status changes. Requires a unique "
             "snapshot_key to identify what's being monitored.\n\n"
             "The read skill is faster for static pages — try it first. "
@@ -468,7 +468,7 @@ if _BROWSER_AVAILABLE:
             "Use 'render' when the read skill returned empty or garbled content from a JS-heavy site",
             "Use 'screenshot' + ocr=true for visual content that resists text extraction",
             "Use 'interact' for multi-step workflows: login, form fill, apply filters, navigate pages",
-            "Use 'monitor' with snapshot_key in persistent tasks to track page changes over time",
+            "Use 'monitor' with snapshot_key in goal pursuits to track page changes over time",
             "Always try the read skill first — it is much faster for static pages",
             "Use wait_for='selector:.price' to wait for a specific element before extracting",
             "For shopping: use interact with fill + select steps to apply filters, then extract results",

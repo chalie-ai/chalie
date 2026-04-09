@@ -7,7 +7,7 @@ decides whether and how to act on it. Replaces the autonomous action system.
 Proactive output styles (based on confidence):
   confidence < 0.7  → Ask: proactive push asking if the user wants help
   confidence 0.7-0.85 → Suggest: proactive push with a concrete suggestion
-  confidence > 0.85 → Act: create a persistent task that runs through the ACT loop
+  confidence > 0.85 → Act: launch a goal pursuit that runs through the ACT loop
     with full tool access (search, read, find_tools, etc.), then surfaces results
 
 The 'act' style is the key differentiator from the old system. Instead of sending a
@@ -299,10 +299,10 @@ def _execute_proactive(goal: Dict[str, Any], style: str) -> Dict[str, Any]:
     Execute proactive action for a goal.
 
     - 'ask' / 'suggest': Push a proactive message to the user via prompt queue.
-    - 'act': Create a persistent task that runs through the full ACT loop with
-      tool access (search, read, find_tools, etc.). The persistent task worker
-      picks it up, decomposes it into steps, executes with tools, and surfaces
-      the results when done.
+    - 'act': Launch a goal pursuit that runs through the full ACT loop with
+      tool access (search, read, find_tools, etc.). GoalPursuitProcessor
+      runs in a daemon thread, executes with tools, and surfaces the results
+      when done.
     """
     if style == 'act':
         return _execute_via_goal_pursuit(goal)

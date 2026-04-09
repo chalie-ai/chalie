@@ -4,7 +4,7 @@ Goal Strategy Service -- Lightweight strategy generation on actionable transitio
 When a goal transitions to actionable (sufficient salience + confidence),
 generates a 1-3 sentence strategy via LLM. The strategy:
   - Guides the proactive service on HOW to act
-  - Feeds into persistent task scope when ACT-style execution triggers
+  - Feeds into goal pursuit scope when ACT-style execution triggers
   - Keeps the LLM call lightweight (~500 tokens prompt, ~100 tokens response)
 
 Called exactly once per actionable transition.

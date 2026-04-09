@@ -161,7 +161,7 @@ class OutputService:
         source: str = 'task',
     ) -> str:
         """
-        Enqueue a proactive/background output (persistent tasks, reminders, etc.).
+        Enqueue a proactive/background output (goal pursuits, reminders, etc.).
 
         Convenience wrapper around enqueue_text() with sensible defaults for
         messages that originate from background workers rather than user requests.
