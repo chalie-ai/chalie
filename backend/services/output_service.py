@@ -93,6 +93,7 @@ class OutputService:
             'reminder': 'reminder',
             'task': 'task',
             'goal_pursuit': 'task',
+            'scheduled_prompt': 'task',
             'critic_escalation': 'escalation',
             'notification': 'notification',
             'plan_action': 'task',
@@ -144,7 +145,7 @@ class OutputService:
                 logger.warning(f"Notification buffer push failed: {e}")
 
         # Notification tools (Telegram etc.) for drift and all background events
-        if source in ('reminder', 'task', 'goal_pursuit') or source.startswith('cron_tool:'):
+        if source in ('reminder', 'task', 'goal_pursuit', 'scheduled_prompt') or source.startswith('cron_tool:'):
             self._send_to_notification_tools(response)
 
         logger.info(

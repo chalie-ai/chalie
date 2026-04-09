@@ -1,14 +1,16 @@
 """
 Scheduler Service — Background poller for scheduled items in SQLite.
 
-Polls scheduled_items table every 60 seconds. Fires due items through
-the prompt queue — frontal cortex handles tone and framing naturally.
+Polls scheduled_items table every 60 seconds. Fires due items either as
+direct notifications (OutputService) or through ScheduledMessageProcessor
+for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
 Entry point: scheduler_worker(shared_state=None) registered in run.py.
 """
 
 import logging
+import threading
 import time
 
 from services.embedding_utils import pack_embedding
@@ -19,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
+
+# Cap concurrent scheduled prompt executions to prevent resource exhaustion
+_PROMPT_SEMAPHORE = threading.Semaphore(3)
 
 # System handler registry — capabilities register callbacks for item_type='system'
 _SYSTEM_HANDLERS: dict[str, callable] = {}
@@ -97,7 +102,7 @@ def scheduler_worker(shared_state=None):
 
 
 def _poll_and_fire():
-    """Poll for due items and fire them through the prompt queue."""
+    """Poll for due items and fire them — direct delivery or ScheduledMessageProcessor."""
     try:
         from services.database_service import get_shared_db_service
 
@@ -218,33 +223,49 @@ def _fire_item(item: dict):
         return
 
     if is_prompt:
-        # Route through digest_worker -> cognitive triage -> LLM (original behaviour)
-        from services.prompt_queue import PromptQueue
-        from services.client_context_service import ClientContextService
-        from workers.digest_worker import digest_worker
+        # Guard: empty/whitespace prompts are not actionable
+        if not message or not message.strip():
+            logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
+            return
 
-        client_context_text = ClientContextService().format_for_prompt()
-        # Frame as an execution instruction — without this, the LLM reads the
-        # raw message (e.g. "At 09:30 every morning, check …") and interprets
-        # it as a new scheduling request instead of executing the task.
-        execution_prompt = (
-            f"[SCHEDULED TASK — EXECUTE NOW]\n"
-            f"This is a previously scheduled prompt that is now due. "
-            f"Execute the task described below immediately. "
-            f"Do NOT create a new schedule or reminder — it is already scheduled "
-            f"and will fire again automatically.\n\n"
-            f"{message}"
-        )
-        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-        queue.enqueue(execution_prompt, {
-            "source": source,
-            "destination": "web",
-            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat() if isinstance(item.get("due_at"), datetime) else str(item.get("due_at", "")),
-            "scheduled_message": message,
-            "channel": item.get("channel", item.get("topic", "general")),
-            "client_context": client_context_text,
-        })
-        logger.info(f"{LOG_PREFIX} Fired {source} (via LLM) '{item.get('id')}': {message[:80]}")
+        # Dispatch via ScheduledMessageProcessor in a daemon thread
+        item_id = item.get('id', 'unknown')
+        item_channel = item.get('channel') or item.get('topic') or None
+
+        def _run():
+            _PROMPT_SEMAPHORE.acquire()
+            try:
+                from services.scheduled_message_processor import ScheduledMessageProcessor
+                from services.output_service import OutputService
+
+                result = ScheduledMessageProcessor().process(message, item_id, item_channel)
+                response_text = result.get('response', '').strip()
+                if not response_text:
+                    response_text = "Scheduled task completed but produced no output."
+
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=response_text,
+                    source='scheduled_prompt',
+                )
+                logger.info(f"{LOG_PREFIX} Scheduled prompt {item_id} complete")
+            except Exception as exc:
+                logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}", exc_info=True)
+                try:
+                    from services.output_service import OutputService
+                    OutputService().enqueue_proactive(
+                        topic='user',
+                        response="A scheduled task could not be completed.",
+                        source='scheduled_prompt',
+                    )
+                except Exception:
+                    pass
+            finally:
+                _PROMPT_SEMAPHORE.release()
+
+        t = threading.Thread(target=_run, daemon=True, name=f"scheduled-prompt-{item_id}")
+        t.start()
+        logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
     else:
         # Direct delivery — bypass LLM, publish straight to output events
         from services.output_service import OutputService
