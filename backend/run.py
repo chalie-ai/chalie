@@ -61,10 +61,10 @@ def main():
         config["models_dir"] = args.models_dir
     runtime_config.set(config)
 
-    # Preload embedding model in a background thread so Flask starts immediately.
-    # On first run the model (~438MB) may need to download from HuggingFace;
-    # blocking here would prevent the onboarding page from loading for 5+ minutes.
-    def _preload_embedding_model():
+    # Preload models in a single background thread so Flask starts immediately.
+    # Models are loaded sequentially to avoid concurrent memory spikes that
+    # exceed the Docker VM limit (embedding + ONNX loaded in parallel = OOM).
+    def _preload_models():
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
@@ -76,12 +76,6 @@ def main():
             logger.warning(f"[System] Embedding model preload failed: {e}")
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
-    import threading as _threading
-    _threading.stack_size(2 * 1024 * 1024)
-    _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
-
-    # Download/update ONNX classifiers, then warm the inference path.
-    def _preload_onnx_models():
         try:
             logger.info("[System] Checking ONNX models (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
@@ -96,7 +90,9 @@ def main():
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
-    _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
+    import threading as _threading
+    _threading.stack_size(2 * 1024 * 1024)
+    _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
     # Initialize SQLite database — declarative convergence
     from services.database_service import get_shared_db_service
