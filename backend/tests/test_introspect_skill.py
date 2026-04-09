@@ -45,15 +45,6 @@ def _seed_episode(db, episode_id='ep-1', updated_at='2026-01-01 10:00:00'):
     db.commit()
 
 
-def _seed_persistent_task(db, goal, status='accepted', iterations_used=0):
-    """Insert a persistent_tasks row (nullable FKs left NULL)."""
-    db.execute(
-        "INSERT INTO persistent_tasks (goal, status, iterations_used) "
-        "VALUES (?, ?, ?)",
-        (goal, status, iterations_used),
-    )
-    db.commit()
-
 
 def _seed_scheduled_item(db, message, due_at, status='pending', item_id=None):
     """Insert a scheduled_items row."""
@@ -337,45 +328,6 @@ class TestSkillUsageScope:
 
 @pytest.mark.unit
 class TestReasoningStateScope:
-
-    def test_reasoning_state_shows_persistent_tasks(self, db):
-        _seed_persistent_task(db, 'Research machine learning papers', 'in_progress', 3)
-
-        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
-        result = _reasoning_persistent_tasks()
-
-        assert 'Research machine learning papers' in result
-
-    def test_reasoning_state_shows_task_status(self, db):
-        _seed_persistent_task(db, 'Write weekly summary', 'paused', 1)
-
-        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
-        result = _reasoning_persistent_tasks()
-
-        assert 'paused' in result
-
-    def test_reasoning_state_task_count_singular(self, db):
-        _seed_persistent_task(db, 'Single task', 'accepted', 0)
-
-        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
-        result = _reasoning_persistent_tasks()
-
-        assert '1 persistent task' in result
-
-    def test_reasoning_state_task_count_plural(self, db):
-        _seed_persistent_task(db, 'Task A', 'accepted', 0)
-        _seed_persistent_task(db, 'Task B', 'in_progress', 2)
-
-        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
-        result = _reasoning_persistent_tasks()
-
-        assert '2 persistent tasks' in result
-
-    def test_reasoning_state_no_tasks_returns_empty(self, db):
-        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
-        result = _reasoning_persistent_tasks()
-
-        assert result == ''
 
     @patch(_UTC_NOW, return_value=_FIXED_NOW)
     def test_reasoning_state_shows_reminders(self, mock_now, db):

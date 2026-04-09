@@ -201,7 +201,6 @@ if __name__ == "__main__":
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
-    from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
 
     # Preload embedding model singleton
@@ -240,7 +239,6 @@ if __name__ == "__main__":
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
     # Moment enrichment service

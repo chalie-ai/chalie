@@ -81,7 +81,7 @@ class TestInteractionLogServiceConstructor:
 # ── get_activity_feed ─────────────────────────────────────────────────────────
 
 class TestGetActivityFeed:
-    def _make_service(self, interaction_rows=None, task_rows=None, scheduled_rows=None):
+    def _make_service(self, interaction_rows=None, scheduled_rows=None):
         """Build an InteractionLogService with a mocked DB returning given rows."""
         from services.interaction_log_service import InteractionLogService
         db = MagicMock()
@@ -94,7 +94,6 @@ class TestGetActivityFeed:
         # fetchall returns different rows for each successive call
         cursor.fetchall.side_effect = [
             interaction_rows or [],
-            task_rows or [],
             scheduled_rows or [],
         ]
         return InteractionLogService(db)
@@ -122,17 +121,6 @@ class TestGetActivityFeed:
         assert len(result['items']) == 1
         assert result['items'][0]['source'] == 'autonomous'
         assert result['items'][0]['type'] == 'proactive_sent'
-
-    def test_persistent_task_events_included(self):
-        now = datetime.now(timezone.utc)
-        task_rows = [
-            (1, 'Research topic', 'in_progress', {'last_summary': 'Found 3 sources', 'coverage_estimate': 0.4, 'cycles_completed': 2}, now),
-        ]
-        svc = self._make_service(task_rows=task_rows)
-        result = svc.get_activity_feed()
-        assert len(result['items']) == 1
-        assert result['items'][0]['source'] == 'background_task'
-        assert result['items'][0]['summary'] == 'Found 3 sources'
 
     def test_scheduler_events_included(self):
         now = datetime.now(timezone.utc)

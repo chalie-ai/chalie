@@ -31,7 +31,6 @@ DATA_TABLES = [
     'list_events',
     'documents',
     'document_chunks',
-    'persistent_tasks',
     'place_fingerprints',
     'moments',
     'tool_performance_metrics',

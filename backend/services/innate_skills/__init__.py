@@ -20,7 +20,7 @@ from services.innate_skills.introspect_skill import handle_introspect
 from services.innate_skills.scheduler_skill import handle_scheduler
 from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.list_skill import handle_list
-from services.innate_skills.persistent_task_skill import handle_persistent_task
+from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 from services.innate_skills.find_tools_skill import handle_find_tools
@@ -41,7 +41,7 @@ _SKILL_HANDLERS = {
     'schedule': handle_scheduler,
     'autobiography': handle_autobiography,
     'list': handle_list,
-    'persistent_task': handle_persistent_task,
+    'goal_pursuit': handle_goal_pursuit,
     'document': handle_document,
     'read': handle_read,
     'find_tools': handle_find_tools,
@@ -69,7 +69,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["schedule"] = lambda channel, action: handle_scheduler(channel, action)
     dispatcher.handlers["autobiography"] = lambda channel, action: handle_autobiography(channel, action)
     dispatcher.handlers["list"] = lambda channel, action: handle_list(channel, action)
-    dispatcher.handlers["persistent_task"] = lambda channel, action: handle_persistent_task(channel, action)
+    dispatcher.handlers["goal_pursuit"] = lambda channel, action: handle_goal_pursuit(channel, action)
     dispatcher.handlers["document"] = lambda channel, action: handle_document(channel, action)
     dispatcher.handlers["read"] = lambda channel, action: handle_read(channel, action)
     dispatcher.handlers["find_tools"] = lambda channel, action: handle_find_tools(channel, action)

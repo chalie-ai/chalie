@@ -102,7 +102,7 @@ class TestDeleteAll:
         required_tables = [
             'episodes', 'knowledge',
             'transcript', 'autobiography', 'scheduled_items',
-            'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
+            'lists', 'identity_vectors', 'place_fingerprints',
             'interaction_log', 'cortex_iterations',
         ]
         for table in required_tables:
@@ -132,7 +132,7 @@ class TestDataSummary:
 
         required_tables = [
             'episodes', 'knowledge', 'transcript',
-            'autobiography', 'scheduled_items', 'persistent_tasks',
+            'autobiography', 'scheduled_items',
             'lists', 'place_fingerprints',
             'interaction_log',
         ]
@@ -152,7 +152,7 @@ class TestExportData:
         required_tables = [
             'episodes', 'knowledge',
             'transcript', 'autobiography', 'scheduled_items',
-            'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
+            'lists', 'list_items', 'place_fingerprints',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in export_data table list"

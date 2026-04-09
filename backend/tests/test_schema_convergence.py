@@ -89,7 +89,6 @@ class TestSchemaConvergence:
             "providers",
             "tool_calls",
             "compactions",
-            "persistent_tasks",
             "lists",
         }
         missing = expected - tables

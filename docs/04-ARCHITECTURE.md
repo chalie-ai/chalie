@@ -115,7 +115,7 @@ frontend/
 - **`act_dispatcher_service.py`** — Routes tool calls to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`tool_call_service.py`** — Unified API for all `tool_calls` table writes and reads. Methods: `store()`, `store_batch()`, `get_by_transcript()`, `get_by_timerange()`, `get_find_tools_results()`. `ephemeral` flag controls visibility in Previous Turns (ephemeral records — tool loop results, steers — are excluded; non-ephemeral — file tags, nudges — are included).
-- **`persistent_task_service.py`** — Multi-session background task management with state machine (ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; 5 active tasks max
+- **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass that runs a single goal string in a daemon thread with higher limits (50 iterations, 2h timeout); channel-isolated (`goal_pursuit:{uuid}`); surfaces result via `OutputService.enqueue_proactive()`; uses `review_tool_calls` skill to recall prior work if context was compacted
 
 #### Constants & Registries
 - **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
@@ -159,7 +159,7 @@ Built-in cognitive skills always available to the LLM:
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`persistent_task_skill.py`** — Multi-session background task management: create, pause, resume, cancel, check status, list (<100ms; create enqueues task for three-phase background execution)
+- **`goal_pursuit_skill.py`** — Spawn a background goal pursuit: takes a single `goal` string, creates a `GoalPursuitProcessor` daemon thread in a channel-isolated context (`goal_pursuit:{uuid}`), returns immediately; result surfaces as a proactive message when complete
 - **`document_skill.py`** — Document search and management: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves tool outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
@@ -188,7 +188,7 @@ Built-in cognitive skills always available to the LLM:
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
-- **Persistent Task Worker** — Runs eligible multi-session background tasks via three-phase execution (30min cycle with ±30% jitter): (1) PLAN — single LLM call generates a 2–6 step guidance plan; (2) EXECUTE — tool loop with up to 200 iterations, no timeout; `sub_agent` innate skill available for spawning focused sub-workers (50 iterations each); (3) SURFACE — result injected into digest worker, LLM produces natural summary; outer loop denies `persistent_task` skill, sub-agents deny both `persistent_task` and `sub_agent`
+- **Goal Pursuit** — `GoalPursuitProcessor` daemon thread spawned by the `goal_pursuit` innate skill; runs up to 50 tool-loop iterations with a 2h timeout; no plan phase, no state machine, no checkpoints; uses `frontal-cortex-unified` provider job; surfaces completion via `OutputService.enqueue_proactive()`
 - **Document Worker** — PromptQueue worker for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
 - **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in ``vault_config``; unlocked post-login; migrates legacy Fernet data on first unlock
@@ -307,7 +307,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Operational Limits
 - **Tool loop**: 30 max iterations, 15 min cumulative timeout; per-iteration synthesis sent via WebSocket
-- **Persistent tasks**: 5 active max, 14-day auto-expiry; execution bounded by iterations (200 outer, 50 per sub-agent), no wall-clock timeout
+- **Goal pursuit**: 50 max iterations, 2h wall-clock timeout; no concurrency cap, no state machine
 - **Fatigue budget**: 2.5 activation units per 30min
 - **Per-concept cooldown**: 60min (prevents circular rumination)
 - **Delegation rate**: 1 per topic per 30min

@@ -568,22 +568,7 @@ class SelfModelService:
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
 
-                # 4. Stuck tasks: in_progress with iterations >= max
-                try:
-                    stuck = conn.execute("""
-                        SELECT COUNT(*) FROM persistent_tasks
-                        WHERE status = 'in_progress'
-                          AND iterations_used >= max_iterations
-                    """).fetchone()[0]
-                    if stuck > 0:
-                        checks.append({
-                            'signal': f"{stuck} task(s) stuck: iterations exhausted but still in_progress",
-                            'severity': 0.7,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Stuck tasks check failed: {e}", exc_info=True)
-
-                # 5. Proactive rejection rate: >95% in last 24h
+                # 4. Proactive rejection rate: >95% in last 24h
                 try:
                     candidates = conn.execute("""
                         SELECT COUNT(*) FROM interaction_log

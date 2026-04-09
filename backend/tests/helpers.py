@@ -2,64 +2,13 @@
 Test data factories — produce realistic row tuples matching actual DB column orders.
 
 Usage:
-    from tests.helpers import make_task_row, make_scheduled_item, make_trait_row
+    from tests.helpers import make_scheduled_item, make_trait_row
 
 All factories return tuples (matching cursor.fetchone/fetchall) unless
 noted otherwise.  Override any field via keyword argument.
 """
 
-import json
 from datetime import datetime, timezone, timedelta
-
-
-# ─── persistent_tasks ────────────────────────────────────────────────
-# Column order matches: SELECT id, account_id, thread_id, goal, scope,
-#   status, priority, progress, result, result_artifact, iterations_used,
-#   max_iterations, created_at, updated_at, expires_at, deadline,
-#   next_run_after, fatigue_budget
-
-def make_task_row(
-    task_id=1,
-    account_id=1,
-    thread_id=None,
-    goal="Test background task",
-    scope=None,
-    status="accepted",
-    priority=5,
-    progress=None,
-    result=None,
-    result_artifact=None,
-    iterations_used=0,
-    max_iterations=20,
-    created_at=None,
-    updated_at=None,
-    expires_at=None,
-    deadline=None,
-    next_run_after=None,
-    fatigue_budget=15.0,
-):
-    """Return an 18-element tuple matching persistent_tasks SELECT order."""
-    now = datetime.now(timezone.utc)
-    return (
-        task_id,
-        account_id,
-        thread_id,
-        goal,
-        scope,
-        status,
-        priority,
-        json.dumps(progress) if isinstance(progress, dict) else (progress or "{}"),
-        result,
-        json.dumps(result_artifact) if isinstance(result_artifact, dict) else result_artifact,
-        iterations_used,
-        max_iterations,
-        created_at or now,
-        updated_at or now,
-        expires_at or (now + timedelta(days=14)),
-        deadline,
-        next_run_after,
-        fatigue_budget,
-    )
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────

@@ -38,7 +38,6 @@ TEMPORAL_PAST_DECAY_HOURS = 24.0  # Completed items decay over 24 hours
 # Limits
 MAX_WORLD_STATE_ITEMS = 5
 MAX_SCHEDULED_CANDIDATES = 10
-MAX_TASK_CANDIDATES = 10
 MAX_LIST_CANDIDATES = 10
 MAX_EXTERNAL_SIGNAL_CANDIDATES = 10
 
@@ -109,7 +108,6 @@ class WorldStateService:
         else:
             db_items = []
             db_items.extend(self._get_salient_scheduled_items(message_embedding))
-            db_items.extend(self._get_salient_tasks(message_embedding))
             db_items.extend(self._get_salient_lists(message_embedding))
             items.extend(self._collapse_items(db_items))
 
@@ -144,7 +142,6 @@ class WorldStateService:
             payload: dict = {
                 'refreshed_at': time.time(),
                 'scheduled_items': [],
-                'persistent_tasks': [],
                 'lists': [],
             }
 
@@ -171,26 +168,6 @@ class WorldStateService:
                         'item_type': item_type,
                         'recurrence': recurrence,
                         'metadata': metadata,
-                    })
-
-                # Persistent tasks
-                cursor.execute("""
-                    SELECT id, goal, status, progress, updated_at, deadline
-                    FROM persistent_tasks
-                    WHERE status IN ('active', 'running', 'paused', 'accepted', 'in_progress')
-                       OR (status = 'completed' AND updated_at >= datetime(?, '-48 hours'))
-                    ORDER BY updated_at DESC
-                    LIMIT ?
-                """, (now.isoformat(), MAX_TASK_CANDIDATES))
-                for row in cursor.fetchall():
-                    task_id, goal, status, progress_json, updated_at_str, deadline_str = row
-                    payload['persistent_tasks'].append({
-                        'id': task_id,
-                        'goal': goal,
-                        'status': status,
-                        'progress': progress_json,
-                        'updated_at': updated_at_str,
-                        'deadline': deadline_str,
                     })
 
                 # Lists
@@ -224,95 +201,10 @@ class WorldStateService:
             logger.debug(
                 f"{LOG_PREFIX} Cache refreshed: "
                 f"{len(payload['scheduled_items'])} scheduled, "
-                f"{len(payload['persistent_tasks'])} tasks, "
                 f"{len(payload['lists'])} lists"
             )
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} refresh_model failed (non-fatal): {e}")
-
-    def notify_task_changed(
-        self,
-        task_id,
-        goal: str,
-        status: str,
-        progress_json,
-        updated_at,
-        deadline,
-    ) -> None:
-        """
-        Update the cached world model when a persistent task changes state.
-
-        If the cache doesn't exist, do nothing — the next refresh_model() call
-        will populate it. Fail-open.
-
-        Args:
-            task_id: Integer or string task identifier.
-            goal: Task goal text.
-            status: New task status string.
-            progress_json: Progress JSON string or dict (may be None).
-            updated_at: Updated-at timestamp (float, string, or datetime).
-            deadline: Deadline timestamp (may be None).
-        """
-        try:
-            store = self._get_store()
-            raw = store.get(WORLD_MODEL_KEY)
-            if not raw:
-                return
-
-            payload = json.loads(raw)
-            tasks = payload.get('persistent_tasks', [])
-
-            # Normalise task_id for comparison
-            try:
-                tid = int(task_id) if task_id is not None else None
-            except (TypeError, ValueError):
-                tid = task_id
-
-            # Serialise updated_at and deadline to ISO strings if needed
-            def _to_iso(val):
-                if val is None:
-                    return None
-                if isinstance(val, str):
-                    return val
-                if isinstance(val, (int, float)):
-                    from datetime import datetime, timezone
-                    return datetime.fromtimestamp(val, tz=timezone.utc).isoformat()
-                if hasattr(val, 'isoformat'):
-                    return val.isoformat()
-                return str(val)
-
-            updated_entry = {
-                'id': tid,
-                'goal': goal or '',
-                'status': status or '',
-                'progress': progress_json if isinstance(progress_json, str) else (
-                    json.dumps(progress_json) if progress_json else None
-                ),
-                'updated_at': _to_iso(updated_at),
-                'deadline': _to_iso(deadline),
-            }
-
-            # Update existing entry or append new one
-            found = False
-            for i, t in enumerate(tasks):
-                try:
-                    existing_id = int(t.get('id')) if t.get('id') is not None else None
-                except (TypeError, ValueError):
-                    existing_id = t.get('id')
-                if existing_id == tid:
-                    tasks[i] = updated_entry
-                    found = True
-                    break
-
-            if not found:
-                tasks.append(updated_entry)
-
-            payload['persistent_tasks'] = tasks
-            # Preserve remaining TTL — re-set with full TTL is acceptable here
-            store.setex(WORLD_MODEL_KEY, WORLD_MODEL_TTL, json.dumps(payload))
-            logger.debug(f"{LOG_PREFIX} notify_task_changed: task {tid} → {status}")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} notify_task_changed failed (non-fatal): {e}")
 
     def notify_schedule_changed(
         self,
@@ -656,64 +548,6 @@ class WorldStateService:
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Cache: scheduled item error: {e}")
 
-            # --- Persistent tasks ---
-            for entry in payload.get('persistent_tasks', []):
-                try:
-                    task_id = entry.get('id')
-                    goal = entry.get('goal', '')
-                    status = entry.get('status', '')
-                    progress_json = entry.get('progress')
-                    updated_at_str = entry.get('updated_at')
-                    deadline_str = entry.get('deadline')
-
-                    if deadline_str:
-                        deadline = parse_utc(deadline_str)
-                        temporal = self._temporal_score(
-                            now, deadline, status == 'completed'
-                        )
-                    elif status == 'completed':
-                        updated = parse_utc(updated_at_str) if updated_at_str else now
-                        temporal = self._past_decay_score(now, updated)
-                    else:
-                        temporal = 0.5
-
-                    semantic = 0.0
-                    if message_embedding and conn and task_id is not None:
-                        semantic = self._semantic_score_task(
-                            conn, task_id, message_embedding
-                        )
-
-                    salience = W_TEMPORAL * temporal + W_SEMANTIC * semantic
-                    if salience < SALIENCE_THRESHOLD:
-                        continue
-
-                    progress = (
-                        json.loads(progress_json) if progress_json else {}
-                    ) if isinstance(progress_json, str) else (progress_json or {})
-                    coverage = progress.get('coverage_estimate', 0)
-
-                    if status == 'completed':
-                        label = f"[COMPLETED] {goal[:80]}"
-                    else:
-                        deadline_hint = ""
-                        if deadline_str:
-                            deadline_dt = parse_utc(deadline_str)
-                            deadline_hint = (
-                                f" — due {self._relative_time(now, deadline_dt)}"
-                            )
-                        label = (
-                            f"[{status.upper()}] {goal[:80]} "
-                            f"({coverage:.0%}){deadline_hint}"
-                        )
-
-                    items.append({
-                        'type': 'task',
-                        'label': label,
-                        'salience': salience,
-                    })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Cache: task error: {e}")
-
             # --- Lists ---
             for entry in payload.get('lists', []):
                 try:
@@ -885,14 +719,6 @@ class WorldStateService:
                     except Exception as e:
                         logger.debug(f"{LOG_PREFIX} Skipping malformed scheduled entry: {e}", exc_info=False)
 
-                for entry in payload.get('persistent_tasks', []):
-                    try:
-                        status = entry.get('status', '')
-                        goal = entry.get('goal', '')
-                        summary['tasks'].append(f"[{status.upper()}] {goal[:80]}")
-                    except Exception as e:
-                        logger.debug(f"{LOG_PREFIX} Skipping malformed task entry: {e}", exc_info=False)
-
                 for entry in payload.get('lists', []):
                     try:
                         summary['lists'].append(entry.get('name', ''))
@@ -977,83 +803,6 @@ class WorldStateService:
             return items
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Scheduled items unavailable: {e}")
-            return []
-
-    def _get_salient_tasks(self, message_embedding: list = None) -> list:
-        """Retrieve persistent tasks scored by temporal + semantic salience."""
-        try:
-            db = self._get_db()
-            now = utc_now()
-            items = []
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Active tasks + recently completed (last 48 hours)
-                cursor.execute("""
-                    SELECT id, goal, status, progress, updated_at, deadline
-                    FROM persistent_tasks
-                    WHERE status IN ('active', 'running', 'paused', 'accepted', 'in_progress')
-                       OR (status = 'completed' AND updated_at >= datetime(?, '-48 hours'))
-                    ORDER BY updated_at DESC
-                    LIMIT ?
-                """, (now.isoformat(), MAX_TASK_CANDIDATES))
-                rows = cursor.fetchall()
-
-                for row in rows:
-                    task_id, goal, status, progress_json, updated_at_str, deadline_str = row
-
-                    # Temporal score: prefer deadline if available
-                    if deadline_str:
-                        deadline = parse_utc(deadline_str)
-                        temporal = self._temporal_score(
-                            now, deadline, status == 'completed'
-                        )
-                    elif status == 'completed':
-                        updated = parse_utc(updated_at_str)
-                        temporal = self._past_decay_score(now, updated)
-                    else:
-                        # Active task with no deadline — moderate baseline salience
-                        temporal = 0.5
-
-                    semantic = 0.0
-                    if message_embedding:
-                        semantic = self._semantic_score_task(
-                            conn, task_id, message_embedding
-                        )
-
-                    salience = W_TEMPORAL * temporal + W_SEMANTIC * semantic
-
-                    if salience >= SALIENCE_THRESHOLD:
-                        progress = (
-                            json.loads(progress_json)
-                            if progress_json
-                            else {}
-                        )
-                        coverage = progress.get('coverage_estimate', 0)
-
-                        if status == 'completed':
-                            label = f"[COMPLETED] {goal[:80]}"
-                        else:
-                            deadline_hint = ""
-                            if deadline_str:
-                                deadline_dt = parse_utc(deadline_str)
-                                deadline_hint = (
-                                    f" — due {self._relative_time(now, deadline_dt)}"
-                                )
-                            label = (
-                                f"[{status.upper()}] {goal[:80]} "
-                                f"({coverage:.0%}){deadline_hint}"
-                            )
-
-                        items.append({
-                            'type': 'task',
-                            'label': label,
-                            'salience': salience,
-                        })
-
-            return items
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Tasks unavailable: {e}")
             return []
 
     def _get_salient_lists(self, message_embedding: list = None) -> list:
@@ -1190,37 +939,6 @@ class WorldStateService:
         except Exception as e:
             logger.debug(
                 f"{LOG_PREFIX} Semantic score failed for scheduled item {item_id}: {e}"
-            )
-            return 0.0
-
-    def _semantic_score_task(
-        self, conn, task_id: int, message_embedding: list
-    ) -> float:
-        """
-        Cosine similarity between the current message and a persistent task goal.
-
-        Falls back to 0.0 on any error.
-        """
-        try:
-            packed = pack_embedding(message_embedding)
-            cursor = conn.cursor()
-
-            # KNN search: retrieve up to MAX_TASK_CANDIDATES nearest neighbours
-            cursor.execute("""
-                SELECT rowid, distance
-                FROM persistent_tasks_vec
-                WHERE embedding MATCH ? AND k = ?
-            """, (packed, MAX_TASK_CANDIDATES))
-
-            for vec_row in cursor.fetchall():
-                if vec_row[0] == task_id:
-                    distance = vec_row[1]
-                    return max(0.0, 1.0 - distance)
-
-            return 0.0
-        except Exception as e:
-            logger.debug(
-                f"{LOG_PREFIX} Semantic score failed for task {task_id}: {e}"
             )
             return 0.0
 

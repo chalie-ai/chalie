@@ -29,7 +29,7 @@ is logged on startup if the model directory is absent.
 
 Integration points:
   - ActDispatcherService: gate external actions by tier before execution
-  - PersistentTaskWorker: verify tier before each background cycle
+  - GoalPursuitProcessor: verify tier before each background cycle
 """
 
 import logging

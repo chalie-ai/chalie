@@ -555,3 +555,83 @@ class TestNormalizeResponse:
 
         assert result['model'] == 'gpt-4o'
         assert result['provider'] == 'openai'
+
+
+# ── Subclass MAX_ITERATIONS / MAX_TIMEOUT overrides ───────────────────────────
+
+class TestSubclassLimitOverrides:
+    """Verify that getattr(self, 'MAX_ITERATIONS', ...) respects subclass overrides."""
+
+    def test_subclass_max_iterations_respected(
+        self,
+        mock_transcript_append, mock_providers,
+        mock_dispatcher, mock_tool_call_svc, mock_skills
+    ):
+        """A subclass with MAX_ITERATIONS=5 must exit the loop after 5 iterations."""
+        class LowLimitProcessor(MessageProcessor):
+            MAX_ITERATIONS = 5
+
+        proc = LowLimitProcessor()
+
+        tc = _tool_call('memory')
+        mock_providers.send.return_value = _make_llm_response(tool_calls=[tc])
+        # Every send_messages call returns another tool call — infinite loop if cap ignored
+        mock_providers.send_messages.return_value = _make_llm_response(tool_calls=[tc])
+
+        proc.send('ask', 'sys', channel='user')
+
+        # Loop may execute at most MAX_ITERATIONS dispatches
+        assert mock_dispatcher.dispatch_action.call_count <= 5
+
+    def test_subclass_max_iterations_lower_than_module_default(
+        self,
+        mock_transcript_append, mock_providers,
+        mock_dispatcher, mock_tool_call_svc, mock_skills
+    ):
+        """The subclass cap (5) must be strictly lower than the module default (30)."""
+        class LowLimitProcessor(MessageProcessor):
+            MAX_ITERATIONS = 5
+
+        proc = LowLimitProcessor()
+
+        tc = _tool_call('memory')
+        mock_providers.send.return_value = _make_llm_response(tool_calls=[tc])
+        mock_providers.send_messages.return_value = _make_llm_response(tool_calls=[tc])
+
+        proc.send('ask', 'sys', channel='user')
+
+        # With only 5 iterations allowed, dispatch should never reach the module default
+        assert mock_dispatcher.dispatch_action.call_count < MAX_ITERATIONS
+
+    def test_subclass_max_timeout_respected(
+        self,
+        mock_transcript_append, mock_providers,
+        mock_dispatcher, mock_tool_call_svc, mock_skills
+    ):
+        """A subclass with MAX_TIMEOUT=10 must exit when simulated time exceeds 10s."""
+        class ShortTimeoutProcessor(MessageProcessor):
+            MAX_TIMEOUT = 10
+
+        proc = ShortTimeoutProcessor()
+
+        tc = _tool_call('memory')
+        mock_providers.send.return_value = _make_llm_response(tool_calls=[tc])
+        mock_providers.send_messages.return_value = _make_llm_response(tool_calls=[tc])
+
+        import time as _time_module
+        original_time = _time_module.time
+        call_count = [0]
+
+        def fast_time():
+            call_count[0] += 1
+            # After a few calls, jump beyond the subclass's 10s timeout
+            if call_count[0] > 4:
+                return original_time() + 100
+            return original_time()
+
+        with patch('services.message_processor.time') as mock_time:
+            mock_time.time.side_effect = fast_time
+            proc.send('ask', 'sys', channel='user')
+
+        # Loop must have exited early, well before the module default MAX_ITERATIONS
+        assert mock_dispatcher.dispatch_action.call_count < MAX_ITERATIONS

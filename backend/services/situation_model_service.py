@@ -328,8 +328,6 @@ class SituationModelService:
                 # Flatten all item types into summary dicts
                 for item in payload.get("scheduled_items", []):
                     items.append({"type": "scheduled", "label": item.get("message", "")})
-                for item in payload.get("persistent_tasks", []):
-                    items.append({"type": "task", "label": item.get("description", "")})
                 for item in payload.get("lists", []):
                     items.append({"type": "list", "label": item.get("name", "")})
             return {

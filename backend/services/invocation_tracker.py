@@ -25,7 +25,7 @@ _REWARD_MAP = {
     # Identity
     'autobiography': lambda ok, res: 0.1 if ok else 0.0,
     # Task management
-    'persistent_task': lambda ok, res: 0.2 if ok else -0.1,
+    'goal_pursuit': lambda ok, res: 0.2 if ok else -0.1,
     # Research / discovery
     'read': lambda ok, res: 0.2 if ok else -0.1,
     'find_tools': lambda ok, res: 0.1 if ok else 0.0,

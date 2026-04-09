@@ -144,14 +144,14 @@ Key subsystems worth knowing about:
 - **DMN Service**: Default Mode Network — timer-based proactive intelligence (60min idle → recent context, 6h cadence → salience context); calls unified_generate with proactive=True
 - **Tool Loop**: Standard tool-calling while loop inside `MessageProcessor.send()` — LLM calls, dispatches via `ActDispatcherService`, stores ephemeral results via `ToolCallService`, appends tool_result messages, repeats; safety cap 30 iterations / 15 min
 - **ToolCallService**: Unified API for all `tool_calls` table operations; `ephemeral` flag controls what appears in Previous Turns context
-- **Persistent Task Service**: Multi-session background tasks with state machine; three-phase execution (plan → execute → surface); `sub_agent` skill available during execution for spawning focused workers
+- **Goal Pursuit**: `GoalPursuitProcessor` daemon thread (subclass of `MessageProcessor`) spawned by the `goal_pursuit` innate skill; single `goal` string parameter; 50 iterations / 2h timeout; no state machine, no plan phase; surfaces via `OutputService.enqueue_proactive()`
 - **Document Service**: Hybrid search (semantic + FTS + keyword boost via RRF), soft delete, duplicate detection
 - **Event Bridge**: Connects ambient context changes to goal signal routing with stabilization windows and focus gates
 - **Interface Layer**: External apps pair via bluetooth-style protocol, expose tool capabilities, health-monitored (30s interval, 3-failure threshold)
 
 ### Innate Skills (`backend/services/innate_skills/`)
 Built-in cognitive skills always available to the LLM:
-`memory`, `introspect`, `associate`, `schedule`, `autobiography`, `list`, `persistent_task`, `document`, `read`, `reflect`, `find_tools`, `notes`, `goals`, `rich_render`, `sub_agent`, `review_tool_calls`
+`memory`, `introspect`, `associate`, `schedule`, `autobiography`, `list`, `goal_pursuit`, `document`, `read`, `reflect`, `find_tools`, `notes`, `goals`, `rich_render`, `review_tool_calls`
 
 ## Code Organization
 

@@ -285,34 +285,22 @@ class TestSystemAPI:
     # GET /system/observability/tasks
     # ────────────────────────────────────────────
 
-    def test_observability_tasks_returns_all_sections(self, client, db):
-        """GET /system/observability/tasks returns persistent_tasks."""
-        # Seed a master_account row so the endpoint's account_id query works
-        db.execute(
-            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'admin', 'hash')"
-        )
-        db.commit()
-
-        mock_pt_svc = MagicMock()
-        mock_pt_svc.get_active_tasks.return_value = [{'id': 1, 'goal': 'research X', 'state': 'active'}]
-
-        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc):
-            resp = client.get('/system/observability/tasks')
+    def test_observability_tasks_returns_goal_ecology_stats(self, client):
+        """GET /system/observability/tasks returns goal_ecology_stats."""
+        resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert len(data['persistent_tasks']) == 1
-        assert data['persistent_tasks'][0]['goal'] == 'research X'
         assert 'generated_at' in data
+        assert 'goal_ecology_stats' in data
 
-    def test_observability_tasks_handles_sub_service_failures(self, client):
-        """GET /system/observability/tasks gracefully handles individual sub-service failures."""
-        with patch('services.persistent_task_service.PersistentTaskService', side_effect=RuntimeError('pt down')):
+    def test_observability_tasks_handles_store_failures(self, client):
+        """GET /system/observability/tasks returns 200 even if store query fails."""
+        with patch('services.memory_client.MemoryClientService.create_connection', side_effect=RuntimeError('store down')):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['persistent_tasks'] == []
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -473,19 +461,6 @@ class TestSystemAPI:
         mock_cls.assert_called_once()
         from services.database_service import get_shared_db_service
         assert mock_cls.call_args[0][0] is get_shared_db_service()
-
-    def test_observability_tasks_passes_db_to_persistent_task_service(self, client, db):
-        """PersistentTaskService must be constructed with get_shared_db_service()."""
-        mock_pt_svc = MagicMock()
-        mock_pt_svc.get_active_tasks.return_value = []
-        mock_pt_cls = MagicMock(return_value=mock_pt_svc)
-
-        with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls):
-            resp = client.get('/system/observability/tasks')
-
-        assert resp.status_code == 200
-        from services.database_service import get_shared_db_service
-        mock_pt_cls.assert_called_once_with(get_shared_db_service())
 
     def test_observability_autobiography_passes_db_to_both_services(self, client, db):
         """AutobiographyService and AutobiographyDeltaService must receive get_shared_db_service()."""

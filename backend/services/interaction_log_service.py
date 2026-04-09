@@ -228,8 +228,7 @@ class InteractionLogService:
     def get_activity_feed(self, since_hours: int = 24, limit: int = 50, offset: int = 0) -> dict:
         """
         Unified activity feed: what Chalie did autonomously.
-        Aggregates interaction_log + persistent_tasks + scheduled_items
-        into a single chronological feed.
+        Aggregates interaction_log + scheduled_items into a single chronological feed.
 
         Args:
             since_hours: How far back to look (default 24h, max 168h/7 days)
@@ -271,34 +270,7 @@ class InteractionLogService:
                         'occurred_at': row[5],
                     })
 
-                # 2. Persistent tasks that changed in the window
-                try:
-                    cursor.execute(
-                        "SELECT id, goal, status, progress, updated_at "
-                        "FROM persistent_tasks "
-                        "WHERE updated_at > ? "
-                        "ORDER BY updated_at DESC LIMIT ?",
-                        (since_str, sql_cap)
-                    )
-                    for row in cursor.fetchall():
-                        progress = row[3] if isinstance(row[3], dict) else (json.loads(row[3]) if row[3] else {})
-                        items.append({
-                            'source': 'background_task',
-                            'type': f'task_{row[2]}',
-                            'channel': row[1],
-                            'summary': progress.get('last_summary', f'Task {row[2]}'),
-                            'detail': {
-                                'task_id': row[0],
-                                'status': row[2],
-                                'coverage': progress.get('coverage_estimate'),
-                                'cycles': progress.get('cycles_completed'),
-                            },
-                            'occurred_at': row[4],
-                        })
-                except Exception as e:
-                    logging.debug(f"[ACTIVITY FEED] persistent_tasks unavailable: {e}")
-
-                # 3. Fired scheduled items
+                # 2. Fired scheduled items
                 try:
                     cursor.execute(
                         "SELECT id, message, item_type, channel, last_fired_at "

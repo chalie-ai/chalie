@@ -180,15 +180,6 @@ class DMNService:
                 lines = [f"- {description or ''}" for (description,) in goals]
                 sections.append("Active goals:\n" + '\n'.join(lines))
 
-            # Accepted (queued) background tasks
-            cursor.execute(
-                "SELECT goal, status FROM persistent_tasks WHERE status = 'accepted' LIMIT 10"
-            )
-            tasks = cursor.fetchall()
-            if tasks:
-                lines = [f"- {goal or ''} ({status})" for goal, status in tasks]
-                sections.append("Pending tasks:\n" + '\n'.join(lines))
-
         return '\n\n'.join(sections)
 
     def _active_topic(self) -> str:

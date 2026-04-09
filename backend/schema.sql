@@ -522,33 +522,9 @@ CREATE TABLE IF NOT EXISTS place_fingerprints (
 
 CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
 
--- ────────────────────────────────────────────────────────────────
--- PERSISTENT TASKS — multi-session ACT work
--- Valid states: accepted, in_progress, paused, completed, cancelled, expired, stalled
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS persistent_tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id INTEGER REFERENCES master_account(id),
-    channel TEXT,
-    goal TEXT NOT NULL,
-    scope TEXT,
-    status TEXT DEFAULT 'accepted',
-    priority INTEGER DEFAULT 5,
-    progress TEXT DEFAULT '{}',              -- JSONB
-    result TEXT,
-    result_artifact TEXT,                    -- JSONB
-    iterations_used INTEGER DEFAULT 0,
-    max_iterations INTEGER DEFAULT 20,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    expires_at TEXT DEFAULT (datetime('now', '+14 days')),
-    deadline TEXT,
-    next_run_after TEXT,
-    fatigue_budget REAL DEFAULT 15.0
-);
-
-CREATE INDEX IF NOT EXISTS idx_persistent_tasks_status ON persistent_tasks(account_id, status);
-CREATE INDEX IF NOT EXISTS idx_persistent_tasks_next_run ON persistent_tasks(status, next_run_after);
+-- persistent_tasks table removed — replaced by goal_pursuit skill + GoalPursuitProcessor.
+DROP TABLE IF EXISTS persistent_tasks;
+DROP TABLE IF EXISTS persistent_tasks_vec;
 
 -- cognitive_reflexes table removed — CognitiveReflexService removed.
 DROP TABLE IF EXISTS cognitive_reflexes;
@@ -739,7 +715,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]
 CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS goals_vec USING vec0(embedding float[768]);
 

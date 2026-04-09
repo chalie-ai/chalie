@@ -88,9 +88,11 @@ class MessageProcessor:
         iteration = 0
         timed_out = False
         loop_start = time.time()
+        max_iter = getattr(self, 'MAX_ITERATIONS', MAX_ITERATIONS)
+        max_timeout = getattr(self, 'MAX_TIMEOUT', MAX_TIMEOUT)
 
-        while llm_response.tool_calls and iteration < MAX_ITERATIONS:
-            if time.time() - loop_start > MAX_TIMEOUT:
+        while llm_response.tool_calls and iteration < max_iter:
+            if time.time() - loop_start > max_timeout:
                 logger.warning(f"[TOOL LOOP] Timeout after {iteration} iterations for channel={channel!r}")
                 timed_out = True
                 break

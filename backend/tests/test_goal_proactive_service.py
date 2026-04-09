@@ -11,7 +11,7 @@ from services.goal_proactive_service import (
     _calculate_social_cost,
     _choose_output_style,
     _execute_proactive,
-    _execute_via_persistent_task,
+    _execute_via_goal_pursuit,
     _execute_via_proactive_push,
     _learn_quiet_hours,
     MIN_CONFIDENCE_FOR_ACTION,
@@ -398,104 +398,45 @@ class TestProactiveExecution:
 
         assert "Based on what you've been working on, I think this could be useful:" not in prompt
 
-    def test_act_style_creates_persistent_task(self, db):
-        """Act-style should create a persistent task, not just push a message."""
-        # Seed master_account so the account_id resolution works
-        db.execute(
-            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
-        )
-        db.commit()
-
+    def test_act_style_spawns_goal_pursuit(self):
+        """Act-style should spawn a GoalPursuitProcessor daemon thread."""
         goal = {
             'id': 'test-goal-id',
             'description': 'Research ML papers',
             'strategy': 'search arxiv for recent publications',
         }
 
-        mock_task_service = MagicMock()
-        mock_task_service.find_duplicate.return_value = None
-        mock_task_service.create_task.return_value = {'id': 42}
-        mock_task_service.transition.return_value = (True, 'ok')
+        result = _execute_proactive(goal, 'act')
 
-        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
-            result = _execute_proactive(goal, 'act')
-
-        assert result['action'] == 'persistent_task_created'
+        assert result['action'] == 'goal_pursuit_spawned'
         assert result['style'] == 'act'
-        assert result['task_id'] == 42
-        mock_task_service.create_task.assert_called_once()
-        mock_task_service.transition.assert_called_once_with(42, 'accepted')
+        assert 'pursuit_id' in result
+        assert 'Research ML papers' in result['task_goal']
 
-    def test_act_style_includes_strategy_in_task_goal(self, db):
+    def test_act_style_includes_strategy_in_task_goal(self):
         """When strategy exists, the task goal should include it."""
-        db.execute(
-            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
-        )
-        db.commit()
-
         goal = {
             'id': 'test-id',
             'description': 'Monitor tech news',
             'strategy': 'search for Python and AI updates weekly',
         }
 
-        mock_task_service = MagicMock()
-        mock_task_service.find_duplicate.return_value = None
-        mock_task_service.create_task.return_value = {'id': 99}
-        mock_task_service.transition.return_value = (True, 'ok')
+        result = _execute_via_goal_pursuit(goal)
 
-        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
-            _execute_via_persistent_task(goal)
+        assert 'Monitor tech news' in result['task_goal']
+        assert 'search for Python and AI updates weekly' in result['task_goal']
 
-        # Verify the task goal includes both description and strategy
-        call_kwargs = mock_task_service.create_task.call_args
-        task_goal = call_kwargs[1].get('goal') or call_kwargs[0][1] if call_kwargs[0] else call_kwargs[1]['goal']
-        assert 'Monitor tech news' in task_goal
-        assert 'search for Python and AI updates weekly' in task_goal
-
-    def test_act_style_deduplicates_tasks(self, db):
-        """If a task already exists for this goal, don't create another."""
-        db.execute(
-            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'testuser', 'hash')"
-        )
-        db.commit()
-
+    def test_act_style_no_strategy_uses_description_only(self):
+        """When strategy is empty, task goal is just the description."""
         goal = {
             'id': 'test-id',
-            'description': 'Already tracked goal',
-            'strategy': 'existing approach',
+            'description': 'Simple goal with no strategy',
+            'strategy': '',
         }
 
-        mock_task_service = MagicMock()
-        mock_task_service.find_duplicate.return_value = {'id': 77, 'goal': 'Already tracked goal'}
+        result = _execute_via_goal_pursuit(goal)
 
-        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_task_service):
-            result = _execute_via_persistent_task(goal)
-
-        assert result['action'] == 'task_exists'
-        assert result['task_id'] == 77
-        mock_task_service.create_task.assert_not_called()
-
-    def test_act_style_fallback_on_failure(self):
-        """If persistent task creation fails, fall back to proactive push."""
-        goal = {
-            'id': 'test-id',
-            'description': 'Fallback goal',
-            'strategy': 'should fallback',
-        }
-
-        # Real store receives the fallback proactive-push payload
-        store = MemoryStore()
-
-        with patch('services.database_service.get_shared_db_service',
-                   side_effect=Exception("DB unavailable")), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=store):
-            result = _execute_via_persistent_task(goal)
-
-        # Should fall back to proactive push with 'suggest' style
-        assert result['action'] == 'proactive_push'
-        assert result['style'] == 'suggest'
+        assert result['task_goal'] == 'Simple goal with no strategy'
 
     def test_ask_pushes_to_prompt_queue(self):
         """Ask-style should push exactly one message to the prompt-queue."""

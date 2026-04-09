@@ -305,96 +305,71 @@ def _execute_proactive(goal: Dict[str, Any], style: str) -> Dict[str, Any]:
       the results when done.
     """
     if style == 'act':
-        return _execute_via_persistent_task(goal)
+        return _execute_via_goal_pursuit(goal)
     else:
         return _execute_via_proactive_push(goal, style)
 
 
-def _execute_via_persistent_task(goal: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_via_goal_pursuit(goal: Dict[str, Any]) -> Dict[str, Any]:
     """
-    High-confidence path: create a persistent task backed by the ACT loop.
+    High-confidence path: spawn a GoalPursuitProcessor in a daemon thread.
 
-    The persistent task worker runs the goal through the full ACT orchestrator
-    with access to all innate skills (recall, search, read, find_tools, etc.).
-    This is how the system autonomously uses tools — e.g., searching for tech news,
-    preparing competitive reports, researching neighborhoods.
-
-    The task is created with scope derived from the goal's strategy and evidence,
-    giving the ACT loop concrete direction rather than a vague objective.
+    Runs the goal through GoalPursuitProcessor with access to all innate skills.
+    When complete, OutputService.enqueue_proactive() surfaces the result.
     """
+    import threading
+    import uuid
+
     goal_id = goal.get('id', 'unknown')
     description = goal.get('description', '')
     strategy = goal.get('strategy', '')
 
-    # Build a scoped task goal that gives the ACT loop direction
     task_goal = description
     if strategy:
         task_goal = f"{description}. Approach: {strategy}"
 
-    try:
-        from services.database_service import get_shared_db_service
-        from services.persistent_task_service import PersistentTaskService
+    pursuit_id = uuid.uuid4().hex[:12]
 
-        db = get_shared_db_service()
-        task_service = PersistentTaskService(db)
-
-        # Resolve account ID
-        account_id = 1
+    def _run():
         try:
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM master_account LIMIT 1")
-                row = cursor.fetchone()
-                cursor.close()
-                if row:
-                    account_id = row[0]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Account ID resolution failed, using default: {e}")
-
-        # Check for duplicate tasks (don't re-create for the same goal)
-        existing = task_service.find_duplicate(task_goal)
-        if existing:
-            logger.info(
-                f"{LOG_PREFIX} Task already exists for goal {goal_id[:8]} "
-                f"(task {existing['id']})"
+            from services.goal_pursuit_processor import GoalPursuitProcessor
+            from services.output_service import OutputService
+            result = GoalPursuitProcessor().process(task_goal, pursuit_id)
+            response_text = result.get('response', '').strip()
+            if not response_text:
+                response_text = "Goal pursuit completed but produced no output."
+            OutputService().enqueue_proactive(
+                topic='user',
+                response=response_text,
+                source='goal_pursuit',
             )
-            return {
-                'action': 'task_exists',
-                'style': 'act',
-                'goal_id': goal_id,
-                'task_id': existing['id'],
-            }
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} Goal pursuit failed for goal {goal_id[:8]}: {e}", exc_info=True)
+            try:
+                from services.output_service import OutputService
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=f"Goal pursuit failed: {e}",
+                    source='goal_pursuit',
+                )
+            except Exception:
+                pass
 
-        task = task_service.create_task(
-            account_id=account_id,
-            goal=task_goal,
-            scope=f"Goal-driven proactive task from goal ecology (goal_id={goal_id})",
-            priority=4,  # Slightly above default — goal-driven tasks matter
-        )
+    t = threading.Thread(target=_run, daemon=True, name=f"goal-pursuit-{pursuit_id}")
+    t.start()
 
-        # Transition to accepted so the worker picks it up
-        task_service.transition(task['id'], 'accepted')
+    logger.info(
+        f"{LOG_PREFIX} Spawned goal pursuit {pursuit_id} for goal "
+        f"{goal_id[:8]}: '{task_goal[:80]}'"
+    )
 
-        logger.info(
-            f"{LOG_PREFIX} Created persistent task {task['id']} for goal "
-            f"{goal_id[:8]}: '{task_goal[:80]}'"
-        )
-
-        return {
-            'action': 'persistent_task_created',
-            'style': 'act',
-            'goal_id': goal_id,
-            'task_id': task['id'],
-            'task_goal': task_goal[:200],
-        }
-
-    except Exception as e:
-        logger.warning(
-            f"{LOG_PREFIX} Persistent task creation failed for goal "
-            f"{goal_id[:8]}, falling back to proactive push: {e}"
-        )
-        # Fallback: if task creation fails, at least push a message
-        return _execute_via_proactive_push(goal, 'suggest')
+    return {
+        'action': 'goal_pursuit_spawned',
+        'style': 'act',
+        'goal_id': goal_id,
+        'pursuit_id': pursuit_id,
+        'task_goal': task_goal[:200],
+    }
 
 
 def _execute_via_proactive_push(goal: Dict[str, Any], style: str) -> Dict[str, Any]:

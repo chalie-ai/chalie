@@ -263,11 +263,6 @@ class TestDMNContextGathering:
             "VALUES (?, ?, 'emergent', 'active', 0.8, 0.9)",
             ('g-1', 'Learn more about astronomy'),
         )
-        # Insert an accepted persistent task — goal is NOT NULL; status has a default
-        db.execute(
-            "INSERT INTO persistent_tasks (goal, status) VALUES (?, 'accepted')",
-            ('Summarise arxiv papers weekly',),
-        )
         db.commit()
 
         svc = _make_service(get_shared_db_service(), store)
@@ -276,10 +271,8 @@ class TestDMNContextGathering:
         assert 'favourite_language' in result
         assert 'Python' in result
         assert 'Learn more about astronomy' in result
-        assert 'Summarise arxiv papers weekly' in result
         assert 'High-priority memories:' in result
         assert 'Active goals:' in result
-        assert 'Pending tasks:' in result
 
     def test_salience_context_empty_tables(self, db, store):
         """_gather_salience_context returns an empty string when all tables are empty."""

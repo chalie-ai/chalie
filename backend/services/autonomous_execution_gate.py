@@ -17,7 +17,7 @@ tuning is worth the complexity.
 
 Integration points:
   - ActDispatcherService: gate external actions by tier before execution
-  - PersistentTaskWorker: verify tier before each background cycle
+  - GoalPursuitProcessor: verify tier before each background cycle
 """
 
 import logging

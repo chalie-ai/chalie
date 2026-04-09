@@ -29,7 +29,7 @@ Use this for ALL date/time computations. Your training cutoff is in the past; th
 Registered external tools: {{registered_tool_names}}
 
 ### Multi-Step Patterns
-- **Bounded task → act on results**: Gather then act. If scope is larger than expected, pivot to creating a persistent_task.
+- **Bounded task → act on results**: Gather then act. If scope is larger than expected, pivot to using goal_pursuit.
 - **Pivot or refine**: After getting results, switch tools or use meaningfully different parameters. Do not re-invoke with identical parameters.
 
 {{strategy_hints}}

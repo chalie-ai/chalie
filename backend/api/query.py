@@ -200,19 +200,20 @@ def _slice_relevance(query: str) -> dict:
     except Exception as e:
         logger.debug("[Query API] relevance episodic lookup failed: %s", e)
 
-    # Goal matching via world model cache
+    # Goal matching via goals table
     try:
-        MemoryClientService = _get_memory_client()
-        store = MemoryClientService.create_connection()
-        raw = store.get("world_model:items")
-        if raw:
-            payload = json.loads(raw)
-            for task in payload.get("persistent_tasks", []):
-                goal = task.get("goal", "")
-                if goal and query.lower() in goal.lower():
-                    related_goals.append(goal[:120])
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT description FROM goals WHERE status = 'active' LIMIT 20"
+            )
+            for (description,) in cursor.fetchall():
+                if description and query.lower() in description.lower():
+                    related_goals.append(description[:120])
     except Exception as e:
-        logger.debug("[Query API] relevance world model lookup failed: %s", e)
+        logger.debug("[Query API] relevance goals lookup failed: %s", e)
 
     # Derive recommendation
     if relevance >= 0.7:

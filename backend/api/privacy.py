@@ -54,7 +54,7 @@ def data_summary():
         with db.connection() as conn:
             for table in [
                 "episodes", "knowledge", "transcript",
-                "autobiography", "scheduled_items", "persistent_tasks",
+                "autobiography", "scheduled_items",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
                 "documents", "document_chunks",
@@ -93,7 +93,7 @@ def export_data():
     user_data_tables = [
         "episodes", "knowledge",
         "transcript", "autobiography",
-        "scheduled_items", "persistent_tasks", "lists", "list_items",
+        "scheduled_items", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
         "place_fingerprints",
         "interaction_log", "cortex_iterations",
@@ -291,7 +291,6 @@ def delete_all():
                 "compactions",
                 "autobiography",
                 "scheduled_items",
-                "persistent_tasks",
                 "lists",
                 "list_items",
                 "list_events",

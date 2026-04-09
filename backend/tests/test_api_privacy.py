@@ -52,7 +52,7 @@ class TestPrivacyAPI:
             assert "knowledge" in data
             assert "transcript" in data
             assert "autobiography" in data
-            assert "persistent_tasks" in data
+            assert "scheduled_items" in data
             assert "place_fingerprints" in data
 
             # Verify counts are 0 for an empty database

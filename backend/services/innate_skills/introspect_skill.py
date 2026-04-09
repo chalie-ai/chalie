@@ -19,8 +19,8 @@ TOOL_SCHEMA = {
         "Perception directed inward. Returns a comprehensive internal state report "
         "covering four scopes: memory health (episode/concept counts, working memory depth, "
         "consolidation recency), skill and tool usage (table with counts and last results), "
-        "reasoning state (active focus, persistent tasks, upcoming reminders, recent autonomous "
-        "actions), and identity (relationship depth, communication style, personality, "
+        "reasoning state (active focus, upcoming reminders, recent autonomous actions), "
+        "and identity (relationship depth, communication style, personality, "
         "autobiography recency). All deterministic — no LLM calls. "
         "Use when the user asks about system state, capabilities, or what you have been doing, "
         "or when you need to gauge how much context you have before deciding what to do."
@@ -317,11 +317,6 @@ def _tool_summary(tool_name: str) -> str:
 def _scope_reasoning_state() -> str:
     parts = []
 
-    # Persistent tasks
-    task_line = _reasoning_persistent_tasks()
-    if task_line:
-        parts.append(task_line)
-
     # Upcoming reminders
     reminder_line = _reasoning_upcoming_reminders()
     if reminder_line:
@@ -336,38 +331,6 @@ def _scope_reasoning_state() -> str:
         return 'No active reasoning state.'
     return '\n'.join(parts)
 
-
-def _reasoning_persistent_tasks() -> str:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT goal, status, iterations_used "
-                "FROM persistent_tasks "
-                "WHERE status IN ('accepted', 'in_progress', 'paused') "
-                "ORDER BY updated_at DESC LIMIT 5"
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return ''
-
-        count = len(rows)
-        summaries = []
-        for row in rows:
-            goal = (row[0] or '').strip()[:40]
-            status = row[1] or ''
-            summaries.append(f"'{goal}' ({status})")
-
-        label = 'persistent task' if count == 1 else 'persistent tasks'
-        return f'{count} {label}: {", ".join(summaries)}.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_persistent_tasks failed: {e}')
-        return ''
 
 
 def _reasoning_upcoming_reminders() -> str:
