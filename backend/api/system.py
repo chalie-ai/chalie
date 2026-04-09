@@ -385,25 +385,11 @@ def observability_identity():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks."""
+    """Goal ecology stats."""
     try:
         result = {
             'generated_at': _now_iso(),
-            'persistent_tasks': [],
         }
-
-        # Persistent tasks
-        try:
-            from services.persistent_task_service import PersistentTaskService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            svc = PersistentTaskService(db)
-            with db.connection() as conn:
-                row = conn.execute("SELECT id FROM master_account LIMIT 1").fetchone()
-            account_id = row[0] if row else 1
-            result['persistent_tasks'] = svc.get_active_tasks(account_id)
-        except Exception as e:
-            logger.warning(f"[OBS] persistent tasks error: {e}")
 
         # Goal ecology stats
         try:
@@ -420,28 +406,10 @@ def observability_tasks():
         except Exception as e:
             logger.warning(f"[OBS] goal ecology stats error: {e}")
 
-
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")
         return jsonify({"error": "Failed to retrieve task data"}), 500
-
-
-@system_bp.route('/system/observability/tasks/<int:task_id>', methods=['DELETE'])
-@require_session
-def cancel_persistent_task(task_id):
-    """Cancel (dismiss) a persistent background task."""
-    try:
-        from services.persistent_task_service import PersistentTaskService
-        from services.database_service import get_shared_db_service
-        svc = PersistentTaskService(get_shared_db_service())
-        ok, msg = svc.transition(task_id, 'cancelled')
-        if ok:
-            return jsonify({"status": "cancelled"}), 200
-        return jsonify({"error": msg}), 400
-    except Exception as e:
-        logger.error(f"[REST API] cancel task error: {e}")
-        return jsonify({"error": "Failed to cancel task"}), 500
 
 
 @system_bp.route('/system/observability/autobiography', methods=['GET'])

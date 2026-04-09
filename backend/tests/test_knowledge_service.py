@@ -1104,18 +1104,17 @@ class TestDoc2QueryService:
     """Unit tests for Doc2QueryService in isolation."""
 
     def test_is_available_returns_false_when_model_import_fails(self):
-        """When optimum/transformers are not importable, is_available() returns False."""
+        """When onnxruntime is not importable, is_available() returns False."""
         from services.doc2query_service import Doc2QueryService
         from unittest.mock import patch
 
         svc = Doc2QueryService()
-        with patch.dict('sys.modules', {'optimum': None, 'optimum.onnxruntime': None}):
-            # Force re-init by resetting state
-            svc._available = None
-            svc._model = None
-            # The import will fail inside _ensure_loaded; is_available should return False
-            with patch.object(svc, '_ensure_loaded', side_effect=lambda: setattr(svc, '_available', False)):
-                result = svc.is_available()
+        # Force re-init by resetting state
+        svc._available = None
+        svc._encoder = None
+        # The import will fail inside _ensure_loaded; is_available should return False
+        with patch.object(svc, '_ensure_loaded', side_effect=lambda: setattr(svc, '_available', False)):
+            result = svc.is_available()
         assert result is False
 
     def test_generate_queries_returns_empty_when_unavailable(self):
@@ -1129,26 +1128,37 @@ class TestDoc2QueryService:
     def test_generate_queries_deduplication(self):
         """Duplicate outputs from the model are deduplicated (case-insensitive)."""
         from services.doc2query_service import Doc2QueryService
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
+        import numpy as np
 
         svc = Doc2QueryService()
         svc._available = True
+        svc._last_used = __import__('time').time()
         mock_tokenizer = MagicMock()
-        mock_model = MagicMock()
         svc._tokenizer = mock_tokenizer
-        svc._model = mock_model
+        svc._encoder = MagicMock()
+        svc._encoder.run.return_value = [np.zeros((1, 5, 512), dtype=np.float32)]
+        svc._decoder = MagicMock()
+        svc._decoder_past = MagicMock()
 
-        mock_tokenizer.return_value = {'input_ids': MagicMock()}
-        # Simulate model returning duplicates (same text, different case)
-        mock_model.generate.return_value = MagicMock()
-        mock_tokenizer.batch_decode.return_value = [
+        mock_tokenizer.return_value = {
+            'input_ids': np.array([[1, 2, 3]], dtype=np.int64),
+            'attention_mask': np.ones((1, 3), dtype=np.int64),
+        }
+        # Each _generate_one call gets its own decoded text via tokenizer.decode
+        decode_results = iter([
             'what is the user sister name',
             'What is the user sister name',  # duplicate (case variation)
             'sibling name of user',
             'sibling name of user',           # exact duplicate
-        ]
+        ])
+        mock_tokenizer.decode.side_effect = lambda tokens, **kw: next(decode_results)
 
-        result = svc.generate_queries("sister: Elena")
+        with patch.object(svc, '_generate_one', side_effect=[
+            [10], [20], [30], [40]
+        ]):
+            result = svc.generate_queries("sister: Elena", num_queries=4)
+
         assert len(result) == 2
         assert result[0] == 'what is the user sister name'
         assert result[1] == 'sibling name of user'
@@ -1156,36 +1166,53 @@ class TestDoc2QueryService:
     def test_generate_queries_filters_empty_strings(self):
         """Empty strings from model output are excluded from results."""
         from services.doc2query_service import Doc2QueryService
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
+        import numpy as np
 
         svc = Doc2QueryService()
         svc._available = True
+        svc._last_used = __import__('time').time()
         mock_tokenizer = MagicMock()
         svc._tokenizer = mock_tokenizer
-        svc._model = MagicMock()
+        svc._encoder = MagicMock()
+        svc._encoder.run.return_value = [np.zeros((1, 5, 512), dtype=np.float32)]
+        svc._decoder = MagicMock()
+        svc._decoder_past = MagicMock()
 
-        mock_tokenizer.return_value = {}
-        mock_tokenizer.batch_decode.return_value = ['', '  ', 'valid query', '']
-        svc._model.generate.return_value = MagicMock()
+        mock_tokenizer.return_value = {
+            'input_ids': np.array([[1, 2]], dtype=np.int64),
+            'attention_mask': np.ones((1, 2), dtype=np.int64),
+        }
+        decode_results = iter(['', '  ', 'valid query', ''])
+        mock_tokenizer.decode.side_effect = lambda tokens, **kw: next(decode_results)
 
-        result = svc.generate_queries("key: value")
+        with patch.object(svc, '_generate_one', side_effect=[[], [], [10], []]):
+            result = svc.generate_queries("key: value", num_queries=4)
+
         assert '' not in result
         assert '  ' not in result
         assert 'valid query' in result
 
     def test_generate_queries_returns_empty_on_exception(self):
-        """If model.generate() throws, generate_queries() returns [] without raising."""
+        """If encoder inference throws, generate_queries() returns [] without raising."""
         from services.doc2query_service import Doc2QueryService
         from unittest.mock import MagicMock
+        import numpy as np
 
         svc = Doc2QueryService()
         svc._available = True
+        svc._last_used = __import__('time').time()
         mock_tokenizer = MagicMock()
         svc._tokenizer = mock_tokenizer
-        svc._model = MagicMock()
+        svc._encoder = MagicMock()
+        svc._decoder = MagicMock()
+        svc._decoder_past = MagicMock()
 
-        mock_tokenizer.return_value = {}
-        svc._model.generate.side_effect = RuntimeError("ONNX inference error")
+        mock_tokenizer.return_value = {
+            'input_ids': np.array([[1, 2]], dtype=np.int64),
+            'attention_mask': np.ones((1, 2), dtype=np.int64),
+        }
+        svc._encoder.run.side_effect = RuntimeError("ONNX inference error")
 
         result = svc.generate_queries("key: value")
         assert result == []
@@ -1198,20 +1225,20 @@ class TestDoc2QueryService:
         assert a is b
 
     def test_ensure_loaded_is_idempotent(self):
-        """Calling _ensure_loaded() twice does not reinitialize the model."""
+        """Calling _ensure_loaded() twice does not reinitialize the sessions."""
         from services.doc2query_service import Doc2QueryService
         from unittest.mock import MagicMock, patch
 
         svc = Doc2QueryService()
-        # Pre-populate model so it looks already loaded
-        svc._model = MagicMock()
+        # Pre-populate encoder so it looks already loaded
+        svc._encoder = MagicMock()
+        svc._last_used = __import__('time').time()
         svc._available = True
 
-        # _ensure_loaded must return early without re-entering the lock block
-        # Verify by ensuring no import side effects are triggered
-        with patch('services.doc2query_service.ORTModelForSeq2SeqLM', create=True) as mock_ort:
+        # _ensure_loaded must return early without creating new InferenceSession objects
+        with patch('onnxruntime.InferenceSession', create=True) as mock_session_cls:
             svc._ensure_loaded()
-            mock_ort.from_pretrained.assert_not_called()
+            mock_session_cls.assert_not_called()
 
     def test_thread_safe_singleton_init(self):
         """Concurrent calls to get_doc2query_service() produce one instance."""

@@ -93,7 +93,7 @@ frontend/
 - **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `compactions` table
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`knowledge_service.py`** — Unified knowledge store (traits, concepts, procedures, relationships) with RRF hybrid search (exact + FTS5 porter-stemmed + vector KNN), NLTK stop-word filtering on FTS queries, doc2query expansion at write time, decay management, and prompt injection
-- **`doc2query_service.py`** — Generates potential search queries for knowledge entries at write time using `doc2query/msmarco-t5-small-v1` (77M param T5 via ONNX); stored in `search_queries` column and indexed in FTS5 for improved recall
+- **`doc2query_service.py`** — Generates potential search queries for knowledge entries at write time using `doc2query/msmarco-t5-small-v1` (77M param T5 via ONNX Runtime directly — no PyTorch/optimum dependency); stored in `search_queries` column and indexed in FTS5 for improved recall; ONNX session unloads after 10 minutes of idle to reclaim ~600MB
 - **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as behavioral traits in knowledge table with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables

@@ -222,54 +222,7 @@ class TestAppUpdateServiceTTL:
 
 
 # ---------------------------------------------------------------------------
-# 6. persistent_task_service — create and transition paths
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestPersistentTaskServiceQueueTTL:
-    """Both create_task and transition() must call expire on persistent_task:execute."""
-
-    _EXECUTE_KEY = "persistent_task:execute"
-
-    @pytest.fixture
-    def svc_and_store(self, db):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.persistent_task_service import PersistentTaskService
-            from services.database_service import get_shared_db_service
-            # Seed master_account so FK constraints are satisfied
-            db.execute(
-                "INSERT OR IGNORE INTO master_account (id, username, password_hash) "
-                "VALUES (1, 'user', 'hash')"
-            )
-            db.commit()
-            svc = PersistentTaskService(get_shared_db_service())
-            yield svc, store
-
-    def test_create_task_sets_ttl_on_execute_queue(self, svc_and_store):
-        """create_task rpushes a wake signal and sets TTL=1800."""
-        service, store = svc_and_store
-        service.create_task(account_id=1, goal="Write unit tests", channel="web:default:1")
-        assert _has_ttl(store, self._EXECUTE_KEY), \
-            "persistent_task:execute must have a TTL after create_task rpush"
-
-    def test_transition_to_in_progress_sets_ttl_on_execute_queue(self, svc_and_store):
-        """transition() to in_progress rpushes a wake signal and sets TTL=1800."""
-        service, store = svc_and_store
-        task = service.create_task(account_id=1, goal="Ship feature", channel="web:default:1")
-        task_id = task["id"]
-
-        # Clear the key so we can verify transition() re-sets the TTL independently
-        store._lists.pop(self._EXECUTE_KEY, None)
-
-        service.transition(task_id, "in_progress")
-        assert _has_ttl(store, self._EXECUTE_KEY), \
-            "persistent_task:execute must have a TTL after transition to in_progress"
-
-
-# ---------------------------------------------------------------------------
-# 7. intent_service — rpush to intents:{target}
+# 6. intent_service — rpush to intents:{target}
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit

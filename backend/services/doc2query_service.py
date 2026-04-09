@@ -3,109 +3,201 @@
 import logging
 import os
 import threading
+import time
 from typing import List
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME = "doc2query/msmarco-t5-small-v1"
 _MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'models', 'doc2query-small')
+_IDLE_TIMEOUT = 600  # 10 minutes
 
 
 class Doc2QueryService:
-    """Generates potential search queries for knowledge entries using a dedicated T5 model."""
 
     def __init__(self):
-        self._model = None
+        self._encoder = None
+        self._decoder = None
+        self._decoder_past = None
         self._tokenizer = None
         self._lock = threading.Lock()
-        self._available = None  # None = not checked yet
+        self._available = None
+        self._last_used = 0.0
 
     def is_available(self) -> bool:
-        """Check if the model is loaded and ready."""
         if self._available is None:
             self._ensure_loaded()
         return self._available or False
 
     def _ensure_loaded(self):
-        """Lazy-load model on first use."""
-        if self._model is not None:
-            return
         with self._lock:
-            if self._model is not None:
+            # Check idle timeout under lock to prevent race with generate_queries
+            if self._encoder is not None and self._last_used > 0:
+                if time.time() - self._last_used > _IDLE_TIMEOUT:
+                    self._unload_unlocked()
+
+            if self._encoder is not None:
                 return
             try:
-                from optimum.onnxruntime import ORTModelForSeq2SeqLM
+                import onnxruntime as ort
                 from transformers import AutoTokenizer
 
                 model_dir = os.path.abspath(_MODEL_DIR)
+                encoder_path = os.path.join(model_dir, 'encoder_model.onnx')
+                decoder_path = os.path.join(model_dir, 'decoder_model.onnx')
+                decoder_past_path = os.path.join(model_dir, 'decoder_with_past_model.onnx')
 
-                # Check if ONNX model exists; if not, export from HuggingFace
-                if not os.path.exists(os.path.join(model_dir, 'encoder_model.onnx')):
-                    logger.info(f"[DOC2QUERY] Exporting {_MODEL_NAME} to ONNX at {model_dir}...")
-                    os.makedirs(model_dir, exist_ok=True)
-                    model = ORTModelForSeq2SeqLM.from_pretrained(
-                        _MODEL_NAME, export=True
-                    )
-                    model.save_pretrained(model_dir)
-                    tokenizer = AutoTokenizer.from_pretrained(_MODEL_NAME)
-                    tokenizer.save_pretrained(model_dir)
-                    self._model = model
-                    self._tokenizer = tokenizer
-                else:
-                    self._model = ORTModelForSeq2SeqLM.from_pretrained(model_dir)
-                    self._tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                missing = [p for p in (encoder_path, decoder_path, decoder_past_path)
+                           if not os.path.exists(p)]
+                if missing:
+                    names = [os.path.basename(p) for p in missing]
+                    logger.info("[DOC2QUERY] Missing model files at %s: %s", model_dir, ', '.join(names))
+                    self._available = False
+                    return
+
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 1
+                opts.inter_op_num_threads = 1
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+                self._encoder = ort.InferenceSession(encoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._decoder = ort.InferenceSession(decoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._decoder_past = ort.InferenceSession(decoder_past_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
                 self._available = True
-                logger.info("[DOC2QUERY] Model loaded successfully")
+                self._last_used = time.time()
+                logger.info("[DOC2QUERY] Model loaded (3 ONNX sessions)")
             except (ImportError, ModuleNotFoundError) as e:
-                logger.warning(f"[DOC2QUERY] Model permanently unavailable (missing dependency): {e}")
+                logger.warning("[DOC2QUERY] Permanently unavailable (missing dependency): %s", e)
                 self._available = False
             except Exception as e:
-                logger.warning(f"[DOC2QUERY] Model load failed (will retry): {e}")
-                self._available = None  # transient — allow retry on next call
+                logger.warning("[DOC2QUERY] Load failed (will retry): %s", e)
+                # Reset partial state so retry can re-attempt from scratch
+                self._encoder = None
+                self._decoder = None
+                self._decoder_past = None
+                self._tokenizer = None
+                self._available = None
+
+    def _unload_unlocked(self):
+        """Release all sessions without acquiring the lock (caller must hold it)."""
+        self._encoder = None
+        self._decoder = None
+        self._decoder_past = None
+        self._tokenizer = None
+        self._available = None
+        self._last_used = 0.0
+        logger.info("[DOC2QUERY] Unloaded (idle timeout)")
+
+    def _unload(self):
+        with self._lock:
+            self._unload_unlocked()
 
     def generate_queries(self, text: str, num_queries: int = 5) -> List[str]:
-        """Generate potential search queries for a knowledge entry text.
-
-        Args:
-            text: The knowledge entry text (e.g., "sister: Elena")
-            num_queries: Number of queries to generate
-
-        Returns:
-            List of generated query strings. Empty list if model unavailable.
-        """
         if not self.is_available():
             return []
+        self._last_used = time.time()
 
         try:
-            inputs = self._tokenizer(
-                text, max_length=384, truncation=True, return_tensors="pt"
-            )
+            encoded = self._tokenizer(text, max_length=384, truncation=True, return_tensors="np")
+            input_ids = encoded["input_ids"]
+            attention_mask = encoded["attention_mask"]
 
-            outputs = self._model.generate(
-                **inputs,
-                max_length=64,
-                do_sample=True,
-                top_p=0.95,
-                num_return_sequences=num_queries,
-            )
+            encoder_out = self._encoder.run(None, {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            })
+            encoder_hidden = encoder_out[0]
 
-            queries = self._tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            # Deduplicate while preserving order
+            queries = []
+            for _ in range(num_queries):
+                tokens = self._generate_one(encoder_hidden, attention_mask)
+                text_out = self._tokenizer.decode(tokens, skip_special_tokens=True).strip()
+                if text_out:
+                    queries.append(text_out)
+
             seen = set()
             unique = []
             for q in queries:
-                q = q.strip()
-                if q and q.lower() not in seen:
-                    seen.add(q.lower())
+                low = q.lower()
+                if low not in seen:
+                    seen.add(low)
                     unique.append(q)
             return unique
         except Exception as e:
-            logger.warning(f"[DOC2QUERY] Generation failed: {e}")
+            logger.warning("[DOC2QUERY] Generation failed: %s", e)
             return []
 
+    def _generate_one(self, encoder_hidden, attention_mask, max_length=64):
+        import numpy as np
 
-# Singleton
+        decoder_ids = np.array([[0]], dtype=np.int64)
+        past_kv = None
+        generated = []
+
+        for step in range(max_length):
+            if step == 0:
+                feeds = {
+                    "input_ids": decoder_ids,
+                    "encoder_attention_mask": attention_mask,
+                    "encoder_hidden_states": encoder_hidden,
+                }
+                outputs = self._decoder.run(None, feeds)
+                logits = outputs[0]
+                output_names = [o.name for o in self._decoder.get_outputs()]
+                past_kv = {}
+                for i, name in enumerate(output_names):
+                    if name.startswith("present."):
+                        past_name = name.replace("present.", "past_key_values.", 1)
+                        past_kv[past_name] = outputs[i]
+            else:
+                feeds = {
+                    "input_ids": decoder_ids,
+                    "encoder_attention_mask": attention_mask,
+                }
+                feeds.update(past_kv)
+                outputs = self._decoder_past.run(None, feeds)
+                logits = outputs[0]
+                output_names = [o.name for o in self._decoder_past.get_outputs()]
+                for i, name in enumerate(output_names):
+                    if name.startswith("present."):
+                        past_name = name.replace("present.", "past_key_values.", 1)
+                        past_kv[past_name] = outputs[i]
+
+            next_token = self._sample_top_p(logits[0, -1, :], top_p=0.95)
+
+            if next_token == 1:
+                break
+
+            generated.append(next_token)
+            decoder_ids = np.array([[next_token]], dtype=np.int64)
+
+        return generated
+
+    @staticmethod
+    def _sample_top_p(logits, top_p=0.95, temperature=1.0):
+        import numpy as np
+
+        if temperature != 1.0:
+            logits = logits / temperature
+
+        logits = logits - logits.max()
+        exp_logits = np.exp(logits)
+        probs = exp_logits / exp_logits.sum()
+
+        sorted_indices = np.argsort(-probs)
+        sorted_probs = probs[sorted_indices]
+
+        cumsum = np.cumsum(sorted_probs)
+        mask = cumsum - sorted_probs <= top_p
+
+        filtered_probs = sorted_probs * mask
+        filtered_probs /= filtered_probs.sum()
+
+        chosen_idx = np.random.choice(len(filtered_probs), p=filtered_probs)
+        return int(sorted_indices[chosen_idx])
+
+
 _instance = None
 _instance_lock = threading.Lock()
 

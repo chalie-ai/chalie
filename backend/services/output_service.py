@@ -92,7 +92,7 @@ class OutputService:
             'tool_result': 'response',
             'reminder': 'reminder',
             'task': 'task',
-            'persistent_task': 'task',
+            'goal_pursuit': 'task',
             'critic_escalation': 'escalation',
             'notification': 'notification',
             'plan_action': 'task',

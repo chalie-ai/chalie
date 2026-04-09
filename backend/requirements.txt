@@ -26,7 +26,6 @@ icalendar>=5.0.0
 PyYAML>=6.0
 vobject>=0.9.7
 nltk>=3.8
-optimum[onnxruntime]>=1.16.0
 
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0

@@ -68,35 +68,26 @@ def main():
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
-            svc = get_embedding_service()
-            # Warm the ONNX session — first encode() triggers model load and,
-            # on first run, a ~300MB HuggingFace download. Running here so the
-            # user never hits that delay during an actual conversation.
-            svc.generate_embedding("warmup")
-            logger.info("[System] Embedding model ready (inference warm)")
+            get_embedding_service()
+            logger.info("[System] Embedding model loaded")
         except Exception as e:
             import traceback
             logger.warning(f"[System] Embedding model preload failed: {e}")
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
     import threading as _threading
+    _threading.stack_size(2 * 1024 * 1024)
     _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
 
-    # Download/update ONNX classifiers, then warm the inference path.
+    # Download/update ONNX classifiers (no warm-up inference).
     def _preload_onnx_models():
         try:
             logger.info("[System] Checking ONNX models (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            # Download missing models / version-check existing ones
             svc.ensure_models()
-            # Warm the mode-tiebreaker — load session + tokenizer + throwaway inference
-            label, _ = svc.predict("mode-tiebreaker", "warmup")
-            if label is not None:
-                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
-            else:
-                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
             svc._ready = True
+            logger.info("[System] ONNX models verified")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
@@ -158,7 +149,6 @@ def main():
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
-    from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
 
@@ -171,7 +161,6 @@ def main():
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
 

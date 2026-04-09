@@ -810,70 +810,6 @@ def _run_response_pipeline(
     return response_data, False
 
 
-def _handle_persistent_task_result(text: str, metadata: dict) -> str:
-    """Surface a completed persistent task result to the user.
-
-    Follows the same pattern as _handle_cron_tool_result — inject the result
-    into the response pipeline so the LLM produces a natural summary.
-    """
-    try:
-        from services.config_service import ConfigService
-
-        configs = load_configs()
-        cortex_config = configs['cortex']['config']
-
-        task_id = metadata.get('task_id')
-        thread_id = metadata.get('thread_id') or 'persistent_task'
-        goal = metadata.get('goal', '')
-
-        working_memory = WorkingMemoryService(
-            max_turns=cortex_config.get('max_working_memory_turns', 10)
-        )
-
-        try:
-            generation_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
-        except Exception:
-            generation_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-        prompt_template = ConfigService.get_agent_prompt("frontal-cortex-scheduled-tool")
-
-        channel = f'persistent_task:{task_id}'
-        classification = {
-            'topic': channel,
-            'confidence': 10,
-            'similar_topic': '',
-            'topic_update': '',
-        }
-
-        injected_text = f"Background task completed.\n\nGoal: {goal}\n\nResult:\n{text}"
-
-        response_data, is_empty = _run_response_pipeline(
-            text=injected_text,
-            channel=channel,
-            classification=classification,
-            thread_id=thread_id,
-            metadata=metadata,
-            cortex_config=cortex_config,
-            prompt_template=prompt_template,
-            generation_config=generation_config,
-            destination=metadata.get('destination', 'web'),
-            trait_extraction_meta={'source': f'persistent_task:{task_id}'},
-            log_event_type='persistent_task_completed',
-            log_payload={'task_id': task_id, 'goal': goal},
-            log_source='persistent_task',
-            log_tag='PERSISTENT TASK',
-            working_memory=working_memory,
-            wm_key=thread_id or channel,
-        )
-
-        if is_empty:
-            return f"Task {task_id} | Empty response"
-        return f"Task {task_id} | Surfaced in {response_data.get('generation_time', 0):.2f}s"
-
-    except Exception as e:
-        logging.error(f"[PERSISTENT TASK] Failed to surface result: {e}", exc_info=True)
-        return f"Task {metadata.get('task_id', 'unknown')} | ERROR: {e}"
-
 
 def _handle_cron_tool_result(text: str, metadata: dict) -> str:
     """
@@ -969,10 +905,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     Proactive drift messages go through full routing but skip user input logging.
     """
     metadata = metadata or {}
-
-    # Persistent task result shortcut: background task completed (not a conversational turn)
-    if metadata.get('source') == 'persistent_task_result':
-        return _handle_persistent_task_result(text, metadata)
 
     # Cron tool shortcut: background scheduled tool result (not a conversational turn)
     if metadata.get('source', '').startswith('cron_tool:'):
