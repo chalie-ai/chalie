@@ -511,22 +511,30 @@ class TestGetPreviousMessagesTranscript:
         return uid1, uid2
 
     def test_user_row_appears(self, db):
+        # North star format: lowercase 'user:' for transcript input rows.
         self._seed_transcript(db)
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'USER: Hello world' in result
+        assert 'user: Hello world' in result
+        assert 'USER: Hello world' not in result
 
     def test_assistant_row_appears(self, db):
+        # North star format: title-case 'Assistant:' (capital A) — the sole
+        # exception to the lowercase input-row rule.
         self._seed_transcript(db)
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'ASSISTANT: Hi there' in result
+        assert 'Assistant: Hi there' in result
+        assert 'ASSISTANT: Hi there' not in result
 
     def test_durable_tool_call_appears(self, db):
+        # North star format: bare `[tool_name(k=v;k=v)] result`, no timestamp
+        # prefix, no TOOL() wrapper. Empty params dict → `[memory()] …`.
         self._seed_transcript(db)
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'TOOL(memory): User likes dark mode' in result
+        assert '[memory()] User likes dark mode' in result
+        assert 'TOOL(memory)' not in result
 
     def test_ephemeral_tool_call_does_not_appear(self, db):
         self._seed_transcript(db)
@@ -545,8 +553,8 @@ class TestGetPreviousMessagesTranscript:
         self._seed_transcript(db)
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        user_pos = result.index('USER: Hello world')
-        asst_pos = result.index('ASSISTANT: Hi there')
+        user_pos = result.index('user: Hello world')
+        asst_pos = result.index('Assistant: Hi there')
         assert user_pos < asst_pos
 
     def test_other_channel_rows_excluded(self, db):
@@ -1307,13 +1315,15 @@ class TestGetPreviousMessagesDurableToolInterleaving:
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
 
-        assert 'TOOL(memory): Result from memory' in result
-        assert 'TOOL(find_tools): Found weather tool' in result
+        assert '[memory()] Result from memory' in result
+        assert '[find_tools()] Found weather tool' in result
+        assert 'TOOL(memory)' not in result
+        assert 'TOOL(find_tools)' not in result
 
         # Both appear after the transcript row
         input_pos = result.index('The input row')
-        memory_pos = result.index('TOOL(memory): Result from memory')
-        find_pos = result.index('TOOL(find_tools): Found weather tool')
+        memory_pos = result.index('[memory()] Result from memory')
+        find_pos = result.index('[find_tools()] Found weather tool')
         assert input_pos < memory_pos < find_pos
 
     def test_tool_calls_ordered_by_timestamp(self, db):
@@ -1343,8 +1353,8 @@ class TestGetPreviousMessagesDurableToolInterleaving:
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
 
-        first_pos = result.index('TOOL(first_tool): First result')
-        second_pos = result.index('TOOL(second_tool): Second result')
+        first_pos = result.index('[first_tool()] First result')
+        second_pos = result.index('[second_tool()] Second result')
         assert first_pos < second_pos
 
 
@@ -1438,14 +1448,20 @@ class TestGetPreviousMessagesTimestampFormat:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 34. getPreviousMessages() — role rendered in UPPERCASE
+# 34. getPreviousMessages() — role rendering per north star
+#
+# North star § Literal format:
+#   - Transcript input rows (user, proactive_thought, goal_pursuit, scheduled)
+#     render with lowercase role labels.
+#   - The assistant row is the sole exception — rendered title case 'Assistant:'.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesRoleCase:
-    """Lock the role rendering convention: always UPPERCASE."""
+    """Lock the role rendering convention: lowercase for inputs, title-case
+    for assistant only."""
 
-    def test_user_role_rendered_uppercase(self, db):
+    def test_user_role_rendered_lowercase(self, db):
         channel = 'test_channel'
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -1456,10 +1472,10 @@ class TestGetPreviousMessagesRoleCase:
 
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'USER: Hello' in result
-        assert 'user: Hello' not in result
+        assert 'user: Hello' in result
+        assert 'USER: Hello' not in result
 
-    def test_assistant_role_rendered_uppercase(self, db):
+    def test_assistant_role_rendered_titlecase(self, db):
         channel = 'test_channel'
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -1470,10 +1486,13 @@ class TestGetPreviousMessagesRoleCase:
 
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'ASSISTANT: Hi there' in result
+        assert 'Assistant: Hi there' in result
+        assert 'ASSISTANT: Hi there' not in result
+        assert 'assistant: Hi there' not in result
 
-    def test_arbitrary_role_rendered_uppercase(self, db):
-        """Any role string (e.g. proactive_thought) is uppercased."""
+    def test_arbitrary_role_rendered_lowercase(self, db):
+        """Any non-assistant role string (e.g. proactive_thought) stays
+        lowercase — only 'assistant' is title-cased."""
         channel = 'test_channel'
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -1484,8 +1503,34 @@ class TestGetPreviousMessagesRoleCase:
 
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'PROACTIVE_THOUGHT: Background thought' in result
-        assert 'proactive_thought: Background thought' not in result
+        assert 'proactive_thought: Background thought' in result
+        assert 'PROACTIVE_THOUGHT: Background thought' not in result
+
+    def test_goal_pursuit_role_rendered_lowercase(self, db):
+        channel = 'test_channel'
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES (?, 'goal_pursuit', 'Pursuit tick', '2026-04-10 10:00:00')",
+            (channel,)
+        )
+        db.commit()
+
+        p = FakeProcessor.make()
+        result = p.getPreviousMessages()
+        assert 'goal_pursuit: Pursuit tick' in result
+
+    def test_scheduled_role_rendered_lowercase(self, db):
+        channel = 'test_channel'
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES (?, 'scheduled', 'Timer fired', '2026-04-10 10:00:00')",
+            (channel,)
+        )
+        db.commit()
+
+        p = FakeProcessor.make()
+        result = p.getPreviousMessages()
+        assert 'scheduled: Timer fired' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1556,16 +1601,20 @@ class TestGetPreviousMessagesNullRole:
     The transcript.role column has a NOT NULL constraint, so a database-level NULL
     cannot be inserted.  Instead, test that when the Python dict returned by
     get_recent() has role=None (which could happen if a future schema change or
-    custom query omits the column), the fallback renders cleanly as 'UNKNOWN'.
+    custom query omits the column), the fallback renders cleanly as lowercase
+    'unknown' — matching the north star input-row case convention (lowercase
+    for everything except 'assistant').
 
     We verify this by patching transcript_service.get_recent to return a row
     with role=None, which exercises the exact code path:
-        role = (entry.get('role') or 'unknown').upper()
+        raw_role = (entry.get('role') or 'unknown')
+        role_label = 'Assistant' if raw_role == 'assistant' else raw_role
     """
 
-    def test_none_role_falls_back_to_unknown_uppercase(self):
+    def test_none_role_falls_back_to_unknown_lowercase(self):
         """If get_recent() ever returns a row dict with role=None,
-        getPreviousMessages() must render it as 'UNKNOWN:' without crashing.
+        getPreviousMessages() must render it as 'unknown:' (lowercase)
+        without crashing.
         """
         from unittest.mock import patch
 
@@ -1582,7 +1631,8 @@ class TestGetPreviousMessagesNullRole:
             result = p.getPreviousMessages()
 
         assert 'Null role content' in result
-        assert 'UNKNOWN:' in result
+        assert 'unknown:' in result
+        assert 'UNKNOWN:' not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1602,8 +1652,9 @@ class TestGetPreviousMessagesEmptyContent:
 
         p = FakeProcessor.make()
         result = p.getPreviousMessages()
-        # Row is rendered — empty content means USER: <empty>
-        assert 'USER: ' in result
+        # Row is rendered — empty content means 'user: ' (lowercase, trailing space)
+        assert 'user: ' in result
+        assert 'USER: ' not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1950,9 +2001,13 @@ class TestGetPreviousMessagesMissingCreatedAt:
         assert _MISSING_TS_PLACEHOLDER in result
         assert '0001-01-01' not in result
 
-    def test_missing_created_at_on_durable_tool_call_renders_placeholder(self):
+    def test_missing_created_at_on_durable_tool_call_still_renders_bare(self):
+        """Durable tool_calls render BARE under the north star — no timestamp
+        prefix, so a null created_at on a tool_call simply drops out of the
+        output. The row still renders as `[tool_name(params)] result` and
+        inherits its owning transcript row's timestamp implicitly by position.
+        """
         from unittest.mock import patch
-        from services.message_processor_v2 import _MISSING_TS_PLACEHOLDER
 
         fake_row = {
             'id': 10,
@@ -1963,6 +2018,7 @@ class TestGetPreviousMessagesMissingCreatedAt:
         fake_tc = {
             'id': 99,
             'tool_name': 'memory',
+            'params': '{}',
             'result': 'Durable result with null timestamp',
             'created_at': None,
         }
@@ -1974,9 +2030,11 @@ class TestGetPreviousMessagesMissingCreatedAt:
             p = FakeProcessor.make()
             result = p.getPreviousMessages()
 
-        # Transcript row renders real timestamp; tool call renders placeholder
-        assert '[2026-04-10 10:00] USER: Good row' in result
-        assert f'[{_MISSING_TS_PLACEHOLDER}] TOOL(memory): Durable result with null timestamp' in result
+        # Transcript row renders real timestamp in north star format
+        assert '[2026-04-10 10:00] user: Good row' in result
+        # Tool call renders bare — no timestamp, no TOOL() wrapper
+        assert '[memory()] Durable result with null timestamp' in result
+        # Year-1 placeholder must never leak through
         assert '0001-01-01' not in result
 
 
@@ -2089,6 +2147,327 @@ class TestTranscriptFetchLimit:
         assert _Narrow._TRANSCRIPT_FETCH_LIMIT == 500
         # Base is untouched
         assert MessageProcessor._TRANSCRIPT_FETCH_LIMIT == 2000
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 50. getPreviousMessages() — compaction pseudo-tool filter (Decision 4B)
+#
+# The `compaction` durable tool_call is an audit-only DTO. Its content is
+# already replayed at the top of Previous Messages via the `compactions`
+# table prepend (step 2 of the algorithm). Rendering it a second time as a
+# durable tool_call under the owning input row would double-show the summary.
+#
+# Locked: the compaction pseudo-tool MUST be filtered at the call site,
+# never at the ToolCallService layer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetPreviousMessagesCompactionFilter:
+    def test_compaction_durable_tool_call_filtered(self):
+        """A durable `compaction` tool_call linked to a transcript row must
+        NOT surface in Previous Messages — its content is already replayed
+        via the `compactions` table prepend."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 42,
+            'role': 'user',
+            'content': 'The input row',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_compaction_tc = {
+            'id': 99,
+            'tool_name': 'compaction',
+            'params': '{"strategy": "bulk"}',
+            'result': 'THIS_SHOULD_NOT_APPEAR',
+            'invoked_by': 'system',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {
+                42: [fake_compaction_tc]
+            }
+            p = FakeProcessor.make()
+            result = p.getPreviousMessages()
+
+        # The transcript row itself still renders
+        assert 'The input row' in result
+        # But the compaction pseudo-tool payload MUST NOT appear
+        assert 'THIS_SHOULD_NOT_APPEAR' not in result
+        assert '[compaction(' not in result
+        assert '[compaction()' not in result
+
+    def test_memory_durable_tool_call_still_renders(self):
+        """Negative control: a `memory` durable tool_call under the same row
+        DOES render. Proves the filter is scoped to `compaction` only."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 42,
+            'role': 'user',
+            'content': 'Input row',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_memory_tc = {
+            'id': 88,
+            'tool_name': 'memory',
+            'params': '{"radius": 0.15}',
+            'result': 'User visited Mykonos in 2024',
+            'invoked_by': 'system',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {
+                42: [fake_memory_tc]
+            }
+            p = FakeProcessor.make()
+            result = p.getPreviousMessages()
+
+        assert '[memory(radius=0.15)] User visited Mykonos in 2024' in result
+
+    def test_mixed_compaction_and_memory_only_memory_surfaces(self):
+        """Two durable tool_calls on the same row: one `compaction`, one
+        `memory`. The `memory` row surfaces; the `compaction` row does not."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 42,
+            'role': 'user',
+            'content': 'The input row',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_memory_tc = {
+            'id': 100,
+            'tool_name': 'memory',
+            'params': '{}',
+            'result': 'SEED_SURVIVES',
+            'invoked_by': 'system',
+            'ephemeral': 0,
+        }
+        fake_compaction_tc = {
+            'id': 101,
+            'tool_name': 'compaction',
+            'params': '{}',
+            'result': 'COMPACTION_DROPPED',
+            'invoked_by': 'system',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {
+                42: [fake_memory_tc, fake_compaction_tc]
+            }
+            p = FakeProcessor.make()
+            result = p.getPreviousMessages()
+
+        assert 'SEED_SURVIVES' in result
+        assert 'COMPACTION_DROPPED' not in result
+
+    def test_never_render_frozenset_exported(self):
+        """The filter set is a module-level frozenset so any future caller
+        (tests, tooling) can consult it without copying the list."""
+        from services.message_processor_v2 import _NEVER_RENDER_IN_PREVIOUS
+        assert isinstance(_NEVER_RENDER_IN_PREVIOUS, frozenset)
+        assert 'compaction' in _NEVER_RENDER_IN_PREVIOUS
+        # Sanity: the set is frozen — not a vanilla mutable set.
+        assert not hasattr(_NEVER_RENDER_IN_PREVIOUS, 'add')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 51. _render_params() — canonical source shared by live + historical rendering
+#
+# The canonical rendering helper used by both handleTool() (Commit 3 — live
+# ACT trail append) and getPreviousMessages() (Commit 2a — historical durable
+# tool_call replay from DB). Locked as a single source of truth so sibling
+# processors never diverge.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRenderParamsCanonicalSource:
+    def test_empty_dict_renders_empty_string(self):
+        p = FakeProcessor.make()
+        assert p._render_params({}) == ''
+
+    def test_none_renders_empty_string(self):
+        """Defensive path: falsy input → empty string, never crashes."""
+        p = FakeProcessor.make()
+        assert p._render_params(None) == ''
+
+    def test_single_key_renders_key_equals_value(self):
+        p = FakeProcessor.make()
+        assert p._render_params({'query': 'hello'}) == 'query=hello'
+
+    def test_multi_key_semicolon_joined(self):
+        """Separator is `;`, matching the north star ACT loop trail format."""
+        p = FakeProcessor.make()
+        rendered = p._render_params({'query': 'hello', 'radius': 0.15})
+        assert rendered == 'query=hello;radius=0.15'
+
+    def test_insertion_order_preserved(self):
+        """Py 3.7+ dicts preserve insertion order; _render_params must not sort."""
+        p = FakeProcessor.make()
+        rendered = p._render_params({'z_last': 1, 'a_first': 2})
+        assert rendered == 'z_last=1;a_first=2'
+
+    def test_numeric_values_stringified(self):
+        p = FakeProcessor.make()
+        assert p._render_params({'n': 42}) == 'n=42'
+        assert p._render_params({'f': 3.14}) == 'f=3.14'
+
+    def test_boolean_values_stringified(self):
+        p = FakeProcessor.make()
+        assert p._render_params({'flag': True}) == 'flag=True'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 52. _parse_tc_params() — DB string → dict normalisation
+#
+# tool_calls.params is stored as a JSON string. The renderer accepts both
+# already-parsed dicts (tests) and raw DB strings (prod) and never crashes
+# on malformed data.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestParseTcParams:
+    def test_none_returns_empty_dict(self):
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params(None) == {}
+
+    def test_empty_string_returns_empty_dict(self):
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params('') == {}
+
+    def test_pre_parsed_dict_passthrough(self):
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params({'a': 1}) == {'a': 1}
+
+    def test_valid_json_string_parsed(self):
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params('{"query": "hello", "radius": 0.15}') == {
+            'query': 'hello', 'radius': 0.15
+        }
+
+    def test_malformed_json_returns_empty_dict(self):
+        """Bad JSON from the DB must never crash rendering — return empty
+        and let the line render as `[tool_name()] result`."""
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params('not-json') == {}
+        assert _parse_tc_params('{broken') == {}
+
+    def test_non_dict_json_returns_empty_dict(self):
+        """JSON list/scalar must not become the params dict."""
+        from services.message_processor_v2 import _parse_tc_params
+        assert _parse_tc_params('[1, 2, 3]') == {}
+        assert _parse_tc_params('"just a string"') == {}
+        assert _parse_tc_params('42') == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 53. getPreviousMessages() — params rendering parity with live ACT trail
+#
+# The historical renderer must produce the same `[name(k=v;k=v)] result`
+# format as the live ACT trail append in handleTool() (Commit 3). This is
+# tested end-to-end by feeding a mocked durable tool_call through the
+# rendering pipeline and asserting the final line matches _render_params'
+# direct output.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetPreviousMessagesParamsRenderingParity:
+    def test_params_from_db_string_rendered_via_canonical_source(self):
+        """Tool_call params loaded as a JSON string from the DB must render
+        identically to the live ACT trail format."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 1,
+            'role': 'user',
+            'content': 'Ask for memory',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_tc = {
+            'id': 2,
+            'tool_name': 'memory',
+            'params': '{"radius": 0.15}',
+            'result': 'User visited Mykonos in 2024',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {1: [fake_tc]}
+            p = FakeProcessor.make()
+            result = p.getPreviousMessages()
+
+        # Canonical source matches directly
+        expected_params_str = p._render_params({'radius': 0.15})
+        assert expected_params_str == 'radius=0.15'
+        expected_line = f'[memory({expected_params_str})] User visited Mykonos in 2024'
+        assert expected_line in result
+
+    def test_empty_params_renders_empty_parens(self):
+        """Empty dict params → `[tool_name()] result` (empty parens)."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 1,
+            'role': 'user',
+            'content': 'row',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_tc = {
+            'id': 2,
+            'tool_name': 'memory',
+            'params': '{}',
+            'result': 'empty params result',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {1: [fake_tc]}
+            p = FakeProcessor.make()
+            result = p.getPreviousMessages()
+
+        assert '[memory()] empty params result' in result
+
+    def test_malformed_params_string_falls_back_gracefully(self):
+        """Malformed params JSON → `[tool_name()] result` — never crash."""
+        from unittest.mock import patch
+
+        fake_row = {
+            'id': 1,
+            'role': 'user',
+            'content': 'row',
+            'created_at': '2026-04-10 10:00:00',
+        }
+        fake_tc = {
+            'id': 2,
+            'tool_name': 'memory',
+            'params': 'not-json-at-all',
+            'result': 'survived bad params',
+            'ephemeral': 0,
+        }
+
+        with patch('services.transcript_service.get_recent', return_value=[fake_row]), \
+             patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.tool_call_service.ToolCallService') as mock_tcs_cls:
+            mock_tcs_cls.return_value.get_by_transcript_ids.return_value = {1: [fake_tc]}
+            p = FakeProcessor.make()
+            # Must not raise
+            result = p.getPreviousMessages()
+
+        assert '[memory()] survived bad params' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

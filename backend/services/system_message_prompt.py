@@ -40,98 +40,38 @@ class SystemMessagePrompt:
 
 
 class UnifiedSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for user-facing (unified) turns.
+    """Pure static template renderer for the user-facing (unified) system
+    prompt body.
 
-    Lifts the logic from `SystemPromptAssemblyService._build_unified()`:
-    loads the UNIFIED prompt template (identity-core + frontal-cortex-unified)
-    and injects the `{{identity_modulation}}` and `{{adaptive_directives}}`
-    placeholders via the same helpers the legacy service uses.
+    **Zero-arg by design (Decision Y1 — 2026-04-10).** This class has no
+    constructor parameters and does not read any turn-specific state. It
+    returns the UNIFIED prompt template verbatim, leaving the
+    ``{{identity_modulation}}`` and ``{{adaptive_directives}}`` placeholders
+    **literal** for a caller further up the stack to weave in.
 
-    Will be wired to: `UserMessageProcessor` (Commit 8).
+    **Why the retrofit from Commit 1's parameterised version:** identity
+    modulation and adaptive directives are *per-turn runtime context*, not
+    static template content. They belong one level up, inside the owning
+    ``MessageProcessor`` subclass's ``getSystemPrompt()`` override, which
+    already holds the turn state (``self._raw_input``, ``self._metadata``).
+    Keeping them *inside* ``SystemMessagePrompt`` forced parameters on the
+    class, which in turn forced ``MessageProcessor.getSystemPrompt()`` to
+    either know about subclass-specific args (leaky) or silently degrade
+    identity/adaptive when callers forgot to override. The zero-arg contract
+    makes that failure mode impossible — the weaving cannot be "forgotten"
+    because the class itself cannot hold turn state.
+
+    The weaving moves to ``UserMessageProcessor.getSystemPrompt()`` in
+    Commit 8. Until then, the placeholders ride through as literal markers;
+    no production code path instantiates this class yet.
+
+    Will be wired to: ``UserMessageProcessor`` (Commit 8).
     """
-
-    def __init__(self, original_prompt: str = '', thread_id: str = None):
-        self._original_prompt = original_prompt
-        self._thread_id = thread_id
 
     def getPrompt(self) -> str:
         from workers.digest_singletons import load_configs
         configs = load_configs()
-        template = configs['cortex']['prompt_map']['UNIFIED']
-
-        identity_modulation = self._get_identity_modulation()
-        template = template.replace('{{identity_modulation}}', identity_modulation)
-
-        adaptive = self._get_adaptive_directives()
-        template = template.replace('{{adaptive_directives}}', adaptive)
-
-        return template
-
-    def _get_identity_modulation(self) -> str:
-        try:
-            from services.identity_service import IdentityService
-            from services.voice_mapper_service import VoiceMapperService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            identity = IdentityService(db_service)
-            mapper = VoiceMapperService()
-
-            vectors = identity.get_vectors()
-            identity.check_coherence()
-            modulation = mapper.generate_modulation(vectors)
-            return modulation if modulation else "Engage naturally as a peer."
-        except Exception as e:
-            logger.warning(f"[SYSTEM PROMPT] Identity modulation unavailable: {e}")
-            return "Engage naturally as a peer."
-
-    def _get_adaptive_directives(self) -> str:
-        # TODO(v0.3.2): WorkingMemoryService is deprecated per CLAUDE.md and the
-        # north star (/Volumes/llm/chalie-plans/message-processing.md). This is
-        # a straight lift of the legacy SystemPromptAssemblyService._get_adaptive_directives()
-        # logic to preserve byte-parity for Commit 1. Do not extend this path —
-        # the adaptive layer signal source should be migrated off WorkingMemoryService
-        # in a follow-up commit. The `try/except` already tolerates its removal.
-        try:
-            from services.adaptive_layer_service import AdaptiveLayerService
-            from services.database_service import get_shared_db_service
-            from services.working_memory_service import WorkingMemoryService  # DEPRECATED
-
-            db_service = get_shared_db_service()
-            service = AdaptiveLayerService(db_service)
-
-            working_memory_turns = []
-            if self._thread_id:
-                try:
-                    wm_service = WorkingMemoryService()
-                    working_memory_turns = wm_service.get_recent_turns(self._thread_id) or []
-                except Exception:
-                    pass
-
-            current_signals = {
-                'prompt_token_count': len(self._original_prompt.split()) if self._original_prompt else 0,
-            }
-            if self._thread_id:
-                try:
-                    from services.memory_client import MemoryClientService
-                    import json as _json
-                    _store = MemoryClientService.create_connection()
-                    _snapshot_raw = _store.get(f"adaptive_signals:{self._thread_id}")
-                    if _snapshot_raw:
-                        _snapshot = _json.loads(_snapshot_raw)
-                        current_signals.update(_snapshot)
-                except Exception:
-                    pass
-
-            return service.generate_directives(
-                thread_id=self._thread_id,
-                working_memory_turns=working_memory_turns,
-                current_signals=current_signals,
-                current_message=self._original_prompt,
-            ) or ''
-        except Exception as e:
-            logger.warning(f"[SYSTEM PROMPT] Adaptive directives unavailable: {e}")
-            return ''
+        return configs['cortex']['prompt_map']['UNIFIED']
 
 
 class _FileBackedSystemMessagePrompt(SystemMessagePrompt):
