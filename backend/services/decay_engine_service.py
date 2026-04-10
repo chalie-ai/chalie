@@ -205,7 +205,6 @@ class DecayEngineService:
 
                     updated = 0
                     durability_updated = 0
-                    cron_tool_updated = 0
 
                     for row in rows:
                         episode_id, retrieval_weight, hours_since, sf_source, sf_durability = row
@@ -220,11 +219,6 @@ class DecayEngineService:
                             elif sf_durability == 'evolving':
                                 exponent = self.retrieval_decay_exponent * 1.5
                                 durability_updated += 1
-
-                        # 3x accelerated decay for cron_tool episodes
-                        if sf_durability == 'cron_tool':
-                            exponent = self.retrieval_decay_exponent * 3.0
-                            cron_tool_updated += 1
 
                         # Power-law decay: rw = rw * (1 + hours)^(-exponent)
                         new_rw = max(0.01, retrieval_weight * math.pow(1.0 + hours_since, -exponent))
@@ -241,12 +235,6 @@ class DecayEngineService:
                         logger.info(
                             f"[DECAY ENGINE] Applied durability-based decay to "
                             f"{durability_updated} tool_reflection episodes"
-                        )
-
-                    if cron_tool_updated > 0:
-                        logger.info(
-                            f"[DECAY ENGINE] Applied 3x decay to "
-                            f"{cron_tool_updated} cron_tool episodes"
                         )
 
                     cursor.close()

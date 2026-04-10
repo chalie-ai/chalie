@@ -8,7 +8,7 @@ ensures one job at a time per queue.
     This module is scheduled for removal. The new message-processing model
     (see ``/Volumes/llm/chalie-plans/message-processing.md``) eliminates the
     shared dispatch queue entirely: each input channel (WebSocket, DMN timer,
-    cron, scheduled, goal pursuit, …) constructs and invokes its own
+    scheduled, goal pursuit, …) constructs and invokes its own
     ``MessageProcessor`` subclass directly, on its own thread. Nothing is
     queued centrally. This file will be deleted once every channel has been
     migrated to the new pattern. Do not add new callers.

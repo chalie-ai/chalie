@@ -21,11 +21,6 @@ class TestSummarizeEvent:
         assert '5' in result
         assert 'budget_exhausted' in result
 
-    def test_cron_tool_executed_includes_tool_name(self):
-        from services.interaction_log_service import _summarize_event
-        result = _summarize_event('cron_tool_executed', {'tool_name': 'search'})
-        assert 'search' in result
-
     def test_unknown_event_type_returns_humanized_string(self):
         from services.interaction_log_service import _summarize_event
         result = _summarize_event('some_unknown_event', {})
@@ -50,7 +45,7 @@ class TestActivityEventTypes:
     def test_contains_expected_types(self):
         from services.interaction_log_service import _ACTIVITY_EVENT_TYPES
         expected = {
-            'proactive_sent', 'act_loop_telemetry', 'cron_tool_executed',
+            'proactive_sent', 'act_loop_telemetry',
             'plan_proposed',
         }
         for t in expected:

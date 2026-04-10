@@ -15,8 +15,8 @@ response cycle: topic classification, context assembly, unified generation
 (single LLM call with discoverable skills/tools), memory chunking,
 and output delivery.
 
-It also provides lightweight helpers used by cron-tool and other workers for
-interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``).
+It also provides lightweight helpers for interactive tool dialog
+(``process_tool_dialog``, ``store_tool_dialog_memory``).
 
 .. deprecated::
     This module is scheduled for removal. The new message-processing model
@@ -50,7 +50,6 @@ from services.innate_skills.registry import ALL_SKILL_NAMES
 from workers.digest_singletons import (          # noqa: F401
     get_context_relevance_service,
     get_orchestrator,
-    get_mode_router,
     load_configs,
 )
 
@@ -59,7 +58,6 @@ from workers.digest_singletons import (          # noqa: F401
 from workers.post_exchange_hooks import (         # noqa: F401
     _run_iip_hook,
     _run_belief_correction_hook,
-    _classify_engagement,
     _detect_fork_response,
     _store_adaptive_signals,
 )
@@ -586,9 +584,9 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
     Called synchronously during an interactive tool-Chalie dialog. Returns response text
     to be written back to the tool container's stdin. Does NOT surface to the user.
 
-    Memory is stored with memory_durability='tool_internal' -- weaker than cron_tool,
-    so the user can ask "did that tool ask you something?" but the tool dialog doesn't
-    alter long-term behavioral patterns.
+    Memory is stored with memory_durability='tool_internal' so the user can ask
+    "did that tool ask you something?" but the tool dialog doesn't alter long-term
+    behavioral patterns.
 
     Args:
         text: Tool data text (prefixed by trigger_prompt from caller)
@@ -683,229 +681,6 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
         logging.warning(f"[TOOL DIALOG] Memory storage failed for '{tool_name}': {e}")
 
 
-def _run_response_pipeline(
-    *,
-    text,
-    channel,
-    classification,
-    thread_id,
-    metadata,
-    cortex_config,
-    prompt_template,
-    generation_config,
-    destination='web',
-    trait_extraction_meta=None,
-    log_event_type=None,
-    log_payload=None,
-    log_source=None,
-    log_tag='PIPELINE',
-    working_memory=None,
-    wm_key=None,
-):
-    """Shared response pipeline for cron-tool and proactive-drift handlers.
-
-    Covers the common steps: context assembly, FrontalCortexService generation,
-    empty-response check, working-memory append, conversation history store,
-    orchestrator routing, trait extraction, and interaction logging.
-
-    Args:
-        text: The prompt text for generation.
-        channel: Channel key for context assembly and orchestrator.
-        classification: Classification dict for context/generation.
-        thread_id: Resolved thread ID.
-        metadata: Full metadata dict (passed to orchestrator).
-        cortex_config: Base cortex config dict.
-        prompt_template: System prompt template string for FrontalCortexService.
-        generation_config: Config dict for FrontalCortexService (may differ from cortex_config).
-        destination: Delivery destination (default 'web').
-        trait_extraction_meta: Dict passed as ``metadata`` to ``enqueue_trait_extraction``.
-        log_event_type: Event type string for interaction log (None to skip).
-        log_payload: Payload dict for interaction log (response text is injected automatically).
-        log_source: Source string for interaction log.
-        log_tag: Tag for log messages (e.g. 'CRON TOOL', 'PROACTIVE').
-        working_memory: Optional WorkingMemoryService instance for WM append.
-        wm_key: Key for working memory append (defaults to ``thread_id or channel``).
-
-    Returns:
-        tuple: (response_data dict, is_empty bool) where is_empty is True
-            when the LLM produced an empty response and the caller should
-            return an early-exit status string.
-    """
-    # Context relevance
-    inclusion_map = None
-    try:
-        inclusion_map = get_context_relevance_service().compute_inclusion_map(
-            mode='UNIFIED', signals={}, classification=classification,
-        )
-    except Exception as e:
-        logging.warning(f"[{log_tag}] Context relevance failed: {e}")
-
-    # ── User prompt (per-turn) ────────────────────────────────────
-    from services.user_prompt_assembly_service import UserPromptAssemblyService
-    user_prompt_svc = UserPromptAssemblyService()
-    user_prompt_svc.build(user_message=text, channel=channel, thread_id=thread_id)
-    user_prompt = user_prompt_svc.to_provider()
-
-    # Generation
-    cortex_service = FrontalCortexService(generation_config)
-
-    response_data = cortex_service.generate_response(
-        system_prompt_template=prompt_template,
-        original_prompt=user_prompt,
-        classification=classification,
-        chat_history=[],
-        thread_id=thread_id,
-        inclusion_map=inclusion_map,
-    )
-
-    # Force UNIFIED mode (both cron and proactive bypass mode routing)
-    response_data['mode'] = 'UNIFIED'
-
-    # Empty response check
-    if not response_data.get('response', '').strip():
-        logging.info(f"[{log_tag}] Empty response generated -- skipping delivery")
-        return response_data, True
-
-    # Working memory append
-    if working_memory is not None:
-        _wm_key = wm_key or thread_id or channel
-        working_memory.append_turn(_wm_key, 'assistant', response_data['response'])
-
-    # Orchestrator routing
-    try:
-        orchestrator = get_orchestrator()
-        context = {
-            'topic': channel,
-            'response': response_data['response'],
-            'confidence': response_data.get('confidence', 0.5),
-            'generation_time': response_data.get('generation_time', 0.0),
-            'destination': destination,
-            'metadata': metadata,
-            'actions': [],
-        }
-        orchestrator.route_path(mode='UNIFIED', context=context)
-    except Exception as e:
-        logging.error(f"[{log_tag}] Orchestrator failed: {e}")
-
-    # Trait extraction
-    if trait_extraction_meta is not None:
-        try:
-            enqueue_trait_extraction(
-                prompt_message=text,
-                metadata=trait_extraction_meta,
-                thread_id=thread_id,
-            )
-        except Exception as e:
-            logging.warning(f"[{log_tag}] Trait extraction enqueue failed: {e}")
-
-    # Interaction logging
-    if log_event_type:
-        try:
-            from services.database_service import get_shared_db_service
-            from services.interaction_log_service import InteractionLogService
-            db_service = get_shared_db_service()
-            log_service = InteractionLogService(db_service)
-            payload = dict(log_payload) if log_payload else {}
-            payload.setdefault('response', response_data['response'][:500])
-            payload.setdefault('generation_time', response_data.get('generation_time', 0))
-            log_service.log_event(
-                event_type=log_event_type,
-                payload=payload,
-                topic=channel,
-                source=log_source or log_tag.lower(),
-                metadata=metadata,
-            )
-        except Exception as e:
-            logger.debug(f"[{log_tag}] Failed to log {log_event_type} event: {e}", exc_info=True)
-
-    return response_data, False
-
-
-
-def _handle_cron_tool_result(text: str, metadata: dict) -> str:
-    """
-    Pipeline for scheduled (cron) tool results.
-
-    Goes directly to response generation (no mode routing or user input logging).
-    Tool has already formatted the prompt with its data.
-    Enqueues trait extraction with memory_durability: 'cron_tool' for 3x decay.
-    """
-    try:
-        from services.config_service import ConfigService
-
-        configs = load_configs()
-        cortex_config = configs['cortex']['config']
-
-        tool_name = metadata.get('tool_name', 'unknown')
-        priority = metadata.get('priority', 'normal')
-        destination = metadata.get('destination', 'web')
-
-        thread_id = metadata.get('thread_id') or metadata.get('source', 'cron_tool')
-
-        working_memory = WorkingMemoryService(
-            max_turns=cortex_config.get('max_working_memory_turns', 10)
-        )
-
-        # Load scheduled tool prompt template and config
-        scheduled_tool_template = ConfigService.get_agent_prompt("frontal-cortex-scheduled-tool")
-        try:
-            scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
-        except Exception as e:
-            logging.warning(f"[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config: {e}")
-            scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-        channel = f'cron_tool:{tool_name}'
-        classification = {
-            'topic': channel,
-            'confidence': 10,
-            'similar_topic': '',
-            'topic_update': '',
-        }
-
-        response_data, is_empty = _run_response_pipeline(
-            text=text,
-            channel=channel,
-            classification=classification,
-            thread_id=thread_id,
-            metadata=metadata,
-            cortex_config=cortex_config,
-            prompt_template=scheduled_tool_template,
-            generation_config=scheduled_tool_config,
-            destination=destination,
-            trait_extraction_meta={
-                'source': f'cron_tool:{tool_name}',
-                'priority': priority,
-            },
-            log_event_type='cron_tool_executed',
-            log_payload={
-                'tool_name': tool_name,
-                'priority': priority,
-            },
-            log_source='cron_tool',
-            log_tag='CRON TOOL',
-            working_memory=working_memory,
-            wm_key=thread_id or channel,
-        )
-
-        if is_empty:
-            return f"Tool '{tool_name}' | Mode: UNIFIED | Empty response (no updates)"
-
-        logging.info(
-            f"[CRON TOOL] {tool_name} delivered: priority={priority} "
-            f"({response_data.get('generation_time', 0):.2f}s)"
-        )
-
-        return (
-            f"Tool '{tool_name}' | Mode: UNIFIED | "
-            f"Response generated in {response_data.get('generation_time', 0):.2f}s"
-        )
-
-    except Exception as e:
-        logging.error(f"[CRON TOOL] Failed: {e}")
-        tool_name = metadata.get('tool_name', 'unknown')
-        return f"Tool '{tool_name}' | ERROR: cron_tool - {e}"
-
-
 def digest_worker(text: str, metadata: dict = None) -> str:
     """
     Main worker function that processes prompts through classification and response generation.
@@ -916,10 +691,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     Proactive drift messages go through full routing but skip user input logging.
     """
     metadata = metadata or {}
-
-    # Cron tool shortcut: background scheduled tool result (not a conversational turn)
-    if metadata.get('source', '').startswith('cron_tool:'):
-        return _handle_cron_tool_result(text, metadata)
 
     # Step 1: Load configurations
     configs = load_configs()

@@ -256,18 +256,14 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
 
-    # Register cron-triggered tools
+    # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        for tool in registry.get_cron_tools():
-            worker_func = registry.create_cron_worker(tool)
-            manager.register_service(f"tool-{tool['name']}-service", worker_func)
-        tool_count = len(registry.get_tool_names())
+        tool_count = len(ToolRegistryService().get_tool_names())
         if tool_count > 0:
             logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
     except Exception as e:
-        logging.warning(f"[Consumer] Tool cron registration failed: {e}")
+        logging.warning(f"[Consumer] Tool registry load failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:

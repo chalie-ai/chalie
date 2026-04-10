@@ -81,20 +81,24 @@ def get_mode_router():
 
 
 def load_configs():
-    """Load frontal cortex mode-specific prompts and configurations."""
+    """Load frontal cortex mode-specific prompts and configurations.
+
+    The only live cortex prompt is ``UNIFIED`` — the legacy ``ACT`` mode was
+    folded into the unified path (see ``project_act_synthesis_removal``) and
+    its prompt file has been deleted. ``prompt_map`` keeps its dict shape so
+    downstream callers (``digest_worker.py``, ``system_prompt_assembly_service``)
+    keep working without conditional key handling.
+    """
     identity_prompt = ConfigService.get_agent_prompt("identity-core")
     cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
 
     # Identity + mode prompt (values + voice + behavioral contract)
-    # ACT does NOT get identity -- reasoning stays pure
-    act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
     unified_prompt = identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
 
     return {
         'cortex': {
             'config': cortex_config,
             'prompt_map': {
-                'ACT': act_prompt,
                 'UNIFIED': unified_prompt,
             }
         },

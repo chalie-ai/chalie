@@ -197,19 +197,14 @@ def main():
                   "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
-    # Register cron-triggered tools
-    registry = None
+    # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        for tool in registry.get_cron_tools():
-            worker_func = registry.create_cron_worker(tool)
-            manager.register_service(f"tool-{tool['name']}-service", worker_func)
-        tool_count = len(registry.get_tool_names())
+        tool_count = len(ToolRegistryService().get_tool_names())
         if tool_count > 0:
             logger.info(f"[Startup] Tool registry loaded: {tool_count} tools")
     except Exception as e:
-        logger.warning(f"[Startup] Tool cron registration failed: {e}")
+        logger.warning(f"[Startup] Tool registry load failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:

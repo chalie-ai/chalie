@@ -208,7 +208,6 @@ class DMNService:
                     "SELECT channel FROM transcript "
                     "WHERE channel NOT LIKE 'goal_pursuit:%' "
                     "  AND channel NOT LIKE 'scheduled:%' "
-                    "  AND channel NOT LIKE 'cron_tool:%' "
                     "ORDER BY created_at DESC LIMIT 1"
                 )
                 row = cursor.fetchone()

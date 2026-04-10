@@ -7,6 +7,7 @@ schema up to date.  Replaces SchemaService.initialize_schema(),
 DatabaseService.run_pending_migrations(), and SchemaService._create_vec_tables().
 """
 
+import json
 import logging
 import re
 import sqlite3
@@ -48,6 +49,7 @@ class SchemaConvergenceService:
         self._embedding_dimensions = embedding_dimensions
         self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
         self._migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
+        self._jobs_config_path = Path(__file__).resolve().parent.parent / "configs" / "cognitive_jobs.json"
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -72,6 +74,7 @@ class SchemaConvergenceService:
         columns_added = 0
         indexes_synced = 0
         virtual_tables_created = 0
+        orphan_jobs_pruned = 0
 
         with self.db_service.connection() as conn:
             _load_sqlite_vec(conn)
@@ -97,11 +100,14 @@ class SchemaConvergenceService:
             else:
                 self._run_pending_migrations(conn)
 
+            orphan_jobs_pruned = self._converge_job_assignments(conn)
+
         logger.info(
             f"Schema converged: {tables_created} tables created, "
             f"{columns_added} columns added, "
             f"{indexes_synced} indexes synced, "
-            f"{virtual_tables_created} virtual tables created"
+            f"{virtual_tables_created} virtual tables created, "
+            f"{orphan_jobs_pruned} orphan jobs pruned"
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -504,6 +510,70 @@ class SchemaConvergenceService:
         if normalized_ddl.startswith(prefix):
             return f"create {obj_type} if not exists " + normalized_ddl[len(prefix):]
         return normalized_ddl
+
+    def _converge_job_assignments(self, conn: sqlite3.Connection) -> int:
+        """Remove job_provider_assignments rows whose job_name is not in cognitive_jobs.json.
+
+        This replaces the pattern of writing a ``0XX_remove_*_job.sql`` migration
+        every time a job is retired.  Delete the entry from ``cognitive_jobs.json``
+        and the orphan row is swept on the next startup automatically.
+
+        Returns the number of orphan rows pruned (0 if none, or if the config is
+        unreadable — safety: never silently wipe the table when the config is gone).
+        """
+        # Safety: if the config is missing or malformed, do nothing.
+        if not self._jobs_config_path.exists():
+            logger.warning(
+                "[convergence] cognitive_jobs.json not found — skipping job assignment convergence"
+            )
+            return 0
+
+        try:
+            jobs_data = json.loads(self._jobs_config_path.read_text())
+            desired = {j["id"] for j in jobs_data.get("jobs", [])}
+        except Exception as exc:
+            logger.warning(
+                f"[convergence] Failed to parse cognitive_jobs.json — skipping job convergence: {exc}"
+            )
+            return 0
+
+        # Safety: if the config has zero jobs, treat it as a corrupt/truncated
+        # write and refuse to wipe the entire assignments table. A legitimate
+        # empty-jobs state would break Chalie anyway; better to log and bail.
+        if not desired:
+            logger.warning(
+                "[convergence] cognitive_jobs.json contains zero jobs — treating as unsafe config, skipping job convergence"
+            )
+            return 0
+
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT job_name FROM job_provider_assignments"
+            ).fetchall()
+        except Exception as exc:
+            # Table may not exist on a very fresh DB that hasn't been stamped yet.
+            logger.debug(f"[convergence] Could not query job_provider_assignments: {exc}")
+            return 0
+
+        live = {row[0] for row in rows}
+        orphans = live - desired
+
+        if not orphans:
+            return 0
+
+        placeholders = ",".join("?" for _ in orphans)
+        try:
+            conn.execute(
+                f"DELETE FROM job_provider_assignments WHERE job_name IN ({placeholders})",
+                tuple(sorted(orphans)),
+            )
+            logger.info(
+                f"[convergence] Pruned {len(orphans)} orphan job assignments: {sorted(orphans)}"
+            )
+            return len(orphans)
+        except Exception as exc:
+            logger.error(f"[convergence] Failed to prune orphan job assignments: {exc}")
+            return 0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Utility

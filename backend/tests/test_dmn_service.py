@@ -9,7 +9,6 @@ Strategy: input → output, not wiring.
 
 import json
 import time
-import os
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -475,19 +474,6 @@ class TestActiveTopic:
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('scheduled:reminder-42', 'assistant', 'reminder text', '2026-04-10T11:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        assert result == 'general'
-
-    def test_cron_tool_channel_filtered(self, db, store):
-        """A 'cron_tool:*' channel is excluded; falls back to general."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('cron_tool:hourly-check', 'assistant', 'check done', '2026-04-10T09:00:00')"
         )
         db.commit()
 

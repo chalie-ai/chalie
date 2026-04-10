@@ -19,12 +19,6 @@
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "frontal-cortex-act",
-      "name": "Act Mode",
-      "desc": "Plans and executes multi-step tool actions. Up to 7 iterations per invocation.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "low", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "plan-decomposition",
       "name": "Plan Decomposition",
       "desc": "Decomposes task goals into executable step DAGs for long-horizon planning.",
@@ -47,12 +41,6 @@
       "name": "Experience Assimilation",
       "desc": "Evaluates tool outputs for novel knowledge worth storing.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "frontal-cortex-scheduled-tool",
-      "name": "Scheduled Tool Mode",
-      "desc": "Generates responses after scheduled tool/reminder execution.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none", "vision": "none" }
     },
     {
       "id": "trait-extraction",

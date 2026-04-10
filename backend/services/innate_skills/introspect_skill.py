@@ -362,7 +362,7 @@ def _reasoning_upcoming_reminders() -> str:
 
 
 def _reasoning_recent_actions() -> str:
-    RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
+    RELEVANT_TYPES = ('proactive_sent', 'plan_proposed')
     try:
         from services.database_service import get_shared_db_service
 
@@ -400,7 +400,6 @@ def _reasoning_recent_actions() -> str:
 def _action_label(event_type: str) -> str:
     labels = {
         'proactive_sent': 'sent proactive message',
-        'cron_tool_executed': 'ran scheduled tool',
         'plan_proposed': 'proposed plan',
     }
     return labels.get(event_type, event_type.replace('_', ' '))

@@ -18,7 +18,7 @@ from services.database_service import DatabaseService
 # decided NOT to send; surfacing them undermines the judgment layer.
 _ACTIVITY_EVENT_TYPES = (
     'proactive_sent',
-    'act_loop_telemetry', 'cron_tool_executed',
+    'act_loop_telemetry',
     'plan_proposed',
     'place_transition',
 )
@@ -38,7 +38,6 @@ def _summarize_event(event_type: str, payload: dict) -> str:
     summaries = {
         'proactive_sent': lambda: f"Shared a thought: {p.get('response', '')[:80]}",
         'act_loop_telemetry': lambda: f"Ran {p.get('actions_total', 0)} actions ({p.get('termination_reason', 'completed')})",
-        'cron_tool_executed': lambda: f"Ran {p.get('tool_name', 'tool')} in background",
         'plan_proposed': lambda: f"Proposed background task: {p.get('topic', 'unknown')}",
         'place_transition': lambda: "Noticed a location change",
     }
