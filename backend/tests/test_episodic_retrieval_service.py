@@ -429,7 +429,7 @@ class TestAdaptiveRadius:
         # DB is empty, so _count_episodes() returns 0
         captured = {}
 
-        def capture_radius(embedding, text, effective_radius):
+        def capture_radius(embedding, text, effective_radius, telemetry=None):
             captured['effective_radius'] = effective_radius
             return []
 
@@ -445,7 +445,7 @@ class TestAdaptiveRadius:
         svc = EpisodicService(get_shared_db_service(), config={})
         captured = {}
 
-        def capture_radius(embedding, text, effective_radius):
+        def capture_radius(embedding, text, effective_radius, telemetry=None):
             captured['effective_radius'] = effective_radius
             return []
 
@@ -465,7 +465,7 @@ class TestAdaptiveRadius:
         captured_1000 = {}
 
         def make_capture(bucket):
-            def _fn(embedding, text, effective_radius):
+            def _fn(embedding, text, effective_radius, telemetry=None):
                 bucket['effective_radius'] = effective_radius
                 return []
             return _fn
@@ -494,7 +494,7 @@ class TestAdaptiveRadius:
         for count, expected in test_cases:
             captured = {}
 
-            def capture(embedding, text, er, _expected=expected):
+            def capture(embedding, text, er, telemetry=None, _expected=expected):
                 captured['er'] = er
                 return []
 

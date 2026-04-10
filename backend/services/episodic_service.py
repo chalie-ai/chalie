@@ -468,15 +468,80 @@ class EpisodicService:
 
     # ── Retrieval ────────────────────────────────────────────────────
 
-    def retrieve_episodes(self, query_text: str, radius: float = 0.3) -> List[dict]:
+    def retrieve_episodes(
+        self,
+        query_text: str,
+        radius: float = 0.3,
+        *,
+        query_embedding: List[float] | None = None,
+        return_telemetry: bool = False,
+    ):
+        """Retrieve episodes via hybrid vector + FTS search.
+
+        Parameters
+        ----------
+        query_text
+            Free text query.
+        radius
+            Caller-chosen INPUT radius (pre adaptive-shrink). The memory
+            skill may already have composed this from narrow/expand
+            factors before calling — this method only applies the
+            population-aware adaptive shrink on top.
+        query_embedding
+            Pre-computed query embedding. When provided, the embedding
+            is used as-is and no extra call is made to the embedding
+            service. Memory skill passes this after computing q_now
+            once per recall call so redundancy/drift detection and
+            retrieval share the same vector.
+        return_telemetry
+            When True, returns a ``(episodes, telemetry)`` tuple where
+            ``telemetry`` is a dict with keys:
+              - ``episode_count``: total live episode count
+              - ``input_radius``: the ``radius`` arg as passed in
+              - ``adaptive_shrink_divisor``: population-aware divisor
+              - ``effective_radius``: the radius actually used for the
+                vector distance filter
+              - ``vector_candidates``: count of vector candidates
+                returned by sqlite-vec (pre radius filter)
+              - ``survivors_after_radius``: count remaining after the
+                radius threshold is applied
+              - ``fts_candidates``: count of FTS matches
+              - ``final_rrf_count``: count of RRF-merged candidates
+              - ``top_distances``: list of up to 5 nearest vector
+                distances (float) for the top survivors
+            When False, returns the plain ``List[dict]`` for backwards
+            compatibility with existing callers.
+        """
+        telemetry: dict = {
+            'episode_count': 0,
+            'input_radius': radius,
+            'adaptive_shrink_divisor': 1.0,
+            'effective_radius': radius,
+            'vector_candidates': 0,
+            'survivors_after_radius': 0,
+            'fts_candidates': 0,
+            'final_rrf_count': 0,
+            'top_distances': [],
+        }
         try:
             query_analysis = self._analyze_query(query_text)
-            query_embedding = self._generate_embedding(query_text)
+            if query_embedding is None:
+                query_embedding = self._generate_embedding(query_text)
             episode_count = self._count_episodes()
-            effective_radius = radius / (1 + 0.1 * math.log2(episode_count + 2))
-            candidates = self._hybrid_retrieve(query_embedding, query_text, effective_radius)
+            adaptive_divisor = 1 + 0.1 * math.log2(episode_count + 2)
+            effective_radius = radius / adaptive_divisor
+
+            telemetry['episode_count'] = episode_count
+            telemetry['adaptive_shrink_divisor'] = adaptive_divisor
+            telemetry['effective_radius'] = effective_radius
+
+            candidates = self._hybrid_retrieve(
+                query_embedding, query_text, effective_radius, telemetry=telemetry
+            )
 
             if not candidates:
+                if return_telemetry:
+                    return [], telemetry
                 return []
 
             query_data = {
@@ -490,10 +555,25 @@ class EpisodicService:
             ranked = self._rerank_with_composite_score(candidates, query_data, self.weights)
             self._apply_reconsolidation(ranked)
 
+            telemetry['final_rrf_count'] = len(ranked)
+            top_dists = []
+            for ep in ranked[:5]:
+                vd = ep.get('vector_distance')
+                if vd is not None:
+                    try:
+                        top_dists.append(round(float(vd), 4))
+                    except (TypeError, ValueError):
+                        pass
+            telemetry['top_distances'] = top_dists
+
+            if return_telemetry:
+                return ranked, telemetry
             return ranked
 
         except Exception as e:
             logging.error(f"Failed to retrieve episodes: {e}")
+            if return_telemetry:
+                return [], telemetry
             return []
 
     def _count_episodes(self) -> int:
@@ -622,7 +702,7 @@ class EpisodicService:
             raise
 
     def _hybrid_retrieve(self, query_embedding: List[float], query_text: str,
-                        effective_radius: float) -> List[dict]:
+                        effective_radius: float, telemetry: dict | None = None) -> List[dict]:
         try:
             with self.db_service.connection() as conn:
                 cursor = DictCursor(conn.cursor())
@@ -648,6 +728,10 @@ class EpisodicService:
                 vector_results = [r for r in all_vector_results
                                   if r.get('vector_distance') is not None
                                   and r['vector_distance'] <= effective_radius]
+
+                if telemetry is not None:
+                    telemetry['vector_candidates'] = len(all_vector_results)
+                    telemetry['survivors_after_radius'] = len(vector_results)
 
                 import re as _re
                 fts_safe = _re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
@@ -676,6 +760,9 @@ class EpisodicService:
                     all_fts = cursor.fetchall()
                     fts_results = [r for r in all_fts
                                    if r.get('text_rank') is not None and r['text_rank'] > -50]
+
+                if telemetry is not None:
+                    telemetry['fts_candidates'] = len(fts_results)
 
                 candidates = self._merge_with_rrf(vector_results, fts_results)
                 return candidates

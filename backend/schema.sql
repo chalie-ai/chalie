@@ -756,6 +756,41 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
 
 -- ────────────────────────────────────────────────────────────────
+-- MEMORY RECALL LOG — telemetry for dynamic memory radius tuning
+-- One row per memory recall call (seed or llm-driven). Written by
+-- memory_skill after EpisodicService.retrieve_episodes returns.
+-- Consumed by the meta-harness (nightly tests) to tune the 8
+-- radius constants in memory_skill.py — see
+-- /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS memory_recall_log (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    turn_uid                 TEXT NOT NULL,
+    transcript_id            INTEGER,
+    channel                  TEXT NOT NULL,
+    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
+    query                    TEXT NOT NULL,
+    query_embedding_hash     TEXT NOT NULL,
+    input_radius             REAL NOT NULL,
+    narrow_factor            REAL NOT NULL DEFAULT 1.0,
+    expand_factor            REAL NOT NULL DEFAULT 1.0,
+    adaptive_shrink_divisor  REAL NOT NULL DEFAULT 1.0,
+    effective_radius         REAL NOT NULL,
+    episode_count            INTEGER NOT NULL DEFAULT 0,
+    vector_candidates        INTEGER NOT NULL DEFAULT 0,
+    fts_candidates           INTEGER NOT NULL DEFAULT 0,
+    survivors_after_radius   INTEGER NOT NULL DEFAULT 0,
+    final_rrf_count          INTEGER NOT NULL DEFAULT 0,
+    top_distances            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_recall_log_turn
+    ON memory_recall_log (turn_uid, id);
+CREATE INDEX IF NOT EXISTS idx_memory_recall_log_caller
+    ON memory_recall_log (caller, created_at DESC);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT — persistent, channel-scoped conversation record
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS transcript (

@@ -1,8 +1,59 @@
+import hashlib
+import json
 import logging
+import math
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
+
+
+# ── Dynamic memory radius — tuning constants ────────────────────────────────
+#
+# Composition: effective_input = BASELINE × narrow_factor × expand_factor
+# `EpisodicService.retrieve_episodes` then applies its own population-aware
+# adaptive shrink on top. All eight constants are tuned by the meta-harness
+# loop (loop_improve.sh) against the d1-context-recall benchmark suite —
+# see /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
+#
+# Do NOT read these values from config/env at import time. They are literal
+# module-level floats so the meta-harness can diff-patch them mechanically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Baseline input radius for LLM-driven recall calls (memory skill recall).
+# Higher than SEED_RADIUS_BASELINE because the LLM is deliberately probing
+# for context, not pre-seeding from a compressed prior query.
+RECALL_RADIUS_BASELINE: float = 0.5
+
+# Baseline for the pre-turn seed recall. Tighter than RECALL_RADIUS_BASELINE
+# because the seed query is a raw user turn and we want precision, not
+# exploration.
+SEED_RADIUS_BASELINE: float = 0.2
+
+# Redundancy-narrow — fires when a new recall query is semantically very
+# close to a query already made earlier in the same turn (seed or prior
+# llm_recall). Narrowing contracts scope to avoid re-surfacing duplicates.
+#
+# NARROW_MIN_DIST  — if min_dist_to_history >= this, no narrowing (factor=1.0)
+# NARROW_MAX_DIST  — if min_dist_to_history <= this, full narrowing applies
+#                     (anything below is clamped to NARROW_FACTOR_FLOOR)
+# NARROW_FACTOR_FLOOR — smallest multiplicative factor allowed (e.g. 0.35
+#                     means recall radius shrinks to at most 35% of baseline)
+NARROW_MIN_DIST: float = 0.25
+NARROW_MAX_DIST: float = 0.05
+NARROW_FACTOR_FLOOR: float = 0.35
+
+# Drift-expand — fires when a new recall query is semantically FAR from the
+# seed query and the prior recall query. Models exploratory multi-topic
+# turns where one cluster was already covered and the LLM is now pivoting
+# to an unrelated topic.
+#
+# DRIFT_MIN_DIST — below this, no expansion (factor=1.0)
+# DRIFT_MAX_DIST — at/above this, full expansion applies (clamped to CEILING)
+# EXPAND_FACTOR_CEILING — largest multiplicative factor allowed
+EXPAND_MIN_DIST: float = 0.30
+EXPAND_MAX_DIST: float = 0.55
+EXPAND_FACTOR_CEILING: float = 2.2
 
 TOOL_SCHEMA = {
     "name": "memory",
@@ -291,28 +342,302 @@ def _search_knowledge(
         return [], f"error: {e}"
 
 
-def _search_episodes(
-    channel: str, query: str, limit: int
-) -> Tuple[List[Dict], str]:
-    """Search episodic memory via hybrid retrieval."""
+def _cosine_distance(a: List[float], b: List[float]) -> float:
+    """Return cosine DISTANCE in the same scale sqlite-vec uses (0..2).
+
+    Matches the distance domain used by ``EpisodicService`` radius filters
+    so narrow/expand thresholds are comparable with the values that come
+    back from ``top_distances`` in retrieval telemetry. Returns 1.0 (a
+    neutral "unknown, definitely not matched") when vectors are empty or
+    dimension-mismatched — never raises, never returns NaN.
+    """
+    if not a or not b or len(a) != len(b):
+        return 1.0
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    if na <= 0 or nb <= 0:
+        return 1.0
+    sim = dot / math.sqrt(na * nb)
+    # Clamp for numerical safety, then map [-1,1] similarity → [0,2] distance.
+    sim = max(-1.0, min(1.0, sim))
+    return 1.0 - sim
+
+
+def _compute_narrow_factor(
+    q_embedding: List[float], history: List[Dict]
+) -> Tuple[float, float]:
+    """Return ``(narrow_factor, min_dist_to_history)``.
+
+    Fires when the new query is semantically close to any prior query
+    made earlier in the current turn. Closer match → tighter narrowing.
+    History entries without an embedding are skipped (can't score).
+    """
+    if not history:
+        return 1.0, float("inf")
+
+    min_dist = float("inf")
+    for entry in history:
+        emb = entry.get("embedding")
+        if not emb:
+            continue
+        d = _cosine_distance(q_embedding, emb)
+        if d < min_dist:
+            min_dist = d
+
+    if min_dist == float("inf") or min_dist >= NARROW_MIN_DIST:
+        return 1.0, min_dist
+
+    if min_dist <= NARROW_MAX_DIST:
+        return NARROW_FACTOR_FLOOR, min_dist
+
+    # Linear interpolation between (NARROW_MIN_DIST → 1.0) and
+    # (NARROW_MAX_DIST → NARROW_FACTOR_FLOOR). NARROW_MAX_DIST < NARROW_MIN_DIST
+    # because smaller distance = stronger narrowing.
+    span = NARROW_MIN_DIST - NARROW_MAX_DIST
+    if span <= 0:
+        return NARROW_FACTOR_FLOOR, min_dist
+    t = (NARROW_MIN_DIST - min_dist) / span  # 0 at MIN_DIST, 1 at MAX_DIST
+    factor = 1.0 - t * (1.0 - NARROW_FACTOR_FLOOR)
+    return max(NARROW_FACTOR_FLOOR, min(1.0, factor)), min_dist
+
+
+def _compute_expand_factor(
+    q_embedding: List[float], history: List[Dict]
+) -> Tuple[float, float]:
+    """Return ``(expand_factor, max_drift)``.
+
+    Drift = max distance between q_now and any prior query in history
+    (including the seed). Large drift ⇒ LLM has pivoted to a fresh topic
+    that the baseline radius may be too tight for.
+    """
+    if not history:
+        return 1.0, 0.0
+
+    max_drift = 0.0
+    for entry in history:
+        emb = entry.get("embedding")
+        if not emb:
+            continue
+        d = _cosine_distance(q_embedding, emb)
+        if d > max_drift:
+            max_drift = d
+
+    if max_drift <= EXPAND_MIN_DIST:
+        return 1.0, max_drift
+
+    if max_drift >= EXPAND_MAX_DIST:
+        return EXPAND_FACTOR_CEILING, max_drift
+
+    span = EXPAND_MAX_DIST - EXPAND_MIN_DIST
+    if span <= 0:
+        return EXPAND_FACTOR_CEILING, max_drift
+    t = (max_drift - EXPAND_MIN_DIST) / span
+    factor = 1.0 + t * (EXPAND_FACTOR_CEILING - 1.0)
+    return min(EXPAND_FACTOR_CEILING, max(1.0, factor)), max_drift
+
+
+def _embedding_hash(embedding: List[float]) -> str:
+    """Short stable fingerprint for telemetry — not a crypto hash."""
+    if not embedding:
+        return "empty"
+    try:
+        h = hashlib.md5()
+        # Only hash first 16 components; good enough for dedup in a
+        # telemetry table, cheap to compute.
+        for x in embedding[:16]:
+            h.update(f"{x:.6f}".encode())
+        return h.hexdigest()[:16]
+    except Exception:
+        return "err"
+
+
+def _write_recall_telemetry(
+    db_service,
+    *,
+    turn_uid: str,
+    transcript_id: int | None,
+    channel: str,
+    caller: str,
+    query: str,
+    embedding_hash: str,
+    input_radius: float,
+    narrow_factor: float,
+    expand_factor: float,
+    telemetry: Dict,
+) -> None:
+    """Insert one row into memory_recall_log. Never raises."""
+    try:
+        with db_service.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_recall_log (
+                    turn_uid, transcript_id, channel, caller, query,
+                    query_embedding_hash, input_radius, narrow_factor,
+                    expand_factor, adaptive_shrink_divisor, effective_radius,
+                    episode_count, vector_candidates, fts_candidates,
+                    survivors_after_radius, final_rrf_count, top_distances
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    turn_uid,
+                    transcript_id,
+                    channel,
+                    caller,
+                    query,
+                    embedding_hash,
+                    input_radius,
+                    narrow_factor,
+                    expand_factor,
+                    telemetry.get("adaptive_shrink_divisor", 1.0),
+                    telemetry.get("effective_radius", input_radius),
+                    telemetry.get("episode_count", 0),
+                    telemetry.get("vector_candidates", 0),
+                    telemetry.get("fts_candidates", 0),
+                    telemetry.get("survivors_after_radius", 0),
+                    telemetry.get("final_rrf_count", 0),
+                    json.dumps(telemetry.get("top_distances", [])),
+                ),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
+
+
+def recall_episodes(
+    channel: str,
+    query: str,
+    *,
+    caller: str = "llm_recall",
+    baseline_radius: float | None = None,
+    limit: int = 10,
+    return_raw: bool = False,
+):
+    """Public entry point for episode recall with dynamic radius.
+
+    Used by both the `memory` skill's recall action (``caller='llm_recall'``)
+    and the pre-turn seed path (``caller='seed'``). Composes the effective
+    input radius from baseline × narrow_factor × expand_factor using the
+    current MessageProcessor's ``_memory_query_history`` and ``_memory_seed``
+    if available, caches q_now in the history for future calls within the
+    same turn, and emits one ``memory_recall_log`` row per call.
+
+    Parameters
+    ----------
+    return_raw
+        When False (default), returns ``(hits, status)`` in the memory-skill
+        hit format — used by the `memory` skill recall action.
+        When True, returns ``(raw_episodes, status)`` where ``raw_episodes``
+        are the untouched ranked dicts from ``EpisodicService`` — used by
+        the seed path which needs them for ``format_for_prompt``.
+    """
     try:
         from services.episodic_service import EpisodicService
         from services.database_service import get_shared_db_service
+        from services.message_processor_v2 import current_processor
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
+        return [], f"error: {exc}"
 
+    if baseline_radius is None:
+        baseline_radius = (
+            SEED_RADIUS_BASELINE if caller == "seed" else RECALL_RADIUS_BASELINE
+        )
+
+    try:
         db = get_shared_db_service()
         service = EpisodicService(db)
 
-        episodes = service.retrieve_episodes(
+        # 1. Compute q_now embedding once, reuse for retrieval + history.
+        q_embedding = service._generate_embedding(query)
+
+        # 2. Reach into the current processor for per-turn memory state.
+        proc = current_processor()
+        history: List[Dict] = []
+        turn_uid = "ephemeral"
+        transcript_id: int | None = None
+        if proc is not None:
+            history = list(proc._memory_query_history or [])
+            # Seed query is conceptually the 0th entry; fold it in for
+            # narrow/expand scoring even if the seed path did not already
+            # populate history.
+            if proc._memory_seed and not any(
+                h.get("caller") == "seed" for h in history
+            ):
+                # We don't have the seed embedding cached in that case,
+                # so we recompute it — cheap and one-time per turn.
+                try:
+                    seed_emb = service._generate_embedding(proc._memory_seed)
+                    history.insert(
+                        0,
+                        {
+                            "query": proc._memory_seed,
+                            "embedding": seed_emb,
+                            "caller": "seed",
+                            "effective_radius": SEED_RADIUS_BASELINE,
+                        },
+                    )
+                except Exception as _seed_exc:
+                    logger.debug(
+                        f"{LOG_PREFIX} Could not embed seed for drift calc: {_seed_exc}"
+                    )
+            turn_uid = getattr(proc, "_uid", None) or proc.CHANNEL or "unbound"
+            turn_uid = str(turn_uid)
+            transcript_id = getattr(proc, "_uid", None)
+
+        # 3. Compose dynamic radius.
+        narrow_factor, _min_dist = _compute_narrow_factor(q_embedding, history)
+        expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
+        input_radius = baseline_radius * narrow_factor * expand_factor
+
+        # 4. Retrieve with pre-computed embedding + telemetry.
+        episodes, telemetry = service.retrieve_episodes(
             query_text=query,
-            radius=0.5,
+            radius=input_radius,
+            query_embedding=q_embedding,
+            return_telemetry=True,
+        )
+
+        # 5. Append this call to per-turn history (in live order).
+        if proc is not None:
+            proc._memory_query_history.append(
+                {
+                    "query": query,
+                    "embedding": q_embedding,
+                    "caller": caller,
+                    "effective_radius": telemetry.get("effective_radius", input_radius),
+                }
+            )
+
+        # 6. Emit telemetry row — every call, even empty.
+        _write_recall_telemetry(
+            db,
+            turn_uid=turn_uid,
+            transcript_id=transcript_id,
+            channel=channel,
+            caller=caller,
+            query=query,
+            embedding_hash=_embedding_hash(q_embedding),
+            input_radius=input_radius,
+            narrow_factor=narrow_factor,
+            expand_factor=expand_factor,
+            telemetry=telemetry,
         )
 
         if not episodes:
             candidates = _count_episode_candidates(db, channel)
-            return [], f"0 matches ({candidates} candidates evaluated)"
+            status = f"0 matches ({candidates} candidates evaluated)"
+            return ([], status) if return_raw else ([], status)
+
+        if return_raw:
+            return episodes[:limit], f"{len(episodes[:limit])} matches"
 
         hits = []
-        for ep in episodes:
+        for ep in episodes[:limit]:
             gist = ep.get("gist", "")
             hits.append({
                 "layer": "episodes",
@@ -325,8 +650,20 @@ def _search_episodes(
         return hits, f"{len(hits)} matches"
 
     except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Episode search failed: {e}")
+        logger.warning(f"{LOG_PREFIX} Episode search failed: {e}", exc_info=True)
         return [], f"error: {e}"
+
+
+def _search_episodes(
+    channel: str, query: str, limit: int
+) -> Tuple[List[Dict], str]:
+    """Search episodic memory via hybrid retrieval with dynamic radius."""
+    return recall_episodes(
+        channel=channel,
+        query=query,
+        caller="llm_recall",
+        limit=limit,
+    )
 
 
 def _search_transcript(

@@ -31,12 +31,56 @@ Commits schedule:
   Commit 11 — rename this file to message_processor.py
 """
 
+import contextlib
+import contextvars
 import logging
 
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
+
+
+# ── Current-processor context ─────────────────────────────────────────────────
+#
+# Innate skills and downstream services sometimes need to reach the
+# MessageProcessor instance for the turn they are running inside (e.g. to
+# append to ``_memory_query_history`` or read ``_memory_seed``). The
+# MessageProcessor instance is not part of any tool signature — skills are
+# dispatched by name via ``handleTool()`` and must not receive the
+# processor as an argument.
+#
+# We expose an async-safe ``ContextVar`` + a context manager so that
+# ``send()`` can bind the running processor for the duration of a turn and
+# tools called from inside that turn can discover it via
+# ``current_processor()``. Outside a turn this returns ``None`` and callers
+# MUST degrade gracefully.
+_CURRENT_PROCESSOR: contextvars.ContextVar["MessageProcessor | None"] = (
+    contextvars.ContextVar("chalie_current_processor", default=None)
+)
+
+
+def current_processor() -> "MessageProcessor | None":
+    """Return the `MessageProcessor` for the current turn, or None.
+
+    Returns None when called outside a ``MessageProcessor.send()`` turn
+    (worker threads, tests, legacy orchestrator). Callers must handle that.
+    """
+    return _CURRENT_PROCESSOR.get()
+
+
+@contextlib.contextmanager
+def bind_current_processor(processor: "MessageProcessor"):
+    """Context manager that binds ``processor`` as the current-turn processor.
+
+    Wrap the body of ``MessageProcessor.send()`` with this. Resets the
+    ContextVar on exit regardless of success / exception path.
+    """
+    token = _CURRENT_PROCESSOR.set(processor)
+    try:
+        yield processor
+    finally:
+        _CURRENT_PROCESSOR.reset(token)
 
 
 class MessageProcessor:
@@ -81,6 +125,13 @@ class MessageProcessor:
         self._raw_input = raw_input
         self._metadata = metadata or {}
         self._memory_seed: str | None = None
+        # Per-turn log of memory recall queries (seed + llm_recall).
+        # Populated by the memory skill recall path; consumed by the next
+        # recall call for redundancy-narrow and drift-expand computation.
+        # Entries: {'query': str, 'embedding': list[float],
+        #           'caller': 'seed'|'llm_recall', 'effective_radius': float}.
+        # Never persisted — cleared when the instance is discarded.
+        self._memory_query_history: list[dict] = []
         self._act_trail: list[str] = []
         self._pending_tool_calls: list[dict] = []
         self._discovered_tools: list[dict] = []
@@ -188,20 +239,35 @@ class MessageProcessor:
     def getPreviousMessages(self, token_budget: int | None = None) -> str:
         """Assemble the ## Previous Messages block for this channel.
 
+        Format (locked by the north star,
+        ``/Volumes/llm/chalie-plans/message-processing.md`` § "Literal format"):
+
+        - Input rows  : ``[YYYY-MM-DD HH:MM] <role>: <content>``
+                        — role rendered **lowercase** for transcript input
+                          rows. ``assistant`` is the sole exception — see next.
+        - Assistant   : ``[YYYY-MM-DD HH:MM] Assistant: <content>``
+                        — title case, capital A.
+        - Durable     : ``[<tool_name>(<key>=<value>;…)] <result>``
+          tool_calls    — **bare**, no timestamp prefix, no ``TOOL()``
+                          wrapper. Inherits the owning row's timestamp
+                          implicitly by positional placement.
+
         Algorithm:
         1. Look up the compaction row for self.CHANNEL.
-        2. If a compaction exists, prepend compacted_text as the opening block
-           and read transcript rows with id > compacted_up_to_id.
+        2. If a compaction exists, prepend ``compacted_text`` as the opening
+           block and read transcript rows with ``id > compacted_up_to_id``.
            If no compaction exists, read all transcript rows for the channel.
-        3. For each transcript row, emit:
-               [YYYY-MM-DD HH:MM] <ROLE>: <content>
-           then, immediately below, any durable (ephemeral=0) tool_calls
-           linked to that row:
-               [YYYY-MM-DD HH:MM] TOOL(<tool_name>): <result>
-        4. Ephemeral (ephemeral=1) tool_call rows are never emitted here.
+        3. For each transcript row, emit the input / assistant line, then
+           immediately below, any **durable** (``ephemeral=0``) tool_calls
+           linked to that row in the bare format above.
+        4. Ephemeral (``ephemeral=1``) tool_call rows are never emitted here.
+        5. Durable tool_calls whose name is in ``_NEVER_RENDER_IN_PREVIOUS``
+           are filtered out — the ``compaction`` pseudo-tool is an audit-only
+           DTO whose content is already surfaced via the ``compactions`` table
+           prepend (step 2) and must never double-render.
 
-        The token_budget parameter is accepted for forward-compatibility with
-        Commit 7 (compaction). In Commit 2 it is silently ignored — no
+        The ``token_budget`` parameter is accepted for forward-compatibility
+        with Commit 7 (compaction). In Commit 2/2a it is silently ignored — no
         truncation is performed.
 
         Returns '' when the channel has no transcript rows and no compaction.
@@ -240,22 +306,46 @@ class MessageProcessor:
 
         for entry in entries:
             ts = _format_ts(entry.get('created_at'), row_kind='transcript', row_id=entry.get('id'))
-            role = (entry.get('role') or 'unknown').upper()
+            raw_role = (entry.get('role') or 'unknown')
+            role_label = 'Assistant' if raw_role == 'assistant' else raw_role
             content = entry.get('content') or ''
-            lines.append(f"[{ts}] {role}: {content}")
+            lines.append(f"[{ts}] {role_label}: {content}")
 
-            # Interleave durable tool_calls under this transcript row
+            # Interleave durable tool_calls under this transcript row.
+            # Hard filter: compaction pseudo-tool DTOs NEVER surface in
+            # Previous Messages — their content is already replayed via the
+            # `compactions` table prepend above. (Decision 4B — compaction
+            # tool must NEVER make it to Previous Messages.)
             for tc in durable_by_id.get(entry.get('id'), []):
-                tc_ts = _format_ts(
-                    tc.get('created_at'),
-                    row_kind='tool_call',
-                    row_id=tc.get('id'),
-                )
-                tc_name = tc.get('tool_name') or tc.get('name', 'tool')
+                tc_name = tc.get('tool_name') or tc.get('name') or 'tool'
+                if tc_name in _NEVER_RENDER_IN_PREVIOUS:
+                    continue
+                tc_params = _parse_tc_params(tc.get('params'))
                 tc_result = tc.get('result') or ''
-                lines.append(f"[{tc_ts}] TOOL({tc_name}): {tc_result}")
+                lines.append(
+                    f"[{tc_name}({self._render_params(tc_params)})] {tc_result}"
+                )
 
         return '\n'.join(lines)
+
+    def _render_params(self, params: dict) -> str:
+        """Render a params dict as ``key=value;key=value`` for the ACT trail
+        and for durable tool_call rendering in Previous Messages.
+
+        Empty dict → empty string (renders as ``[tool_name()] …``).
+        Values are stringified with ``str()`` — no JSON escaping.
+        Insertion order is preserved (Py 3.7+ guarantee).
+        Separator is ``;``, matching the north star ACT loop trail format.
+
+        **Canonical source.** This is the single implementation used by both
+        live rendering (``handleTool()`` in Commit 3, which appends to
+        ``self._act_trail``) and historical rendering
+        (``getPreviousMessages()`` replaying durable tool_calls from the DB).
+        Siblings must not re-implement this — they share it via identity.
+        """
+        if not params:
+            return ''
+        return ';'.join(f"{k}={v}" for k, v in params.items())
 
     # ── Stubs (real bodies arrive in later commits) ───────────────────────────
 
@@ -299,6 +389,41 @@ class MessageProcessor:
 #: ``created_at`` value. Must be exactly 16 characters so the
 #: ``[YYYY-MM-DD HH:MM]`` column width in Previous Messages stays stable.
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
+
+
+#: Durable tool_call names that **must never** surface in Previous Messages.
+#: These are pseudo-tool DTOs stored with ``ephemeral=0`` for audit purposes
+#: only — their content is either already replayed via another channel (e.g.
+#: the ``compactions`` table for ``compaction``) or deliberately excluded from
+#: replay context (future: ``act_restart`` in Commit 7).
+#:
+#: Decision 4B — resolved by the user on 2026-04-10: "compaction tool should
+#: NEVER make it to Previous Messages". Filtered at the ``getPreviousMessages``
+#: call site, immediately after ``get_by_transcript_ids`` returns, so the
+#: filter is loud and visible rather than buried in a service parameter.
+_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction'})
+
+
+def _parse_tc_params(raw: object) -> dict:
+    """Parse the ``tool_calls.params`` column into a dict for rendering.
+
+    The DB stores params as a JSON-encoded string. Callers may also pass a
+    pre-parsed dict (tests mocking the service). This helper normalises both
+    paths and returns ``{}`` on any parse failure — the rendered line becomes
+    ``[tool_name()] result`` which is still valid per the north star format.
+    """
+    if raw is None or raw == '':
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        import json
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _format_ts(

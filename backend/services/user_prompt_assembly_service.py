@@ -119,18 +119,32 @@ class UserPromptAssemblyService(PromptAssemblyContract):
             return ''
 
     def _get_episodic_recall(self, query_text: str) -> str:
+        # Seed recall routes through the memory skill's dynamic-radius path
+        # so every seed call emits a memory_recall_log row with caller='seed'.
+        # When a MessageProcessor v2 turn is bound, this also pre-populates
+        # `_memory_query_history` so subsequent LLM-side memory calls can
+        # compute drift vs the seed query. When no processor is bound (legacy
+        # orchestrator), telemetry still fires; history is simply empty.
         try:
             from services.episodic_service import EpisodicService
             from services.database_service import get_shared_db_service
+            from services.innate_skills import memory_skill
 
             db = get_shared_db_service()
             svc = EpisodicService(db)
-            episodes = svc.retrieve_episodes(query_text=query_text, radius=0.2)
 
-            if not episodes:
+            raw_episodes, _status = memory_skill.recall_episodes(
+                channel='',  # legacy path has no channel at this point
+                query=query_text,
+                caller='seed',
+                baseline_radius=memory_skill.SEED_RADIUS_BASELINE,
+                return_raw=True,
+            )
+
+            if not raw_episodes:
                 return ''
 
-            return svc.format_for_prompt(episodes)
+            return svc.format_for_prompt(raw_episodes)
 
         except Exception as e:
             logger.info(f"[USER PROMPT] Episodic recall failed: {e}")
