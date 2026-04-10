@@ -137,9 +137,50 @@ async function resolveApiKey() {
         }
         // Logged in — load dashboard regardless of provider state
         await loadData();
+        // Start the background session heartbeat so a vault lock (server
+        // restart, session expiry) kicks the user back to login without
+        // requiring a manual refresh.
+        startSessionHeartbeat();
     } catch (err) {
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
+}
+
+// ==========================================
+// Session heartbeat
+// ==========================================
+let _sessionHeartbeatInterval = null;
+let _sessionHeartbeatFired = false;
+
+async function checkSessionAlive() {
+    if (_sessionHeartbeatFired) return;
+    try {
+        const statusUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}/auth/status` : '/auth/status';
+        const res = await fetch(statusUrl, { credentials: 'same-origin' });
+        if (!res.ok) return; // transient — leave the user alone
+        const data = await res.json();
+        // /auth/status forces has_session=false when vault_state==='locked',
+        // so this single check handles both session expiry and vault-locked-
+        // after-restart. Only redirect if an account still exists.
+        if (data.has_master_account && !data.has_session) {
+            _sessionHeartbeatFired = true;
+            if (_sessionHeartbeatInterval) {
+                clearInterval(_sessionHeartbeatInterval);
+                _sessionHeartbeatInterval = null;
+            }
+            window.location.replace('/login/?next=/brain/');
+        }
+    } catch (_) { /* network blip — retry next beat */ }
+}
+
+function startSessionHeartbeat() {
+    if (_sessionHeartbeatInterval) return;
+    _sessionHeartbeatInterval = setInterval(checkSessionAlive, 5 * 60 * 1000);
+    // Re-check whenever the tab becomes visible again so a user returning
+    // after a long break gets bounced to login immediately.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkSessionAlive();
+    });
 }
 
 
@@ -529,6 +570,20 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const id = editingProviderId;
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
+
+    // Auto-commit any pending value in the model input so users don't have
+    // to remember to press Enter / click Add before saving.
+    const pendingModel = document.getElementById('editModelInput').value.trim();
+    if (pendingModel && !editModels.includes(pendingModel)) {
+        editModels.push(pendingModel);
+        document.getElementById('editModelInput').value = '';
+        renderModelTags();
+    }
+
+    if (editModels.length === 0) {
+        showToast('Add at least one model', 'error');
+        return;
+    }
 
     const body = {
         name: document.getElementById('editName').value.trim(),
