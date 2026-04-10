@@ -101,6 +101,13 @@ def main():
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
 
+    # One-time transcript rebuild (runs exactly once; sentinel file prevents re-runs)
+    try:
+        from migrate_transcript_rebuild import run_once_on_boot
+        run_once_on_boot(db_path=database_service.db_path)
+    except Exception as _mig_err:
+        logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
+
     # Clean up expired auth sessions from SQLite
     try:
         from services.auth_session_service import cleanup_expired_sessions

@@ -50,13 +50,13 @@ Usage:
 
 import argparse
 import hashlib
-import json
+import logging
 import os
-import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── DB path resolution ──────────────────────────────────────────────────────
 
@@ -359,6 +359,111 @@ def _print_pair_preview(pairs: list):
         print(f"    [{i + 1}] user     {pair['user_created_at']}  {u_preview!r}")
         print(f"         assistant {pair['asst_created_at']}  {a_preview!r}")
         print()
+
+
+# ── Boot-time auto-run ──────────────────────────────────────────────────────
+
+# Sentinel file written after the migration completes.  Its presence prevents
+# re-running on subsequent boots.
+_MIGRATION_ID = "transcript-rebuild-v1"
+
+# Channel prefixes that belong to background/system flows — skip during auto-run
+_BACKGROUND_PREFIXES = ("goal_pursuit:", "scheduled:", "dmn:", "cron_tool:")
+
+
+def _flag_path(db_path: str) -> Path:
+    """Return the path of the done-flag file for this migration."""
+    data_dir = Path(db_path).parent
+    return data_dir / f".{_MIGRATION_ID}.done"
+
+
+def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
+    """Run the transcript rebuild migration exactly once at boot time.
+
+    Checks for a sentinel file alongside the DB.  If absent, runs the
+    migration silently on all non-background channels and writes the sentinel
+    on success.  Subsequent boots are no-ops.
+
+    Safe to call even if the DB has no transcript rows — the per-channel
+    loop exits early with "Nothing to write."
+
+    Args:
+        db_path: Override the DB path (default: $CHALIE_DB_PATH or built-in default).
+        limit:   Number of most-recent rows to analyse per channel (default 100).
+    """
+    db_path = _resolve_db(db_path)
+    flag = _flag_path(db_path)
+
+    if flag.exists():
+        logger.debug(f"[TranscriptMigration] Already done (sentinel {flag})")
+        return
+
+    if not Path(db_path).exists():
+        logger.warning(
+            f"[TranscriptMigration] DB not found at {db_path} — skipping"
+        )
+        return
+
+    logger.info("[TranscriptMigration] Running one-time transcript rebuild …")
+
+    try:
+        # Discover all channels that have transcript rows
+        conn = sqlite3.connect(db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        all_channels = [
+            r["channel"]
+            for r in conn.execute(
+                "SELECT DISTINCT channel FROM transcript ORDER BY channel"
+            ).fetchall()
+        ]
+        conn.close()
+
+        # Skip background/system channels
+        channels = [
+            ch for ch in all_channels
+            if not any(ch.startswith(p) for p in _BACKGROUND_PREFIXES)
+        ]
+
+        if not channels:
+            logger.info("[TranscriptMigration] No user-facing channels found — nothing to do")
+            _write_flag(flag)
+            return
+
+        logger.info(f"[TranscriptMigration] Channels to migrate: {channels}")
+
+        total_pairs = 0
+        total_skipped = 0
+        for ch in channels:
+            result = run_migration(db_path, ch, limit, dry_run=False)
+            total_pairs += result.get("pairs_inserted", 0)
+            total_skipped += (
+                result.get("skipped_unrecoverable_user", 0)
+                + result.get("skipped_empty_assistant", 0)
+                + result.get("skipped_unpaired", 0)
+                + result.get("skipped_dedup", 0)
+            )
+
+        logger.info(
+            f"[TranscriptMigration] Complete — "
+            f"{total_pairs} pair(s) written, {total_skipped} skipped"
+        )
+        _write_flag(flag)
+
+    except Exception as e:
+        # Never crash boot — log and carry on
+        logger.error(
+            f"[TranscriptMigration] Failed: {e}",
+            exc_info=True,
+        )
+
+
+def _write_flag(flag: Path) -> None:
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text(_MIGRATION_ID)
+        logger.debug(f"[TranscriptMigration] Sentinel written: {flag}")
+    except Exception as e:
+        logger.warning(f"[TranscriptMigration] Could not write sentinel: {e}")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
