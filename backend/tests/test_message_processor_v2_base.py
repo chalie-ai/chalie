@@ -649,10 +649,18 @@ class TestGetPreviousMessagesCompaction:
 
 
 class TestAbstractStubs:
-    def test_send_raises(self):
+    def test_send_is_callable(self, db):
+        """send() is wired in Commit 6 — no longer raises NotImplementedError."""
+        from unittest.mock import patch
+        from services.llm_service import LLMResponse
         p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
-            p.send()
+        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
+        with patch('services.providers.Providers.instance') as mock_inst, \
+             patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
+            mock_inst.return_value.send_messages.return_value = fake_response
+            result = p.send()
+        assert isinstance(result, str)
 
     def test_store_is_callable(self, db):
         """store() is wired in Commit 4 — it calls DB, no longer raises NotImplementedError."""
@@ -1813,18 +1821,21 @@ class TestStubExceptionTypes:
 
     Note: handleTool() is no longer a stub (wired in Commit 3).
           store() is no longer a stub (wired in Commit 4).
-          send() remains a stub until Commit 6.
+          send() is no longer a stub (wired in Commit 6).
     """
 
-    def test_send_raises_not_implemented_error(self):
+    def test_send_is_wired_in_commit_6(self, db):
+        """send() is wired in Commit 6 — calls provider, does not raise NotImplementedError."""
+        from unittest.mock import patch
+        from services.llm_service import LLMResponse
         p = FakeProcessor.make()
-        exc = None
-        try:
-            p.send()
-        except NotImplementedError as e:
-            exc = e
-        assert exc is not None, "send() must raise NotImplementedError"
-        assert type(exc) is NotImplementedError
+        fake_response = LLMResponse(text='done', model='m', provider='p', tool_calls=None)
+        with patch('services.providers.Providers.instance') as mock_inst, \
+             patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
+            mock_inst.return_value.send_messages.return_value = fake_response
+            result = p.send()
+        assert result == 'done'
 
     def test_store_is_wired_in_commit_4(self, db):
         """store() is wired in Commit 4 — calls DB, does not raise NotImplementedError."""
@@ -1840,10 +1851,18 @@ class TestStubExceptionTypes:
         result = p.postTurn()
         assert result is None
 
-    def test_send_not_caught_as_plain_exception(self):
+    def test_send_accepts_request_id(self, db):
+        """send() accepts an optional request_id parameter (Commit 6 contract)."""
+        from unittest.mock import patch
+        from services.llm_service import LLMResponse
         p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
-            p.send('req-id')
+        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
+        with patch('services.providers.Providers.instance') as mock_inst, \
+             patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
+            mock_inst.return_value.send_messages.return_value = fake_response
+            result = p.send('req-id')
+        assert isinstance(result, str)
 
     def test_store_not_caught_as_plain_exception(self, db):
         """store() is wired in Commit 4 — calls DB, no longer raises NotImplementedError."""

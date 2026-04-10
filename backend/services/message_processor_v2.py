@@ -34,9 +34,10 @@ Commits schedule:
 import contextlib
 import contextvars
 import logging
+import time
 
 from services.system_message_prompt import SystemMessagePrompt
-from services.time_utils import parse_utc
+from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -493,9 +494,163 @@ class MessageProcessor:
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.
 
-        Wired in Commit 6 (no compaction) and Commit 7 (compaction).
+        Wired in Commit 6 (no compaction). Compaction threshold checks and
+        the two-stage compaction helpers (_run_full_compaction,
+        _run_stage1_tool_compaction, _run_stage2_act_restart) arrive in
+        Commit 7 — do not add them here.
+
+        Exception semantics:
+        - Provider errors propagate immediately. store() is NOT called;
+          no partial rows land. The atomic-turn guarantee from Commit 4.
+        - handleTool() errors are already trapped inside handleTool().
+        - _emit_narration() errors are logged and swallowed — never kill
+          the ACT loop (north star § ACT Loop step 4).
+        - store() errors propagate. If store() raises, postTurn() is NOT
+          called and the exception surfaces to the caller.
+        - postTurn() errors are caught and logged. The turn is already
+          stored; the caller still receives the final response.
+
+        Final-text semantics:
+        - Clean exit (LLM returned text with no tool_calls) → final_text is
+          the terminating text.
+        - Cap exit (MAX_ITERATIONS or MAX_TIMEOUT) → final_text is ''. The
+          last iteration's mid-loop narration is NEVER stored as the
+          assistant row — that text represents partial thinking, not a
+          final answer. Storing it would violate north star § Storage Model
+          ("final ACT-loop response only").
         """
-        raise NotImplementedError
+        from services.providers import Providers
+
+        with bind_current_processor(self):
+            self._run_memory_seed()
+
+            loop_start = time.time()
+            iteration = 0
+            llm_response = None
+            loop_exited_cleanly = False
+
+            while (
+                iteration < self.MAX_ITERATIONS
+                and time.time() - loop_start < self.MAX_TIMEOUT
+            ):
+                user_body = self.getUserPrompt()
+                # TODO: _wrap_with_checkpoint(self.CHANNEL, user_body) arrives in Commit 7
+                # when two-stage compaction is introduced. At that point send() will
+                # measure the user body against the 80% context threshold and wrap it
+                # with the ### Checkpoint / ### Current State envelope when a compaction
+                # watermark exists. For now the bare body is passed directly.
+                system_prompt = self.getSystemPrompt()
+                tools = self.getTools()
+
+                # Single-element messages[] so the provider sees one user turn
+                # containing the full literal-text body (Previous Messages,
+                # memory seed, raw input, ACT trail). The provider's multi-turn
+                # interface is intentionally NOT used — history lives in the
+                # getUserPrompt() text block, not in the messages array.
+                messages = [{'role': 'user', 'content': user_body}]
+
+                # Provider errors propagate here. store() is not called if
+                # this raises — the turn leaves no trace in the DB.
+                llm_response = Providers.instance().send_messages(
+                    system_prompt, messages, job=self.JOB, tools=tools
+                )
+
+                if not llm_response.tool_calls:
+                    loop_exited_cleanly = True
+                    break
+
+                # Narration text BEFORE tool dispatch — the LLM emitted the
+                # narration in its response ahead of the tool_use block, so
+                # the stored timeline must reflect that semantic order. The
+                # transcript-timeline example in the north star § Storage
+                # Model shows tool_synthesis preceding the tool_call DTOs
+                # for the same iteration.
+                if llm_response.text:
+                    # Audit-only pseudo-tool DTO. Ephemeral=1 so it does
+                    # not replay in future Previous Messages — the final
+                    # assistant response is what matters for continuity.
+                    self._pending_tool_calls.append({
+                        'name': 'tool_synthesis',
+                        'params': {},
+                        'result': llm_response.text,
+                        'ephemeral': 1,
+                        'invoked_by': 'system',
+                        'timestamp': utc_now().isoformat(),
+                    })
+                    self._act_trail.append(f"[tool_synthesis] {llm_response.text}")
+                    # North star § ACT Loop step 4: callback exceptions are
+                    # logged and swallowed — they must never kill the loop.
+                    try:
+                        self._emit_narration(llm_response.text, iteration)
+                    except Exception as exc:
+                        logger.error(
+                            "[MessageProcessor.send] _emit_narration raised "
+                            "(swallowed per north star § ACT Loop step 4): %s",
+                            exc,
+                            exc_info=True,
+                        )
+
+                for tc in llm_response.tool_calls:
+                    self.handleTool(tc)  # never raises; appends DTO + trail
+
+                # Drain any mid-loop steering messages the user sent during this turn.
+                for steer in self._drain_steering(request_id):
+                    self._pending_tool_calls.append({
+                        'name': 'user_steer',
+                        'params': {},
+                        'result': steer,
+                        'ephemeral': 1,
+                        'invoked_by': 'system',
+                        'timestamp': utc_now().isoformat(),
+                    })
+                    self._act_trail.append(
+                        f"[steer(User added the following feedback, observe in detail before proceeding)] {steer}"
+                    )
+
+                iteration += 1
+
+            if loop_exited_cleanly:
+                final_text = (llm_response.text or '') if llm_response else ''
+            else:
+                # Cap exit — no clean terminating text. The last iteration's
+                # narration is already captured as a tool_synthesis DTO; we
+                # must NOT re-use it as the assistant row.
+                logger.warning(
+                    "[MessageProcessor.send] ACT loop hit safety cap "
+                    "(iteration=%d, elapsed=%.1fs, max_iter=%d, max_timeout=%d) — "
+                    "final_text set to '' to avoid persisting mid-loop narration "
+                    "as assistant response",
+                    iteration,
+                    time.time() - loop_start,
+                    self.MAX_ITERATIONS,
+                    self.MAX_TIMEOUT,
+                )
+                final_text = ''
+
+            self.store(final_text)
+            try:
+                self.postTurn()
+            except Exception as e:
+                logger.error(
+                    "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True
+                )
+            return final_text
+
+    def _emit_narration(self, text: str, iteration: int) -> None:
+        """Base no-op. UserMessageProcessor overrides in Commit 8 to push
+        mid-loop text to the websocket via the on_narration callback."""
+        pass
+
+    def _drain_steering(self, request_id: str | None) -> list[str]:
+        """Return any mid-loop steering messages queued for this request.
+
+        Commit 6 stub — base always returns [] so DMN, goal-pursuit, and
+        scheduled subclasses silently produce no user_steer DTOs. Will be
+        wired to the user_input_queue MemoryStore key in Commit 8 (or a
+        follow-up) inside UserMessageProcessor, which overrides this method
+        to drain ``steer:{request_id}`` from MemoryStore.
+        """
+        return []
 
     def store(self, llm_response: str) -> None:
         """Persist the turn atomically via transcript_service.append_atomic_turn.
