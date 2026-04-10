@@ -196,7 +196,29 @@ def _run_compaction(channel: str, messages: list, context_limit: int, job: str,
         else:
             context_parts.append(f"[{role}]: {content}")
 
+    # Safety net: if the serialised context would itself exceed the provider's
+    # limit (legacy bloat, oversized tool result, or a channel that never had
+    # compaction run), drop the oldest messages until it fits. The watermark
+    # below is still set to the latest transcript id, so dropped messages are
+    # naturally skipped by future build_messages() calls — the channel recovers.
+    # Char-based trimming avoids re-joining the (potentially huge) list every
+    # iteration; ~4 chars/token is the standard rough estimate.
+    safe_chars = int(context_limit * 0.75) * 4
+    total_chars = sum(len(p) for p in context_parts) + 2 * max(0, len(context_parts) - 1)
+    dropped = 0
+    while total_chars > safe_chars and len(context_parts) > 1:
+        removed = context_parts.pop(0)
+        total_chars -= len(removed) + 2
+        dropped += 1
+    if context_parts and len(context_parts[0]) > safe_chars:
+        # Single surviving entry is still too large — hard truncate it.
+        context_parts[0] = context_parts[0][:safe_chars] + "\n\n[… truncated due to size …]"
     full_context = '\n\n'.join(context_parts)
+    if dropped:
+        logger.warning(
+            f"[CTX WINDOW] Trimmed {dropped} oldest message(s) from compaction input "
+            f"for {channel!r} — exceeded {safe_chars} char safety budget"
+        )
 
     system_prompt = (
         "Analyse the following conversation transcript and produce the most minimal form "

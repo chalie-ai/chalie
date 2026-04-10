@@ -17,6 +17,17 @@ and output delivery.
 
 It also provides lightweight helpers used by cron-tool and other workers for
 interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``).
+
+.. deprecated::
+    This module is scheduled for removal. The new message-processing model
+    (see ``/Volumes/llm/chalie-plans/message-processing.md``) splits this
+    5-phase pipeline into per-channel ``MessageProcessor`` subclasses. Each
+    subclass owns its own pre-turn preparation, runs the shared
+    ``MessageProcessor.send()`` (LLM + ACT loop + compaction + atomic store),
+    and fires its own ``postTurn()`` service fan-out (trait extraction,
+    contradiction detection, phase updates, metrics, …). Nothing remains
+    centralised. This file will be deleted once every channel has been
+    migrated. Do not add new callers or extend the existing pipeline here.
 """
 
 import json

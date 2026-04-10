@@ -14,6 +14,15 @@ then a mode-specific prompt drives the LLM to generate the response.
 
 Scoring is based on observable signals (context warmth, fact density, NLP features).
 A small LLM tie-breaker handles ambiguous cases when top-2 scores are within margin.
+
+.. deprecated::
+    This module is scheduled for removal. The new message-processing model
+    (see ``/Volumes/llm/chalie-plans/message-processing.md``) removes mode
+    routing altogether: each ``MessageProcessor`` subclass hardcodes its own
+    ``CHANNEL`` and ``ROLE`` and assembles a single fixed system prompt for
+    its message type (``UserMessageProcessor`` → user prompt,
+    ``DMNMessageProcessor`` → dmn prompt, etc.). No runtime mode selection,
+    no tie-breaker, no shared router. Do not add new callers.
 """
 
 import re

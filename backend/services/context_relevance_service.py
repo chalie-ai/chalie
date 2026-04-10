@@ -12,6 +12,15 @@ Seven layers applied in order:
 5. Dependency resolution (with circular detection)
 6. Safety overrides
 7. MAX_INCLUDED_NODES safeguard
+
+.. deprecated::
+    This module is scheduled for removal. The new message-processing model
+    (see ``/Volumes/llm/chalie-plans/message-processing.md``) does not use
+    a shared context-node graph: each ``MessageProcessor`` subclass builds
+    its own fixed system prompt and assembles its own ``getUserPrompt()``
+    directly from the inputs it cares about. There is no mode-conditioned
+    node gating, no template masks, no runtime relevance scoring. Do not
+    add new callers.
 """
 
 import json

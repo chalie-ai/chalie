@@ -3,6 +3,15 @@ Working Memory Service - Rolling buffer of raw conversation turns.
 
 MemoryStore-based FIFO buffer of the last N raw turns for immediate context.
 Unlike gists (compressed summaries), this stores verbatim user/assistant turns.
+
+.. deprecated::
+    This module is scheduled for removal. The new message-processing model
+    (see ``/Volumes/llm/chalie-plans/message-processing.md``) stores the
+    canonical turn history directly in the transcript (``channel`` +
+    ``role``) and assembles ``getPreviousMessages()`` from that single
+    source of truth. There is no separate rolling buffer — the transcript
+    IS working memory, and compaction handles size bounds via
+    ephemeral=0 ``compaction`` tool_call rows. Do not add new callers.
 """
 
 import json

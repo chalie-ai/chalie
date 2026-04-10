@@ -1,3 +1,16 @@
+"""
+Orchestrator Service — Path-based routing and execution for termination paths.
+
+.. deprecated::
+    This module is scheduled for removal. The new message-processing model
+    (see ``/Volumes/llm/chalie-plans/message-processing.md``) eliminates the
+    cross-channel orchestrator entirely: each ``MessageProcessor`` subclass
+    owns its own tool dispatch (via ``handleTool()``) and its own post-turn
+    service fan-out (via ``postTurn()``). Routing paths, RespondHandler,
+    ActHandler, and IgnoreHandler die with this service. Do not add new
+    callers.
+"""
+
 import logging
 from typing import Dict, Any, List
 

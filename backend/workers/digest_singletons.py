@@ -11,6 +11,15 @@ Digest Singletons — Lazy singleton accessors used by digest_worker and friends
 
 Extracted from digest_worker.py to reduce file size. All getters preserve
 their original semantics: create-on-first-access, reuse for process lifetime.
+
+.. deprecated::
+    This module is scheduled for removal alongside ``digest_worker`` itself.
+    The new message-processing model (see
+    ``/Volumes/llm/chalie-plans/message-processing.md``) does not use
+    cross-channel singletons: ``load_configs()`` logic moves into the
+    relevant ``SystemMessagePrompt`` subclass, and the orchestrator /
+    mode-router / context-relevance singletons die with their owning
+    services. Do not add new callers.
 """
 
 import json
