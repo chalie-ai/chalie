@@ -96,7 +96,12 @@ Conversation history is **not** assembled here. It is constructed from the datab
 │          Only non-empty when degradation signals are present        │
 │          ─────────────────────────────────────────────────          │
 │  Step 4  Current Turn                             📥 DB             │
-│          EpisodicService.retrieve_episodes(query, radius=0.2)       │
+│          memory_skill.recall_episodes(                              │
+│              caller='seed',                                         │
+│              baseline_radius=SEED_RADIUS_BASELINE,                  │
+│          )                                                          │
+│          → dynamic radius (narrow/expand vs prior-turn queries)     │
+│          → writes memory_recall_log row (caller='seed')             │
 │          → "### Related Memories" (episodic auto-recall)            │
 │          → "## User Message" (raw user text)                        │
 │          → file tags (images / documents from metadata)             │
