@@ -649,11 +649,6 @@ class TestGetPreviousMessagesCompaction:
 
 
 class TestAbstractStubs:
-    def test_handle_tool_raises(self):
-        p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
-            p.handleTool({'name': 'memory', 'input': {}})
-
     def test_send_raises(self):
         p = FakeProcessor.make()
         with pytest.raises(NotImplementedError):
@@ -669,6 +664,69 @@ class TestAbstractStubs:
         # Must not raise and must return None
         result = p.postTurn()
         assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 14b. handleTool() — Commit 3 basic dispatch tests
+#      (These complement the exhaustive suite in
+#       test_message_processor_v2_handle_tool.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHandleToolBasic:
+    """Basic handleTool() contract wired in Commit 3."""
+
+    def test_handle_tool_dispatches(self):
+        """Happy path: calls dispatch_action once with correct args, appends
+        DTO + trail line, and returns the result string."""
+        from unittest.mock import patch
+
+        fake_dispatch = {'result': 'Memory result text', 'status': 'success'}
+        p = FakeProcessor.make()
+
+        with patch(
+            'services.act_dispatcher_service.ActDispatcherService'
+        ) as MockDispatcher:
+            MockDispatcher.return_value.dispatch_action.return_value = fake_dispatch
+            result = p.handleTool({'name': 'memory', 'input': {'query': 'hello'}})
+
+        MockDispatcher.return_value.dispatch_action.assert_called_once_with(
+            FakeProcessor._CHANNEL, {'type': 'memory', 'query': 'hello'}
+        )
+        assert result == 'Memory result text'
+        assert len(p._pending_tool_calls) == 1
+        assert len(p._act_trail) == 1
+
+    def test_handle_tool_returns_string(self):
+        """Return type is always str even when dispatch result is non-string."""
+        from unittest.mock import patch
+
+        for raw_result in [None, 42, {'nested': 'dict'}, 3.14]:
+            p = FakeProcessor.make()
+            fake_dispatch = {'result': raw_result, 'status': 'success'}
+            with patch('services.act_dispatcher_service.ActDispatcherService') as MockDispatcher:
+                MockDispatcher.return_value.dispatch_action.return_value = fake_dispatch
+                result = p.handleTool({'name': 'memory', 'input': {}})
+            assert isinstance(result, str), (
+                f"handleTool() must return str, got {type(result).__name__} for raw={raw_result!r}"
+            )
+
+    def test_handle_tool_traps_dispatch_errors(self):
+        """When dispatch raises, result is ERROR string, DTO + trail still appended,
+        no exception propagates."""
+        from unittest.mock import patch
+
+        p = FakeProcessor.make()
+        with patch('services.act_dispatcher_service.ActDispatcherService') as MockDispatcher:
+            MockDispatcher.return_value.dispatch_action.side_effect = RuntimeError('boom')
+            result = p.handleTool({'name': 'memory', 'input': {}})
+
+        assert result.startswith('ERROR: memory failed:')
+        assert 'boom' in result
+        assert len(p._pending_tool_calls) == 1
+        assert len(p._act_trail) == 1
+        # Result captured in DTO matches what was returned
+        assert p._pending_tool_calls[0]['result'] == result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1665,17 +1723,10 @@ class TestGetPreviousMessagesEmptyContent:
 class TestStubExceptionTypes:
     """Verify stubs raise the exact exception class (NotImplementedError),
     not a broader Exception or a subclass.
-    """
 
-    def test_handle_tool_raises_not_implemented_error(self):
-        p = FakeProcessor.make()
-        exc = None
-        try:
-            p.handleTool({'name': 'memory', 'input': {}})
-        except NotImplementedError as e:
-            exc = e
-        assert exc is not None, "handleTool() must raise NotImplementedError"
-        assert type(exc) is NotImplementedError
+    Note: handleTool() is no longer a stub (wired in Commit 3).
+    send() and store() remain stubs until Commits 4 and 6.
+    """
 
     def test_send_raises_not_implemented_error(self):
         p = FakeProcessor.make()
@@ -1702,12 +1753,6 @@ class TestStubExceptionTypes:
         p = FakeProcessor.make()
         result = p.postTurn()
         assert result is None
-
-    def test_handle_tool_not_caught_as_plain_exception(self):
-        """Confirm raise is NotImplementedError (not a wrapped or different type)."""
-        p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
-            p.handleTool({})
 
     def test_send_not_caught_as_plain_exception(self):
         p = FakeProcessor.make()

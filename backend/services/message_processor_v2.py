@@ -350,11 +350,145 @@ class MessageProcessor:
     # ── Stubs (real bodies arrive in later commits) ───────────────────────────
 
     def handleTool(self, tc: dict) -> str:
-        """Dispatch a single LLM tool call.
+        """Dispatch a single LLM tool call and record the attempt.
 
-        Wired in Commit 3.
+        Single chokepoint for all LLM-requested tool execution during an ACT
+        loop. **Exceptions are NEVER re-raised** — they become ERROR strings
+        the LLM sees on the next iteration. The entire body runs inside one
+        protective ``try/except`` so that no matter what fails (dispatch,
+        malformed ``tc``, ``_render_params`` bug, ``utc_now`` crash, append
+        failure), a DTO still lands in ``self._pending_tool_calls`` and a
+        matching line still lands in ``self._act_trail``. Lockstep is the
+        contract.
+
+        Appends a DTO to ``self._pending_tool_calls`` and a rendered line to
+        ``self._act_trail`` in lockstep, regardless of success or failure.
+        Returns the result string so ``send()`` can pass it back to the LLM.
+
+        ``find_tools`` side effect: extends ``self._discovered_tools`` with
+        any newly discovered tool schemas (deduped by name). The LLM only sees
+        the confirmation string; ``getTools()`` exposes the schemas on the next
+        ACT iteration. The side effect only fires on ``status == 'success'``
+        dispatches — error dispatches never mutate discovered tools.
+
+        Note: the DTO's ``invoked_by='llm'`` stays set here (not injected by
+        ``store()`` in Commit 4). Future pseudo-tool DTOs produced by
+        ``_run_memory_seed`` (Commit 5), ``tool_synthesis``/``user_steer``
+        (Commit 6), and ``compaction``/``act_restart`` (Commit 7) will carry
+        ``invoked_by='system'``. ``invoked_by`` is per-DTO state — varies by
+        origin — so it cannot be injected uniformly by ``store()``.
+
+        Ordering note: sibling DTOs produced within the same millisecond share
+        an identical ``timestamp``. Commit 4's ``store()`` is the owner of
+        turn-level ordering; it will use list insertion order (or a monotonic
+        sequence counter) as the stable tiebreaker. Do not add per-call
+        sequence counters here.
         """
-        raise NotImplementedError
+        from services.act_dispatcher_service import ActDispatcherService
+        from services.time_utils import utc_now
+        from services.tool_schema_service import get_external_tool_schemas
+
+        # Defensive name extraction — must survive malformed tc
+        # (missing key, None value, entirely empty dict).
+        tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
+        tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
+        if not isinstance(tc_input, dict):
+            tc_input = {}
+
+        # Guard empty CHANNEL — base class default is ''. Subclasses MUST
+        # override. If we ever end up here with an empty channel something
+        # is badly wired; log loudly but do not crash the ACT loop.
+        if not self.CHANNEL:
+            logger.warning(
+                "[MessageProcessor.handleTool] CHANNEL is empty on %s; "
+                "dispatch will likely fail routing",
+                type(self).__name__,
+            )
+
+        result_text = ''
+        try:
+            try:
+                dispatch = ActDispatcherService(
+                    execution_gate=False
+                ).dispatch_action(self.CHANNEL, {'type': tool_name, **tc_input})
+                result_text = str(dispatch.get('result', ''))
+            except Exception as exc:
+                result_text = f"ERROR: {tool_name} failed: {exc}"
+                logger.error(
+                    "[MessageProcessor.handleTool] tool=%s raised: %s",
+                    tool_name, exc,
+                    exc_info=True,
+                )
+                dispatch = {}
+
+            # find_tools side effect — only on successful dispatch.
+            # Error dispatches ({}) or status!='success' never mutate state.
+            if (
+                tool_name == 'find_tools'
+                and dispatch.get('status') == 'success'
+            ):
+                discovered = dispatch.get('_discovered_tools', [])
+                if discovered:
+                    new_schemas = get_external_tool_schemas(discovered)
+                    existing_names = {
+                        t.get('name') for t in self._discovered_tools
+                    }
+                    for s in new_schemas:
+                        name = s.get('name') if isinstance(s, dict) else None
+                        if name and name not in existing_names:
+                            self._discovered_tools.append(s)
+                            existing_names.add(name)
+        except Exception as exc:
+            # Belt-and-braces: any failure in the find_tools side effect
+            # (or anywhere above) gets caught here so the DTO + trail still
+            # land in the ``finally`` block below.
+            if not result_text:
+                result_text = f"ERROR: {tool_name} failed: {exc}"
+            logger.error(
+                "[MessageProcessor.handleTool] post-dispatch failure tool=%s: %s",
+                tool_name, exc,
+                exc_info=True,
+            )
+        finally:
+            # Lockstep append — ALWAYS runs, even if everything above crashed.
+            # Any failure in this block is the last line of defence; we swallow
+            # it to preserve the never-re-raise contract.
+            try:
+                self._pending_tool_calls.append({
+                    'name': tool_name,
+                    'params': tc_input,
+                    'result': result_text,
+                    'ephemeral': 1,
+                    'invoked_by': 'llm',
+                    'timestamp': utc_now().isoformat(),
+                })
+            except Exception as exc:
+                logger.error(
+                    "[MessageProcessor.handleTool] DTO append failed tool=%s: %s",
+                    tool_name, exc,
+                    exc_info=True,
+                )
+            try:
+                rendered = self._render_params(tc_input)
+            except Exception as exc:
+                rendered = ''
+                logger.error(
+                    "[MessageProcessor.handleTool] _render_params failed tool=%s: %s",
+                    tool_name, exc,
+                    exc_info=True,
+                )
+            try:
+                self._act_trail.append(
+                    f"[{tool_name}({rendered})] {result_text}"
+                )
+            except Exception as exc:
+                logger.error(
+                    "[MessageProcessor.handleTool] trail append failed tool=%s: %s",
+                    tool_name, exc,
+                    exc_info=True,
+                )
+
+        return result_text
 
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.
