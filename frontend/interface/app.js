@@ -97,6 +97,10 @@ class ChalieApp {
     this._taskStrip = new TaskStrip({ api: this.api });
     this._taskStrip.onAuthFailure(() => this._handleAuthFailure());
 
+    // Heartbeat — redirect to login if the session becomes invalid
+    // (server restart that locks the vault, session expiry, etc.)
+    this.heartbeat.onAuthFailure(() => this._handleAuthFailure());
+
     // Document upload module
     this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
     this._docUpload.init();
