@@ -670,6 +670,90 @@ class TestAbstractStubs:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 14a. _run_memory_seed() — Commit 5 base no-op slot
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRunMemorySeedBaseNoop:
+    """Commit 5 — the base ``_run_memory_seed()`` hook is a pure no-op.
+
+    Exists so ``send()`` (Commit 6) can call it unconditionally. User-channel
+    subclasses override in Commit 8 to run the memory auto-seed. Background
+    channels (DMN, goal-pursuit, scheduled) inherit the no-op.
+    """
+
+    def test_returns_none(self):
+        p = FakeProcessor.make()
+        result = p._run_memory_seed()
+        assert result is None
+
+    def test_does_not_raise(self):
+        """Must be a no-op — no exceptions, no side effects."""
+        p = FakeProcessor.make()
+        # Should not raise for any call shape
+        p._run_memory_seed()
+        p._run_memory_seed()  # idempotent
+        p._run_memory_seed()  # still fine
+
+    def test_does_not_mutate_memory_seed(self):
+        """Base no-op must leave ``_memory_seed`` as constructor default (None)."""
+        p = FakeProcessor.make()
+        assert p._memory_seed is None  # constructor default
+        p._run_memory_seed()
+        assert p._memory_seed is None  # still None after no-op
+
+    def test_does_not_touch_pending_tool_calls(self):
+        """Base no-op must not append any DTO to ``_pending_tool_calls``.
+
+        Subclass overrides in Commit 8 will append a durable ``memory`` DTO;
+        the base must not, because background channels (DMN/goal/scheduled)
+        inherit this and should never produce a spurious memory row.
+        """
+        p = FakeProcessor.make()
+        assert p._pending_tool_calls == []
+        p._run_memory_seed()
+        assert p._pending_tool_calls == []
+
+    def test_does_not_touch_act_trail(self):
+        """Base no-op must not append anything to ``_act_trail`` either."""
+        p = FakeProcessor.make()
+        assert p._act_trail == []
+        p._run_memory_seed()
+        assert p._act_trail == []
+
+    def test_is_overridable(self):
+        """Subclasses can override with custom behaviour without special
+        machinery — confirm the hook is a plain instance method."""
+        from services.message_processor_v2 import MessageProcessor
+
+        class SeedingProcessor(MessageProcessor):
+            CHANNEL = 'seeding'
+            ROLE = 'user'
+
+            def getUserDefinition(self) -> str:
+                return 'def'
+
+            def getUserPrompt(self) -> str:
+                return 'prompt'
+
+            def _run_memory_seed(self) -> None:
+                self._memory_seed = 'seeded'
+
+        p = SeedingProcessor('raw', {})
+        assert p._memory_seed is None
+        p._run_memory_seed()
+        assert p._memory_seed == 'seeded'
+
+    def test_base_preserves_noop_when_subclass_does_not_override(self):
+        """Subclass that does NOT override inherits the base no-op unchanged."""
+        p = FakeProcessor.make()
+        p._memory_seed = 'pre-existing'  # something else set it
+        p._run_memory_seed()
+        # Base no-op must not clobber pre-existing state
+        assert p._memory_seed == 'pre-existing'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 14b. handleTool() — Commit 3 basic dispatch tests
 #      (These complement the exhaustive suite in
 #       test_message_processor_v2_handle_tool.py)

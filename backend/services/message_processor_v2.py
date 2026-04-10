@@ -529,7 +529,31 @@ class MessageProcessor:
             pending_tool_calls=self._pending_tool_calls,
         )
 
-    # ── Overridable hook ─────────────────────────────────────────────────────
+    # ── Overridable hooks ────────────────────────────────────────────────────
+
+    def _run_memory_seed(self) -> None:
+        """Pre-ACT-loop memory auto-seed hook.
+
+        Base is a **no-op**. ``UserMessageProcessor`` overrides in Commit 8 to
+        dispatch the ``memory`` skill once at the start of a turn, populate
+        ``self._memory_seed``, and append a durable ``memory`` DTO
+        (``ephemeral=0``, ``invoked_by='system'``) to ``self._pending_tool_calls``
+        so the seed lands in transcript history via the atomic ``store()`` call.
+
+        Exists on the base so ``send()`` (Commit 6) can call it unconditionally
+        without polymorphic branching or hasattr checks. Per-channel subclasses
+        that have no seeding concept (DMN, goal-pursuit, scheduled) inherit the
+        no-op and nothing happens.
+
+        Contract for overrides:
+        - MUST be idempotent within a single turn (``send()`` calls it exactly
+          once, immediately before the ACT loop begins).
+        - MUST NOT raise. Seed failures degrade to "no seed this turn" and
+          should be logged, not propagated — the turn still runs.
+        - MUST leave ``self._memory_seed = None`` if no seed was produced, so
+          ``getUserPrompt()`` can test truthiness cleanly.
+        """
+        pass
 
     def postTurn(self) -> None:
         """Per-channel post-turn service fan-out.
