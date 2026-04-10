@@ -1,5 +1,5 @@
 {
-  "_comment": "ACT mode: Action planning and execution with qwen3:14b for reasoning",
+  "_comment": "ACT mode: Action planning and execution with gemma4:31b for reasoning",
   "temperature": 0.5,
   "timeout": 180,
   "format": "json",

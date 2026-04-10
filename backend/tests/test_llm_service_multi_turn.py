@@ -139,7 +139,7 @@ class TestOllamaMultiTurn:
     def _make_svc(self):
         from services.ollama_service import OllamaService
         svc = OllamaService.__new__(OllamaService)
-        svc.model = "qwen3:4b"
+        svc.model = "gemma4:31b"
         svc.host = "http://localhost:11434"
         svc.keep_alive = "0"
         svc.temperature = 0.5
@@ -155,7 +155,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "4"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 10,
             "eval_count": 1,
         }
@@ -179,7 +179,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "result"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 5,
             "eval_count": 2,
         }
@@ -199,7 +199,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "42"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 8,
             "eval_count": 3,
         }

@@ -121,14 +121,14 @@ class TestProvidersAPI:
             "id": 1,
             "name": "ollama-local",
             "platform": "ollama",
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "api_key": None,
         }
 
         response = client.post('/providers', json={
             "name": "ollama-local",
             "platform": "ollama",
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
         })
 
         assert response.status_code == 201
@@ -271,7 +271,7 @@ class TestProvidersAPI:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "models": [
-                {"name": "qwen3:4b"},
+                {"name": "gemma4:31b"},
                 {"name": "llama3:8b"},
             ]
         }
@@ -281,14 +281,14 @@ class TestProvidersAPI:
              patch('requests.get', return_value=mock_response):
             response = client.post('/providers/test', json={
                 "platform": "ollama",
-                "model": "qwen3:4b",
+                "model": "gemma4:31b",
                 "host": "http://localhost:11434",
             })
 
         assert response.status_code == 200
         data = response.get_json()
         assert data["success"] is True
-        assert data["model"] == "qwen3:4b"
+        assert data["model"] == "gemma4:31b"
         assert "latency_ms" in data
         assert "2 model(s) available" in data["message"]
 

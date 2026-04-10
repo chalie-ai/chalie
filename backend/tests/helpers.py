@@ -97,7 +97,7 @@ def make_provider_row(
     provider_id=1,
     name="test-provider",
     platform="ollama",
-    model="qwen3:4b",
+    model="gemma4:31b",
     host="http://localhost:11434",
     api_key=None,
     dimensions=256,
