@@ -654,10 +654,13 @@ class TestAbstractStubs:
         with pytest.raises(NotImplementedError):
             p.send()
 
-    def test_store_raises(self):
+    def test_store_is_callable(self, db):
+        """store() is wired in Commit 4 — it calls DB, no longer raises NotImplementedError."""
         p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
+        with patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
+        assert p._uid is not None
 
     def test_post_turn_is_noop(self):
         p = FakeProcessor.make()
@@ -1725,7 +1728,8 @@ class TestStubExceptionTypes:
     not a broader Exception or a subclass.
 
     Note: handleTool() is no longer a stub (wired in Commit 3).
-    send() and store() remain stubs until Commits 4 and 6.
+          store() is no longer a stub (wired in Commit 4).
+          send() remains a stub until Commit 6.
     """
 
     def test_send_raises_not_implemented_error(self):
@@ -1738,15 +1742,13 @@ class TestStubExceptionTypes:
         assert exc is not None, "send() must raise NotImplementedError"
         assert type(exc) is NotImplementedError
 
-    def test_store_raises_not_implemented_error(self):
+    def test_store_is_wired_in_commit_4(self, db):
+        """store() is wired in Commit 4 — calls DB, does not raise NotImplementedError."""
         p = FakeProcessor.make()
-        exc = None
-        try:
+        with patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
-        except NotImplementedError as e:
-            exc = e
-        assert exc is not None, "store() must raise NotImplementedError"
-        assert type(exc) is NotImplementedError
+        assert p._uid is not None
 
     def test_post_turn_returns_none_not_not_implemented(self):
         """postTurn() is overridable, NOT a stub — must return None, not raise."""
@@ -1759,10 +1761,13 @@ class TestStubExceptionTypes:
         with pytest.raises(NotImplementedError):
             p.send('req-id')
 
-    def test_store_not_caught_as_plain_exception(self):
+    def test_store_not_caught_as_plain_exception(self, db):
+        """store() is wired in Commit 4 — calls DB, no longer raises NotImplementedError."""
         p = FakeProcessor.make()
-        with pytest.raises(NotImplementedError):
+        with patch('services.transcript_service._embed_entry'), \
+             patch('services.transcript_service._trigger_episode_extraction'):
             p.store('response text')
+        assert p._uid is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

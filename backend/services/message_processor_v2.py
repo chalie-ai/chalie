@@ -500,9 +500,34 @@ class MessageProcessor:
     def store(self, llm_response: str) -> None:
         """Persist the turn atomically via transcript_service.append_atomic_turn.
 
-        Wired in Commit 4.
+        Calls append_atomic_turn() which opens a single DB transaction and
+        writes the input row, all pending tool_call DTOs, and the assistant row
+        atomically. Sets self._uid to the input transcript row id on success.
+
+        If self.ROLE is empty a warning is logged but the write proceeds —
+        the empty string is passed through as-is. Downstream CHECK constraints
+        or callers are responsible for rejecting it.
+
+        Does NOT catch exceptions. If the write fails the exception propagates
+        to send(), leaving self._uid as None. The transaction guarantees that
+        either all rows land or none do.
         """
-        raise NotImplementedError
+        if not self.ROLE:
+            logger.warning(
+                "[MessageProcessor.store] ROLE is empty on %s; "
+                "writing empty-string role to transcript",
+                type(self).__name__,
+            )
+
+        from services.transcript_service import append_atomic_turn
+
+        self._uid = append_atomic_turn(
+            channel=self.CHANNEL,
+            role=self.ROLE,
+            raw_input=self._raw_input,
+            llm_response=llm_response,
+            pending_tool_calls=self._pending_tool_calls,
+        )
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
