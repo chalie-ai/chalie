@@ -41,6 +41,7 @@ TOOL_CALLS_DDL = [
         invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
         created_at    TEXT NOT NULL DEFAULT (datetime('now')),
         ephemeral     INTEGER NOT NULL DEFAULT 0,
+        tool_call_id  TEXT,
         FOREIGN KEY (transcript_id) REFERENCES transcript(id)
     )
     """,

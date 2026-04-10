@@ -568,8 +568,14 @@ class TestGetBaseSession:
     # ── mem options ───────────────────────────────────────────────────────────
 
     @pytest.mark.unit
-    def test_mem_options_always_set(self, models_dir, ort_stub, monkeypatch):
-        """enable_mem_pattern and enable_cpu_mem_arena are True regardless of which path is used."""
+    def test_mem_options_docker_oom_mitigation(self, models_dir, ort_stub, monkeypatch):
+        """_get_base_session() enables mem_pattern but disables cpu_mem_arena.
+
+        The arena is intentionally off for the base model — pre-allocating a
+        contiguous pool alongside the ~2.2GB embedding model causes a memory
+        spike that exceeds the Docker VM limit. See onnx_inference_service.py
+        line 432-435 for the rationale.
+        """
         base = self._base_dir(models_dir)
         base.mkdir()
         (base / "model.onnx").write_bytes(b"raw")
@@ -594,7 +600,7 @@ class TestGetBaseSession:
 
         opts = captured_opts[0]
         assert opts.enable_mem_pattern is True
-        assert opts.enable_cpu_mem_arena is True
+        assert opts.enable_cpu_mem_arena is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
