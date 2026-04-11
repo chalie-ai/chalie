@@ -83,6 +83,16 @@ _ASSEMBLY_MARKERS = (
     "IMPORTANT: The user is in voice mode",
 )
 
+# Content prefixes indicating a system/scheduled injection, not a user message
+_INJECTION_PREFIXES = (
+    "[SCHEDULED TASK",   # ScheduledMessageProcessor prompts
+    "1. [20",            # Episode-dump injections (e.g. "1. [2026-04-08 06:40] salience:2 ...")
+)
+
+# Max chars for the plain-text (no-marker) fallback path — longer content is
+# almost certainly a bulk injection or legacy context dump, not a user message
+_PLAIN_TEXT_MAX = 10_000
+
 # Roles that are background/internal — skip entirely
 _SKIP_ROLES = {"proactive_thought", "goal_pursuit", "scheduled", "tool"}
 
@@ -91,29 +101,45 @@ def extract_user_message(content: str) -> str | None:
     """Extract the raw user message from an assembled prompt.
 
     Returns the extracted text, or None if unrecoverable.
+
+    Three cases:
+      1. Has '## User Message\\n' marker: extract everything after it.
+         If the extracted text itself contains assembly headers, the entry
+         is a recursive blob (world-state injected into the prior turn's
+         content, then re-assembled) — skip it.
+      2. No assembly headers at all, short enough, no injection prefix:
+         treat as raw user text (old format before UserPromptAssemblyService).
+      3. Anything else: unrecoverable — skip.
     """
     if not content:
         return None
 
-    # Case 1: Contains the assembly marker — extract cleanly
+    # Case 1: Has the assembly marker — extract after it
     if _USER_MSG_MARKER in content:
         idx = content.index(_USER_MSG_MARKER) + len(_USER_MSG_MARKER)
         raw = content[idx:].strip()
-        if len(raw) >= 3:
-            return raw
-        # Marker present but nothing after it
-        return None
+        if len(raw) < 3:
+            return None
+        # Recursive blob check: after extraction the text still contains
+        # assembly structure from the previous turn embedded inside it
+        if any(m in raw for m in _ASSEMBLY_MARKERS):
+            return None
+        return raw
 
-    # Case 2: No assembly markers at all — plain text input (old format or
-    # direct injection); use as-is
+    # Case 2: No assembly markers — old plain-text format
     if not any(m in content for m in _ASSEMBLY_MARKERS):
         stripped = content.strip()
-        if len(stripped) >= 3:
-            return stripped
-        return None
+        if len(stripped) < 3:
+            return None
+        # Skip known system/scheduled injection patterns
+        if any(stripped.startswith(p) for p in _INJECTION_PREFIXES):
+            return None
+        # Skip bulk dumps that are too long to be a real user message
+        if len(stripped) > _PLAIN_TEXT_MAX:
+            return None
+        return stripped
 
-    # Case 3: Assembly markers present but no ## User Message marker —
-    # cannot reliably extract the raw message
+    # Case 3: Has assembly headers but no ## User Message marker
     return None
 
 
@@ -367,8 +393,11 @@ def _print_pair_preview(pairs: list):
 # re-running on subsequent boots.
 _MIGRATION_ID = "transcript-rebuild-v1"
 
-# Channel prefixes that belong to background/system flows — skip during auto-run
-_BACKGROUND_PREFIXES = ("goal_pursuit:", "scheduled:", "dmn:", "cron_tool:")
+# Channel prefixes that belong to background/system flows — skip during auto-run.
+# prompt:  — old scheduled-prompt delivery channels (contain [SCHEDULED TASK] text)
+# web:     — old web interface channels (also contained scheduled prompts)
+# scheduled: — new ScheduledMessageProcessor channels
+_BACKGROUND_PREFIXES = ("goal_pursuit:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
 
 
 def _flag_path(db_path: str) -> Path:
