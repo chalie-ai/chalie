@@ -26,6 +26,45 @@ logger = logging.getLogger(__name__)
 # Canonical location of all prompt files, relative to this file.
 _PROMPTS_DIR = Path(__file__).parent.parent / 'prompts'
 
+# ── Unified system prompt ─────────────────────────────────────────────────────
+# Inlined as a Python constant (not a markdown file) so the stable prefix is
+# cache-friendly. {{adaptive_directives}} sits at the bottom — it changes
+# every turn and acts as the cache-busting suffix. Weaved by
+# UserMessageProcessor.getSystemPrompt() before the prompt is sent.
+_UNIFIED_PROMPT = """\
+Respond directly OR invoke tools — whichever serves the request.
+
+## Principles
+
+1. **You reason, tools provide data.** All judgment happens here.
+2. **Respond directly when possible.** If the conversation already contains everything needed, respond now.
+3. **Auto-store personal facts.** If the user discloses a personal fact (e.g., "my dog's name is Biscuit", "I am allergic to peanuts"), use the `memory` skill to store it immediately. Do not ask for permission.
+4. **Proactive recall.** If a user's request could be answered by information they have previously shared, use the `memory` skill to check before responding.
+5. **Never fabricate tool results.** If you did not call a tool — or a call returned an error — do not pretend the action succeeded. Only reference information from actual tool results in this conversation.
+6. **Use code for math.** If a request requires calculation (e.g., mortgage, interest, percentages), use the `code_eval` tool. Do not perform complex arithmetic inline.
+7. **Avoid tool use for simple acknowledgments.** Do not invoke tools for messages like "thanks", "got it", or "ok".
+8. **Handle ambiguity with search.** If a user's request is ambiguous (e.g., "check my schedule" when multiple calendars exist), use `memory` or other tools to disambiguate before finalizing an action.
+
+────────────────────────────────
+
+## Output
+
+**Direct response**: When you have sufficient context, respond with text.
+
+**Tool use**: When you need to take action, call the appropriate tool. Each time you call tools, you must also include a cycle summary — a brief text synthesising what the tools returned and what you plan to do next. This is shown to the user in real time.
+
+Good: "Checked your TV and movie services — nothing matches your preferences. Checking the weather for a walk instead."
+Bad: "Running weather check."
+
+When all tool calls are complete, your final response must be a comprehensive factual synthesis of everything found. Include key data points, numbers, names, dates, and findings from all tool results.
+
+Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born 1942, revenue $50B in 2023, ~190K employees."
+
+────────────────────────────────
+
+{{adaptive_directives}}\
+"""
+
 
 class SystemMessagePrompt:
     """Abstract base class for system-message body builders.
@@ -40,38 +79,20 @@ class SystemMessagePrompt:
 
 
 class UnifiedSystemMessagePrompt(SystemMessagePrompt):
-    """Pure static template renderer for the user-facing (unified) system
-    prompt body.
+    """System-message body for user-facing (unified) turns.
 
-    **Zero-arg by design (Decision Y1 — 2026-04-10).** This class has no
-    constructor parameters and does not read any turn-specific state. It
-    returns the UNIFIED prompt template verbatim, leaving the
-    ``{{identity_modulation}}`` and ``{{adaptive_directives}}`` placeholders
-    **literal** for a caller further up the stack to weave in.
+    **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
+    parameters, no turn-specific state. Returns ``_UNIFIED_PROMPT`` verbatim,
+    leaving ``{{adaptive_directives}}`` as a literal placeholder for
+    ``UserMessageProcessor.getSystemPrompt()`` to weave in.
 
-    **Why the retrofit from Commit 1's parameterised version:** identity
-    modulation and adaptive directives are *per-turn runtime context*, not
-    static template content. They belong one level up, inside the owning
-    ``MessageProcessor`` subclass's ``getSystemPrompt()`` override, which
-    already holds the turn state (``self._raw_input``, ``self._metadata``).
-    Keeping them *inside* ``SystemMessagePrompt`` forced parameters on the
-    class, which in turn forced ``MessageProcessor.getSystemPrompt()`` to
-    either know about subclass-specific args (leaky) or silently degrade
-    identity/adaptive when callers forgot to override. The zero-arg contract
-    makes that failure mode impossible — the weaving cannot be "forgotten"
-    because the class itself cannot hold turn state.
-
-    The weaving moves to ``UserMessageProcessor.getSystemPrompt()`` in
-    Commit 8. Until then, the placeholders ride through as literal markers;
-    no production code path instantiates this class yet.
-
-    Will be wired to: ``UserMessageProcessor`` (Commit 8).
+    The prompt is a Python constant (not a file read) so the stable prefix
+    maximises provider-side prompt caching. ``{{adaptive_directives}}`` sits
+    at the bottom to act as the per-turn cache-busting suffix.
     """
 
     def getPrompt(self) -> str:
-        from workers.digest_singletons import load_configs
-        configs = load_configs()
-        return configs['cortex']['prompt_map']['UNIFIED']
+        return _UNIFIED_PROMPT
 
 
 class _FileBackedSystemMessagePrompt(SystemMessagePrompt):

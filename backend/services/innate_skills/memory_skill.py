@@ -28,7 +28,7 @@ RECALL_RADIUS_BASELINE: float = 0.5
 # Baseline for the pre-turn seed recall. Tighter than RECALL_RADIUS_BASELINE
 # because the seed query is a raw user turn and we want precision, not
 # exploration.
-SEED_RADIUS_BASELINE: float = 0.2
+SEED_RADIUS_BASELINE: float = 0.3
 
 # Redundancy-narrow — fires when a new recall query is semantically very
 # close to a query already made earlier in the same turn (seed or prior

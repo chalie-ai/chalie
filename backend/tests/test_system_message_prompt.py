@@ -93,26 +93,13 @@ class TestSystemMessagePromptBase:
 
 
 class TestUnifiedSystemMessagePrompt:
-    """Unified prompt is a pure zero-arg static template renderer (Decision Y1).
+    """Unified prompt is an inlined Python constant (Decision Y1).
 
-    Placeholders (``{{identity_modulation}}``, ``{{adaptive_directives}}``) ride
-    through verbatim — the ``UserMessageProcessor`` subclass weaves turn state
-    in via its own ``getSystemPrompt()`` override (Commit 8).
+    ``getPrompt()`` returns ``_UNIFIED_PROMPT`` directly — no file reads,
+    no config loading, no turn-specific state. ``{{adaptive_directives}}``
+    rides through as a literal placeholder; ``UserMessageProcessor.getSystemPrompt()``
+    weaves the per-turn value in before the prompt is sent.
     """
-
-    def _mock_load_configs(self, template: str):
-        """Return a patch target that makes load_configs return the given template."""
-        mock_configs = {
-            'cortex': {
-                'prompt_map': {
-                    'UNIFIED': template,
-                }
-            }
-        }
-        return patch(
-            'workers.digest_singletons.load_configs',
-            return_value=mock_configs,
-        )
 
     # ── Zero-arg contract (Y1) ────────────────────────────────────────────────
 
@@ -125,8 +112,8 @@ class TestUnifiedSystemMessagePrompt:
     def test_init_rejects_unexpected_kwargs(self):
         """Passing legacy parameters (original_prompt / thread_id) must raise.
 
-        This is the Y1 tripwire: if any caller still relies on the old
-        parameterised shape it must fail loudly — not silently degrade.
+        Y1 tripwire: any caller still relying on the old parameterised shape
+        must fail loudly, not silently degrade.
         """
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         with pytest.raises(TypeError):
@@ -135,10 +122,7 @@ class TestUnifiedSystemMessagePrompt:
             UnifiedSystemMessagePrompt(thread_id='t1')  # type: ignore[call-arg]
 
     def test_no_identity_or_adaptive_helper_methods(self):
-        """Y1: identity modulation and adaptive directive weaving have moved
-        up to ``UserMessageProcessor.getSystemPrompt()``. Neither helper should
-        exist on ``UnifiedSystemMessagePrompt`` any more.
-        """
+        """Y1: weaving has moved up to UserMessageProcessor.getSystemPrompt()."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         assert not hasattr(UnifiedSystemMessagePrompt, '_get_identity_modulation'), (
             "_get_identity_modulation should have been removed — weaving now "
@@ -149,107 +133,89 @@ class TestUnifiedSystemMessagePrompt:
             "lives in UserMessageProcessor.getSystemPrompt()"
         )
 
-    # ── Template passthrough ──────────────────────────────────────────────────
+    # ── Prompt constant contract ──────────────────────────────────────────────
 
-    def test_returns_unified_template_verbatim(self):
-        """getPrompt() returns exactly what ``load_configs()`` hands back for
-        ``cortex.prompt_map.UNIFIED`` — no substitution, no trimming."""
+    def test_returns_non_empty_string(self):
+        """getPrompt() returns a non-empty string without any mocking."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = (
-            "You are Chalie.\n\n"
-            "{{identity_modulation}}\n\n"
-            "Do your best.\n\n"
-            "{{adaptive_directives}}"
-        )
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
-        assert result == template
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        assert isinstance(result, str)
+        assert len(result) > 0
 
-    def test_identity_modulation_placeholder_preserved_literal(self):
-        """``{{identity_modulation}}`` survives unchanged — the subclass weaves it later."""
+    def test_idempotent(self):
+        """Calling getPrompt() twice returns the same value."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "Base prompt.\n\n{{identity_modulation}}\n\nTail."
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
-        assert '{{identity_modulation}}' in result, (
-            "Placeholder must ride through literal — weaving happens in "
-            "UserMessageProcessor.getSystemPrompt(), not here"
-        )
+        sut = UnifiedSystemMessagePrompt()
+        assert sut.getPrompt() == sut.getPrompt()
 
-    def test_adaptive_directives_placeholder_preserved_literal(self):
-        """``{{adaptive_directives}}`` survives unchanged — the subclass weaves it later."""
+    def test_adaptive_directives_placeholder_present(self):
+        """``{{adaptive_directives}}`` is present for UserMessageProcessor to weave in."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "Base prompt.\n\n{{adaptive_directives}}\n\nTail."
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().getPrompt()
         assert '{{adaptive_directives}}' in result
 
-    def test_both_placeholders_preserved_literal(self):
-        """Both placeholders ride through as a single verbatim block."""
+    def test_adaptive_directives_at_bottom(self):
+        """``{{adaptive_directives}}`` sits at the end of the prompt (cache-busting suffix)."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "{{identity_modulation}}\n\n{{adaptive_directives}}"
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
-        assert result == template
-        assert '{{identity_modulation}}' in result
-        assert '{{adaptive_directives}}' in result
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        idx = result.rfind('{{adaptive_directives}}')
+        assert idx != -1
+        # Nothing substantive after the placeholder (may have whitespace/newline)
+        assert result[idx + len('{{adaptive_directives}}'):].strip() == ''
 
-    def test_template_without_placeholders_returned_verbatim(self):
-        """A template without any placeholders is returned unchanged."""
+    def test_no_identity_modulation_placeholder(self):
+        """``{{identity_modulation}}`` must not appear — identity is prepended by
+        getUserDefinition(), not injected via template substitution."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "A static prompt with no placeholders at all."
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
-        assert result == template
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        assert '{{identity_modulation}}' not in result
 
-    def test_repeated_placeholders_preserved_literal(self):
-        """Repeated placeholder tokens ride through identically."""
+    def test_no_dead_placeholders(self):
+        """No stale {{...}} placeholders other than {{adaptive_directives}}."""
+        import re
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "{{identity_modulation}} and also {{identity_modulation}}"
-        with self._mock_load_configs(template):
-            result = UnifiedSystemMessagePrompt().getPrompt()
-        assert result == template
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        placeholders = set(re.findall(r'\{\{(\w+)\}\}', result))
+        assert placeholders == {'adaptive_directives'}, (
+            f"Unexpected placeholders: {placeholders - {'adaptive_directives'}}"
+        )
 
     # ── No side effects on DB / services ──────────────────────────────────────
 
     def test_get_prompt_does_not_touch_identity_service(self):
         """Y1: the class must not import or instantiate IdentityService."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "body {{identity_modulation}}"
-        with self._mock_load_configs(template), \
-             patch('services.identity_service.IdentityService') as mock_ident:
+        with patch('services.identity_service.IdentityService') as mock_ident:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_ident.assert_not_called()
 
     def test_get_prompt_does_not_touch_adaptive_layer_service(self):
         """Y1: the class must not import or instantiate AdaptiveLayerService."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "body {{adaptive_directives}}"
-        with self._mock_load_configs(template), \
-             patch('services.adaptive_layer_service.AdaptiveLayerService') as mock_adl:
+        with patch('services.adaptive_layer_service.AdaptiveLayerService') as mock_adl:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_adl.assert_not_called()
 
     def test_get_prompt_does_not_touch_voice_mapper_service(self):
         """Y1: no voice mapper dependency inside the class."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "body"
-        with self._mock_load_configs(template), \
-             patch('services.voice_mapper_service.VoiceMapperService') as mock_vms:
+        with patch('services.voice_mapper_service.VoiceMapperService') as mock_vms:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_vms.assert_not_called()
 
     def test_get_prompt_does_not_touch_working_memory_service(self):
-        """Y1 also kills the WorkingMemoryService lookup that the legacy
-        adaptive-directive branch relied on. Locking this absence here
-        satisfies task #21 (drop WorkingMemoryService branch) automatically.
-        """
+        """Y1: WorkingMemoryService lookup is gone."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        template = "body"
-        with self._mock_load_configs(template), \
-             patch('services.working_memory_service.WorkingMemoryService') as mock_wms:
+        with patch('services.working_memory_service.WorkingMemoryService') as mock_wms:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_wms.assert_not_called()
+
+    def test_get_prompt_does_not_call_load_configs(self):
+        """Prompt is a Python constant — no config loading at call time."""
+        from services.system_message_prompt import UnifiedSystemMessagePrompt
+        with patch('workers.digest_singletons.load_configs') as mock_lc:
+            UnifiedSystemMessagePrompt().getPrompt()
+        mock_lc.assert_not_called()
 
     # ── Subclassing contract ──────────────────────────────────────────────────
 

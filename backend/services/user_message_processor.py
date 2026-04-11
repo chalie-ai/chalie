@@ -185,27 +185,17 @@ class UserMessageProcessor(MessageProcessor):
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
     def getSystemPrompt(self) -> str:
-        """Override to inject adaptive_directives into the UNIFIED template.
+        """Override to inject adaptive_directives into the UNIFIED prompt body.
 
-        The UnifiedSystemMessagePrompt.getPrompt() returns the raw UNIFIED
-        template (frontal-cortex-unified.md). The template contains one
-        placeholder this override must fill: {{adaptive_directives}}.
+        UnifiedSystemMessagePrompt.getPrompt() returns _UNIFIED_PROMPT, an
+        inlined Python constant with one placeholder: {{adaptive_directives}}.
+        This override fills it with per-turn adaptive signals, then prepends
+        getUserDefinition() (the identity modulation line) as the first line of
+        the final system prompt.
 
-        Other placeholders in the template ({{user_state}}, {{user_traits}},
-        {{world_state}}, {{situation}}, etc.) are NOT filled here — this is
-        existing behaviour from system_prompt_assembly_service._build_unified()
-        which also only filled {{adaptive_directives}}. Those placeholders pass
-        through as literal mustache text to the LLM. Filling them is a separate
-        refactor concern, not part of Commit 8.
-
-        NOTE: {{identity_modulation}} is NOT a placeholder in the actual
-        frontal-cortex-unified.md template (verified). The old assembly service
-        called template.replace('{{identity_modulation}}', ...) which was a
-        no-op. Do not reintroduce it.
-
-        getUserDefinition() provides the identity modulation text as the FIRST
-        LINE of the system prompt (prepended by the f-string below), per north
-        star §"System Message" — that is the correct delivery path.
+        {{adaptive_directives}} sits at the bottom of _UNIFIED_PROMPT so the
+        stable principles prefix is cache-friendly and only the suffix busts
+        the provider-side prompt cache each turn.
         """
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
 
