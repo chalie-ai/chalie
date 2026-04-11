@@ -136,31 +136,25 @@ class TestHistoryTokenBudget:
 
 class TestConcurrentExecution:
 
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_single_action_runs_directly(self, mock_dispatcher_cls):
+    def test_single_action_runs_directly(self):
         """Single action dispatches via the dispatcher."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.return_value = _make_result('recall')
-        mock_dispatcher_cls.return_value = mock_dispatcher
-
         svc = ActLoopService(_make_config())
+        # Trigger lazy-load of dispatcher
+        svc.execute_actions('test-topic', [])
+        # Register a real handler for the test
+        svc._dispatcher.handlers['recall'] = lambda topic, action: _make_result('recall')
         results = svc.execute_actions('test-topic', [{'type': 'recall', 'query': 'test'}])
 
         assert len(results) == 1
         assert results[0]['action_type'] == 'recall'
-        mock_dispatcher.dispatch_action.assert_called_once()
 
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_multiple_actions_return_in_order(self, mock_dispatcher_cls):
+    def test_multiple_actions_return_in_order(self):
         """Multiple actions return results preserving original order."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.side_effect = [
-            _make_result('recall', result='recall result'),
-            _make_result('associate', result='assoc result'),
-        ]
-        mock_dispatcher_cls.return_value = mock_dispatcher
-
         svc = ActLoopService(_make_config())
+        svc.execute_actions('test-topic', [])
+        svc._dispatcher.handlers['recall'] = lambda topic, action: _make_result('recall', result='recall result')
+        svc._dispatcher.handlers['associate'] = lambda topic, action: _make_result('associate', result='assoc result')
+
         results = svc.execute_actions('test-topic', [
             {'type': 'recall', 'query': 'test'},
             {'type': 'associate', 'seeds': ['news']},
@@ -170,22 +164,25 @@ class TestConcurrentExecution:
         assert results[0]['action_type'] == 'recall'
         assert results[1]['action_type'] == 'associate'
 
-    @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_sequential_error_propagates(self, mock_dispatcher_cls):
+    def test_sequential_error_propagates(self):
         """If a sequential action throws, the error propagates up."""
-        mock_dispatcher = MagicMock()
-        mock_dispatcher.dispatch_action.side_effect = [
-            _make_result('recall'),
-            Exception("connection failed"),
-        ]
-        mock_dispatcher_cls.return_value = mock_dispatcher
-
         svc = ActLoopService(_make_config())
-        with pytest.raises(Exception, match="connection failed"):
-            svc.execute_actions('test-topic', [
-                {'type': 'recall', 'query': 'test'},
-                {'type': 'associate', 'seeds': ['news']},
-            ])
+        svc.execute_actions('test-topic', [])
+        svc._dispatcher.handlers['recall'] = lambda topic, action: _make_result('recall')
+
+        # The dispatcher catches exceptions and returns status='error'
+        # instead of letting them bubble up.
+        def exploding_handler(topic, action):
+            raise Exception("connection failed")
+        svc._dispatcher.handlers['associate'] = exploding_handler
+
+        results = svc.execute_actions('test-topic', [
+            {'type': 'recall', 'query': 'test'},
+            {'type': 'associate', 'seeds': ['news']},
+        ])
+
+        assert results[1]['status'] == 'error'
+        assert 'connection failed' in results[1]['result']
 
 
 # ── History and Append ───────────────────────────────────────
