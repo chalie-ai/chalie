@@ -32,7 +32,6 @@ DATA_TABLES = [
     'documents',
     'document_chunks',
     'place_fingerprints',
-    'moments',
     'tool_performance_metrics',
 ]
 

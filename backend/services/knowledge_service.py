@@ -152,7 +152,7 @@ class KnowledgeService:
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
-    VALID_KINDS = {'trait', 'fact', 'procedure', 'preference', 'rule', 'metric'}
+    VALID_KINDS = {'trait', 'fact', 'procedure', 'preference', 'rule', 'metric', 'moment', 'moment_context'}
     VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
 
     # Procedural learning constants (ported from ProceduralMemoryService)
@@ -744,6 +744,62 @@ class KnowledgeService:
         except Exception as e:
             logger.error(f"[KNOWLEDGE] forget failed for ({entity}, {key}): {e}")
             return False
+
+    def forget_all_by_entity(self, entity: str, kind: Optional[str] = None) -> int:
+        """
+        Bulk soft-delete every active row for an entity (optionally filtered by
+        kind) and keep the FTS shadow table in sync.
+
+        Used by cascade-delete callers (e.g. moments) so they don't have to
+        reach into private helpers like ``_remove_fts``. Returns the number of
+        rows that were soft-deleted.
+        """
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+
+                if kind is not None:
+                    cursor.execute(
+                        "SELECT rowid FROM knowledge "
+                        "WHERE entity = ? AND kind = ? AND deleted_at IS NULL",
+                        (entity, kind),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT rowid FROM knowledge "
+                        "WHERE entity = ? AND deleted_at IS NULL",
+                        (entity,),
+                    )
+                rowids = [r[0] for r in cursor.fetchall()]
+
+                if not rowids:
+                    cursor.close()
+                    return 0
+
+                placeholders = ','.join('?' for _ in rowids)
+                cursor.execute(
+                    f"UPDATE knowledge SET deleted_at = datetime('now') "
+                    f"WHERE rowid IN ({placeholders})",
+                    rowids,
+                )
+                affected = cursor.rowcount
+
+                for rid in rowids:
+                    self._remove_fts(conn, rid)
+
+                cursor.close()
+
+            logger.info(
+                f"[KNOWLEDGE] forget_all_by_entity soft-deleted {affected} row(s) "
+                f"for entity={entity} kind={kind or '*'}"
+            )
+            return affected
+
+        except Exception as e:
+            logger.error(
+                f"[KNOWLEDGE] forget_all_by_entity failed for entity={entity} kind={kind}: {e}"
+            )
+            return 0
 
     # ── Core: strengthen ───────────────────────────────────────────────
 

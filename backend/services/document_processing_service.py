@@ -183,10 +183,10 @@ class DocumentProcessingService:
 
             # Step 12: Set status — auto-confirm unless the document came
             # from an in-chat conversation (those need user review).
-            # Watched folders, moments, and dashboard uploads all skip confirmation.
+            # Watched folders and dashboard uploads all skip confirmation.
             _src = doc.get('source_type', '')
             _auto = (
-                _src in ('watched_folder', 'moment', 'upload')
+                _src in ('watched_folder', 'upload')
                 or doc.get('watched_folder_id')  # belt-and-suspenders for watched folders
             )
             if _auto:

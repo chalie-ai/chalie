@@ -74,7 +74,7 @@ class DocumentService:
                 watched-folder documents).
             file_hash: SHA-256 hex digest of the file for deduplication.
             source_type: Origin label (``'upload'``, ``'watched_folder'``,
-                ``'conversation'``, or ``'moment'``).
+                or ``'conversation'``).
             watched_folder_id: Optional ID of the originating watched folder.
             doc_id: Optional explicit document ID; generated if not provided.
 

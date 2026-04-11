@@ -241,9 +241,9 @@ if __name__ == "__main__":
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
-    # Moment enrichment service
-    from services.moment_enrichment_service import moment_enrichment_worker
-    manager.register_service("moment-enrichment-service", moment_enrichment_worker)
+    # Moment context enrichment service (6h worker)
+    from services.moment_context_service import moment_context_worker
+    manager.register_service("moment-context-service", moment_context_worker)
 
     # Background LLM worker
     from workers.background_llm_worker import background_llm_worker

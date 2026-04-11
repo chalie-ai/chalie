@@ -180,9 +180,9 @@ def main():
     from workers.interface_daemon_worker import interface_daemon_worker
     manager.register_service("interface-daemon-watcher", interface_daemon_worker)
 
-    # Moment enrichment service
-    from services.moment_enrichment_service import moment_enrichment_worker
-    manager.register_service("moment-enrichment-service", moment_enrichment_worker)
+    # Moment context enrichment service (6h worker)
+    from services.moment_context_service import moment_context_worker
+    manager.register_service("moment-context-service", moment_context_worker)
 
     # Self-model service (interoception — epistemic, operational, capability awareness)
     from services.self_model_service import self_model_worker

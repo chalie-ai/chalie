@@ -298,7 +298,7 @@ def delete_all():
                 "identity_events",
                 "place_fingerprints",
 
-                # Documents (includes moments, watched-folder docs)
+                # Documents (watched-folder docs)
                 "document_chunks",
                 "documents",
                 "watched_folders",

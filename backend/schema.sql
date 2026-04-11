@@ -501,9 +501,9 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
 );
 
 
--- NOTE: moments were previously stored in a dedicated `moments` table.
--- They are now stored as documents with source_type='moment' in the documents
--- table. The moments table and its indices have been removed (migration 004).
+-- NOTE: moments are stored in the knowledge table as kind='moment' (parent)
+-- and kind='moment_context' (enrichment context rows). The old dedicated
+-- moments table and documents-table path (source_type='moment') are removed.
 
 -- ────────────────────────────────────────────────────────────────
 -- PLACE FINGERPRINTS — learned place patterns
