@@ -14,7 +14,7 @@ The module is imported directly; no callers are wired up yet.
 Test coverage:
   1.  Base constructor fields
   2.  Default class constants
-  3.  getSystemPrompt() with default SystemMessagePrompt (returns '')
+  3.  getSystemPrompt() raises TypeError when SYSTEM_PROMPT_CLASS is the abstract base
   4.  getSystemPrompt() with a subclass that sets SYSTEM_PROMPT_CLASS
   5.  getTools() — empty NATIVE_TOOLS + empty _discovered_tools → []
   6.  getTools() — native + dynamic → both returned
@@ -47,6 +47,18 @@ _USER_DEF = "The user is a human named Alice interacting via the chat interface.
 _USER_PROMPT = "What time is it?"
 
 
+def _stub_prompt_cls():
+    """Minimal concrete ``SystemMessagePrompt`` used as the default for
+    ``FakeProcessor``. Any test that wants to exercise the abstract-default
+    contract overrides ``SYSTEM_PROMPT_CLASS`` back to the bare base."""
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
+
+    return _StubPrompt
+
+
 class FakeProcessor:
     """Concrete MessageProcessor subclass used in all tests below.
 
@@ -65,6 +77,7 @@ class FakeProcessor:
         class _Fake(MessageProcessor):
             CHANNEL = FakeProcessor._CHANNEL
             ROLE = FakeProcessor._ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self) -> str:
                 return _USER_DEF
@@ -84,6 +97,7 @@ class FakeProcessor:
         class _Fake(MessageProcessor):
             CHANNEL = FakeProcessor._CHANNEL
             ROLE = FakeProcessor._ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self) -> str:
                 return _USER_DEF
@@ -215,25 +229,56 @@ class TestClassConstants:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. getSystemPrompt() with default SystemMessagePrompt (returns '')
+# 3. getSystemPrompt() raises TypeError when SYSTEM_PROMPT_CLASS is the abstract base
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetSystemPromptDefault:
-    def test_format_with_empty_body(self):
-        p = FakeProcessor.make()
-        # Default SYSTEM_PROMPT_CLASS.getPrompt() returns '' so the result is
-        # "{user_def}\n\n"
+    """The module-level default ``SYSTEM_PROMPT_CLASS`` on ``MessageProcessor``
+    is the abstract ``SystemMessagePrompt`` base — any subclass that forgets
+    to override it must fail loudly at getSystemPrompt() call time, not
+    silently produce a blank body."""
+
+    def test_module_default_is_abstract_base(self):
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import SystemMessagePrompt
+        assert MessageProcessor.SYSTEM_PROMPT_CLASS is SystemMessagePrompt
+
+    def test_abstract_default_raises_type_error(self):
+        """If SYSTEM_PROMPT_CLASS is left as the abstract base, calling
+        getSystemPrompt() raises TypeError — loud-failure contract."""
+        from services.system_message_prompt import SystemMessagePrompt
+        p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=SystemMessagePrompt)
+        with pytest.raises(TypeError):
+            p.getSystemPrompt()
+
+    def test_concrete_override_produces_expected_format(self):
+        from services.system_message_prompt import SystemMessagePrompt
+
+        class _Concrete(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'BODY'
+
+        p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_Concrete)
         result = p.getSystemPrompt()
-        assert result == f"{_USER_DEF}\n\n"
+        assert result == f"{_USER_DEF}\n\nBODY"
 
     def test_user_definition_is_first_line(self):
-        p = FakeProcessor.make()
+        from services.system_message_prompt import SystemMessagePrompt
+
+        class _Concrete(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'BODY'
+
+        p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_Concrete)
         result = p.getSystemPrompt()
         assert result.startswith(_USER_DEF)
 
     def test_double_newline_separator(self):
-        p = FakeProcessor.make()
+        from services.system_message_prompt import SystemMessagePrompt
+
+        class _Concrete(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'BODY'
+
+        p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_Concrete)
         result = p.getSystemPrompt()
         assert '\n\n' in result
 
@@ -248,20 +293,18 @@ class TestGetSystemPromptCustomClass:
         from services.system_message_prompt import SystemMessagePrompt
 
         class _SentinelPrompt(SystemMessagePrompt):
-            def getPrompt(self) -> str:
-                return 'SENTINEL_BODY'
+            _SYSTEM_PROMPT = 'SENTINEL_BODY'
 
         p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_SentinelPrompt)
         result = p.getSystemPrompt()
         assert result == f"{_USER_DEF}\n\nSENTINEL_BODY"
 
     def test_unified_system_message_prompt_wired(self):
-        """SYSTEM_PROMPT_CLASS can be set to UnifiedSystemMessagePrompt on a subclass."""
+        """SYSTEM_PROMPT_CLASS can be set to any concrete SystemMessagePrompt subclass."""
         from services.system_message_prompt import SystemMessagePrompt
 
         class _MockUnified(SystemMessagePrompt):
-            def getPrompt(self) -> str:
-                return 'UNIFIED_MOCK'
+            _SYSTEM_PROMPT = 'UNIFIED_MOCK'
 
         p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_MockUnified)
         result = p.getSystemPrompt()
@@ -275,11 +318,10 @@ class TestGetSystemPromptCustomClass:
         from services.system_message_prompt import SystemMessagePrompt
 
         class _Counter(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'body'
+
             def __init__(self):
                 call_count['n'] += 1
-
-            def getPrompt(self) -> str:
-                return 'body'
 
         p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_Counter)
         p.getSystemPrompt()
@@ -741,6 +783,7 @@ class TestRunMemorySeedBaseNoop:
         class SeedingProcessor(MessageProcessor):
             CHANNEL = 'seeding'
             ROLE = 'user'
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self) -> str:
                 return 'def'
@@ -920,12 +963,11 @@ class TestInstanceIsolation:
 
 
 class TestGetSystemPromptFileBackedDMN:
-    """Wire a real file-backed subclass (DMNSystemMessagePrompt) and verify
-    the output contains both getUserDefinition() and the on-disk prompt body.
+    """Wire a real concrete subclass (DMNSystemMessagePrompt) and verify the
+    output contains both getUserDefinition() and the inlined prompt body.
 
-    DMNSystemMessagePrompt reads backend/prompts/dmn.md which is present in
-    the repo.  If the file is missing for any reason the fallback string is
-    used, which is also non-empty — so the test is resilient regardless.
+    DMNSystemMessagePrompt returns an inlined Python constant — no file I/O,
+    no fallbacks. The body is guaranteed non-empty by its class contract.
     """
 
     def test_output_contains_user_definition(self):
@@ -1018,11 +1060,10 @@ class TestGetSystemPromptExceptionPropagation:
         from services.system_message_prompt import SystemMessagePrompt
 
         class _Exploding(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'unreachable'
+
             def __init__(self):
                 raise RuntimeError("deliberate explosion in SYSTEM_PROMPT_CLASS")
-
-            def getPrompt(self) -> str:
-                return 'unreachable'
 
         p = FakeProcessor.make(SYSTEM_PROMPT_CLASS=_Exploding)
         with pytest.raises(RuntimeError, match="deliberate explosion"):
@@ -1032,6 +1073,8 @@ class TestGetSystemPromptExceptionPropagation:
         from services.system_message_prompt import SystemMessagePrompt
 
         class _ExplodingPrompt(SystemMessagePrompt):
+            _SYSTEM_PROMPT = 'unreachable'
+
             def getPrompt(self) -> str:
                 raise ValueError("getPrompt exploded")
 

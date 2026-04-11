@@ -59,10 +59,15 @@ def _dto(
 def _make_processor(channel=_CHANNEL, role='user', raw_input='hello', **kwargs):
     """Build a concrete FakeProcessor with overridable CHANNEL, ROLE, raw_input."""
     from services.message_processor import MessageProcessor
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
 
     class _Fake(MessageProcessor):
         CHANNEL = channel
         ROLE = role
+        SYSTEM_PROMPT_CLASS = _StubPrompt
 
         def getUserDefinition(self) -> str:
             return 'test definition'

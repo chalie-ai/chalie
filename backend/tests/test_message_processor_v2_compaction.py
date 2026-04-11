@@ -54,12 +54,17 @@ def _make_llm_response(text='summary text', tool_calls=None):
 def _make_processor(channel=_CHANNEL, role=_ROLE, raw_input='hello', **kwargs):
     """Build a concrete FakeCompactingProcessor instance."""
     from services.message_processor import MessageProcessor
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
 
     _prompt = raw_input
 
     class FakeCompactingProcessor(MessageProcessor):
         CHANNEL = channel
         ROLE = role
+        SYSTEM_PROMPT_CLASS = _StubPrompt
 
         def getUserDefinition(self) -> str:
             return _USER_DEF

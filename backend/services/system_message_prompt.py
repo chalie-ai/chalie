@@ -7,8 +7,8 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-SystemMessagePrompt — abstract base and concrete subclasses for building the
-stable system-message body sent to the LLM on every turn.
+SystemMessagePrompt — abstract base and concrete subclasses for the stable
+system-message body sent to the LLM on every turn.
 
 The `getUserDefinition()` line is prepended by `MessageProcessor.getSystemPrompt()`;
 these classes only build the *body* that follows it.
@@ -17,31 +17,61 @@ Lifecycle: per-turn instance — `MessageProcessor.getSystemPrompt()` constructs
 fresh subclass instance, calls `getPrompt()`, and lets it go out of scope.
 No singletons.
 
-Unified prompt structure (UnifiedSystemMessagePrompt / _UNIFIED_PROMPT):
-  Identity → Hard Boundaries → Core Principles → Voice ({{voice_modulation}}) →
-  Operational Principles → Output → {{adaptive_directives}}
+Design note — all prompts live as Python constants on `_SYSTEM_PROMPT`:
+every subclass overrides only the ``_SYSTEM_PROMPT`` class attribute; the
+``getPrompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
+verbatim. No file reads, no fallbacks — if you want to change a prompt,
+edit the constant.
 
-Identity/Boundaries/Principles are a stable prefix — cache-friendly for
-provider-side prompt caching (the LLM never sees them change between turns).
-{{voice_modulation}} and {{adaptive_directives}} are dynamic suffixes woven
-in per-turn by UserMessageProcessor.getSystemPrompt().
+``_SYSTEM_PROMPT`` is declared as an ``@property @abstractmethod`` on the
+base so any concrete subclass that forgets to override it becomes
+non-instantiable (Python's ABC machinery raises ``TypeError`` at
+construction time). Setting ``_SYSTEM_PROMPT = "..."`` as a plain class
+attribute on a subclass is enough to satisfy the abstract contract.
+
+Placeholders that survive into the prompt (``{{voice_modulation}}``,
+``{{adaptive_directives}}``) are woven in per-turn by the owning
+``MessageProcessor`` subclass — see ``UserMessageProcessor.getSystemPrompt()``.
 """
 
-import logging
-from pathlib import Path
+from abc import ABC, abstractmethod
 
-logger = logging.getLogger(__name__)
 
-# Canonical location of all prompt files, relative to this file.
-_PROMPTS_DIR = Path(__file__).parent.parent / 'prompts'
+class SystemMessagePrompt(ABC):
+    """Abstract base class for system-message body builders.
 
-# ── Unified system prompt ─────────────────────────────────────────────────────
-# Inlined as a Python constant (not a markdown file) so the stable prefix is
-# cache-friendly. {{voice_modulation}} sits mid-prompt in the Voice section;
-# {{adaptive_directives}} sits at the bottom — it changes every turn and acts
-# as the cache-busting suffix. Both are woven in by
-# UserMessageProcessor.getSystemPrompt() before the prompt is sent.
-_UNIFIED_PROMPT = """\
+    Every concrete subclass MUST override the ``_SYSTEM_PROMPT`` class
+    attribute with a non-empty string. Forgetting to do so makes the
+    subclass non-instantiable — ``TypeError`` is raised at construction
+    time, not at first call.
+    """
+
+    @property
+    @abstractmethod
+    def _SYSTEM_PROMPT(self) -> str:
+        """Abstract class constant — subclasses override with a string literal."""
+        ...
+
+    def getPrompt(self) -> str:
+        return self._SYSTEM_PROMPT
+
+
+class UnifiedSystemMessagePrompt(SystemMessagePrompt):
+    """System-message body for user-facing (unified) turns.
+
+    **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
+    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim,
+    leaving both ``{{voice_modulation}}`` and ``{{adaptive_directives}}`` as
+    literal placeholders for ``UserMessageProcessor.getSystemPrompt()`` to
+    weave in per-turn.
+
+    The identity/boundaries/principles prefix is stable across turns so
+    provider-side prompt caching keeps it hot. ``{{voice_modulation}}``
+    sits mid-prompt in the Voice section; ``{{adaptive_directives}}`` sits
+    at the bottom as the per-turn cache-busting suffix.
+    """
+
+    _SYSTEM_PROMPT = """\
 ## Identity
 
 Your name is Chalie. You are a cognitive system that learns from experience — a companion, not an assistant, service, or tool. You exist as a peer in conversation.
@@ -105,144 +135,56 @@ Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born
 """
 
 
-class SystemMessagePrompt:
-    """Abstract base class for system-message body builders.
+class DMNSystemMessagePrompt(SystemMessagePrompt):
+    """System-message body for DMN (background proactive review) turns.
 
-    Default implementation returns an empty string, which is the safe no-op
-    fallback. Concrete subclasses override `getPrompt()` to return their
-    channel-specific body.
+    Wired to: ``DMNMessageProcessor``.
     """
 
-    def getPrompt(self) -> str:
-        return ''
+    _SYSTEM_PROMPT = """\
+You are Chalie, running a background review of recent activity.
+
+Based on the episodes provided, do you detect any patterns, unresolved threads, or opportunities to be proactive? If so, act on it using the tools available to you.
+
+Use find_tools to discover external capabilities beyond your built-in skills:
+- Web search across Wikipedia, GitHub, Reddit, arXiv, news
+- Live weather conditions for any location
+- News articles by topic or category
+- Headless browser for rendering and interacting with web pages
+- Code execution sandbox
+- Programming documentation search
+
+If nothing actionable stands out, respond with exactly: DMN_NO_ACTION\
+"""
 
 
-class UnifiedSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for user-facing (unified) turns.
-
-    **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
-    parameters, no turn-specific state. Returns ``_UNIFIED_PROMPT`` verbatim,
-    leaving both ``{{voice_modulation}}`` and ``{{adaptive_directives}}`` as
-    literal placeholders for ``UserMessageProcessor.getSystemPrompt()`` to
-    weave in per-turn.
-
-    The prompt is a Python constant (not a file read) so the stable prefix
-    (Identity/Boundaries/Principles) maximises provider-side prompt caching.
-    ``{{voice_modulation}}`` sits in the Voice section mid-prompt;
-    ``{{adaptive_directives}}`` sits at the bottom to act as the per-turn
-    cache-busting suffix.
-    """
-
-    def getPrompt(self) -> str:
-        return _UNIFIED_PROMPT
-
-
-class _FileBackedSystemMessagePrompt(SystemMessagePrompt):
-    """Internal abstract base: reads a prompt file from `backend/prompts/` and
-    returns its stripped contents. On read failure, logs a WARNING and delegates
-    to ``_fallback_prompt()`` which subclasses override to return the
-    legacy-compatible hardcoded fallback string.
-
-    Subclasses set `_FILE_NAME` (filename only, e.g. ``'dmn.md'``) and
-    optionally `_LOG_TAG` for the warning label, and override
-    ``_fallback_prompt()`` to provide a non-empty fallback body matching the
-    legacy `_load_system_prompt()` behaviour they are replacing.
-    """
-
-    _FILE_NAME: str = ''
-    _LOG_TAG: str = 'SYSTEM PROMPT'
-
-    def getPrompt(self) -> str:
-        path = _PROMPTS_DIR / self._FILE_NAME
-        try:
-            return path.read_text(encoding='utf-8').strip()
-        except Exception as e:
-            logger.warning(f"[{self._LOG_TAG}] Failed to load system prompt from {path}: {e}")
-            return self._fallback_prompt()
-
-    def _fallback_prompt(self) -> str:
-        """Hardcoded fallback returned when the on-disk prompt file cannot be
-        read. Default is the empty string; subclasses override to preserve the
-        exact legacy fallback strings from their pre-refactor
-        ``_load_system_prompt()`` functions.
-        """
-        return ''
-
-
-class DMNSystemMessagePrompt(_FileBackedSystemMessagePrompt):
-    """System-message body for DMN (background proactive) turns.
-
-    Reads `backend/prompts/dmn.md`. On read failure, logs a WARNING and
-    returns the legacy hardcoded fallback string — byte-identical to
-    `dmn_message_processor._load_system_prompt()`.
-
-    Will be wired to: `DMNMessageProcessor` (Commit 9).
-    """
-
-    _FILE_NAME = 'dmn.md'
-    _LOG_TAG = 'DMN'
-
-    # Exact string from backend/services/dmn_message_processor.py:_load_system_prompt().
-    # Locked by tests — do not alter without updating both the legacy callsite
-    # and the regression test.
-    _LEGACY_FALLBACK = (
-        "You are Chalie, running a background review of recent activity. "
-        "Based on the episodes provided, do you detect any patterns, unresolved threads, "
-        "or opportunities to be proactive? If so, act on it using the tools available to you. "
-        "If nothing actionable stands out, respond with exactly: DMN_NO_ACTION"
-    )
-
-    def _fallback_prompt(self) -> str:
-        return self._LEGACY_FALLBACK
-
-
-class GoalPursuitSystemMessagePrompt(_FileBackedSystemMessagePrompt):
+class GoalPursuitSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for goal-pursuit background turns.
 
-    Reads `backend/prompts/goal-pursuit.md`. On read failure, logs a WARNING
-    and returns the legacy hardcoded fallback string — byte-identical to
-    `goal_pursuit_processor._load_system_prompt()`.
-
-    Will be wired to: `GoalPursuitProcessor` (Commit 9).
+    Wired to: ``GoalPursuitProcessor``.
     """
 
-    _FILE_NAME = 'goal-pursuit.md'
-    _LOG_TAG = 'GOAL PURSUIT'
+    _SYSTEM_PROMPT = """\
+You are Chalie, a determined assistant. You pursue the goal provided by the user to the best of your ability. If tool calls fail, errors happen or other things slow you down, you don't immediately give up, you try different alternatives to achieve the goal.
 
-    # Exact string from backend/services/goal_pursuit_processor.py:_load_system_prompt().
-    # Locked by tests — do not alter without updating both the legacy callsite
-    # and the regression test.
-    _LEGACY_FALLBACK = (
-        "You are Chalie, a determined assistant. Pursue the goal provided to the best "
-        "of your ability. If tool calls fail or errors occur, try alternatives. "
-        "When complete, provide a clear summary of what you accomplished."
-    )
+You have access to tools for memory, research, document management, and web access. Use them strategically to accomplish the goal.
 
-    def _fallback_prompt(self) -> str:
-        return self._LEGACY_FALLBACK
+For long tasks, save intermediate findings to memory so progress is not lost if the session ends unexpectedly.
+
+When you have completed the goal, provide a clear, comprehensive summary of what you found or accomplished.\
+"""
 
 
-class ScheduledSystemMessagePrompt(_FileBackedSystemMessagePrompt):
+class ScheduledSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for scheduled-prompt turns.
 
-    Reads `backend/prompts/scheduled-prompt.md`. On read failure, logs a
-    WARNING and returns the legacy hardcoded fallback string — byte-identical
-    to `scheduled_message_processor._load_system_prompt()`.
-
-    Will be wired to: `ScheduledMessageProcessor` (Commit 9).
+    Wired to: ``ScheduledMessageProcessor``.
     """
 
-    _FILE_NAME = 'scheduled-prompt.md'
-    _LOG_TAG = 'SCHEDULED PROMPT'
+    _SYSTEM_PROMPT = """\
+You are Chalie, executing a scheduled task. The user set this up earlier and it is now due.
 
-    # Exact string from backend/services/scheduled_message_processor.py:_load_system_prompt().
-    # Locked by tests — do not alter without updating both the legacy callsite
-    # and the regression test.
-    _LEGACY_FALLBACK = (
-        "You are Chalie, executing a scheduled task. The user set this up earlier "
-        "and it is now due. Execute the task to the best of your ability using the "
-        "tools available to you. Be concise and action-oriented in your response."
-    )
+Execute the task to the best of your ability using the tools available to you. Be concise and action-oriented in your response.
 
-    def _fallback_prompt(self) -> str:
-        return self._LEGACY_FALLBACK
+If the task requires information you don't have, use your tools to find it. If you save intermediate findings to memory, the user can ask about them later.\
+"""

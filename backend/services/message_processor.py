@@ -207,9 +207,11 @@ class MessageProcessor:
 
         Format: ``"{user_definition}\n\n{system_prompt_body}"``
 
-        If SYSTEM_PROMPT_CLASS is the abstract base its getPrompt() returns '',
-        yielding ``"{user_definition}\n\n"``. Subclasses override
-        SYSTEM_PROMPT_CLASS to provide richer bodies.
+        ``SYSTEM_PROMPT_CLASS`` defaults to the abstract ``SystemMessagePrompt``
+        base, which cannot be instantiated — any subclass that fails to override
+        it will raise ``TypeError`` at this call site rather than silently
+        producing a blank body. Subclasses must set ``SYSTEM_PROMPT_CLASS`` to
+        a concrete ``SystemMessagePrompt`` subclass.
 
         **Zero-arg construction is the contract.** Every `SystemMessagePrompt`
         subclass takes no constructor parameters — its `getPrompt()` returns

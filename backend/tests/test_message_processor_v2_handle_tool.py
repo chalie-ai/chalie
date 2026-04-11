@@ -41,10 +41,15 @@ _CHANNEL = 'test_channel'
 def _make_processor(**kwargs):
     """Build a concrete FakeProcessor instance for handleTool tests."""
     from services.message_processor import MessageProcessor
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
 
     class _Fake(MessageProcessor):
         CHANNEL = _CHANNEL
         ROLE = 'test_role'
+        SYSTEM_PROMPT_CLASS = _StubPrompt
 
         def getUserDefinition(self) -> str:
             return _USER_DEF

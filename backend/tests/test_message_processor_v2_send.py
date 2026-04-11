@@ -46,6 +46,18 @@ _CHANNEL = 'test_send_channel'
 _ROLE = 'test_role'
 
 
+def _stub_prompt_cls():
+    """Minimal concrete ``SystemMessagePrompt`` wired onto every inline
+    FakeProcessor subclass below, so send() can call getSystemPrompt()
+    without tripping the abstract-default TypeError."""
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
+
+    return _StubPrompt
+
+
 def _make_llm_response(text='', tool_calls=None):
     """Build a minimal LLMResponse-like object with .text and .tool_calls."""
     from services.llm_service import LLMResponse
@@ -66,6 +78,10 @@ def _make_processor(
 ):
     """Build a concrete FakeProcessor instance for send() tests."""
     from services.message_processor import MessageProcessor
+    from services.system_message_prompt import SystemMessagePrompt
+
+    class _StubPrompt(SystemMessagePrompt):
+        _SYSTEM_PROMPT = ''
 
     _prompt = user_prompt
 
@@ -74,6 +90,7 @@ def _make_processor(
         ROLE = _ROLE
         MAX_ITERATIONS = max_iterations
         MAX_TIMEOUT = max_timeout
+        SYSTEM_PROMPT_CLASS = _StubPrompt
 
         def getUserDefinition(self) -> str:
             return _USER_DEF
@@ -566,6 +583,7 @@ class TestProviderException:
         class _Fake(MessageProcessor):
             CHANNEL = 'test_send_err'
             ROLE = 'user'
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return 'fake user'
@@ -795,6 +813,7 @@ class TestEmitNarration:
         class _Fake(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
@@ -815,6 +834,7 @@ class TestEmitNarration:
         class _FakeWithNarration(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
@@ -851,6 +871,7 @@ class TestEmitNarration:
         class _FakeWithNarration(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
@@ -934,6 +955,7 @@ class TestSteeringMidLoop:
         class _FakeWithSteering(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
@@ -1118,6 +1140,7 @@ class TestNarrationSubclassOverride:
         class _FakeWithCallback(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def __init__(self, raw_input, on_narration=None):
                 super().__init__(raw_input)
@@ -1163,6 +1186,7 @@ class TestNarrationSubclassOverride:
         class _FakeWithCallback(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def __init__(self, raw_input):
                 super().__init__(raw_input)
@@ -1206,6 +1230,7 @@ class TestNarrationSubclassOverride:
         class _FakeBoomNarration(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
@@ -1254,6 +1279,7 @@ class TestBindCurrentProcessor:
         class _FakeCapture(MessageProcessor):
             CHANNEL = _CHANNEL
             ROLE = _ROLE
+            SYSTEM_PROMPT_CLASS = _stub_prompt_cls()
 
             def getUserDefinition(self):
                 return _USER_DEF
