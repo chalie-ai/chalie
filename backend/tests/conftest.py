@@ -49,6 +49,27 @@ def _ensure_services_package_loadable():
 _ensure_services_package_loadable()
 
 
+# ── Pre-import modules that bind get_shared_db_service at module level ────────
+# `services.dmn_service` does `from services.database_service import
+# get_shared_db_service` at import time. If the very first import of
+# `services.dmn_service` happens INSIDE a `patch('services.database_service
+# .get_shared_db_service', ...)` block (e.g. tests that mock the DB before
+# referencing dmn_service), the local reference inside dmn_service binds
+# permanently to the MagicMock and never recovers — polluting every later
+# test that touches DMNService.
+#
+# Pre-importing here forces the binding to happen against the real function
+# before any test patches can interfere.
+def _preload_db_bound_modules():
+    try:
+        import services.dmn_service  # noqa: F401
+    except Exception:
+        pass  # If something fails to import in this env, individual tests will surface it.
+
+
+_preload_db_bound_modules()
+
+
 # ── Real-SQLite fixtures ──────────────────────────────────────────
 # Session-scoped template: full schema + migrations applied once.
 # Function-scoped `db`: fresh copy per test, patched as the singleton.

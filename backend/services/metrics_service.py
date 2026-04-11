@@ -117,7 +117,9 @@ class MetricsService:
         counter_names = [
             'requests_total', 'responses_total', 'errors_total',
             'embeddings_total', 'facts_extracted',
-            'memory_chunks_enqueued', 'episodes_generated'
+            'memory_chunks_enqueued', 'episodes_generated',
+            'user_messages_total',
+            'dmn_turns_total', 'goal_pursuit_turns_total', 'scheduled_turns_total'
         ]
 
         for name in counter_names:

@@ -60,8 +60,11 @@ def handle_goal_pursuit(channel: str, params: dict) -> str:
             from services.goal_pursuit_processor import GoalPursuitProcessor
             from services.output_service import OutputService
 
-            result = GoalPursuitProcessor().process(goal, pursuit_id)
-            response_text = result.get('response', '').strip()
+            response_text = GoalPursuitProcessor(
+                raw_input=goal,
+                metadata={'pursuit_id': pursuit_id},
+            ).send()
+            response_text = (response_text or '').strip()
             if not response_text:
                 response_text = "Goal pursuit completed but produced no output."
 

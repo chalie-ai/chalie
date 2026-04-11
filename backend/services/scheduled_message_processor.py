@@ -1,64 +1,115 @@
 """
 ScheduledMessageProcessor — Executes scheduled prompts via the standard tool loop.
 
-Thin MessageProcessor subclass. Same pattern as GoalPursuitProcessor: load a
-system prompt, pass the message through, let the parent handle everything.
+MessageProcessor v2 subclass. CHANNEL is flat 'scheduled' (collapsed from
+the old 'scheduled:{item_id}' format). item_id is stored in metadata only.
+
+North star: /Volumes/llm/chalie-plans/message-processing.md
+Plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md § Commit 9
 """
 
-import os
 import logging
 
-from services.message_processor import MessageProcessor
+from services.message_processor_v2 import MessageProcessor
+from services.system_message_prompt import ScheduledSystemMessagePrompt
+from services.innate_skills.registry import ALL_SKILL_NAMES
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_PATH = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'scheduled-prompt.md')
-
-_EXCLUDED_SKILLS = frozenset({'schedule', 'goal_pursuit'})
-
-
-def _load_system_prompt() -> str:
-    """Load the scheduled-prompt system prompt from disk."""
-    try:
-        with open(os.path.normpath(_PROMPT_PATH), 'r', encoding='utf-8') as f:
-            return f.read().strip()
-    except Exception as e:
-        logger.warning(f"[SCHEDULED PROMPT] Failed to load system prompt: {e}")
-        return (
-            "You are Chalie, executing a scheduled task. The user set this up earlier "
-            "and it is now due. Execute the task to the best of your ability using the "
-            "tools available to you. Be concise and action-oriented in your response."
-        )
+_EXCLUDED_SKILLS: frozenset = frozenset({'schedule', 'goal_pursuit'})
 
 
 class ScheduledMessageProcessor(MessageProcessor):
     """MessageProcessor subclass for scheduled prompt execution.
 
-    Standard limits (30 iterations / 15 minutes). Excludes schedule and
-    goal_pursuit skills to prevent recursion.
+    Standard limits (30 iterations / 900 s). Excludes 'schedule' (prevent
+    recursive scheduling) and 'goal_pursuit' (prevent background spawning).
+
+    CHANNEL is flat 'scheduled' — item_id lives only in metadata, never
+    in the channel string (channel collapse from Commit 9).
     """
 
-    def process(self, message: str, item_id: str) -> dict:
-        """Execute a scheduled prompt through the tool loop.
+    CHANNEL = 'scheduled'   # flat — collapsed from scheduled:{id}
+    ROLE = 'scheduled'
+    SYSTEM_PROMPT_CLASS = ScheduledSystemMessagePrompt
+    NATIVE_TOOLS: list[str] = sorted(
+        s for s in ALL_SKILL_NAMES if s not in _EXCLUDED_SKILLS
+    )
 
-        Args:
-            message: The scheduled message/task to execute.
-            item_id: Scheduled item ID used for channel isolation.
+    def getUserDefinition(self) -> str:
+        return (
+            "The user is 'scheduled' — an automated background process "
+            "executing a task that the user scheduled in advance."
+        )
 
-        Returns:
-            Standard MessageProcessor result dict.
+    def getUserPrompt(self) -> str:
+        """Scheduled message is the raw input; prepend role prefix."""
+        trail = self.getActLoopTrail()
+        parts = [f"scheduled: {self._raw_input}"]
+        if trail:
+            parts.append(trail)
+        return '\n'.join(parts)
+
+    def postTurn(self) -> None:
+        """Scheduled post-turn: interaction log + metrics + mark item executed.
+
+        item_id comes from metadata['item_id']. The mark_executed step is a
+        named hook for the future ScheduledItemService and is best-effort —
+        it must not raise.
+
+        NOTE: ScheduledItemService does NOT exist yet. The mark-executed step
+        is currently a placeholder; the scheduler_service caller updates
+        scheduled_items.status in its own transaction.
         """
-        from services.tool_schema_service import get_skill_schemas
-        from services.innate_skills.registry import ALL_SKILL_NAMES
+        try:
+            from services.interaction_log_service import InteractionLogService
+            from services.database_service import get_shared_db_service
+            log = InteractionLogService(get_shared_db_service())
+            log.log_event(
+                event_type='scheduled_prompt_turn',
+                payload={
+                    'item_id': self._metadata.get('item_id', 'unknown'),
+                },
+                channel=self.CHANNEL,
+                source='scheduled',
+                metadata=self._metadata,
+            )
+        except Exception as e:
+            # WARNING (not DEBUG): audit-trail loss must be visible in production.
+            logger.warning("[Scheduled.postTurn] Interaction log failed: %s", e, exc_info=True)
 
-        system_prompt = _load_system_prompt()
-        channel = f'scheduled:{item_id}'
+        try:
+            from services.metrics_service import MetricsService
+            m = MetricsService()
+            m.record_counter('requests_total')
+            m.record_counter('scheduled_turns_total')
+        except Exception as e:
+            logger.debug("[Scheduled.postTurn] Metrics failed: %s", e, exc_info=True)
 
-        user_prompt = self._assemble_user_prompt(message, channel)
+        # Placeholder hook — see _mark_scheduled_item_executed() for the
+        # caveat about scheduler_service timing.
+        item_id = self._metadata.get('item_id')
+        if item_id:
+            self._mark_scheduled_item_executed(item_id)
 
-        tool_names = [s for s in ALL_SKILL_NAMES if s not in _EXCLUDED_SKILLS]
-        tools = get_skill_schemas(tool_names)
+    def _mark_scheduled_item_executed(self, item_id: str) -> None:
+        """Named hook for the future ScheduledItemService wiring point.
 
-        logger.info(f"[SCHEDULED PROMPT] Starting item {item_id}: '{message[:80]}'")
-        return self.send(user_prompt, system_prompt, channel=channel,
-                         job='frontal-cortex-unified', tools=tools)
+        TIMING CAVEAT: The scheduler_service caller's `_fire_item()` spawns a
+        daemon thread which calls `send()` → `postTurn()` → here. The caller
+        only runs `UPDATE scheduled_items SET status='fired'` AFTER `_fire_item`
+        returns, and the surrounding `conn.commit()` is even later. At the
+        moment this method runs, `scheduled_items.status` may still be
+        'pending'. Do NOT rely on the row already being marked 'fired'.
+
+        Today this is a no-op. When ScheduledItemService is introduced it
+        should mark the item executed itself rather than depending on the
+        scheduler_service caller's UPDATE.
+
+        Does NOT raise — any failure is logged at DEBUG level only.
+        """
+        logger.debug(
+            "[Scheduled._mark_scheduled_item_executed] item_id=%s — placeholder "
+            "(see TIMING CAVEAT in docstring; scheduler_service status update "
+            "races with this hook)", item_id
+        )

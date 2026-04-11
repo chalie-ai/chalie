@@ -200,14 +200,21 @@ class DMNService:
         return '\n\n'.join(sections)
 
     def _active_topic(self) -> str:
-        """Return the most recently active user-facing channel, or 'general'."""
+        """Return the most recently active user-facing channel, or 'general'.
+
+        Whitelist: only rows with channel='user' are considered user-facing.
+        After the Commit 9 channel collapse, 'dmn', 'goal_pursuit', and
+        'scheduled' are flat strings that accumulate in transcript — a LIKE
+        exclusion no longer works. Whitelist is the safe, future-proof approach.
+        Decision: Option A (whitelist) chosen — all user turns go to channel='user'
+        post-Commit 8; pre-migration topic-named rows are intentionally invisible.
+        """
         try:
             with self._db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT channel FROM transcript "
-                    "WHERE channel NOT LIKE 'goal_pursuit:%' "
-                    "  AND channel NOT LIKE 'scheduled:%' "
+                    "WHERE channel = 'user' "
                     "ORDER BY created_at DESC LIMIT 1"
                 )
                 row = cursor.fetchone()
@@ -273,10 +280,16 @@ class DMNService:
         from services.output_service import OutputService
 
         try:
+            # Post-Commit-9 channel collapse: _active_topic() returns either
+            # 'user' (whitelist hit) or 'general' (fallback). It never returns
+            # a pre-migration topic-named channel like 'work' or 'health'.
             channel = self._active_topic()
-            result = DMNMessageProcessor().process(context, mode, channel)
+            result_text = DMNMessageProcessor(
+                raw_input=context,
+                metadata={'mode': mode},
+            ).send()
 
-            response = (result.get('response') or '').strip()
+            response = (result_text or '').strip()
             if not response or 'DMN_NO_ACTION' in response:
                 logger.info("[DMN] %s — no action", mode)
                 return False

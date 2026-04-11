@@ -334,8 +334,11 @@ def _execute_via_goal_pursuit(goal: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from services.goal_pursuit_processor import GoalPursuitProcessor
             from services.output_service import OutputService
-            result = GoalPursuitProcessor().process(task_goal, pursuit_id)
-            response_text = result.get('response', '').strip()
+            response_text = GoalPursuitProcessor(
+                raw_input=task_goal,
+                metadata={'pursuit_id': pursuit_id},
+            ).send()
+            response_text = (response_text or '').strip()
             if not response_text:
                 response_text = "Goal pursuit completed but produced no output."
             OutputService().enqueue_proactive(
