@@ -377,16 +377,29 @@ class TestGetTools:
 class TestRunMemorySeed:
     """_run_memory_seed() DTO shape, empty-result no-op, exception swallow."""
 
-    def _dispatch_returning(self, result_text):
-        mock_dispatch = MagicMock()
-        mock_dispatch.return_value = {'result': result_text}
-        return mock_dispatch
+    # _run_memory_seed() now calls recall_episodes(caller='seed') directly
+    # (not via ActDispatcherService) so the telemetry row in memory_recall_log
+    # carries caller='seed', distinguishing pre-turn seeds from LLM-driven recall.
+
+    def _patch_recall(self, hits, status='2 matches'):
+        """Patch recall_episodes + _format_results at the import site."""
+        recall_patch = patch(
+            'services.innate_skills.memory_skill.recall_episodes',
+            return_value=(hits, status),
+        )
+        format_patch = patch(
+            'services.innate_skills.memory_skill._format_results',
+            return_value='memories text' if hits else '',
+        )
+        return recall_patch, format_patch
 
     def test_f1_appends_durable_dto_on_success(self):
         proc = _make_ump(raw_input='tell me about Paris')
+        fake_hits = [{'layer': 'episodes', 'content': 'Paris trip', 'confidence': 0.8,
+                      'freshness': '2026-01-01', 'salience': 0.5}]
+        recall_patch, format_patch = self._patch_recall(fake_hits)
 
-        with patch('services.act_dispatcher_service.ActDispatcherService') as MockADS:
-            MockADS.return_value.dispatch_action.return_value = {'result': 'memories text'}
+        with recall_patch, format_patch:
             proc._run_memory_seed()
 
         assert proc._memory_seed == 'memories text'
@@ -402,9 +415,9 @@ class TestRunMemorySeed:
 
     def test_f2_no_dto_on_empty_result(self):
         proc = _make_ump()
+        recall_patch, format_patch = self._patch_recall([])
 
-        with patch('services.act_dispatcher_service.ActDispatcherService') as MockADS:
-            MockADS.return_value.dispatch_action.return_value = {'result': ''}
+        with recall_patch, format_patch:
             proc._run_memory_seed()
 
         assert proc._memory_seed is None
@@ -413,8 +426,8 @@ class TestRunMemorySeed:
     def test_f3_swallows_dispatch_exception(self):
         proc = _make_ump()
 
-        with patch('services.act_dispatcher_service.ActDispatcherService') as MockADS:
-            MockADS.return_value.dispatch_action.side_effect = ValueError('network error')
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   side_effect=ValueError('db error')):
             # Must not raise
             proc._run_memory_seed()
 
@@ -424,24 +437,45 @@ class TestRunMemorySeed:
         from services.innate_skills.memory_skill import SEED_RADIUS_BASELINE
 
         proc = _make_ump()
+        fake_hits = [{'layer': 'episodes', 'content': 'x', 'confidence': 0.5,
+                      'freshness': '2026-01-01', 'salience': 0.1}]
+        recall_patch, format_patch = self._patch_recall(fake_hits)
 
-        with patch('services.act_dispatcher_service.ActDispatcherService') as MockADS:
-            MockADS.return_value.dispatch_action.return_value = {'result': 'some memories'}
+        with recall_patch, format_patch:
             proc._run_memory_seed()
 
         dto = proc._pending_tool_calls[0]
         assert dto['params']['radius'] == SEED_RADIUS_BASELINE
 
     def test_f5_dto_contains_action_recall(self):
-        """The DTO params must include action='recall' to match the dispatch call."""
+        """The DTO params must include action='recall'."""
         proc = _make_ump()
+        fake_hits = [{'layer': 'episodes', 'content': 'x', 'confidence': 0.5,
+                      'freshness': '2026-01-01', 'salience': 0.1}]
+        recall_patch, format_patch = self._patch_recall(fake_hits)
 
-        with patch('services.act_dispatcher_service.ActDispatcherService') as MockADS:
-            MockADS.return_value.dispatch_action.return_value = {'result': 'memories'}
+        with recall_patch, format_patch:
             proc._run_memory_seed()
 
         dto = proc._pending_tool_calls[0]
         assert dto['params'].get('action') == 'recall'
+
+    def test_f6_recall_called_with_seed_caller(self):
+        """recall_episodes must be called with caller='seed' so telemetry logs correctly."""
+        proc = _make_ump(raw_input='what is my coffee order?')
+        fake_hits = [{'layer': 'episodes', 'content': 'oat milk latte', 'confidence': 0.9,
+                      'freshness': '2026-01-01', 'salience': 0.7}]
+
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   return_value=(fake_hits, '1 match')) as mock_recall, \
+             patch('services.innate_skills.memory_skill._format_results',
+                   return_value='oat milk latte memory'):
+            proc._run_memory_seed()
+
+        mock_recall.assert_called_once()
+        call_kwargs = mock_recall.call_args
+        assert call_kwargs.kwargs.get('caller') == 'seed' or \
+               (call_kwargs.args and 'seed' in call_kwargs.args)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -37,7 +37,7 @@ LEAVE IN PLACE until Commit 11:
 import logging
 from collections.abc import Callable
 
-from services.message_processor_v2 import MessageProcessor
+from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
 from services.innate_skills.registry import ALL_SKILL_NAMES
 
@@ -249,30 +249,36 @@ class UserMessageProcessor(MessageProcessor):
     def _run_memory_seed(self) -> None:
         """Auto-seed memory once at turn start. Runs before getUserPrompt().
 
-        Dispatches the `memory` skill with the raw input as the query using
-        SEED_RADIUS_BASELINE. The result is stored in self._memory_seed and
-        self._memory_seed_radius, and a durable (ephemeral=0) DTO is appended
-        to self._pending_tool_calls so store() can write it linked to self._uid.
+        Calls recall_episodes(caller='seed') directly so the telemetry row in
+        memory_recall_log carries caller='seed'. This distinguishes the pre-turn
+        seed from LLM-driven recall calls (caller='llm_recall') and allows the
+        meta-harness to tune SEED_RADIUS_BASELINE independently.
+
+        The result is stored in self._memory_seed and self._memory_seed_radius,
+        and a durable (ephemeral=0) DTO is appended to self._pending_tool_calls
+        so store() can write it linked to self._uid.
 
         Does NOT re-run on ACT iterations (send() calls this once, before the
         loop). Does NOT re-run on steers.
 
         Errors are logged and swallowed — a failed seed does not abort the turn.
         """
-        from services.innate_skills.memory_skill import SEED_RADIUS_BASELINE
+        from services.innate_skills.memory_skill import (
+            recall_episodes, SEED_RADIUS_BASELINE, _format_results,
+        )
         from services.time_utils import utc_now
 
         radius = SEED_RADIUS_BASELINE  # 0.2 per memory_skill.py module constant
 
         try:
-            from services.act_dispatcher_service import ActDispatcherService
-
-            dispatch = ActDispatcherService(execution_gate=False).dispatch_action(
-                self.CHANNEL,
-                {'type': 'memory', 'action': 'recall', 'query': self._raw_input,
-                 'radius': radius},
+            hits, _status = recall_episodes(
+                channel=self.CHANNEL,
+                query=self._raw_input,
+                caller='seed',
+                baseline_radius=radius,
+                return_raw=False,
             )
-            seed_text = str(dispatch.get('result', ''))
+            seed_text = _format_results(hits, self._raw_input) if hits else ''
         except Exception as exc:
             logger.warning(f"[USER MSG] Memory auto-seed failed: {exc}")
             seed_text = ''
