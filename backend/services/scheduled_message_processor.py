@@ -10,7 +10,7 @@ Plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md § Commit 9
 
 import logging
 
-from services.message_processor_v2 import MessageProcessor
+from services.message_processor import MessageProcessor
 from services.system_message_prompt import ScheduledSystemMessagePrompt
 from services.innate_skills.registry import ALL_SKILL_NAMES
 

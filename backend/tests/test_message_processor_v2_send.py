@@ -65,7 +65,7 @@ def _make_processor(
     **kwargs,
 ):
     """Build a concrete FakeProcessor instance for send() tests."""
-    from services.message_processor_v2 import MessageProcessor
+    from services.message_processor import MessageProcessor
 
     _prompt = user_prompt
 
@@ -447,7 +447,7 @@ class TestMaxTimeoutCap:
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch.object(p, 'handleTool') as mock_ht, \
-             patch('services.message_processor_v2.time') as mock_time:
+             patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
             mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.side_effect = [
@@ -472,7 +472,7 @@ class TestMaxTimeoutCap:
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch.object(p, 'handleTool') as mock_ht, \
-             patch('services.message_processor_v2.time') as mock_time:
+             patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
             mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.return_value = response
@@ -496,7 +496,7 @@ class TestMaxTimeoutCap:
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch.object(p, 'handleTool') as mock_ht, \
-             patch('services.message_processor_v2.time') as mock_time:
+             patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
             mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.return_value = response_with_tools
@@ -561,7 +561,7 @@ class TestProviderException:
 
     def test_db_has_zero_rows_on_provider_error(self, db):
         """End-to-end: real DB gets zero rows when provider errors."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _Fake(MessageProcessor):
             CHANNEL = 'test_send_err'
@@ -628,7 +628,7 @@ class TestPostTurnException:
 
         llm_resp = _make_llm_response(text='x', tool_calls=None)
 
-        with caplog.at_level(logging.ERROR, logger='services.message_processor_v2'):
+        with caplog.at_level(logging.ERROR, logger='services.message_processor'):
             with patch('services.providers.Providers.instance') as mock_inst:
                 mock_inst.return_value.send_messages.return_value = llm_resp
                 p.send()
@@ -790,7 +790,7 @@ class TestEmitNarration:
 
     def test_base_emit_narration_is_noop(self):
         """Base _emit_narration() must not raise and must return None."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _Fake(MessageProcessor):
             CHANNEL = _CHANNEL
@@ -808,7 +808,7 @@ class TestEmitNarration:
 
     def test_subclass_override_fires_on_narration(self):
         """A subclass that overrides _emit_narration gets called with text + iteration."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         narrations = []
 
@@ -844,7 +844,7 @@ class TestEmitNarration:
 
     def test_narration_fires_once_per_iteration_with_text(self):
         """Two iterations with narration text → two _emit_narration calls."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         narrations = []
 
@@ -926,7 +926,7 @@ class TestSteeringMidLoop:
 
     def _make_processor_with_steering(self, steer_messages):
         """Build a processor whose _drain_steering yields steer_messages once."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         _steers = list(steer_messages)
         _yielded = [False]
@@ -1111,7 +1111,7 @@ class TestNarrationSubclassOverride:
     """Subclass with on_narration callback fires it once per iteration with text."""
 
     def _make_narration_processor(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         narration_log = []
 
@@ -1158,7 +1158,7 @@ class TestNarrationSubclassOverride:
         assert log[0] == ('Processing…', 0)
 
     def test_callback_not_fired_when_none(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _FakeWithCallback(MessageProcessor):
             CHANNEL = _CHANNEL
@@ -1201,7 +1201,7 @@ class TestNarrationSubclassOverride:
         guarantee (not just UserMessageProcessor).
         """
         import logging
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _FakeBoomNarration(MessageProcessor):
             CHANNEL = _CHANNEL
@@ -1223,7 +1223,7 @@ class TestNarrationSubclassOverride:
         iter1 = _make_llm_response(text='narration', tool_calls=[tc])
         iter2 = _make_llm_response(text='final', tool_calls=None)
 
-        with caplog.at_level(logging.ERROR, logger='services.message_processor_v2'):
+        with caplog.at_level(logging.ERROR, logger='services.message_processor'):
             with patch('services.providers.Providers.instance') as mock_inst, \
                  patch.object(p, 'handleTool') as mock_ht:
                 mock_ht.return_value = 'r'
@@ -1247,7 +1247,7 @@ class TestBindCurrentProcessor:
     """current_processor() is bound during send() and cleared on exit."""
 
     def test_current_processor_set_during_send(self):
-        from services.message_processor_v2 import current_processor, MessageProcessor
+        from services.message_processor import current_processor, MessageProcessor
 
         captured = []
 
@@ -1275,7 +1275,7 @@ class TestBindCurrentProcessor:
         assert captured[0] is p
 
     def test_current_processor_cleared_after_send(self):
-        from services.message_processor_v2 import current_processor
+        from services.message_processor import current_processor
 
         p = _make_processor()
         _mock_store(p)
@@ -1290,7 +1290,7 @@ class TestBindCurrentProcessor:
 
     def test_current_processor_cleared_even_on_exception(self):
         """bind_current_processor must clean up even when provider raises."""
-        from services.message_processor_v2 import current_processor
+        from services.message_processor import current_processor
 
         p = _make_processor()
 

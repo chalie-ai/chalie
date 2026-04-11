@@ -9,6 +9,14 @@
 """
 System Prompt Assembly Service — builds the stable, cacheable system prompt.
 
+DEPRECATED (rc-0.3.2): The MessageProcessor v2 hierarchy
+(`SystemMessagePrompt` and its subclasses in
+`backend/services/system_message_prompt.py`) absorbs this responsibility
+for the user/DMN/goal-pursuit/scheduled channels. This module is RETAINED
+ONLY because `backend/workers/digest_worker.py` still depends on it for
+tool-webhook / cron flows. Do not add new callers; do not extend the API.
+The module will be deleted alongside the digest_worker rip.
+
 Contains identity, skills, constraints, directives, and other context that
 rarely changes between turns. Designed for provider-side prompt caching.
 """

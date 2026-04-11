@@ -58,7 +58,7 @@ def _dto(
 
 def _make_processor(channel=_CHANNEL, role='user', raw_input='hello', **kwargs):
     """Build a concrete FakeProcessor with overridable CHANNEL, ROLE, raw_input."""
-    from services.message_processor_v2 import MessageProcessor
+    from services.message_processor import MessageProcessor
 
     class _Fake(MessageProcessor):
         CHANNEL = channel
@@ -776,7 +776,7 @@ class TestMessageProcessorStoreEmptyRoleWarns:
         p = _make_processor(role='')
         p._pending_tool_calls = []
 
-        with caplog.at_level(logging.WARNING, logger='services.message_processor_v2'):
+        with caplog.at_level(logging.WARNING, logger='services.message_processor'):
             with patch('services.transcript_service._embed_entry'), \
                  patch('services.transcript_service._trigger_episode_extraction'):
                 # The DB write may fail or succeed depending on any CHECK on role;

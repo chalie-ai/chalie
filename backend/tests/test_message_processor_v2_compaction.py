@@ -53,7 +53,7 @@ def _make_llm_response(text='summary text', tool_calls=None):
 
 def _make_processor(channel=_CHANNEL, role=_ROLE, raw_input='hello', **kwargs):
     """Build a concrete FakeCompactingProcessor instance."""
-    from services.message_processor_v2 import MessageProcessor
+    from services.message_processor import MessageProcessor
 
     _prompt = raw_input
 
@@ -223,12 +223,12 @@ class TestWrapWithCheckpoint:
     """Module-private _wrap_with_checkpoint function behavior."""
 
     def test_no_compaction_row_returns_bare_body(self, db):
-        from services.message_processor_v2 import _wrap_with_checkpoint
+        from services.message_processor import _wrap_with_checkpoint
         result = _wrap_with_checkpoint(_CHANNEL, 'hello user')
         assert result == 'hello user'
 
     def test_row_with_content_wraps_with_checkpoint_header(self, db):
-        from services.message_processor_v2 import _wrap_with_checkpoint
+        from services.message_processor import _wrap_with_checkpoint
         _seed_compaction(db, _CHANNEL, 'Previously: we talked about movies.')
         result = _wrap_with_checkpoint(_CHANNEL, 'user: What is next?')
         assert result.startswith(
@@ -239,7 +239,7 @@ class TestWrapWithCheckpoint:
         assert result.endswith('user: What is next?')
 
     def test_row_with_content_exact_envelope_format(self, db):
-        from services.message_processor_v2 import _wrap_with_checkpoint
+        from services.message_processor import _wrap_with_checkpoint
         _seed_compaction(db, _CHANNEL, 'checkpoint content')
         result = _wrap_with_checkpoint(_CHANNEL, 'current body')
         expected = (
@@ -253,13 +253,13 @@ class TestWrapWithCheckpoint:
         assert result == expected
 
     def test_row_with_empty_compacted_text_returns_bare_body(self, db):
-        from services.message_processor_v2 import _wrap_with_checkpoint
+        from services.message_processor import _wrap_with_checkpoint
         _seed_compaction(db, _CHANNEL, '')
         result = _wrap_with_checkpoint(_CHANNEL, 'body text')
         assert result == 'body text'
 
     def test_row_with_whitespace_only_compacted_text_returns_bare_body(self, db):
-        from services.message_processor_v2 import _wrap_with_checkpoint
+        from services.message_processor import _wrap_with_checkpoint
         _seed_compaction(db, _CHANNEL, '   \n\t  ')
         result = _wrap_with_checkpoint(_CHANNEL, 'body text')
         assert result == 'body text'
@@ -1077,7 +1077,7 @@ class TestSendIntegrationCompaction:
             return 11.0  # trips timeout
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.message_processor_v2.time') as mock_time_mod, \
+             patch('services.message_processor.time') as mock_time_mod, \
              patch.object(p, '_check_threshold') as mock_thresh, \
              patch.object(p, '_run_stage1_tool_compaction'), \
              patch.object(p, '_run_stage2_act_restart', return_value=True):
@@ -1108,7 +1108,7 @@ class TestSendIntegrationCompaction:
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch.object(p, 'handleTool', return_value='r'), \
-             patch('services.message_processor_v2._wrap_with_checkpoint',
+             patch('services.message_processor._wrap_with_checkpoint',
                    side_effect=counting_wrap):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             mock_inst.return_value.get_context_limit.return_value = 100_000
@@ -1128,27 +1128,27 @@ class TestRegressionGuards:
     """Locks class constants and _NEVER_RENDER_IN_PREVIOUS membership."""
 
     def test_g1_compaction_prompt_is_non_empty(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert isinstance(MessageProcessor.COMPACTION_PROMPT, str)
         assert len(MessageProcessor.COMPACTION_PROMPT.strip()) > 0
 
     def test_g2_tool_compaction_prompt_is_non_empty(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert isinstance(MessageProcessor.TOOL_COMPACTION_PROMPT, str)
         assert len(MessageProcessor.TOOL_COMPACTION_PROMPT.strip()) > 0
 
     def test_g3_never_render_in_previous_contains_compaction(self):
-        from services.message_processor_v2 import _NEVER_RENDER_IN_PREVIOUS
+        from services.message_processor import _NEVER_RENDER_IN_PREVIOUS
         assert 'compaction' in _NEVER_RENDER_IN_PREVIOUS
 
     def test_g4_never_render_in_previous_does_not_contain_tool_compaction(self):
         """tool_compaction is ephemeral=1 and auto-filtered — must not be in
         _NEVER_RENDER_IN_PREVIOUS (that set is for ephemeral=0 audit tools)."""
-        from services.message_processor_v2 import _NEVER_RENDER_IN_PREVIOUS
+        from services.message_processor import _NEVER_RENDER_IN_PREVIOUS
         assert 'tool_compaction' not in _NEVER_RENDER_IN_PREVIOUS
 
     def test_g4_never_render_in_previous_does_not_contain_act_restart(self):
         """act_restart is ephemeral=1 and auto-filtered — must not be in
         _NEVER_RENDER_IN_PREVIOUS."""
-        from services.message_processor_v2 import _NEVER_RENDER_IN_PREVIOUS
+        from services.message_processor import _NEVER_RENDER_IN_PREVIOUS
         assert 'act_restart' not in _NEVER_RENDER_IN_PREVIOUS

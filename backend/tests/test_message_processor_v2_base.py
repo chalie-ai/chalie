@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Unit tests for services.message_processor_v2 — Commit 2 base class.
+"""Unit tests for services.message_processor — Commit 2 base class.
 
 All tests are purely additive — nothing in production code is changed.
 The module is imported directly; no callers are wired up yet.
@@ -60,7 +60,7 @@ class FakeProcessor:
     @staticmethod
     def make(**kwargs):
         """Build a FakeProcessor instance with optional overrides."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _Fake(MessageProcessor):
             CHANNEL = FakeProcessor._CHANNEL
@@ -79,7 +79,7 @@ class FakeProcessor:
 
     @staticmethod
     def cls():
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _Fake(MessageProcessor):
             CHANNEL = FakeProcessor._CHANNEL
@@ -105,14 +105,14 @@ class TestImport:
     def test_import_does_not_hit_database(self):
         with patch('services.database_service.get_shared_db_service') as mock_db:
             import importlib
-            import services.message_processor_v2 as _mod
+            import services.message_processor as _mod
             importlib.reload(_mod)
             mock_db.assert_not_called()
 
     def test_import_does_not_spawn_threads(self):
         before = threading.active_count()
         import importlib
-        import services.message_processor_v2 as _mod
+        import services.message_processor as _mod
         importlib.reload(_mod)
         after = threading.active_count()
         assert after == before, (
@@ -122,12 +122,12 @@ class TestImport:
     def test_import_does_not_call_llm(self):
         with patch('services.llm_service.create_llm_service') as mock_llm:
             import importlib
-            import services.message_processor_v2 as _mod
+            import services.message_processor as _mod
             importlib.reload(_mod)
             mock_llm.assert_not_called()
 
     def test_import_exports_message_processor(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor is not None
 
 
@@ -181,35 +181,35 @@ class TestConstructor:
 
 class TestClassConstants:
     def test_job(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor.JOB == 'frontal-cortex-unified'
 
     def test_max_iterations(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor.MAX_ITERATIONS == 30
 
     def test_max_timeout(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor.MAX_TIMEOUT == 900
 
     def test_native_tools_is_empty_list(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor.NATIVE_TOOLS == []
 
     def test_compaction_prompt_is_non_empty_string(self):
         # Commit 7: prompt is now populated (was placeholder '' in Commit 2).
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert isinstance(MessageProcessor.COMPACTION_PROMPT, str)
         assert len(MessageProcessor.COMPACTION_PROMPT) > 0
 
     def test_tool_compaction_prompt_is_non_empty_string(self):
         # Commit 7: prompt is now populated (was placeholder '' in Commit 2).
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert isinstance(MessageProcessor.TOOL_COMPACTION_PROMPT, str)
         assert len(MessageProcessor.TOOL_COMPACTION_PROMPT) > 0
 
     def test_system_prompt_class_is_base(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         from services.system_message_prompt import SystemMessagePrompt
         assert MessageProcessor.SYSTEM_PROMPT_CLASS is SystemMessagePrompt
 
@@ -736,7 +736,7 @@ class TestRunMemorySeedBaseNoop:
     def test_is_overridable(self):
         """Subclasses can override with custom behaviour without special
         machinery — confirm the hook is a plain instance method."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class SeedingProcessor(MessageProcessor):
             CHANNEL = 'seeding'
@@ -835,13 +835,13 @@ class TestHandleToolBasic:
 
 class TestAbstractMethodsOnBase:
     def test_get_user_prompt_raises_on_base(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         p = MessageProcessor.__new__(MessageProcessor)
         with pytest.raises(NotImplementedError):
             p.getUserPrompt()
 
     def test_get_user_definition_raises_on_base(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         p = MessageProcessor.__new__(MessageProcessor)
         with pytest.raises(NotImplementedError):
             p.getUserDefinition()
@@ -1156,7 +1156,7 @@ class TestGetToolsDynamicToolsCalledOnce:
     """
 
     def test_get_dynamic_tools_called_once(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         call_count = {'n': 0}
 
@@ -1180,7 +1180,7 @@ class TestGetToolsDynamicToolsCalledOnce:
 
     def test_get_dynamic_tools_called_once_per_invocation(self):
         """Two separate getTools() calls → two getDynamicTools() calls (not four)."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         call_count = {'n': 0}
 
@@ -1409,7 +1409,7 @@ class TestGetPreviousMessagesChannelIsolation:
     def test_each_channel_sees_only_its_own_rows(self, db):
         """Build four processors with different CHANNELs and assert no bleed."""
         self._seed_all_channels(db)
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         for channel in ('user', 'dmn', 'goal_pursuit', 'scheduled'):
             class _Chan(MessageProcessor):
@@ -1974,7 +1974,7 @@ class TestImportSafety:
         import ast
         import pathlib
 
-        source_path = pathlib.Path(__file__).parent.parent / 'services' / 'message_processor_v2.py'
+        source_path = pathlib.Path(__file__).parent.parent / 'services' / 'message_processor.py'
         source = source_path.read_text(encoding='utf-8')
         tree = ast.parse(source)
 
@@ -1994,7 +1994,7 @@ class TestImportSafety:
             for imp in top_level_imports:
                 assert blocked not in imp, (
                     f"Blocked import {blocked!r} found in top-level imports of "
-                    f"message_processor_v2.py: {imp!r}"
+                    f"message_processor.py: {imp!r}"
                 )
 
     def test_lazy_imports_inside_methods_are_acceptable(self):
@@ -2006,7 +2006,7 @@ class TestImportSafety:
         import ast
         import pathlib
 
-        source_path = pathlib.Path(__file__).parent.parent / 'services' / 'message_processor_v2.py'
+        source_path = pathlib.Path(__file__).parent.parent / 'services' / 'message_processor.py'
         source = source_path.read_text(encoding='utf-8')
         tree = ast.parse(source)
 
@@ -2048,18 +2048,18 @@ class TestFormatTsHelper:
     """Lock the _format_ts() guard against missing / unparseable timestamps."""
 
     def test_valid_sqlite_naive_timestamp(self):
-        from services.message_processor_v2 import _format_ts
+        from services.message_processor import _format_ts
         # SQLite's naive format — parse_utc normalises the space → 'T'
         assert _format_ts('2026-04-10 14:03:27') == '2026-04-10 14:03'
 
     def test_valid_iso_timestamp_with_offset(self):
-        from services.message_processor_v2 import _format_ts
+        from services.message_processor import _format_ts
         assert _format_ts('2026-04-10T14:03:27+00:00') == '2026-04-10 14:03'
 
     def test_none_returns_placeholder(self, caplog):
         import logging
-        from services.message_processor_v2 import _format_ts, _MISSING_TS_PLACEHOLDER
-        with caplog.at_level(logging.WARNING, logger='services.message_processor_v2'):
+        from services.message_processor import _format_ts, _MISSING_TS_PLACEHOLDER
+        with caplog.at_level(logging.WARNING, logger='services.message_processor'):
             result = _format_ts(None, row_kind='transcript', row_id=42)
         assert result == _MISSING_TS_PLACEHOLDER
         # Warning was emitted referencing the row id
@@ -2067,34 +2067,34 @@ class TestFormatTsHelper:
 
     def test_empty_string_returns_placeholder(self, caplog):
         import logging
-        from services.message_processor_v2 import _format_ts, _MISSING_TS_PLACEHOLDER
-        with caplog.at_level(logging.WARNING, logger='services.message_processor_v2'):
+        from services.message_processor import _format_ts, _MISSING_TS_PLACEHOLDER
+        with caplog.at_level(logging.WARNING, logger='services.message_processor'):
             result = _format_ts('', row_kind='transcript', row_id=7)
         assert result == _MISSING_TS_PLACEHOLDER
         assert any('7' in r.message for r in caplog.records)
 
     def test_whitespace_only_returns_placeholder(self, caplog):
         import logging
-        from services.message_processor_v2 import _format_ts, _MISSING_TS_PLACEHOLDER
-        with caplog.at_level(logging.WARNING, logger='services.message_processor_v2'):
+        from services.message_processor import _format_ts, _MISSING_TS_PLACEHOLDER
+        with caplog.at_level(logging.WARNING, logger='services.message_processor'):
             result = _format_ts('   ', row_kind='tool_call', row_id=9)
         assert result == _MISSING_TS_PLACEHOLDER
 
     def test_unparseable_string_returns_placeholder(self, caplog):
         import logging
-        from services.message_processor_v2 import _format_ts, _MISSING_TS_PLACEHOLDER
-        with caplog.at_level(logging.WARNING, logger='services.message_processor_v2'):
+        from services.message_processor import _format_ts, _MISSING_TS_PLACEHOLDER
+        with caplog.at_level(logging.WARNING, logger='services.message_processor'):
             result = _format_ts('not-a-timestamp', row_kind='transcript', row_id=1)
         # parse_utc returns datetime.min for unparseable → year <= 1 → placeholder
         assert result == _MISSING_TS_PLACEHOLDER
 
     def test_placeholder_has_correct_width(self):
-        from services.message_processor_v2 import _MISSING_TS_PLACEHOLDER
+        from services.message_processor import _MISSING_TS_PLACEHOLDER
         # Must be the same 16-char width as a valid 'YYYY-MM-DD HH:MM' slot
         assert len(_MISSING_TS_PLACEHOLDER) == len('2026-04-10 14:03')
 
     def test_placeholder_does_not_contain_year_1(self):
-        from services.message_processor_v2 import _MISSING_TS_PLACEHOLDER
+        from services.message_processor import _MISSING_TS_PLACEHOLDER
         # Must never accidentally render a real-looking date
         assert '0001' not in _MISSING_TS_PLACEHOLDER
         assert '1970' not in _MISSING_TS_PLACEHOLDER
@@ -2115,7 +2115,7 @@ class TestFormatTsHelper:
 class TestGetPreviousMessagesMissingCreatedAt:
     def test_missing_created_at_renders_placeholder(self):
         from unittest.mock import patch
-        from services.message_processor_v2 import _MISSING_TS_PLACEHOLDER
+        from services.message_processor import _MISSING_TS_PLACEHOLDER
 
         fake_row = {
             'id': 1,
@@ -2139,7 +2139,7 @@ class TestGetPreviousMessagesMissingCreatedAt:
 
     def test_empty_string_created_at_renders_placeholder(self):
         from unittest.mock import patch
-        from services.message_processor_v2 import _MISSING_TS_PLACEHOLDER
+        from services.message_processor import _MISSING_TS_PLACEHOLDER
 
         fake_row = {
             'id': 2,
@@ -2268,7 +2268,7 @@ class TestGetPreviousMessagesSinceIdZero:
             f"Expected since_id=0 when no compaction, got {captured_kwargs.get('since_id')!r}"
         )
         # And the limit was the class constant, not a magic number
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert captured_kwargs.get('limit') == MessageProcessor._TRANSCRIPT_FETCH_LIMIT
 
 
@@ -2279,16 +2279,16 @@ class TestGetPreviousMessagesSinceIdZero:
 
 class TestTranscriptFetchLimit:
     def test_default_value(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert MessageProcessor._TRANSCRIPT_FETCH_LIMIT == 2000
 
     def test_is_class_level_not_instance_level(self):
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         assert '_TRANSCRIPT_FETCH_LIMIT' in vars(MessageProcessor)
 
     def test_subclass_can_override(self):
         """A subclass that needs a tighter fetch ceiling can narrow it."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
 
         class _Narrow(MessageProcessor):
             CHANNEL = 'narrow_channel'
@@ -2431,7 +2431,7 @@ class TestGetPreviousMessagesCompactionFilter:
     def test_never_render_frozenset_exported(self):
         """The filter set is a module-level frozenset so any future caller
         (tests, tooling) can consult it without copying the list."""
-        from services.message_processor_v2 import _NEVER_RENDER_IN_PREVIOUS
+        from services.message_processor import _NEVER_RENDER_IN_PREVIOUS
         assert isinstance(_NEVER_RENDER_IN_PREVIOUS, frozenset)
         assert 'compaction' in _NEVER_RENDER_IN_PREVIOUS
         # Sanity: the set is frozen — not a vanilla mutable set.
@@ -2495,19 +2495,19 @@ class TestRenderParamsCanonicalSource:
 
 class TestParseTcParams:
     def test_none_returns_empty_dict(self):
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params(None) == {}
 
     def test_empty_string_returns_empty_dict(self):
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params('') == {}
 
     def test_pre_parsed_dict_passthrough(self):
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params({'a': 1}) == {'a': 1}
 
     def test_valid_json_string_parsed(self):
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params('{"query": "hello", "radius": 0.15}') == {
             'query': 'hello', 'radius': 0.15
         }
@@ -2515,13 +2515,13 @@ class TestParseTcParams:
     def test_malformed_json_returns_empty_dict(self):
         """Bad JSON from the DB must never crash rendering — return empty
         and let the line render as `[tool_name()] result`."""
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params('not-json') == {}
         assert _parse_tc_params('{broken') == {}
 
     def test_non_dict_json_returns_empty_dict(self):
         """JSON list/scalar must not become the params dict."""
-        from services.message_processor_v2 import _parse_tc_params
+        from services.message_processor import _parse_tc_params
         assert _parse_tc_params('[1, 2, 3]') == {}
         assert _parse_tc_params('"just a string"') == {}
         assert _parse_tc_params('42') == {}
@@ -2635,7 +2635,7 @@ class TestGetPreviousMessagesParamsRenderingParity:
 class TestNativeToolsTypeAnnotation:
     def test_native_tools_annotation_is_list_str(self):
         """Regression lock: NATIVE_TOOLS is annotated as list[str], not bare list."""
-        from services.message_processor_v2 import MessageProcessor
+        from services.message_processor import MessageProcessor
         annotations = MessageProcessor.__annotations__
         assert 'NATIVE_TOOLS' in annotations
         annotation = annotations['NATIVE_TOOLS']

@@ -538,7 +538,7 @@ def recall_episodes(
     try:
         from services.episodic_service import EpisodicService
         from services.database_service import get_shared_db_service
-        from services.message_processor_v2 import current_processor
+        from services.message_processor import current_processor
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"

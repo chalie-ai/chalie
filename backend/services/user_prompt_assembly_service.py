@@ -9,6 +9,13 @@
 """
 User Prompt Assembly Service — builds the per-turn user message.
 
+DEPRECATED (rc-0.3.2): The MessageProcessor v2 hierarchy
+(`UserMessageProcessor.getUserPrompt()`) absorbs this responsibility for the
+user-channel ACT loop. This module is RETAINED ONLY because
+`backend/workers/digest_worker.py` still depends on it for tool-webhook /
+cron flows. Do not add new callers; do not extend the API. The module will
+be deleted alongside the digest_worker rip.
+
 Assembles the full user-facing message sent to the LLM on each turn:
   1. World state header (time, calendar, weather)
   2. System awareness (degradation signals)

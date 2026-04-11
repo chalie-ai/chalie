@@ -40,7 +40,7 @@ _CHANNEL = 'test_channel'
 
 def _make_processor(**kwargs):
     """Build a concrete FakeProcessor instance for handleTool tests."""
-    from services.message_processor_v2 import MessageProcessor
+    from services.message_processor import MessageProcessor
 
     class _Fake(MessageProcessor):
         CHANNEL = _CHANNEL
