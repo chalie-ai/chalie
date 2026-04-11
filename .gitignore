@@ -22,6 +22,7 @@ venv/
 .DS_Store
 .claude/
 Claude.md
+CLAUDE.md
 
 
 # Frontend build artifacts (none currently, vanilla JS)
