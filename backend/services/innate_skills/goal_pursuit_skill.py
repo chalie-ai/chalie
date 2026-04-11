@@ -1,9 +1,9 @@
 """
 Goal Pursuit Skill — Launch a background GoalPursuitProcessor for long-running tasks.
 
-Spawns a daemon thread running GoalPursuitProcessor().process() and returns
-immediately. When the loop completes, OutputService.enqueue_proactive() pushes
-the result to the user's WebSocket.
+Spawns a daemon thread running GoalPursuitProcessor(raw_input=..., metadata=...).send()
+and returns immediately. When the loop completes, OutputService.enqueue_proactive()
+pushes the result to the user's WebSocket.
 """
 
 import json

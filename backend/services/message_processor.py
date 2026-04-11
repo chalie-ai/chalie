@@ -7,28 +7,19 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-MessageProcessor v2 — abstract base class for all LLM message processors.
+MessageProcessor — abstract base class for all LLM message processors.
 
 North star: /Volumes/llm/chalie-plans/message-processing.md
-
-This is a **parallel module** that lives alongside the legacy
-`message_processor.py`. It will be renamed to `message_processor.py`
-in Commit 11 once all subclasses have been migrated.
 
 Lifecycle: one instance per turn. Two turns never share the same object.
 Do not add `.instance()` / singleton accessors.
 
-Commits schedule:
-  Commit 2  (this file) — base class shape + concrete helpers
-  Commit 3  — handleTool()
-  Commit 4  — store() + append_atomic_turn helper
-  Commit 5  — _run_memory_seed() hook
-  Commit 6  — send() body (no compaction)
-  Commit 7  — two-stage mid-ACT compaction inside send()
-  Commit 8  — UserMessageProcessor
-  Commit 9  — DMNMessageProcessor / GoalPursuitProcessor / ScheduledMessageProcessor
-  Commit 10 — wiring + channel collapse
-  Commit 11 — rename this file to message_processor.py
+Each input channel (WebSocket, DMN timer, goal pursuit, scheduled prompt, …)
+constructs its own MessageProcessor subclass directly. The subclass hardcodes
+its CHANNEL and ROLE, implements getUserDefinition() and getUserPrompt(), and
+fans out post-turn services via postTurn(). The base class provides the ACT
+loop (send()), atomic persistence (store()), tool dispatch (handleTool()), and
+compaction primitives.
 """
 
 import contextlib

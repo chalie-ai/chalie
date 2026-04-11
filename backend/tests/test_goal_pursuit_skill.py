@@ -5,9 +5,8 @@ surface behaviour on both success and failure.
 """
 
 import json
-import threading
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from services.innate_skills.goal_pursuit_skill import (
     handle_goal_pursuit,
@@ -161,7 +160,12 @@ class TestHandleGoalPursuitThread:
 
 class TestGoalPursuitThreadSuccess:
     def _run_background_target(self, goal='Finish the task', response_text='Task complete.'):
-        """Capture and immediately invoke the thread target function."""
+        """Capture and immediately invoke the thread target function.
+
+        The production code constructs GoalPursuitProcessor(raw_input=..., metadata=...)
+        and calls .send() on the result (v2 API). The mock wires .send.return_value so
+        the response text propagates correctly into OutputService.enqueue_proactive.
+        """
         captured_target = {}
 
         def capture_thread(**kwargs):
@@ -170,7 +174,7 @@ class TestGoalPursuitThreadSuccess:
             return m
 
         mock_processor_instance = MagicMock()
-        mock_processor_instance.process.return_value = {'response': response_text}
+        mock_processor_instance.send.return_value = response_text
 
         mock_output_instance = MagicMock()
 
@@ -211,7 +215,8 @@ class TestGoalPursuitThreadSuccess:
     def test_empty_processor_response_uses_fallback_message(self):
         """When processor returns empty text, a fallback message is used instead."""
         mock_processor_instance = MagicMock()
-        mock_processor_instance.process.return_value = {'response': ''}
+        # .send() returns an empty string (v2 API returns str, not dict)
+        mock_processor_instance.send.return_value = ''
 
         mock_output_instance = MagicMock()
         captured_target = {}
@@ -238,7 +243,7 @@ class TestGoalPursuitThreadSuccess:
 
 class TestGoalPursuitThreadFailure:
     def _run_failing_target(self, error_message='Something went wrong'):
-        """Run the thread target where GoalPursuitProcessor.process() raises."""
+        """Run the thread target where GoalPursuitProcessor.send() raises (v2 API)."""
         captured_target = {}
 
         def capture_thread(**kwargs):
@@ -246,7 +251,7 @@ class TestGoalPursuitThreadFailure:
             return MagicMock()
 
         mock_processor_instance = MagicMock()
-        mock_processor_instance.process.side_effect = RuntimeError(error_message)
+        mock_processor_instance.send.side_effect = RuntimeError(error_message)
 
         mock_output_instance = MagicMock()
 

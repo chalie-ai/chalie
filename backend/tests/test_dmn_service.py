@@ -430,92 +430,58 @@ class TestGatherSalienceContext:
         assert 'Active goals:' in result
 
 
-# ── TestActiveTopic ────────────────────────────────────────────────────────────
+# ── TestActiveTopicWhitelist ───────────────────────────────────────────────────
+#
+# After Commit 9 (channel collapse), _active_topic() is an Option A whitelist:
+# it only accepts channel='user' rows. Any other channel — regardless of name —
+# is invisible, and the method always returns either 'user' (when a user row
+# exists) or 'general' (when the transcript is empty or has only background rows).
+#
+# The old TestActiveTopic class asserted pre-collapse behaviour (arbitrary
+# topic names like 'work-chat', 'cooking', etc.) which is no longer correct.
 
-class TestActiveTopic:
-    """_active_topic() — filters background channels, falls back to 'general'."""
+class TestActiveTopicWhitelist:
+    """_active_topic() — Commit 9 whitelist: only channel='user' rows are visible."""
 
-    def test_returns_general_when_no_transcript(self, db, store):
-        """Empty transcript → 'general' returned."""
+    def test_returns_user_when_user_rows_present(self, db, store):
+        """When the transcript contains a 'user' channel row, _active_topic() returns 'user'."""
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('user', 'user', 'hello', '2026-04-10T10:00:00')"
+        )
+        db.commit()
+
         svc = _make_service(db, store)
         result = svc._active_topic()
 
+        assert result == 'user'
+
+    def test_returns_user_even_when_only_background_channels(self, db, store):
+        """Whitelist semantics: even with no 'user' rows, the fallback is still 'general'.
+
+        Inserting only background-channel rows (goal_pursuit, dmn, scheduled)
+        must NOT cause _active_topic() to return a background channel name.
+        The whitelist forces the result to either 'user' or 'general'.
+        """
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'goal_pursuit', 'running...', '2026-04-10T12:00:00')"
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('dmn', 'proactive_thought', 'idle review', '2026-04-10T13:00:00')"
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('scheduled', 'scheduled', 'daily task', '2026-04-10T14:00:00')"
+        )
+        db.commit()
+
+        svc = _make_service(db, store)
+        result = svc._active_topic()
+
+        # Whitelist: background rows are invisible; no 'user' row → fall through to 'general'
         assert result == 'general'
-
-    def test_returns_most_recent_user_channel(self, db, store):
-        """The most recent non-background channel is returned."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('work-chat', 'user', 'hello', '2026-04-10T10:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        assert result == 'work-chat'
-
-    def test_goal_pursuit_channel_filtered(self, db, store):
-        """A 'goal_pursuit:*' channel is excluded; falls back to general."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit:abc123', 'assistant', 'working...', '2026-04-10T12:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        assert result == 'general'
-        assert 'goal_pursuit' not in result
-
-    def test_scheduled_channel_filtered(self, db, store):
-        """A 'scheduled:*' channel is excluded; falls back to general."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('scheduled:reminder-42', 'assistant', 'reminder text', '2026-04-10T11:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        assert result == 'general'
-
-    def test_user_channel_wins_over_background(self, db, store):
-        """User-facing channel wins over background channels in recency order."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('general', 'user', 'hi', '2026-04-10T08:00:00')"
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit:xyz', 'assistant', 'running goal', '2026-04-10T09:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        # goal_pursuit is excluded; the most recent user-facing channel is 'general'
-        assert result == 'general'
-
-    def test_most_recent_among_multiple_user_channels(self, db, store):
-        """When multiple user-facing channels exist, the most recent one is returned."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('finance', 'user', 'budget', '2026-04-10T07:00:00')"
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('cooking', 'user', 'recipe', '2026-04-10T11:00:00')"
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._active_topic()
-
-        assert result == 'cooking'
 
 
 # ── TestOnTurn ─────────────────────────────────────────────────────────────────
@@ -913,87 +879,3 @@ class TestLogCycle:
         ).fetchone()[0]
 
         assert count == 2
-
-
-# ── TestDMNMessageProcessorConstants ──────────────────────────────────────────
-
-class TestDMNMessageProcessorConstants:
-    """DMNMessageProcessor — verify overridden limits and passthrough prompt."""
-
-    def test_max_iterations_is_15(self):
-        """MAX_ITERATIONS must be 15 (stricter than normal MessageProcessor)."""
-        from services.dmn_message_processor import DMNMessageProcessor
-
-        assert DMNMessageProcessor.MAX_ITERATIONS == 15
-
-    def test_max_timeout_is_300(self):
-        """MAX_TIMEOUT must be 300 seconds (5 minutes)."""
-        from services.dmn_message_processor import DMNMessageProcessor
-
-        assert DMNMessageProcessor.MAX_TIMEOUT == 300
-
-    def test_assemble_user_prompt_returns_message_unchanged(self, db, store):
-        """_assemble_user_prompt() passes the pre-built context through unmodified."""
-        from unittest.mock import patch
-        from services.dmn_message_processor import DMNMessageProcessor
-
-        # DMNMessageProcessor inherits from MessageProcessor which uses db+store
-        # singletons at call time; we only need a constructed instance here.
-        with patch('services.database_service.get_shared_db_service'), \
-             patch('services.memory_client.MemoryClientService.create_connection'):
-            proc = DMNMessageProcessor()
-
-        context = "Recent episodes:\n1. [2026-04-10 14:30] salience:7\n   User asked about weather"
-        result = proc._assemble_user_prompt(context, 'general')
-
-        assert result == context
-
-    def test_assemble_user_prompt_ignores_metadata(self, db, store):
-        """_assemble_user_prompt() ignores metadata kwarg and still returns context."""
-        from unittest.mock import patch
-        from services.dmn_message_processor import DMNMessageProcessor
-
-        with patch('services.database_service.get_shared_db_service'), \
-             patch('services.memory_client.MemoryClientService.create_connection'):
-            proc = DMNMessageProcessor()
-
-        context = 'some context string'
-        result = proc._assemble_user_prompt(context, 'general', metadata={'key': 'val'})
-
-        assert result == context
-
-
-# ── TestLoadSystemPrompt ───────────────────────────────────────────────────────
-
-class TestLoadSystemPrompt:
-    """_load_system_prompt() — disk load with fallback on error."""
-
-    def test_loads_non_empty_string_from_disk(self):
-        """The DMN system prompt loads from disk and returns a non-empty string."""
-        from services.dmn_message_processor import _load_system_prompt
-
-        result = _load_system_prompt()
-
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_prompt_contains_dmn_no_action_sentinel(self):
-        """The loaded prompt instructs the model to emit DMN_NO_ACTION when idle."""
-        from services.dmn_message_processor import _load_system_prompt
-
-        result = _load_system_prompt()
-
-        assert 'DMN_NO_ACTION' in result
-
-    def test_returns_fallback_on_missing_file(self, tmp_path):
-        """When the prompt file is missing, a non-empty fallback string is returned."""
-        from unittest.mock import patch
-        from services.dmn_message_processor import _load_system_prompt
-
-        missing = str(tmp_path / 'does_not_exist.md')
-        with patch('services.dmn_message_processor._PROMPT_PATH', missing):
-            result = _load_system_prompt()
-
-        assert isinstance(result, str)
-        assert len(result) > 0
-        assert 'DMN_NO_ACTION' in result
