@@ -737,38 +737,81 @@ def update_apply():
 @system_bp.route('/system/reset-thread', methods=['POST'])
 @require_session
 def reset_thread():
-    """Expire the active thread for a channel, forcing the next message to start fresh.
+    """Clear conversation context and advance the thread ID.
 
-    Used by the nightly-test harness to test cross-thread memory recall
-    (i.e., knowledge pipeline) vs. in-context transcript recall.
+    Does two things:
+    1. Deletes all transcript rows (and their linked tool_calls + compaction watermark)
+       for the given processor channel (default 'user'). This empties the Previous
+       Messages block so the next turn starts genuinely fresh — recall must come from
+       the memory pipeline, not conversation context.
+    2. Advances the active_channel MemoryStore key (web:default:N → N+1) so postTurn
+       services (adaptive directives, phase, situation model) scope their writes to the
+       new thread_id.
 
-    Body (optional): {"channel": "default"}
+    In the persistent-context architecture, getPreviousMessages() reads from the
+    transcript table filtered by the hardcoded CHANNEL value ('user'). The MemoryStore
+    active_channel key is separate — it scopes postTurn service state, not transcript
+    retrieval. Both must be updated for a correct reset.
+
+    Body (optional):
+        {"channel": "user"}  — processor CHANNEL to clear (default: "user")
     """
     try:
+        from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
         data = request.get_json(silent=True) or {}
-        channel_id = data.get('channel', 'default')
+        channel = data.get('channel', 'user')
 
+        # ── 1. Clear transcript context ────────────────────────────────────────
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            # Compaction watermark has FK → transcript.id; delete it first
+            conn.execute('DELETE FROM compactions WHERE channel = ?', (channel,))
+
+            ids = [r[0] for r in conn.execute(
+                'SELECT id FROM transcript WHERE channel = ?', (channel,)
+            ).fetchall()]
+
+            cleared = 0
+            if ids:
+                placeholders = ','.join('?' * len(ids))
+                conn.execute(
+                    f'DELETE FROM tool_calls WHERE transcript_id IN ({placeholders})',
+                    ids,
+                )
+                conn.execute('DELETE FROM transcript WHERE channel = ?', (channel,))
+                cleared = len(ids)
+
+            conn.commit()
+
+        # ── 2. Advance MemoryStore thread_id ──────────────────────────────────
         store = MemoryClientService.create_connection()
-        current = store.get(f'active_channel:{channel_id}')
+        current = store.get('active_channel:default')
         if isinstance(current, bytes):
             current = current.decode()
 
-        if not current:
-            return jsonify({'ok': True, 'message': 'No active channel', 'expired': None}), 200
+        new_thread = None
+        if current:
+            parts = current.rsplit(':', 1)
+            try:
+                seq = int(parts[-1]) + 1
+            except (ValueError, IndexError):
+                seq = 1
+            new_thread = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
+            store.set('active_channel:default', new_thread, ex=604800)
 
-        # Create a new channel key — increment sequence so next turn starts fresh
-        parts = current.rsplit(':', 1)
-        try:
-            seq = int(parts[-1]) + 1
-        except (ValueError, IndexError):
-            seq = 1
-        new_channel = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
-        store.set(f'active_channel:{channel_id}', new_channel, ex=604800)
+        logger.info(
+            f"[RESET-THREAD] channel='{channel}': cleared {cleared} transcript rows, "
+            f"thread {current!r} → {new_thread!r}"
+        )
+        return jsonify({
+            'ok': True,
+            'channel': channel,
+            'transcript_rows_cleared': cleared,
+            'new_thread': new_thread,
+        }), 200
 
-        logger.info(f"[RESET-THREAD] Channel reset: {current} → {new_channel}")
-        return jsonify({'ok': True, 'expired': current, 'new_channel': new_channel}), 200
     except Exception as e:
         logger.error(f"[REST API] reset-thread error: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 500
