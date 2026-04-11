@@ -370,9 +370,9 @@ Service                          Model         Prompt                   Latency 
 UserMessageProcessor (unified)   primary       frontal-cortex-unified   ~500ms-2s User WebSocket path
 MessageProcessor compaction      same as JOB   COMPACTION_PROMPT        ~500ms    At 80% ctx threshold (send)
 MessageProcessor tool compact    same as JOB   TOOL_COMPACTION_PROMPT   ~200ms    Stage 1 mid-ACT compaction
-DMNMessageProcessor              primary       dmn.md                   ~500ms-2s DMN idle / cadence trigger
-GoalPursuitProcessor             primary       goal-pursuit.md          ~500ms-2s Per-goal daemon thread
-ScheduledMessageProcessor        primary       scheduled-prompt.md      ~500ms-2s Scheduler service (60s poll)
+DMNMessageProcessor              primary       DMNSystemMessagePrompt   ~500ms-2s DMN idle / cadence trigger
+GoalPursuitProcessor             primary       GoalPursuitSystemMsgPr.  ~500ms-2s Per-goal daemon thread
+ScheduledMessageProcessor        primary       ScheduledSystemMsgPrompt ~500ms-2s Scheduler service (60s poll)
 episodic extraction              lightweight   (inline trigger)         ~200ms    id%25 rolling trigger (async)
 trait extraction                 ONNX+LLM      (digest_worker)          ~200ms    postTurn() enqueue (async)
 ```
