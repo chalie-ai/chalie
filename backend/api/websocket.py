@@ -346,23 +346,63 @@ def _handle_chat(ws, store, msg, active_request=None):
             from services.user_message_processor import UserMessageProcessor
             from services.output_service import OutputService
 
+            # Resolve thread_id ONCE per request from MemoryStore active_channel
+            # so postTurn() services (adaptive directives, phase, situation,
+            # save suggestions, signals) can scope writes correctly. Without
+            # this injection every postTurn service receives thread_id=None and
+            # adaptive signal storage / per-thread state are silently broken
+            # (Commit 8 critic P1-1). Reuses the outer `store` from line 113.
+            thread_id = None
+            try:
+                _raw_tid = store.get('active_channel:default')
+                if _raw_tid:
+                    thread_id = _raw_tid.decode() if isinstance(_raw_tid, bytes) else _raw_tid
+            except Exception as _tid_err:
+                logger.debug(f"[WS] thread_id resolution failed: {_tid_err}")
+
             metadata = {
                 'uuid': request_id,
                 'exchange_id': request_id,
                 'source': source,
                 'image_ids': image_ids,
                 'channel': 'user',
+                'thread_id': thread_id,
             }
 
-            result = UserMessageProcessor.instance().process(prompt=text, metadata=metadata)
+            def _on_narration(text, step=0):
+                """Publish per-iteration synthesis text to the per-request SSE channel."""
+                if not request_id or not text:
+                    return
+                try:
+                    from uuid import uuid4
+                    import json as _json
+                    narration_id = f"narr_{uuid4().hex[:12]}"
+                    # Reuse the outer `store` from ws_chat (line 113) — no need
+                    # to create a second MemoryClient connection per narration
+                    # (Commit 8 critic P2-1).
+                    store.set(f"output:{narration_id}", _json.dumps({
+                        'type': 'act_narration',
+                        'text': text,
+                        'step': step,
+                    }), ex=300)
+                    store.publish(f"sse:{request_id}", narration_id)
+                except Exception as e:
+                    logger.debug(f"[WS] Narration publish failed: {e}")
+
+            proc = UserMessageProcessor(
+                raw_input=text,
+                metadata=metadata,
+                on_narration=_on_narration,
+            )
+            response = proc.send(request_id=request_id)
 
             output_svc = OutputService()
             output_svc.enqueue_text(
-                topic=result.get('channel', 'user'),
-                response=result.get('response', ''),
+                topic='user',
+                response=response,
                 mode='UNIFIED',
                 confidence=1.0,
-                generation_time=result.get('generation_time', 0),
+                generation_time=0.0,
                 original_metadata=metadata,
             )
 
@@ -371,9 +411,9 @@ def _handle_chat(ws, store, msg, active_request=None):
             try:
                 fallback_output = {
                     "type": "TEXT",
-                    "topic": result.get('channel', 'user'),
+                    "topic": 'user',
                     "metadata": {
-                        "blocks": _blocks_svc.from_markdown(result.get('response', '')),
+                        "blocks": _blocks_svc.from_markdown(response),
                         "mode": "UNIFIED",
                         "confidence": 1.0,
                         "metadata": metadata,
