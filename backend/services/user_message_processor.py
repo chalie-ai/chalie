@@ -21,7 +21,7 @@ called as:
 COMMIT 8 STATUS: Amber.
     - Removes UserMessageProcessor.instance() singleton
     - Removes UserMessageProcessor.process()
-    - Wires full postTurn() nine-service fan-out
+    - Wires full postTurn() eight-service fan-out
     - Wires getUserPrompt() absorbing UserPromptAssemblyService
     - Wires getUserDefinition() absorbing identity modulation + adaptive directives
     - Wires _run_memory_seed() with ephemeral=0 DTO
@@ -49,7 +49,7 @@ class UserMessageProcessor(MessageProcessor):
 
     Hardcodes CHANNEL='user', ROLE='user', uses UnifiedSystemMessagePrompt.
     Adds on_narration callback for real-time ACT narration streaming.
-    Overrides postTurn() with the nine-service fan-out.
+    Overrides postTurn() with the eight-service fan-out.
     """
 
     CHANNEL = 'user'
@@ -98,10 +98,15 @@ class UserMessageProcessor(MessageProcessor):
         Falls back to a static peer-to-peer framing on empty or missing record, or on
         any exception.
 
-        Writer path: the user_summary record is produced by the trait extraction
-        service chain (enqueue_trait_extraction → KnowledgeService.store(kind='fact',
-        entity='system', key='user_summary')) triggered from postTurn(). If no traits
-        have been extracted yet (first session), the fallback is the expected behaviour.
+        Writer path: populated at boot by ``run.py`` which synthesises a one-sentence
+        summary from existing ``kind='trait'`` rows in the knowledge store. Traits
+        themselves are written continuously by the LLM-native memory skill
+        (``memory_skill._handle_store`` → ``KnowledgeService.store(kind='trait', …)``)
+        whenever the user discloses a personal fact. The background trait-extraction
+        pipeline that used to produce user_summary mid-session was removed on
+        2026-04-11 (trait-extraction RIP) — continuous re-synthesis now happens at
+        the next boot, not mid-session. The fallback covers first-session (no traits
+        yet) and any read error.
 
         Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
@@ -348,18 +353,17 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Nine-service fan-out, each individually error-isolated.
+        """Eight-service fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
-          1. InteractionLogService — must fire before trait extraction
-          2. enqueue_trait_extraction — daemon thread
-          3. ConversationPhaseService — two calls
-          4. SituationModelService
-          5. SaveSuggestionService — user-side trigger THEN response-side detect
-          6. _detect_fork_response + _store_adaptive_signals
-          7. DMNService.on_turn() — R10 critical
-          8. MetricsService — last ("turn closed" signal)
-          9. compaction_service.check_and_compact — end-turn backstop
+          1. InteractionLogService
+          2. ConversationPhaseService — two calls
+          3. SituationModelService
+          4. SaveSuggestionService — user-side trigger THEN response-side detect
+          5. _detect_fork_response + _store_adaptive_signals
+          6. DMNService.on_turn() — R10 critical
+          7. MetricsService — last ("turn closed" signal)
+          8. compaction_service.check_and_compact — end-turn backstop
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
@@ -415,18 +419,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Interaction log failed: {e}", exc_info=True)
 
-        # 2. Trait extraction (spawns own daemon thread — fire and forget)
-        # Imported AS-IS from digest_worker: internally runs ONNX gate,
-        # LLM call, KnowledgeService.store, contradiction check, user_summary.
-        # Logged at WARNING — silent enqueue failure breaks the memory pipeline
-        # (Commit 8 critic P1-2).
-        try:
-            from workers.digest_worker import enqueue_trait_extraction
-            enqueue_trait_extraction(text, metadata=metadata, thread_id=thread_id)
-        except Exception as e:
-            logger.warning(f"[POSTTURN] Trait extraction enqueue failed: {e}", exc_info=True)
-
-        # 3. Conversation phase — TWO calls (user text + assistant response).
+        # 2. Conversation phase — TWO calls (user text + assistant response).
         # Skip the assistant-side update on empty response (cap-exit turns):
         # feeding '' would drift the phase model toward "silence" wrongly
         # (Commit 8 critic P1-3).
@@ -439,20 +432,20 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 4. Situation model (sync, MemoryStore-only write)
+        # 3. Situation model (sync, MemoryStore-only write)
         try:
             from services.situation_model_service import get_situation_model_service
             get_situation_model_service().update_on_message(thread_id)
         except Exception as e:
             logger.debug(f"[POSTTURN] Situation update failed: {e}", exc_info=True)
 
-        # 5. Save suggestion scan — TWO paths in correct order:
-        #    5a: user-side trigger must fire BEFORE 5b detect (ordering constraint #3)
+        # 4. Save suggestion scan — TWO paths in correct order:
+        #    4a: user-side trigger must fire BEFORE 4b detect (ordering constraint #3)
         try:
             from services.save_suggestion_service import SaveSuggestionService
             save_svc = SaveSuggestionService()
 
-            # 5a: User-side completion/deferral trigger — clears existing flag
+            # 4a: User-side completion/deferral trigger — clears existing flag
             save_flag = save_svc.get_saveable_flag(thread_id)
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
@@ -464,7 +457,7 @@ class UserMessageProcessor(MessageProcessor):
                     )
                     save_svc.clear_flag(thread_id)
 
-            # 5b: Response-side saveable content detection — sets new flag.
+            # 4b: Response-side saveable content detection — sets new flag.
             # NOTE: flag_saveable expects exchange_id (UUID string) for window
             # correlation, not the integer transcript row id (self._uid). Prefer
             # the UUID from metadata; fall back to a stringified row id if absent.
@@ -481,7 +474,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
 
-        # 6. Adaptive layer — fork detection + signal write (sync, MemoryStore)
+        # 5. Adaptive layer — fork detection + signal write (sync, MemoryStore)
         try:
             from workers.post_exchange_hooks import _store_adaptive_signals, _detect_fork_response
             _detect_fork_response(text, thread_id)
@@ -489,7 +482,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Adaptive signals failed: {e}", exc_info=True)
 
-        # 7. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 6. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -499,7 +492,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 8. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 7. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -510,7 +503,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 9. End-turn compaction backstop (safety net; mid-loop compaction in send()
+        # 8. End-turn compaction backstop (safety net; mid-loop compaction in send()
         # should handle most cases — this mirrors digest_worker behaviour and
         # can be deleted in a follow-up once mid-loop compaction is confirmed).
         # WARNING level — silent compaction failure leads to context overflow

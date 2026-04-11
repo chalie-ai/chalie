@@ -24,8 +24,8 @@ It also provides lightweight helpers for interactive tool dialog
     5-phase pipeline into per-channel ``MessageProcessor`` subclasses. Each
     subclass owns its own pre-turn preparation, runs the shared
     ``MessageProcessor.send()`` (LLM + ACT loop + compaction + atomic store),
-    and fires its own ``postTurn()`` service fan-out (trait extraction,
-    contradiction detection, phase updates, metrics, …). Nothing remains
+    and fires its own ``postTurn()`` service fan-out (contradiction detection
+    via memory skill, phase updates, metrics, …). Nothing remains
     centralised. This file will be deleted once every channel has been
     migrated. Do not add new callers or extend the existing pipeline here.
 """
@@ -36,7 +36,6 @@ import time
 import logging
 
 from services import FrontalCortexService
-from services.llm_service import create_llm_service
 from services.world_state_service import WorldStateService
 from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
@@ -177,256 +176,6 @@ def _store_image_tool_calls(transcript_id: int, image_ids: list, image_contexts:
     return tags
 
 
-def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_id: str = None):
-    """Enqueue lightweight trait extraction for a user message.
-
-    Messages over 300 chars are skipped entirely — long messages are almost
-    certainly pasted content (transcripts, plans, articles, code) and the
-    introductory framing is where third-party names appear.
-    """
-    try:
-        import threading
-
-        if len(prompt_message) > 300:
-            logging.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
-            return
-
-        def _extract_traits():
-            try:
-                import json
-                from services.knowledge_service import KnowledgeService
-                from services.database_service import get_shared_db_service
-                from services.provider_cache_service import ProviderCacheService
-
-                # ONNX gate: skip LLM call if classifier says no trait present
-                try:
-                    from services.onnx_inference_service import get_onnx_inference_service
-                    onnx_svc = get_onnx_inference_service()
-                    if onnx_svc.is_available("trait-detector"):
-                        gate_input = f"{prompt_message}\nTrait:"
-                        label, confidence = onnx_svc.predict("trait-detector", gate_input)
-                        if label == "false" and confidence >= 0.85:
-                            logging.debug(
-                                f"[TRAIT_EXTRACT] ONNX gate: no trait detected "
-                                f"(confidence={confidence:.3f}), skipping LLM"
-                            )
-                            return
-                except Exception as e:
-                    logging.debug(f"[TRAIT_EXTRACT] ONNX gate unavailable: {e}")
-
-                provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
-                if not provider_config:
-                    return
-
-                prompt_text = _load_trait_prompt(prompt_message)
-                if not prompt_text:
-                    return
-
-                llm = create_llm_service(provider_config)
-                llm_resp = llm.send_message(
-                    prompt_text,
-                    "Extract traits as JSON. Values must be clean noun phrases — the entity itself, no pronouns, articles, or conjunctions. Return only valid JSON."
-                )
-                result = llm_resp.text if llm_resp else None
-                if not result:
-                    return
-
-                # Strip markdown fences if present
-                import re
-                fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', result, re.DOTALL)
-                if fence_match:
-                    result = fence_match.group(1).strip()
-
-                parsed = json.loads(result)
-                traits = parsed.get('traits', [])
-
-                CONFIDENCE_MAP = {'high': 0.85, 'medium': 0.55, 'low': 0.35}
-
-                db = get_shared_db_service()
-                ks = KnowledgeService(db)
-
-                # Stop words to strip from trait values (LLMs sometimes
-                # include pronouns/conjunctions like "alex and i")
-                _VALUE_STRIP = {
-                    'i', 'me', 'my', 'and', 'or', 'the', 'a', 'an', 'is',
-                    'am', 'are', 'was', 'it', 'to', 'in', 'of', 'for',
-                }
-
-                def _clean_value(v: str) -> str:
-                    """Strip leading/trailing stop words from an extracted value."""
-                    words = v.split()
-                    while words and words[0].lower() in _VALUE_STRIP:
-                        words.pop(0)
-                    while words and words[-1].lower() in _VALUE_STRIP:
-                        words.pop()
-                    return ' '.join(words) if words else v
-
-                stored_count = 0
-                for trait in traits:
-                    key = trait.get('key', '').lower().strip()
-                    value = _clean_value(trait.get('value', '').strip())
-                    conf_label = trait.get('confidence', 'low')
-                    is_permanent = trait.get('permanent', False)
-
-                    if not key or not value:
-                        continue
-
-                    confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
-                    decay_class = 'permanent' if is_permanent else 'standard'
-
-                    stored_entry = ks.store(
-                        kind='trait', entity='user', key=key, value=value,
-                        data={'category': 'core' if is_permanent else 'preference'},
-                        decay_class=decay_class,
-                        confidence=confidence, source='llm_extraction',
-                    )
-                    stored_count += 1
-
-                    # Inline contradiction check — uses rowid from returned dict
-                    if stored_entry:
-                        new_id = stored_entry.get('rowid') or stored_entry.get('id')
-                        if new_id:
-                            _check_trait_contradiction(ks, new_id, key, value, confidence, thread_id, source='chat')
-
-                if stored_count > 0:
-                    _synthesize_user_sentence(db, provider_config)
-
-            except Exception as e:
-                logging.debug(f"[TRAIT_EXTRACT] Failed: {e}")
-
-        def _load_trait_prompt(message: str) -> str:
-            try:
-                import os
-                prompt_path = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)), 'prompts', 'trait-extraction.md'
-                )
-                with open(prompt_path, 'r') as f:
-                    template = f.read()
-                return template.replace('{{message}}', message)
-            except Exception as e:
-                logger.debug(f"[TRAIT_EXTRACT] Failed to load trait prompt template: {e}", exc_info=True)
-                return None
-
-        def _synthesize_user_sentence(db, provider_config) -> None:
-            """Fire a second LLM call to produce a single natural-language sentence
-            summarising ALL stored user traits, then persist it in the settings table."""
-            try:
-                import os
-
-                rows = db.fetch_all(
-                    "SELECT key, value, confidence, decay_class "
-                    "FROM knowledge "
-                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
-                    "ORDER BY decay_class DESC, confidence DESC"
-                )
-                if not rows:
-                    return
-
-                trait_lines = []
-                for row in rows:
-                    key = row['key'] if isinstance(row, dict) else row[0]
-                    value = row['value'] if isinstance(row, dict) else row[1]
-                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
-                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
-                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
-
-                prompt_path = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)), 'prompts', 'trait-synthesis.md'
-                )
-                with open(prompt_path, 'r') as f:
-                    template = f.read()
-                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
-
-                llm = create_llm_service(provider_config)
-                llm_resp = llm.send_message(
-                    prompt_text,
-                    "Output only the sentence. No preamble, no explanation."
-                )
-                sentence = llm_resp.text.strip() if llm_resp and llm_resp.text else None
-                if not sentence:
-                    return
-
-                from services.knowledge_service import KnowledgeService
-                ks = KnowledgeService(db)
-                ks.store(
-                    kind='fact', entity='system', key='user_summary',
-                    value=sentence, decay_class='permanent',
-                    confidence=1.0, source='trait_synthesis',
-                )
-                logging.debug("[TRAIT_SYNTH] Sentence stored: %s", sentence)
-            except Exception as e:
-                logging.warning("[TRAIT_SYNTH] Failed: %s", e)
-
-        t = threading.Thread(target=_extract_traits, daemon=True)
-        t.start()
-
-    except Exception as e:
-        logging.debug(f"[TRAIT_EXTRACT] Enqueue failed: {e}")
-
-
-def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, thread_id: str, source: str = 'chat'):
-    """
-    Runs synchronously after a trait is stored.
-    - temporal_change + source=chat → hard-delete old trait
-    - true_contradiction OR source=ambient → reduce confidences, create pending record, push question
-    """
-    try:
-        from services.embedding_service import get_embedding_service
-        from services.contradiction_classifier_service import ContradictionClassifierService
-        from services.pending_contradiction_service import PendingContradictionService
-        from services.database_service import get_shared_db_service
-        from services.output_service import OutputService
-
-        emb_svc = get_embedding_service()
-        new_text = f"{key}: {value}"
-        embedding = emb_svc.generate_embedding(new_text)
-        if embedding is None:
-            return
-
-        similar = ks.find_similar_traits(embedding, exclude_id=new_id)
-        if not similar:
-            return
-
-        existing = similar[0]  # top candidate only
-        existing_text = f"{existing['key']}: {existing['value']}"
-
-        classifier = ContradictionClassifierService()
-        result = classifier.check_new_trait(new_text, existing_text, source=source)
-        if result is None:
-            return
-
-        classification = result.get('classification', 'compatible')
-
-        if classification == 'temporal_change' and source == 'chat':
-            # Auto-overwrite: hard-delete old trait
-            ks.hard_delete_by_id(existing['id'])
-            logging.info(f"[CONTRADICTION] temporal_change: deleted old trait id={existing['id']} key={existing['key']}")
-
-        elif classification in ('true_contradiction', 'ambiguous') or source == 'ambient':
-            # Ask user: reduce confidences, create pending record, push message
-            ks.update_confidence(existing['id'], existing['confidence'] * 0.75)
-            ks.update_confidence(new_id, 0.5)
-
-            question = (
-                f"I'm seeing two conflicting things about {key}: "
-                f"'{existing['value']}' (existing) and '{value}' (just mentioned). "
-                f"Which is correct? Just tell me and I'll update."
-            )
-
-            db = get_shared_db_service()
-            pending_svc = PendingContradictionService(db)
-            pending_svc.create(new_id, existing['id'], question, source)
-
-            if thread_id:
-                OutputService().enqueue_proactive(
-                    topic=thread_id,
-                    response=question,
-                    source='contradiction',
-                )
-                logging.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
-
-    except Exception as e:
-        logging.debug(f"[CONTRADICTION] Check failed: {e}")
 
 
 
@@ -614,13 +363,6 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         # Build minimal routing signals -- tool dialogs don't need full signal collection
         signals = {'_prompt_text': text}
 
-        # Trait extraction -- runs in background thread, non-blocking
-        enqueue_trait_extraction(
-            prompt_message=text[:1000],
-            metadata={'source': 'chat'},
-            thread_id=thread_id,
-        )
-
         # Generate response via unified pipeline (may engage ACT loop)
         # metadata=None means orchestrator does NOT deliver to user
         response_data, _ = unified_generate(
@@ -652,33 +394,18 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
 
 def store_tool_dialog_memory(tool_name: str, turns: list):
     """
-    Store final-turn-only memory after interactive tool dialog completes.
+    No-op — retained only for the webhook tool path in ``api/tools.py`` which
+    still calls this function after an interactive tool dialog completes.
 
-    Stores ONE memory entry regardless of dialog length:
-    - 1-2 turns: full exchange
-    - >2 turns: first request + final response (summary)
-
-    Tagged with memory_durability='tool_internal' for weak persistence.
+    Historically this routed the final-turn summary into
+    ``enqueue_trait_extraction`` — the only storage path it had. That pipeline
+    was deleted on 2026-04-11 (trait-extraction RIP); there is no replacement
+    writer because the LLM-native memory skill already captures tool-initiated
+    traits inline. This function is kept as a deliberate no-op so the webhook
+    path does not need to change in the narrow trait-extraction rip. It will
+    be deleted alongside the full ``digest_worker`` rip.
     """
-    if not turns:
-        return
-
-    # Build compact exchange summary
-    if len(turns) <= 2:
-        prompt_msg = turns[0].get('request', '')
-    else:
-        prompt_msg = turns[0].get('request', '') + f'\n[{len(turns) - 2} intermediate turns omitted]'
-
-    try:
-        enqueue_trait_extraction(
-            prompt_message=prompt_msg[:1000],
-            metadata={
-                'source': f'tool_dialog:{tool_name}',
-                'tool_name': tool_name,
-            },
-        )
-    except Exception as e:
-        logging.warning(f"[TOOL DIALOG] Memory storage failed for '{tool_name}': {e}")
+    return
 
 
 def digest_worker(text: str, metadata: dict = None) -> str:
@@ -984,9 +711,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Get working memory turn count
     working_memory_turns = len(wm_turns) if wm_turns else 0
-
-    # Step 9e: Enqueue trait extraction (fire-and-forget, daemon thread)
-    enqueue_trait_extraction(text, metadata=metadata, thread_id=thread_id)
 
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None

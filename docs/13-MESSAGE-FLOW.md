@@ -48,7 +48,7 @@ This document is the single authoritative visual map of how a user message trave
                             │    repeat until text-only response or cap hit     │
                             │                                                   │
                             │  store()  — append_atomic_turn() ONE transaction  │
-                            │  postTurn() — 9-service fan-out (see §4)          │
+                            │  postTurn() — 8-service fan-out (see §4)          │
                             └──────────┬────────────────────────────────────────┘
                                        │ final response text
                             ┌──────────▼───────────┐
@@ -158,7 +158,7 @@ Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProces
 │      _embed_entry(assistant_id)                                     │
 │      _trigger_episode_extraction(channel, assistant_id)             │
 │                                                                     │
-│  postTurn() → 9-service fan-out (see §4)                            │
+│  postTurn() → 8-service fan-out (see §4)                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -204,6 +204,8 @@ Triggered when the rendered user-message body (including checkpoint envelope) ex
 
 Runs synchronously inside `send()` after `store()` commits, before `send()` returns. The final response is already in the caller's hands (streamed via narration callback); `postTurn()` latency does not delay the user.
 
+Personal facts (traits) are captured by the LLM-native memory skill path: `frontal-cortex-unified.md:7` instructs the LLM to call `memory.store` for personal disclosures, `memory_skill._handle_store()` auto-classifies the entry as `kind='trait'`, and `_check_trait_contradiction` fires synchronously inside `memory_skill._handle_store()` when `kind == 'trait'` and the stored entry has a valid `id`. The background `enqueue_trait_extraction` pipeline was deleted (2026-04-11) as redundant.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  UserMessageProcessor.postTurn()                                    │
@@ -212,38 +214,34 @@ Runs synchronously inside `send()` after `store()` commits, before `send()` retu
 │     log_event('user_input', channel=CHANNEL)                        │
 │     log_event('system_response', channel=CHANNEL)                   │
 │                         │                                           │
-│  2. enqueue_trait_extraction()       📤 M  (fire-and-forget thread) │
-│     ONNX gate → LLM trait extraction → KnowledgeService.store       │
-│     → contradiction check → user_summary update                    │
-│                         │                                           │
-│  3. ConversationPhaseService         📤 M  (sync)                  │
+│  2. ConversationPhaseService         📤 M  (sync)                  │
 │     update(thread_id, user_text, is_user=True)                      │
 │     update(thread_id, response, is_user=False)  [if response != ''] │
 │                         │                                           │
-│  4. SituationModelService            📤 M  (sync)                  │
+│  3. SituationModelService            📤 M  (sync)                  │
 │     update_on_message(thread_id)                                    │
 │                         │                                           │
-│  5. SaveSuggestionService            📥📤 M  (sync)                │
-│     5a. detect_save_trigger(user_text) → emit_save_card if flagged  │
-│     5b. detect_saveable_content(response) → flag_saveable if hit    │
+│  4. SaveSuggestionService            📥📤 M  (sync)                │
+│     4a. detect_save_trigger(user_text) → emit_save_card if flagged  │
+│     4b. detect_saveable_content(response) → flag_saveable if hit    │
 │                         │                                           │
-│  6. Adaptive layer       📤 M  (sync)                              │
+│  5. Adaptive layer       📤 M  (sync)                              │
 │     _detect_fork_response(text, thread_id)                          │
 │     _store_adaptive_signals(thread_id, text)                        │
 │                         │                                           │
-│  7. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
+│  6. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
 │     Defers DMN idle timer — must fire on every user turn            │
 │                         │                                           │
-│  8. MetricsService       📤 M  (sync)                              │
+│  7. MetricsService       📤 M  (sync)                              │
 │     record_counter('requests_total')                                │
 │     record_counter('user_messages_total')                           │
 │                         │                                           │
-│  9. compaction_service.check_and_compact()   📥📤 DB  (sync)       │
+│  8. compaction_service.check_and_compact()   📥📤 DB  (sync)       │
 │     End-turn backstop — safety net if mid-loop compaction missed    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Background subclasses (`DMNMessageProcessor`, `GoalPursuitProcessor`, `ScheduledMessageProcessor`) run a minimal `postTurn()` — only `InteractionLogService` + `MetricsService`. No trait extraction, no phase updates, no DMN reset.
+Background subclasses (`DMNMessageProcessor`, `GoalPursuitProcessor`, `ScheduledMessageProcessor`) run a minimal `postTurn()` — only `InteractionLogService` + `MetricsService`. No phase updates, no DMN reset.
 
 ---
 
@@ -354,7 +352,7 @@ tool_calls                 store() → append_atomic_turn()    getPreviousMessag
 compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
 interaction_log            postTurn() (every turn)           observability endpoints
 episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
-knowledge                  trait extraction (async)          memory_skill, knowledge endpoints
+knowledge                  memory_skill._handle_store()      memory_skill, knowledge endpoints
 memory_recall_log          recall_episodes() chokepoint      meta-harness tuning
 ```
 
@@ -374,7 +372,6 @@ DMNMessageProcessor              primary       DMNSystemMessagePrompt   ~500ms-2
 GoalPursuitProcessor             primary       GoalPursuitSystemMsgPr.  ~500ms-2s Per-goal daemon thread
 ScheduledMessageProcessor        primary       ScheduledSystemMsgPrompt ~500ms-2s Scheduler service (60s poll)
 episodic extraction              lightweight   (inline trigger)         ~200ms    id%25 rolling trigger (async)
-trait extraction                 ONNX+LLM      (digest_worker)          ~200ms    postTurn() enqueue (async)
 ```
 
 **Deterministic paths (zero LLM):**
@@ -419,7 +416,7 @@ Component latency (user path, typical, no tools):
 | **Literal-text history, not messages[]** | `getPreviousMessages()` assembles a `## Previous Messages` text block; provider sees one-element `messages[]` containing the whole body |
 | **Atomic persistence** | `store()` calls `append_atomic_turn()` — single transaction writes input row, all accumulated DTOs, assistant row together; no mid-loop DB writes |
 | **Tool agnosticism** | `getTools()` resolves `NATIVE_TOOLS` by name at call time; `find_tools` extends `_discovered_tools` dynamically; no tool-name hardcoding |
-| **Per-subclass fan-out** | `postTurn()` is where each subclass fans out its own service work; no shared event bus; `UserMessageProcessor` runs 9 services; background subclasses run 2 |
+| **Per-subclass fan-out** | `postTurn()` is where each subclass fans out its own service work; no shared event bus; `UserMessageProcessor` runs 8 services; background subclasses run 2 |
 | **Compaction is in-loop** | Two-stage mid-ACT compaction fires inside `send()` on threshold breach — Stage 1 trims tool trail in place; Stage 2 restarts the loop from a fresh checkpoint |
 | **Flat channels** | `CHANNEL` is always a fixed string (`'user'`, `'dmn'`, `'goal_pursuit'`, `'scheduled'`); pursuit_id / item_id live in `metadata` only |
 

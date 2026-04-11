@@ -457,7 +457,9 @@ class TestRunMemorySeed:
             proc._run_memory_seed()
 
         assert proc._memory_seed == 'memories text'
-        assert proc._memory_seed_radius == 0.2
+        # SEED_RADIUS_BASELINE tuned 0.2 → 0.3 by upstream 2c3682f; assertion
+        # must track the constant.
+        assert proc._memory_seed_radius == 0.3
         assert len(proc._pending_tool_calls) == 1
 
         dto = proc._pending_tool_calls[0]
@@ -561,11 +563,11 @@ class TestStoreOverride:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# H. postTurn() 9-service fan-out
+# H. postTurn() 8-service fan-out
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPostTurn:
-    """postTurn() must call all nine services with correct args and be fault-isolated."""
+    """postTurn() must call all eight services with correct args and be fault-isolated."""
 
     def _make_proc_for_postturn(self, metadata=None, last_response='reply text',
                                  uid=1):
@@ -574,10 +576,10 @@ class TestPostTurn:
         proc._uid = uid
         return proc
 
-    # ── H1: All nine services called ─────────────────────────────────────────
+    # ── H1: All eight services called ────────────────────────────────────────
 
-    def test_h1_all_nine_services_called_in_order(self):
-        """Verify each of the nine services fires and ordering is load-bearing."""
+    def test_h1_all_eight_services_called_in_order(self):
+        """Verify each of the eight services fires and ordering is load-bearing."""
         proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-1'})
 
         call_log = []
@@ -585,7 +587,6 @@ class TestPostTurn:
         mock_log_svc = MagicMock()
         mock_log_svc.log_event.side_effect = lambda *a, **kw: call_log.append('interaction_log')
 
-        mock_trait = MagicMock(side_effect=lambda *a, **kw: call_log.append('trait_extraction'))
         mock_phase = MagicMock()
         mock_phase.update.side_effect = lambda *a, **kw: call_log.append('phase')
         mock_situation = MagicMock()
@@ -604,7 +605,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=mock_log_svc), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction', mock_trait), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -618,8 +618,8 @@ class TestPostTurn:
              patch('services.compaction_service.check_and_compact', mock_compaction):
             proc.postTurn()
 
-        # interaction_log fires before trait_extraction
-        assert call_log.index('interaction_log') < call_log.index('trait_extraction')
+        # interaction_log fires before phase
+        assert call_log.index('interaction_log') < call_log.index('phase')
         # dmn fires before metrics
         assert 'dmn' in call_log
         assert 'metrics:requests_total' in call_log
@@ -633,7 +633,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=mock_log), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -666,7 +665,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -719,7 +717,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -734,7 +731,7 @@ class TestPostTurn:
              patch('services.compaction_service.check_and_compact'):
             proc.postTurn()
 
-        # 5a fires before 5b
+        # 4a fires before 4b
         assert call_log.index('emit_save_card') < call_log.index('detect_saveable')
         assert 'clear_flag' in call_log
         assert 'flag_saveable' in call_log
@@ -748,7 +745,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -779,7 +775,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -804,7 +799,6 @@ class TestPostTurn:
     def test_h7_failure_in_one_service_does_not_block_others(self):
         """InteractionLog raising must not prevent all other services from firing."""
         proc = self._make_proc_for_postturn()
-        mock_trait = MagicMock()
         mock_phase = MagicMock()
         mock_situation = MagicMock()
         mock_dmn = MagicMock()
@@ -814,7 +808,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    side_effect=RuntimeError('log exploded')), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction', mock_trait), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -832,7 +825,6 @@ class TestPostTurn:
             # Must not raise even though interaction log failed
             proc.postTurn()
 
-        mock_trait.assert_called_once()
         mock_phase.update.assert_called()
         mock_situation.update_on_message.assert_called_once()
         mock_dmn.on_turn.assert_called_once()
@@ -849,7 +841,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -895,7 +886,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -929,7 +919,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -969,7 +958,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -1004,7 +992,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=MagicMock()), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
@@ -1041,7 +1028,6 @@ class TestPostTurn:
         with patch('services.interaction_log_service.InteractionLogService',
                    return_value=mock_log), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('workers.digest_worker.enqueue_trait_extraction'), \
              patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',

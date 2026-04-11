@@ -1419,7 +1419,7 @@ class TestDatabaseServiceFetchAll:
     """Verify DatabaseService.fetch_all returns list-of-dicts, not a cursor.
 
     This is a regression guard for the execute_query → fetch_all rename fix
-    in digest_worker._synthesize_user_sentence and run.py startup synthesis.
+    in run.py startup synthesis (user_summary regeneration).
     The original bug caused 'Cursor' object is not iterable errors when the
     caller tried to iterate over rows.
     """
@@ -1474,7 +1474,7 @@ class TestDatabaseServiceFetchAll:
             "SELECT key, value FROM knowledge WHERE key = 'fetch_all_iter_test'"
         )
 
-        # This is the exact pattern used in _synthesize_user_sentence
+        # This is the pattern used to iterate knowledge rows (e.g. in run.py boot sync)
         trait_lines = []
         for row in rows:
             k = row['key'] if isinstance(row, dict) else row[0]
