@@ -211,15 +211,16 @@ class MessageProcessor:
         yielding ``"{user_definition}\n\n"``. Subclasses override
         SYSTEM_PROMPT_CLASS to provide richer bodies.
 
-        **Zero-arg construction is the Commit 2 contract.** Every
-        `SystemMessagePrompt` subclass wired in Commit 1 provides defaults for
-        all its constructor parameters (e.g. `UnifiedSystemMessagePrompt` has
-        `original_prompt=''`, `thread_id=None`). That keeps this base-class
-        call site pure — no knowledge of subclass-specific args leaks up.
-        Subclasses of `MessageProcessor` that need richer system-prompt inputs
-        (identity modulation bound to the real raw input, thread_id from
-        metadata, …) override `getSystemPrompt()` themselves in Commits 8+
-        and forward whatever args their `SYSTEM_PROMPT_CLASS` expects.
+        **Zero-arg construction is the contract.** Every `SystemMessagePrompt`
+        subclass takes no constructor parameters — its `getPrompt()` returns
+        either a static body or a template string with placeholder tokens
+        (e.g. `UnifiedSystemMessagePrompt` exposes `{{voice_modulation}}` and
+        `{{adaptive_directives}}`). That keeps this base-class call site pure —
+        no knowledge of subclass-specific args leaks up. Subclasses of
+        `MessageProcessor` that need richer system-prompt inputs (voice
+        modulation, adaptive directives bound to real metadata, …) override
+        `getSystemPrompt()` themselves and weave their own placeholder values
+        into the template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.

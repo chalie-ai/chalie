@@ -171,13 +171,20 @@ class TestUnifiedSystemMessagePrompt:
         assert '{{identity_modulation}}' not in result
 
     def test_no_dead_placeholders(self):
-        """No stale {{...}} placeholders other than {{adaptive_directives}}."""
+        """No stale {{...}} placeholders other than the two live ones.
+
+        {{voice_modulation}} and {{adaptive_directives}} are intentionally live —
+        UserMessageProcessor.getSystemPrompt() weaves them in per-turn.
+        Any other {{...}} is a bug.
+        """
         import re
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         result = UnifiedSystemMessagePrompt().getPrompt()
         placeholders = set(re.findall(r'\{\{(\w+)\}\}', result))
-        assert placeholders == {'adaptive_directives'}, (
-            f"Unexpected placeholders: {placeholders - {'adaptive_directives'}}"
+        allowed = {'adaptive_directives', 'voice_modulation'}
+        unexpected = placeholders - allowed
+        assert not unexpected, (
+            f"Unexpected dead placeholders in _UNIFIED_PROMPT: {unexpected}"
         )
 
     # ── No side effects on DB / services ──────────────────────────────────────

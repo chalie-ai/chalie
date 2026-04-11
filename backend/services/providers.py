@@ -13,6 +13,7 @@ Resolves the correct LLM provider for a given job (e.g. 'frontal-cortex-unified'
 sends messages, and returns a raw LLMResponse. No response parsing here.
 """
 
+import json
 import threading
 import logging
 
@@ -39,7 +40,9 @@ class Providers:
             tools = self._get_tools(job)
         provider = self._resolve(job)
         messages = [{"role": "user", "content": user_prompt}]
-        return provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        self._log_after_call(system_prompt, messages, tools, job, response)
+        return response
 
     def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True):
         """Multi-turn send with a pre-built messages array. Returns LLMResponse.
@@ -57,7 +60,61 @@ class Providers:
         if tools is None:
             tools = self._get_tools(job)
         provider = self._resolve(job)
-        return provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        self._log_after_call(system_prompt, messages, tools, job, response)
+        return response
+
+    def _log_after_call(self, system_prompt, messages, tools, job, response):
+        """Write the LLM request log file. Best-effort, never raises.
+
+        Called by both :meth:`send` and :meth:`send_messages` so every LLM
+        request goes through a single logging chokepoint.
+        """
+        try:
+            from services.llm_request_logger import log_llm_request
+            from services.message_processor import current_processor
+            proc = current_processor()
+            caller_name = type(proc).__name__ if proc is not None else 'unknown'
+            user_msg_str = self._render_messages_for_log(messages)
+            log_llm_request(
+                caller=caller_name,
+                job=job,
+                provider=getattr(response, 'provider', 'unknown'),
+                model=getattr(response, 'model', 'unknown'),
+                system_message=system_prompt or '',
+                user_message=user_msg_str,
+                tools=tools,
+            )
+        except Exception as e:
+            logger.debug(f"[LLM LOG] Hook failed: {e}", exc_info=True)
+
+    @staticmethod
+    def _render_messages_for_log(messages):
+        """Render the messages array verbatim for a log file.
+
+        Fidelity rules:
+          * list-valued ``content`` (Anthropic content-block form) is
+            JSON-serialised so nothing is silently lost to ``str(list)``.
+          * Single-element user messages (the MessageProcessor v2 common case)
+            are written as the raw string with no ``[user]`` prefix — the spec
+            says "verbatim".
+          * Multi-element arrays keep the ``[role]`` prefix per entry so
+            reviewers can tell the messages apart in the log.
+        """
+        msgs = messages or []
+
+        def _content_to_str(content):
+            if isinstance(content, str):
+                return content
+            return json.dumps(content, ensure_ascii=False)
+
+        if len(msgs) == 1 and msgs[0].get('role') == 'user':
+            return _content_to_str(msgs[0].get('content', ''))
+
+        return '\n\n'.join(
+            f"[{m.get('role', '?')}] {_content_to_str(m.get('content', ''))}"
+            for m in msgs
+        )
 
     def send_async(self, user_prompt, system_prompt, job='unified', tools=None, callback=None):
         """Fire-and-forget in daemon thread. Calls callback(LLMResponse) when done."""

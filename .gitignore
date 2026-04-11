@@ -32,3 +32,6 @@ frontend/_interfaces
 docker-compose.yml
 frontend/server/data/
 .aider*
+
+# LLM request logs (verbatim, one file per request, never committed)
+/logs/

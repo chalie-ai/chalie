@@ -78,43 +78,49 @@ class UserMessageProcessor(MessageProcessor):
         # Set by store() — the final LLM response text, needed by postTurn()
         # for interaction logging and phase updates (call AFTER store()).
         self._last_response: str = ''
-        # Cached identity-modulation string. getSystemPrompt() runs every ACT
-        # iteration; without this cache each iteration would re-instantiate
-        # IdentityService + VoiceMapperService and re-read DB rows. The user
-        # identity is stable for the duration of a single turn, so a per-instance
-        # cache is safe (Commit 8 critic P1-4).
+        # Cached user synthesis string. getSystemPrompt() runs every ACT iteration;
+        # without this cache each iteration would re-read KnowledgeService DB rows.
+        # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
+        # Cached voice modulation string. Per-turn cache — same reasoning as above.
+        # Consumed only by getSystemPrompt() during {{voice_modulation}} weave.
+        self._voice_modulation_cached: str | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
     def getUserDefinition(self) -> str:
-        """One-sentence description of the real user for the system prompt.
+        """One-sentence synthesis of the real human user for the system prompt.
 
-        Returns the identity-modulation string from IdentityService/VoiceMapperService,
-        prefixed as the north star requires. Falls back to a static phrase on error.
+        Reads the user_summary record (kind='fact', entity='system', key='user_summary')
+        from KnowledgeService and returns its value. This is a human-readable sentence
+        that describes the user (e.g. "Dylan is a software engineer based in Malta").
 
-        Per-turn cached: identity is stable for the duration of a single turn,
-        but getSystemPrompt() runs on every ACT iteration. The cache prevents
-        per-iteration DB reads against IdentityService.
+        Falls back to a static peer-to-peer framing on empty or missing record, or on
+        any exception.
+
+        Writer path: the user_summary record is produced by the trait extraction
+        service chain (enqueue_trait_extraction → KnowledgeService.store(kind='fact',
+        entity='system', key='user_summary')) triggered from postTurn(). If no traits
+        have been extracted yet (first session), the fallback is the expected behaviour.
+
+        Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
+        cache each iteration would re-query the knowledge table.
         """
         if self._user_definition_cached is not None:
             return self._user_definition_cached
         try:
-            from services.identity_service import IdentityService
-            from services.voice_mapper_service import VoiceMapperService
+            from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
 
-            db = get_shared_db_service()
-            identity = IdentityService(db)
-            mapper = VoiceMapperService()
-
-            vectors = identity.get_vectors()
-            identity.check_coherence()
-            modulation = mapper.generate_modulation(vectors)
-            self._user_definition_cached = modulation if modulation else "Engage naturally as a peer."
+            ks = KnowledgeService(get_shared_db_service())
+            entry = ks.get('system', 'user_summary')
+            if entry and entry.get('value'):
+                self._user_definition_cached = entry['value']
+            else:
+                self._user_definition_cached = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         except Exception as e:
             logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
-            self._user_definition_cached = "Engage naturally as a peer."
+            self._user_definition_cached = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         return self._user_definition_cached
 
     def getUserPrompt(self) -> str:
@@ -185,24 +191,27 @@ class UserMessageProcessor(MessageProcessor):
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
     def getSystemPrompt(self) -> str:
-        """Override to inject adaptive_directives into the UNIFIED prompt body.
+        """Override to weave both dynamic placeholders into the UNIFIED prompt body.
 
         UnifiedSystemMessagePrompt.getPrompt() returns _UNIFIED_PROMPT, an
-        inlined Python constant with one placeholder: {{adaptive_directives}}.
-        This override fills it with per-turn adaptive signals, then prepends
-        getUserDefinition() (the identity modulation line) as the first line of
-        the final system prompt.
+        inlined Python constant with two placeholders:
+          - {{voice_modulation}} — mid-prompt in the Voice section; per-turn
+            cached; supplied by _get_voice_modulation().
+          - {{adaptive_directives}} — bottom of prompt; per-turn; supplied by
+            _get_adaptive_directives().
 
-        {{adaptive_directives}} sits at the bottom of _UNIFIED_PROMPT so the
-        stable principles prefix is cache-friendly and only the suffix busts
-        the provider-side prompt cache each turn.
+        After both are filled, getUserDefinition() (the user synthesis line) is
+        prepended as the first line of the final system prompt.
+
+        Weave order: voice first (mid-prompt), adaptive second (bottom), then
+        prepend user definition. This preserves the stable Identity/Boundaries/
+        Principles prefix for provider-side prompt caching.
         """
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
 
-        # Inject adaptive directives — the only placeholder currently filled
         thread_id = self._metadata.get('thread_id')
-        adaptive = self._get_adaptive_directives(thread_id=thread_id)
-        template = template.replace('{{adaptive_directives}}', adaptive)
+        template = template.replace('{{voice_modulation}}', self._get_voice_modulation())
+        template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives(thread_id=thread_id))
 
         return f"{self.getUserDefinition()}\n\n{template}"
 
@@ -555,6 +564,40 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
+
+    def _get_voice_modulation(self) -> str:
+        """Per-turn cached voice modulation string for the Voice section of the system prompt.
+
+        Calls IdentityService + VoiceMapperService to generate a behavioural style string
+        (e.g. "Speak warmly with a tone of patient curiosity."). This string is injected into
+        the {{voice_modulation}} placeholder in _UNIFIED_PROMPT by getSystemPrompt().
+
+        Consumed only by getSystemPrompt(). Not called from getUserDefinition().
+
+        Read-only: does NOT call identity.check_coherence() — that is a DB-writing
+        path and belongs in postTurn() or a background service, not the per-turn
+        prompt build which runs on every ACT iteration.
+
+        Falls back to 'Engage naturally as a peer.' on any error.
+        """
+        if self._voice_modulation_cached is not None:
+            return self._voice_modulation_cached
+        try:
+            from services.identity_service import IdentityService
+            from services.voice_mapper_service import VoiceMapperService
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            identity = IdentityService(db)
+            mapper = VoiceMapperService()
+
+            vectors = identity.get_vectors()
+            modulation = mapper.generate_modulation(vectors)
+            self._voice_modulation_cached = modulation if modulation else "Engage naturally as a peer."
+        except Exception as e:
+            logger.warning(f"[USER MSG] _get_voice_modulation failed: {e}")
+            self._voice_modulation_cached = "Engage naturally as a peer."
+        return self._voice_modulation_cached
 
     def _get_adaptive_directives(self, thread_id: str | None = None) -> str:
         """Get adaptive response directives for system prompt placeholder injection.

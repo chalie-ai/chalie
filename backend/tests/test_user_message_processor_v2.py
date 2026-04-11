@@ -96,57 +96,82 @@ class TestSubclassShape:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# B. getUserDefinition() fallback paths
+# B. getUserDefinition() — user synthesis from KnowledgeService
 # ─────────────────────────────────────────────────────────────────────────────
 
+_FALLBACK_USER_DEF = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
+
+
 class TestGetUserDefinition:
-    """Identity service integration and fallback behaviour."""
+    """getUserDefinition() returns user synthesis from knowledge store, not voice modulation."""
 
-    def test_b1_returns_modulation_when_identity_succeeds(self):
+    def test_b1_returns_user_synthesis_when_record_exists(self):
+        """Returns the value field of the user_summary knowledge record."""
         proc = _make_ump()
 
-        # Services are imported lazily inside getUserDefinition(), so patch at
-        # their canonical module paths.
+        mock_ks = MagicMock()
+        mock_ks.get.return_value = {'value': 'Dylan is a software engineer based in Malta.'}
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service'):
+            result = proc.getUserDefinition()
+
+        assert result == 'Dylan is a software engineer based in Malta.'
+        mock_ks.get.assert_called_once_with('system', 'user_summary')
+
+    def test_b2_returns_fallback_when_no_record(self):
+        """Returns fallback string when knowledge store returns None."""
+        proc = _make_ump()
+
+        mock_ks = MagicMock()
+        mock_ks.get.return_value = None
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service'):
+            result = proc.getUserDefinition()
+
+        assert result == _FALLBACK_USER_DEF
+
+    def test_b6_does_not_call_voice_mapper_service(self):
+        """getUserDefinition() must NOT call VoiceMapperService — that belongs in _get_voice_modulation()."""
+        proc = _make_ump()
+
+        mock_ks = MagicMock()
+        mock_ks.get.return_value = {'value': 'some user summary'}
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service'), \
+             patch('services.voice_mapper_service.VoiceMapperService') as MockVms:
+            proc.getUserDefinition()
+
+        MockVms.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B2. _get_voice_modulation()
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FALLBACK_VOICE_MOD = "Engage naturally as a peer."
+
+
+class TestGetVoiceModulation:
+    """_get_voice_modulation() returns a behavioural style string for the Voice section."""
+
+    def test_bv1_returns_modulation_string_when_services_succeed(self):
+        """Returns the modulation string from VoiceMapperService."""
+        proc = _make_ump()
+
         with patch('services.identity_service.IdentityService') as MockIdSvc, \
              patch('services.voice_mapper_service.VoiceMapperService') as MockVmSvc, \
              patch('services.database_service.get_shared_db_service'):
 
-            mock_id = MockIdSvc.return_value
-            mock_id.get_vectors.return_value = {'traits': []}
-            mock_id.check_coherence.return_value = None
-
-            mock_vm = MockVmSvc.return_value
-            mock_vm.generate_modulation.return_value = 'You are Dylan, a busy engineer.'
-
-            result = proc.getUserDefinition()
-
-        assert result == 'You are Dylan, a busy engineer.'
-
-    def test_b2_returns_default_when_identity_raises(self):
-        proc = _make_ump()
-
-        with patch('services.identity_service.IdentityService',
-                   side_effect=RuntimeError('db unavailable')), \
-             patch('services.database_service.get_shared_db_service'):
-            result = proc.getUserDefinition()
-
-        assert result == 'Engage naturally as a peer.'
-
-    def test_b3_returns_default_when_modulation_empty(self):
-        proc = _make_ump()
-
-        with patch('services.identity_service.IdentityService') as MockIdSvc, \
-             patch('services.voice_mapper_service.VoiceMapperService') as MockVmSvc, \
-             patch('services.database_service.get_shared_db_service'):
-
-            MockIdSvc.return_value.get_vectors.return_value = {}
+            MockIdSvc.return_value.get_vectors.return_value = {'traits': []}
             MockIdSvc.return_value.check_coherence.return_value = None
-            MockVmSvc.return_value.generate_modulation.return_value = ''
+            MockVmSvc.return_value.generate_modulation.return_value = 'Speak warmly with patient curiosity.'
 
-            result = proc.getUserDefinition()
+            result = proc._get_voice_modulation()
 
-        assert result == 'Engage naturally as a peer.'
-
+        assert result == 'Speak warmly with patient curiosity.'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # C. getUserPrompt() section assembly
@@ -283,7 +308,7 @@ class TestGetUserPrompt:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestGetSystemPrompt:
-    """Adaptive directives injection and user definition prepend."""
+    """Both placeholder injections and user definition prepend."""
 
     def test_d1_fills_adaptive_directives_placeholder(self):
         proc = _make_ump()
@@ -291,6 +316,7 @@ class TestGetSystemPrompt:
         with patch.object(proc.SYSTEM_PROMPT_CLASS, 'getPrompt',
                           return_value='TEMPLATE {{adaptive_directives}} END'), \
              patch.object(proc, 'getUserDefinition', return_value='MOD'), \
+             patch.object(proc, '_get_voice_modulation', return_value='VOICE'), \
              patch.object(proc, '_get_adaptive_directives', return_value='DIR'):
             result = proc.getSystemPrompt()
 
@@ -302,6 +328,7 @@ class TestGetSystemPrompt:
         with patch.object(proc.SYSTEM_PROMPT_CLASS, 'getPrompt',
                           return_value='TEMPLATE {{adaptive_directives}} END'), \
              patch.object(proc, 'getUserDefinition', return_value='MOD'), \
+             patch.object(proc, '_get_voice_modulation', return_value='VOICE'), \
              patch.object(proc, '_get_adaptive_directives', return_value='DIR'):
             result = proc.getSystemPrompt()
 
@@ -313,11 +340,38 @@ class TestGetSystemPrompt:
         with patch.object(proc.SYSTEM_PROMPT_CLASS, 'getPrompt',
                           return_value='BODY'), \
              patch.object(proc, 'getUserDefinition', return_value='MY_DEF'), \
+             patch.object(proc, '_get_voice_modulation', return_value=''), \
              patch.object(proc, '_get_adaptive_directives', return_value=''):
             result = proc.getSystemPrompt()
 
         assert result.startswith('MY_DEF\n\n')
 
+    def test_d4_fills_voice_modulation_placeholder(self):
+        """{{voice_modulation}} is filled by _get_voice_modulation()."""
+        proc = _make_ump()
+
+        with patch.object(proc.SYSTEM_PROMPT_CLASS, 'getPrompt',
+                          return_value='PREAMBLE {{voice_modulation}} POSTAMBLE {{adaptive_directives}}'), \
+             patch.object(proc, 'getUserDefinition', return_value='USER_DEF'), \
+             patch.object(proc, '_get_voice_modulation', return_value='TEST_VOICE'), \
+             patch.object(proc, '_get_adaptive_directives', return_value='DIR'):
+            result = proc.getSystemPrompt()
+
+        assert 'TEST_VOICE' in result
+        assert '{{voice_modulation}}' not in result
+
+    def test_d5_no_literal_placeholders_in_output(self):
+        """After weaving, no {{...}} literals survive in the final output."""
+        import re
+        proc = _make_ump()
+
+        with patch.object(proc, 'getUserDefinition', return_value='USER_DEF'), \
+             patch.object(proc, '_get_voice_modulation', return_value='VOICE_STRING'), \
+             patch.object(proc, '_get_adaptive_directives', return_value='ADAPTIVE_STRING'):
+            result = proc.getSystemPrompt()
+
+        remaining = re.findall(r'\{\{\w+\}\}', result)
+        assert not remaining, f"Unfilled placeholders in system prompt: {remaining}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # E. getTools() voice-mode filter
@@ -1075,14 +1129,23 @@ class TestSmoke:
     def test_j2_getSystemPrompt_runs_with_template_and_directives_stubbed(self):
         proc = _make_ump()
 
+        # Template mirrors the real structure: both placeholders must be
+        # present so the test fails loudly if replace() stops working.
+        template = 'TEMPLATE voice={{voice_modulation}} adaptive={{adaptive_directives}} END'
+
         with patch.object(proc.SYSTEM_PROMPT_CLASS, 'getPrompt',
-                          return_value='TEMPLATE {{adaptive_directives}} END'), \
+                          return_value=template), \
              patch.object(proc, 'getUserDefinition', return_value='TEST_DEF'), \
-             patch.object(proc, '_get_adaptive_directives', return_value=''):
+             patch.object(proc, '_get_voice_modulation', return_value='VOICE_STUB'), \
+             patch.object(proc, '_get_adaptive_directives', return_value='ADAPT_STUB'):
             result = proc.getSystemPrompt()
 
         assert result.startswith('TEST_DEF\n\n')
         assert 'TEMPLATE' in result
+        assert 'voice=VOICE_STUB' in result
+        assert 'adaptive=ADAPT_STUB' in result
+        assert '{{voice_modulation}}' not in result
+        assert '{{adaptive_directives}}' not in result
 
     def test_j3_instance_is_not_a_singleton(self):
         """Two instances must be fully independent — no shared mutable state."""

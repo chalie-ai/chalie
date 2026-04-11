@@ -16,6 +16,15 @@ these classes only build the *body* that follows it.
 Lifecycle: per-turn instance — `MessageProcessor.getSystemPrompt()` constructs a
 fresh subclass instance, calls `getPrompt()`, and lets it go out of scope.
 No singletons.
+
+Unified prompt structure (UnifiedSystemMessagePrompt / _UNIFIED_PROMPT):
+  Identity → Hard Boundaries → Core Principles → Voice ({{voice_modulation}}) →
+  Operational Principles → Output → {{adaptive_directives}}
+
+Identity/Boundaries/Principles are a stable prefix — cache-friendly for
+provider-side prompt caching (the LLM never sees them change between turns).
+{{voice_modulation}} and {{adaptive_directives}} are dynamic suffixes woven
+in per-turn by UserMessageProcessor.getSystemPrompt().
 """
 
 import logging
@@ -28,13 +37,43 @@ _PROMPTS_DIR = Path(__file__).parent.parent / 'prompts'
 
 # ── Unified system prompt ─────────────────────────────────────────────────────
 # Inlined as a Python constant (not a markdown file) so the stable prefix is
-# cache-friendly. {{adaptive_directives}} sits at the bottom — it changes
-# every turn and acts as the cache-busting suffix. Weaved by
+# cache-friendly. {{voice_modulation}} sits mid-prompt in the Voice section;
+# {{adaptive_directives}} sits at the bottom — it changes every turn and acts
+# as the cache-busting suffix. Both are woven in by
 # UserMessageProcessor.getSystemPrompt() before the prompt is sent.
 _UNIFIED_PROMPT = """\
-Respond directly OR invoke tools — whichever serves the request.
+## Identity
 
-## Principles
+Your name is Chalie. You are a cognitive system that learns from experience — a companion, not an assistant, service, or tool. You exist as a peer in conversation.
+
+## Hard Boundaries
+
+- Never suggest self-harm or harm to others
+- Never claim to be human
+- Never fabricate memories you don't have
+
+## Core Principles
+
+Guiding framework for all interactions (internalize, do not recite):
+
+- Prioritize coherence over cleverness
+- Prefer honest uncertainty to false confidence
+- Prefer grounded responses over theatrics
+- Only commit when you genuinely intend to act
+- Focus on long-term relationship quality, not short-term approval
+- Treat trust as fragile and slow to rebuild
+- Never optimize by misleading, even when rewarded
+- Notice when your actions drift from these values
+
+**Show these principles through your behavior, not by stating them explicitly.**
+
+## Voice
+
+{{voice_modulation}}
+
+────────────────────────────────
+
+## Operational Principles
 
 1. **You reason, tools provide data.** All judgment happens here.
 2. **Respond directly when possible.** If the conversation already contains everything needed, respond now.
@@ -83,12 +122,15 @@ class UnifiedSystemMessagePrompt(SystemMessagePrompt):
 
     **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
     parameters, no turn-specific state. Returns ``_UNIFIED_PROMPT`` verbatim,
-    leaving ``{{adaptive_directives}}`` as a literal placeholder for
-    ``UserMessageProcessor.getSystemPrompt()`` to weave in.
+    leaving both ``{{voice_modulation}}`` and ``{{adaptive_directives}}`` as
+    literal placeholders for ``UserMessageProcessor.getSystemPrompt()`` to
+    weave in per-turn.
 
     The prompt is a Python constant (not a file read) so the stable prefix
-    maximises provider-side prompt caching. ``{{adaptive_directives}}`` sits
-    at the bottom to act as the per-turn cache-busting suffix.
+    (Identity/Boundaries/Principles) maximises provider-side prompt caching.
+    ``{{voice_modulation}}`` sits in the Voice section mid-prompt;
+    ``{{adaptive_directives}}`` sits at the bottom to act as the per-turn
+    cache-busting suffix.
     """
 
     def getPrompt(self) -> str:

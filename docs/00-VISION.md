@@ -188,7 +188,7 @@ Users express direction; Chalie handles operations. The gap between "I want X" a
 ### 5. Calm Intelligence
 Brevity, timing, and restraint build trust. Verbosity erodes it.
 
-*Codebase anchor: Radiant design system's "restraint as luxury" principle, soul.md behavioral prompts, frontal cortex adaptive directives for tone calibration.*
+*Codebase anchor: Radiant design system's "restraint as luxury" principle, identity/principles/voice inlined in `UnifiedSystemMessagePrompt` (`backend/services/system_message_prompt.py`), frontal cortex adaptive directives for tone calibration.*
 
 ### 6. Continuity Over Transactions
 Each interaction builds long-term understanding. Memory, identity, and history are first-class concerns, not afterthoughts.
