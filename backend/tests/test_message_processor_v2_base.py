@@ -196,13 +196,17 @@ class TestClassConstants:
         from services.message_processor_v2 import MessageProcessor
         assert MessageProcessor.NATIVE_TOOLS == []
 
-    def test_compaction_prompt_is_empty_string(self):
+    def test_compaction_prompt_is_non_empty_string(self):
+        # Commit 7: prompt is now populated (was placeholder '' in Commit 2).
         from services.message_processor_v2 import MessageProcessor
-        assert MessageProcessor.COMPACTION_PROMPT == ''
+        assert isinstance(MessageProcessor.COMPACTION_PROMPT, str)
+        assert len(MessageProcessor.COMPACTION_PROMPT) > 0
 
-    def test_tool_compaction_prompt_is_empty_string(self):
+    def test_tool_compaction_prompt_is_non_empty_string(self):
+        # Commit 7: prompt is now populated (was placeholder '' in Commit 2).
         from services.message_processor_v2 import MessageProcessor
-        assert MessageProcessor.TOOL_COMPACTION_PROMPT == ''
+        assert isinstance(MessageProcessor.TOOL_COMPACTION_PROMPT, str)
+        assert len(MessageProcessor.TOOL_COMPACTION_PROMPT) > 0
 
     def test_system_prompt_class_is_base(self):
         from services.message_processor_v2 import MessageProcessor
