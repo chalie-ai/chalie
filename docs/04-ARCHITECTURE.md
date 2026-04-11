@@ -14,7 +14,7 @@ Chalie is a **persistent cognitive agent** — a continuously running cognitive 
 ### Communication Pattern
 1. Client connects to `/ws` (WebSocket via flask-sock)
 2. Client sends `{"type": "message", "text": "..."}` JSON frame
-3. Backend spawns daemon thread → `UserMessageProcessor.process()` → response published via pub/sub → WebSocket frames (`status` → `message` → `done`)
+3. Backend spawns daemon thread → `UserMessageProcessor(raw_input, metadata, on_narration).send(request_id)` → response published via pub/sub → WebSocket frames (`status` → `message` → `done`)
 4. Drift thoughts, cards, and proactive notifications also arrive over the same `/ws` connection
 5. Authentication: Session cookie-based (`@require_session` decorator)
 
@@ -84,15 +84,16 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Message Processing
-- **`message_processor.py`** — Base class for all LLM turns. Handles transcript persistence, LLM invocation via `Providers`, and the standard tool-calling loop. The context window is always reconstructed from the database via `context_window_service.build_messages()` — nothing accumulates in memory. Compaction triggers at 80% of the provider's context limit.
-- **`message_processor_v2.py`** — **In-progress refactor** (parallel to legacy base). Introduces: abstract interface (`CHANNEL`/`ROLE`/`getUserPrompt()`/`getUserDefinition()`), per-subclass `NATIVE_TOOLS`/`MAX_ITERATIONS`/`MAX_TIMEOUT`, ContextVar-based current-processor discovery (`current_processor()` / `bind_current_processor()`), and `_memory_query_history` for dynamic radius tuning. Will replace `message_processor.py` at Commit 11 of the refactor.
-- **`user_message_processor.py`** — Entry point for all user-initiated messages. Builds user + system prompts, applies voice-mode tool filtering, sends via `MessageProcessor.send()` (full DB-backed tool loop; 30 iter / 15 min), and returns a normalized result dict. Singleton.
-- **`dmn_message_processor.py`** — `MessageProcessor` subclass for the Default Mode Network. 15 iter / 5 min. Exits silently when response contains `DMN_NO_ACTION`. Excludes `goal_pursuit` skill.
-- **`scheduled_message_processor.py`** — `MessageProcessor` subclass for scheduled prompts (replaces the legacy prompt-queue path).
-- **`context_window_service.py`** — DB-backed context window construction. `build_messages(channel)` always reconstructs the full LLM messages array from the transcript and tool_calls tables. `check_and_compact(channel, context_limit, job, pending_content, is_tool_triggered)` triggers compaction at 80% of the context limit and handles overflow: if a pending tool result would exceed the hard limit, it compacts first and stores the tool result as `overflow_content` in the compaction record. Overflow content is placed *before* the compacted summary in the reconstructed messages so the compacted text receives higher recency/attention weight. Compaction always uses the same provider job as the conversation.
+- **`message_processor.py`** — Abstract base class for all LLM turns. One instance per turn — no singletons, no `.instance()`, no `.process()`. Constructor: `__init__(raw_input, metadata=None)`. Entry method: `send(request_id=None) -> str`. Per-turn state lives on the instance: `_pending_tool_calls`, `_act_trail`, `_discovered_tools`, `_memory_seed`, `_uid`. Provides `send()` (full ACT loop), `store()` (atomic persistence via `transcript_service.append_atomic_turn()`), `handleTool()` (single dispatch chokepoint, never re-raises), `getSystemPrompt()`, `getTools()`, `getPreviousMessages()`. Subclasses implement `getUserDefinition()` and `getUserPrompt()`. Subclasses override `postTurn()` for per-channel service fan-out. History is delivered as a literal `## Previous Messages` text block inside `getUserPrompt()` — the provider sees a single-element `messages[]`, not a multi-turn array. Two-stage mid-ACT compaction fires at 80% of the provider's context window (Stage 1: tool-trail compaction in place; Stage 2: full checkpoint + ACT loop restart). ContextVar-based `current_processor()` / `bind_current_processor()` allow innate skills to reach the running processor without it being passed as a parameter.
+- **`system_message_prompt.py`** — `SystemMessagePrompt` abstract base + four concrete subclasses: `UnifiedSystemMessagePrompt` (user channel, loads `frontal-cortex-unified.md`), `DMNSystemMessagePrompt` (loads `prompts/dmn.md`), `GoalPursuitSystemMessagePrompt` (loads `prompts/goal-pursuit.md`), `ScheduledSystemMessagePrompt` (loads `prompts/scheduled-prompt.md`). One instance per turn, per `MessageProcessor.getSystemPrompt()` call. The `getUserDefinition()` line is prepended by the base `getSystemPrompt()` method — subclasses only build the body.
+- **`user_message_processor.py`** — `UserMessageProcessor(MessageProcessor)` subclass for the user channel. `CHANNEL='user'`, `ROLE='user'`, `NATIVE_TOOLS=ALL_SKILL_NAMES`, `MAX_ITERATIONS=30`, `MAX_TIMEOUT=900s`. Constructor adds `on_narration: Callable[[str, int], None] | None`. `_run_memory_seed()` auto-seeds episodes once per turn (`caller='seed'`, durable `ephemeral=0` DTO). `getUserPrompt()` assembles: world state, system awareness, `## Previous Messages`, memory seed line, current turn, ACT trail. `getSystemPrompt()` weaves `{{adaptive_directives}}` into the unified template. `getTools()` excludes `rich_render` for voice-mode turns. `postTurn()` runs 9-service fan-out (see `docs/13-MESSAGE-FLOW.md` §4).
+- **`dmn_message_processor.py`** — `DMNMessageProcessor(MessageProcessor)` subclass. `CHANNEL='dmn'`, `ROLE='proactive_thought'`, `MAX_ITERATIONS=15`, `MAX_TIMEOUT=300s`. Excludes `goal_pursuit` from `NATIVE_TOOLS`. `postTurn()` logs `dmn_reflection` event + metrics only.
+- **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass. `CHANNEL='goal_pursuit'` (flat — `pursuit_id` in `metadata` only, never in the channel string). `MAX_ITERATIONS=50`, `MAX_TIMEOUT=7200s`. `postTurn()` logs `goal_pursuit_turn` event + metrics.
+- **`scheduled_message_processor.py`** — `ScheduledMessageProcessor(MessageProcessor)` subclass. `CHANNEL='scheduled'` (flat — `item_id` in `metadata` only). Excludes `schedule` and `goal_pursuit` from `NATIVE_TOOLS`. `postTurn()` logs `scheduled_prompt_turn` + metrics + marks item executed.
+- **`context_window_service.py`** — Legacy DB-backed context window helper. `build_messages(channel)` reconstructs a multi-turn `messages[]` array from the transcript and tool_calls tables. `check_and_compact()` triggers compaction at 80% of the context limit. **Not used by the `MessageProcessor` subclasses** — the user/DMN/goal-pursuit/scheduled channels use `getPreviousMessages()` (literal-text block) and the two-stage in-loop compaction inside `send()`. Still called by `digest_worker.py` (legacy) and the end-turn backstop in `UserMessageProcessor.postTurn()`.
 - **`providers.py`** — Thin singleton gateway wrapping provider resolution and LLM send. Resolves the correct LLM provider for a given job (e.g. `frontal-cortex-unified`), sends messages, returns a raw `LLMResponse`. No response parsing.
-- **`user_prompt_assembly_service.py`** — Builds the per-turn user message: world state header, voice-mode guard, system awareness, and current turn (episodic auto-recall + user message + file/nudge tags). Conversation history is **not** assembled here — it is handled by `context_window_service.build_messages()`. Changes every turn; not cached.
-- **`system_prompt_assembly_service.py`** — Builds the stable, cacheable system prompt: identity modulation, adaptive directives, and the frontal-cortex-unified template. Designed for provider-side prompt caching. Previously an empty shell — now fully implemented.
+- **`user_prompt_assembly_service.py`** — **DEPRECATED** (rc-0.3.2). `UserMessageProcessor.getUserPrompt()` absorbs its responsibility for the user channel. Retained on disk only because `digest_worker.py` still imports it. Do not extend; do not add callers.
+- **`system_prompt_assembly_service.py`** — **DEPRECATED** (rc-0.3.2). `SystemMessagePrompt` subclasses absorb its responsibility. Retained on disk only because `digest_worker.py` still imports it. Do not extend; do not add callers.
 
 #### Memory System
 - **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning; fires rolling episode extraction trigger at `id % 25`
@@ -105,7 +106,7 @@ frontend/
 - **`moment_enrichment_service.py`** — Background worker (5min poll): generates LLM summaries, seals moments after 4hrs
 
 #### Autonomous Behavior
-- **`dmn_service.py`** — Default Mode Network: timer-based proactive intelligence. Fires after 60min idle (recent context — last 50 episodes) and every 6h (salience context — top-weight episodes + active goals). Calls `DMNMessageProcessor().process()` — full tool-loop-based LLM call; exits silently when response contains `DMN_NO_ACTION`. Quiet hours (23:00–08:00 local), rate limit (4/24h rolling). Configurable via `CHALIE_DMN_FIRST_IDLE_S` and `CHALIE_DMN_REPEAT_S`.
+- **`dmn_service.py`** — Default Mode Network: timer-based proactive intelligence. Fires after 60min idle (recent context — last 50 episodes) and every 6h (salience context — top-weight episodes + active goals). Constructs `DMNMessageProcessor(context, metadata).send()` directly — one instance per DMN turn; exits silently when response contains `DMN_NO_ACTION`. Quiet hours (23:00–08:00 local), rate limit (4/24h rolling). Configurable via `CHALIE_DMN_FIRST_IDLE_S` and `CHALIE_DMN_REPEAT_S`.
 - **`decay_engine_service.py`** — Periodic decay (30min cycle): power-law `retrieval_weight` decay for episodes (no hard deletes), episode consolidation into super episodes, deferred reconsolidation, knowledge decay, constraint consolidation, transcript cleanup
 
 #### Ambient Awareness
@@ -119,7 +120,7 @@ frontend/
 - **`act_dispatcher_service.py`** — Routes tool calls to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`tool_call_service.py`** — Unified API for all `tool_calls` table writes and reads. `store()` / `store_batch()` accept a `tool_call_id` parameter (LLM-generated call ID) used to reconstruct tool call lists when rebuilding context. `ephemeral` flag controls visibility in Previous Turns (ephemeral records — tool loop results, steers — are excluded; non-ephemeral — file tags, nudges — are included).
-- **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass: single `goal` string, daemon thread, 50 iter / 2h timeout, channel-isolated (`goal_pursuit:{uuid}`); surfaces result via `OutputService.enqueue_proactive()`; uses `review_tool_calls` skill to recall prior work if context was compacted
+- **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass: single `goal` string, daemon thread, `CHANNEL='goal_pursuit'` (flat — `pursuit_id` in `metadata` only), 50 iter / 2h timeout; surfaces result via `OutputService.enqueue_proactive()`
 - **`blocks_render_service.py`** — Universal block-format renderer. All content sent over WebSocket uses the block protocol: JSON arrays of typed block objects. No HTML emitted over the wire. `blocks.js` (frontend) handles rendering.
 
 #### Constants & Registries
@@ -158,7 +159,7 @@ Built-in cognitive skills always available to the LLM:
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`goal_pursuit_skill.py`** — Spawn a background goal pursuit: takes a single `goal` string, creates a `GoalPursuitProcessor` daemon thread in a channel-isolated context (`goal_pursuit:{uuid}`), returns immediately; result surfaces as a proactive message when complete
+- **`goal_pursuit_skill.py`** — Spawn a background goal pursuit: takes a single `goal` string, creates a `GoalPursuitProcessor` daemon thread (`CHANNEL='goal_pursuit'`, `pursuit_id` stored in `metadata`), returns immediately; result surfaces as a proactive message when complete
 - **`document_skill.py`** — Document search and management: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles; discovered tool names compound across tool loop iterations
@@ -175,7 +176,7 @@ Built-in cognitive skills always available to the LLM:
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
-- **DMN Service** — Timer-based proactive intelligence (60min idle → recent context, 6h cadence → salience context); calls `DMNMessageProcessor().process()`; see service listing above
+- **DMN Service** — Timer-based proactive intelligence (60min idle → recent context, 6h cadence → salience context); constructs `DMNMessageProcessor(context, metadata).send()` directly — one instance per DMN turn; see service listing above
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle (30min): power-law `retrieval_weight` decay for episodes (no hard deletes), super episode consolidation (3-5 similar), deferred reconsolidation, knowledge decay, transcript cleanup, constraint consolidation
@@ -189,7 +190,7 @@ Built-in cognitive skills always available to the LLM:
 - **Interface Health Monitor** — Pings all paired interfaces every 30s; marks offline after 3 consecutive failures
 - **Background LLM Worker** — Async LLM calls for non-interactive tasks (profile generation, tool profiling, etc.)
 - **Self Model Worker** — Monitors system health signals; populates `SelfModelService` degradation indicators
-- **Goal Pursuit** — `GoalPursuitProcessor` daemon thread spawned by the `goal_pursuit` innate skill; 50 iter / 2h timeout; no plan phase; surfaces completion via `OutputService.enqueue_proactive()`
+- **Goal Pursuit** — `GoalPursuitProcessor` daemon thread spawned by the `goal_pursuit` innate skill; `CHANNEL='goal_pursuit'` (flat); 50 iter / 2h timeout; no plan phase; surfaces completion via `OutputService.enqueue_proactive()`
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
 - **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in `vault_config`; unlocked post-login; migrates legacy Fernet data on first unlock
 
@@ -199,36 +200,34 @@ Built-in cognitive skills always available to the LLM:
 ```
 [User Input via WebSocket]
   → [WebSocket handler] spawns daemon thread
-    → [UserMessageProcessor.process()]
-      ├─ UserPromptAssemblyService.build()
-      │    (world state, voice guard, system awareness, episodic recall)
-      │    NOTE: conversation history NOT assembled here
-      ├─ SystemPromptAssemblyService.build()
-      │    (identity, directives, frontal-cortex-unified template)
-      ├─ MessageProcessor.send()
-      │    ├─ transcript.append(channel, 'user', ...)
-      │    ├─ context_window_service.check_and_compact() [pre-call]
-      │    ├─ context_window_service.build_messages() → messages array
-      │    │    (always reconstructed from DB — compaction + transcript + tool_calls)
-      │    ├─ Providers.send_messages() → first LLM call
-      │    ├─ Tool loop (standard tool-calling protocol):
-      │    │    ├─ transcript.append(channel, 'assistant', ...)
-      │    │    ├─ ActDispatcherService.dispatch_action() per tool call
-      │    │    ├─ context_window_service.check_and_compact()
-      │    │    │    (overflow check: compact before storing if result would exceed limit)
-      │    │    ├─ transcript.append(channel, 'tool', result)
-      │    │    ├─ ToolCallService.store(..., tool_call_id=tc['id'])
-      │    │    ├─ context_window_service.check_and_compact() [post-iter]
-      │    │    ├─ context_window_service.build_messages() → rebuilt array
-      │    │    ├─ Providers.send_messages() → next LLM call
-      │    │    └─ repeat until no tool_calls or cap (30 iter / 15 min)
-      │    └─ transcript.append(channel, 'assistant', final response)
-      └─ OutputService.enqueue_text() → pub/sub → WebSocket → client
-
-  Background (async, from OutputService):
-    → [Transcript Service] (rolling trigger at id % 25)
-      → [Episode Extractor] → SQLite episodes table
-      → Traits extracted → Knowledge Store
+    → UserMessageProcessor(raw_input, metadata, on_narration).send(request_id)
+      ├─ _run_memory_seed()
+      │    (recall_episodes caller='seed' → _memory_seed, durable DTO)
+      ├─ ACT loop (up to 30 iter / 900s):
+      │    getUserPrompt()  — builds literal-text body:
+      │      World State, System Awareness,
+      │      ## Previous Messages (getPreviousMessages() from DB),
+      │      [memory(radius=X)] seed line,
+      │      user: <raw_input> [file_tags] [nudge_tag],
+      │      ACT loop trail
+      │    _wrap_with_checkpoint() — envelope if compaction exists
+      │    [80% ctx threshold → Stage 1 / Stage 2 compaction]
+      │    getSystemPrompt() — identity + adaptive + unified template
+      │    getTools()       — innate skills + discovered tools
+      │    messages = [{'role':'user','content':user_body}]  (single element)
+      │    Providers.send_messages() → LLM call
+      │    for each tool_call: handleTool() → ActDispatcherService
+      │      DTOs accumulated in _pending_tool_calls (no mid-loop DB writes)
+      │    drain steer:{request_id} → user_steer DTOs
+      │    repeat until text-only response or cap
+      ├─ store() → transcript_service.append_atomic_turn()
+      │    ONE transaction:
+      │      INSERT transcript (ROLE, raw_input) → _uid
+      │      INSERT tool_calls (all accumulated DTOs, sorted by timestamp)
+      │      INSERT transcript ('assistant', llm_response)
+      │    Post-commit daemon threads (embedding + episode extraction)
+      └─ postTurn() → 9-service fan-out → OutputService.enqueue_text()
+                    → pub/sub → WebSocket → client
 ```
 
 ### Background Processes
@@ -244,14 +243,16 @@ Built-in cognitive skills always available to the LLM:
 [DMN Service] → timer-based proactive intelligence
     ├─ 60min idle → "recent" (last 50 high-weight episodes)
     ├─ 6h cadence → "salience" (top episodes by retrieval_weight + active goals)
-    └─ DMNMessageProcessor().process() → exits silently on DMN_NO_ACTION
+    └─ DMNMessageProcessor(context, metadata).send() → exits silently on DMN_NO_ACTION
 ```
 
 ## Key Architectural Decisions
 
 ### Unified Message Processing Path
-- **User messages bypass the mode router entirely** — they go directly to `UserMessageProcessor` which runs the full tool-calling loop (30 iter / 15 min).
-- **Non-user flows** (DMN idle/salience cycles, scheduled prompts) use purpose-built `MessageProcessor` subclasses (`DMNMessageProcessor`, `ScheduledMessageProcessor`, `GoalPursuitProcessor`).
+- **User messages bypass the mode router entirely** — they go directly to `UserMessageProcessor(raw_input, metadata, on_narration).send(request_id)`. One instance per turn; no singleton; no `.process()` entry method.
+- **Non-user flows** (DMN, goal pursuit, scheduled prompts) each instantiate their own `MessageProcessor` subclass directly. No central dispatcher. Each channel is its own orchestrator.
+- **History as literal text** — `getPreviousMessages()` renders the channel transcript as a `## Previous Messages` block inside the user message body. The provider receives a single-element `messages[]` array — not a multi-turn array with `role='tool'` entries.
+- **Atomic persistence** — `store()` calls `transcript_service.append_atomic_turn()` in one transaction at the end of the ACT loop. No mid-loop DB writes.
 - **No synthesis step** — the LLM decides whether to respond directly or call tools. No separate ACT/RESPOND split.
 
 ### Mode-Specific Prompts
@@ -265,14 +266,14 @@ Built-in cognitive skills always available to the LLM:
 - **Scores**: Each mode gets weighted composite score; highest wins; ONNX tie-breaker for ambiguous cases
 
 ### Memory Hierarchy
-- **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; `context_window_service.build_messages()` reads all entries above the compaction watermark on every LLM call (no in-memory accumulation)
-- **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization triggered at 80% of the provider's context limit; stores compacted text, watermark ID, and `overflow_content`; keyed by `channel`
+- **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; `getPreviousMessages()` reads entries above the compaction watermark and renders them as a literal `## Previous Messages` text block; written atomically per turn via `transcript_service.append_atomic_turn()`
+- **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization triggered at 80% of the provider's context limit inside `MessageProcessor.send()`; stores `compacted_text` + `compacted_up_to_id` watermark; keyed by `channel`; surfaced to the LLM via the `### Checkpoint` envelope prepended by `_wrap_with_checkpoint()`
 - **Episodes** (SQLite + sqlite-vec, `episodes` table) — Transcript-linked narrative units with power-law `retrieval_weight` decay and `storage_strength` that never decreases; created by rolling transcript trigger (`id % 25`); consolidate into "super episodes" referencing source episodes; retrieval always routed through `memory_skill.recall_episodes()` for uniform telemetry
 - **Knowledge** (SQLite + sqlite-vec, `knowledge` table) — Unified store replacing former `user_traits`, `semantic_concepts`, `procedural_memory` tables; stores traits, facts, procedures, preferences, rules, metrics; RRF hybrid search (exact + FTS5 + vector KNN)
-- **Tool Calls** (SQLite, `tool_calls` table) — Per-turn tool invocations with `ephemeral` flag; non-ephemeral calls reconstructed into context window by `context_window_service`
+- **Tool Calls** (SQLite, `tool_calls` table) — Per-turn tool invocations with `ephemeral` flag; all accumulated DTOs written atomically at turn end via `transcript_service.append_atomic_turn()`; durable (`ephemeral=0`) rows (memory auto-seed, full compaction records) are replayed in `getPreviousMessages()` on future turns; ephemeral rows are audit-only and never re-injected into context
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
-Each layer optimized for its timescale. Conversation history is reconstructed by `context_window_service.build_messages()` on every call. Per-turn user additions (world state, episodic recall, voice guard) assembled by `UserPromptAssemblyService`. Lists injected into all prompts as `{{active_lists}}`.
+Each layer optimized for its timescale. Conversation history is rendered by `getPreviousMessages()` as a literal text block inside `getUserPrompt()`. Per-turn additions (world state, episodic auto-seed, voice guard) are assembled directly by `UserMessageProcessor.getUserPrompt()`. Lists injected into all prompts as `{{active_lists}}`.
 
 ### Configuration Precedence
 ```
@@ -300,9 +301,10 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Speaker confidence** gates trait storage (unknown speakers = 0.3 penalty)
 
 ### Operational Limits
-- **User tool loop**: 30 max iterations, 15 min cumulative timeout; per-iteration synthesis sent via WebSocket
-- **DMN tool loop**: 15 max iterations, 5 min timeout
-- **Goal pursuit**: 50 max iterations, 2h wall-clock timeout; no concurrency cap, no state machine
+- **User tool loop** (`UserMessageProcessor`): 30 max iterations, 15 min cumulative timeout; mid-loop narration streamed via `on_narration` callback → WebSocket
+- **DMN tool loop** (`DMNMessageProcessor`): 15 max iterations, 5 min timeout; exits silently on `DMN_NO_ACTION`
+- **Goal pursuit** (`GoalPursuitProcessor`): 50 max iterations, 2h wall-clock timeout; `CHANNEL='goal_pursuit'` (flat); no concurrency cap, no state machine
+- **Scheduled** (`ScheduledMessageProcessor`): 30 max iterations, 15 min timeout; `CHANNEL='scheduled'` (flat)
 
 ### Anti-Manipulation
 - **Identity isolation**: 6 vectors with coherence constraints
