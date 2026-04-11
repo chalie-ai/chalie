@@ -19,24 +19,6 @@
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "plan-decomposition",
-      "name": "Plan Decomposition",
-      "desc": "Decomposes task goals into executable step DAGs for long-horizon planning.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "episodic-memory",
-      "name": "Episodic Memory",
-      "desc": "Synthesises sessions into episodic narratives for long-term recall.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "semantic-memory",
-      "name": "Semantic Memory",
-      "desc": "Extracts concepts and relationships to build the knowledge graph.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "none", "classification": "medium", "vision": "none" }
-    },
-    {
       "id": "experience-assimilation",
       "name": "Experience Assimilation",
       "desc": "Evaluates tool outputs for novel knowledge worth storing.",
@@ -47,12 +29,6 @@
       "name": "Trait Extraction",
       "desc": "Extracts user traits from messages via lightweight LLM call. Async, non-blocking.",
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "moment-enrichment",
-      "name": "Moment Enrichment",
-      "desc": "Generates titles and summaries for pinned moments.",
-      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
     },
     {
       "id": "document-synthesis",
@@ -83,12 +59,6 @@
       "name": "Goal Emergence",
       "desc": "Detects new goals from episodic memory narratives. Fires per episode batch.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "ambient-wrapper",
-      "name": "Ambient Wrapper",
-      "desc": "Processes ambient context signals (location, time, environment) into cognitive input.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "medium", "vision": "none" }
     }
   ]
 }

@@ -35,3 +35,15 @@ frontend/server/data/
 
 # LLM request logs (verbatim, one file per request, never committed)
 /logs/
+
+# Merge/editor/run artifacts — never commit
+*.orig
+*.rej
+*.bak
+*.tmp
+*~
+# Stash-suffixed files (e.g. foo.json~abc123... commit-msg) left by partial merges
+*~*... *
+backend/.build_baseline.json
+backend/.simplify_baseline.json*
+backend/.simplify_test_results.xml*
