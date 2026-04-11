@@ -504,3 +504,185 @@ class TestEmptyResultsFormat:
         assert 'knowledge' in result
         assert 'episodes' in result
         assert 'transcript' in result
+
+
+# ── Contradiction check wiring ────────────────────────────────────────────────
+# Tests A-D: _handle_store() <-> _check_trait_contradiction gate
+# These tests patch _check_trait_contradiction at the module level (not its
+# lazy-import internals) and KnowledgeService/get_shared_db_service so no
+# real DB or embedding service is needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _FakeKS:
+    """Minimal KnowledgeService fake — records store() calls, returns configurable dict."""
+
+    def __init__(self, stored_entry=None):
+        self._stored_entry = stored_entry if stored_entry is not None else {'rowid': 99}
+        self.store_calls = []
+
+    def store(self, **kwargs):
+        self.store_calls.append(kwargs)
+        return self._stored_entry
+
+
+def _params_for(key, value, kind=None):
+    """Build a minimal params dict for _handle_store."""
+    entry = {'key': key, 'value': value}
+    if kind is not None:
+        entry['kind'] = kind
+    return {'entries': [entry]}
+
+
+class TestHandleStoreTraitContradictionCheckFires:
+    """Test A — _check_trait_contradiction fires for trait entries."""
+
+    def test_a1_explicit_trait_kind_fires_check(self):
+        """kind='trait' → _check_trait_contradiction called with (ks, rowid, key, value, 1.0, thread_id, source='chat')."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 42})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            result = _handle_store('ch-1', _params_for('user_name', 'Alice', kind='trait'))
+
+        assert 'Stored' in result
+        mock_ctc.assert_called_once_with(
+            fake_ks, 42, 'user_name', 'Alice', 1.0,
+            thread_id='ch-1',
+            source='chat',
+        )
+
+    def test_a2_auto_classified_trait_key_fires_check(self):
+        """key 'user_name' auto-classifies to trait → contradiction check fires."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 7})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            result = _handle_store('ch-2', _params_for('user_name', 'Bob'))
+
+        assert 'Stored' in result
+        assert mock_ctc.call_count == 1
+        _, called_new_id, called_key, called_value, called_conf = mock_ctc.call_args.args
+        assert called_new_id == 7
+        assert called_key == 'user_name'
+        assert called_value == 'Bob'
+        assert called_conf == 1.0
+        assert mock_ctc.call_args.kwargs['thread_id'] == 'ch-2'
+        assert mock_ctc.call_args.kwargs['source'] == 'chat'
+
+    def test_a3_rowid_preferred_over_id_when_both_present(self):
+        """stored_entry with both 'rowid' and 'id' → rowid is passed to check."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 55, 'id': 100})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            _handle_store('ch-3', _params_for('user_name', 'Carol', kind='trait'))
+
+        assert mock_ctc.call_args.args[1] == 55
+
+    def test_a4_falls_back_to_id_when_rowid_absent(self):
+        """stored_entry with 'id' but no 'rowid' → 'id' is used."""
+        fake_ks = _FakeKS(stored_entry={'id': 33})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            _handle_store('ch-4', _params_for('user_name', 'Dave', kind='trait'))
+
+        assert mock_ctc.call_args.args[1] == 33
+
+
+class TestHandleStoreNonTraitSkipsContradictionCheck:
+    """Test B — _check_trait_contradiction must NOT fire for non-trait kinds."""
+
+    @pytest.mark.parametrize('kind', ['fact', 'procedure', 'preference', 'concept', 'rule', 'metric'])
+    def test_b1_no_contradiction_check_for_non_trait_kind(self, kind):
+        fake_ks = _FakeKS(stored_entry={'rowid': 10})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            result = _handle_store('ch-5', _params_for(f'{kind}_key', 'some value', kind=kind))
+
+        assert 'Stored' in result
+        mock_ctc.assert_not_called()
+
+
+class TestHandleStoreContradictionCheckExceptionDoesNotAbortStore:
+    """Test C — exception in _check_trait_contradiction must not propagate."""
+
+    def test_c1_store_succeeds_when_contradiction_check_raises(self):
+        """RuntimeError in _check_trait_contradiction → _handle_store still returns success."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 20})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction',
+                   side_effect=RuntimeError('embedding service down')):
+            from services.innate_skills.memory_skill import _handle_store
+            result = _handle_store('ch-6', _params_for('user_name', 'Eve', kind='trait'))
+
+        assert 'Stored' in result
+        assert len(fake_ks.store_calls) == 1
+
+    def test_c2_result_is_success_string_not_error_despite_ctc_failure(self):
+        """Return value names the stored key even when contradiction check blew up."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 21})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction',
+                   side_effect=ValueError('vector store unavailable')):
+            from services.innate_skills.memory_skill import _handle_store
+            result = _handle_store('ch-7', _params_for('user_name', 'Frank', kind='trait'))
+
+        assert '[MEMORY] Stored 1 entries' in result
+        assert 'Error' not in result
+
+
+class TestHandleStoreMissingRowidSkipsContradictionCheck:
+    """Test D — stored_entry without rowid/id must not call _check_trait_contradiction."""
+
+    def test_d1_empty_dict_stored_entry_skips_ctc(self):
+        """stored_entry={} is falsy → inner `if stored_entry and kind == 'trait':` skips."""
+        fake_ks = _FakeKS(stored_entry={})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            _handle_store('ch-8', _params_for('user_name', 'Grace', kind='trait'))
+
+        mock_ctc.assert_not_called()
+
+    def test_d2_zero_rowid_skips_ctc_via_new_id_guard(self):
+        """rowid=0 → new_id=0 → `if new_id:` guard is falsy → no CTC call."""
+        fake_ks = _FakeKS(stored_entry={'rowid': 0})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            _handle_store('ch-9', _params_for('user_name', 'Heidi', kind='trait'))
+
+        mock_ctc.assert_not_called()
+
+    def test_d3_none_rowid_and_none_id_skips_ctc(self):
+        """rowid=None falls through to id=None → new_id=None → no CTC call."""
+        fake_ks = _FakeKS(stored_entry={'rowid': None, 'id': None})
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=object()), \
+             patch('services.innate_skills.memory_skill._check_trait_contradiction') as mock_ctc:
+            from services.innate_skills.memory_skill import _handle_store
+            _handle_store('ch-10', _params_for('user_name', 'Ivan', kind='trait'))
+
+        mock_ctc.assert_not_called()
+

@@ -1132,7 +1132,7 @@ class MessageProcessor:
         """Per-channel post-turn service fan-out.
 
         Base is a no-op. UserMessageProcessor overrides in Commit 8 with the
-        nine-service fan-out (trait extraction, contradiction detection, phase
+        eight-service fan-out (contradiction detection via memory skill, phase
         updates, etc.). Each subclass is the sole orchestrator of its own tail.
         """
         pass

@@ -188,6 +188,71 @@ def handle_memory(channel: str, params: dict) -> str:
 # ── Store ────────────────────────────────────────────────────────────
 
 
+def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, thread_id: str, source: str = 'chat'):
+    """
+    Runs synchronously after a trait is stored.
+    - temporal_change + source=chat → hard-delete old trait
+    - true_contradiction OR source=ambient → reduce confidences, create pending record, push question
+    """
+    try:
+        from services.embedding_service import get_embedding_service
+        from services.contradiction_classifier_service import ContradictionClassifierService
+        from services.pending_contradiction_service import PendingContradictionService
+        from services.database_service import get_shared_db_service
+        from services.output_service import OutputService
+
+        emb_svc = get_embedding_service()
+        new_text = f"{key}: {value}"
+        embedding = emb_svc.generate_embedding(new_text)
+        if embedding is None:
+            return
+
+        similar = ks.find_similar_traits(embedding, exclude_id=new_id)
+        if not similar:
+            return
+
+        existing = similar[0]  # top candidate only
+        existing_text = f"{existing['key']}: {existing['value']}"
+
+        classifier = ContradictionClassifierService()
+        result = classifier.check_new_trait(new_text, existing_text, source=source)
+        if result is None:
+            return
+
+        classification = result.get('classification', 'compatible')
+
+        if classification == 'temporal_change' and source == 'chat':
+            # Auto-overwrite: hard-delete old trait
+            ks.hard_delete_by_id(existing['id'])
+            logger.info(f"[CONTRADICTION] temporal_change: deleted old trait id={existing['id']} key={existing['key']}")
+
+        elif classification in ('true_contradiction', 'ambiguous') or source == 'ambient':
+            # Ask user: reduce confidences, create pending record, push message
+            ks.update_confidence(existing['id'], existing['confidence'] * 0.75)
+            ks.update_confidence(new_id, 0.5)
+
+            question = (
+                f"I'm seeing two conflicting things about {key}: "
+                f"'{existing['value']}' (existing) and '{value}' (just mentioned). "
+                f"Which is correct? Just tell me and I'll update."
+            )
+
+            db = get_shared_db_service()
+            pending_svc = PendingContradictionService(db)
+            pending_svc.create(new_id, existing['id'], question, source)
+
+            if thread_id:
+                OutputService().enqueue_proactive(
+                    topic=thread_id,
+                    response=question,
+                    source='contradiction',
+                )
+                logger.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
+
+    except Exception as e:
+        logger.debug(f"[CONTRADICTION] Check failed: {e}")
+
+
 def _handle_store(channel: str, params: dict) -> str:
     """Store one or more knowledge entries."""
     entries = params.get("entries", [])
@@ -234,7 +299,6 @@ def _handle_store(channel: str, params: dict) -> str:
 
             if stored_entry and kind == 'trait':
                 try:
-                    from workers.digest_worker import _check_trait_contradiction
                     new_id = stored_entry.get('rowid') or stored_entry.get('id')
                     if new_id:
                         _check_trait_contradiction(
