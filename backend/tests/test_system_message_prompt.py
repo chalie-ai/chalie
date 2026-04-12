@@ -261,13 +261,6 @@ class TestUnifiedSystemMessagePrompt:
 
     # ── No side effects on DB / services ──────────────────────────────────────
 
-    def test_get_prompt_does_not_touch_identity_service(self):
-        """Y1: the class must not import or instantiate IdentityService."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with patch('services.identity_service.IdentityService') as mock_ident:
-            UnifiedSystemMessagePrompt().getPrompt()
-        mock_ident.assert_not_called()
-
     def test_get_prompt_does_not_touch_adaptive_layer_service(self):
         """Y1: the class must not import or instantiate AdaptiveLayerService."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt

@@ -18,7 +18,6 @@ import logging
 from services.innate_skills.memory_skill import handle_memory
 from services.innate_skills.introspect_skill import handle_introspect
 from services.innate_skills.scheduler_skill import handle_scheduler
-from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.list_skill import handle_list
 from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit
 from services.innate_skills.document_skill import handle_document
@@ -39,7 +38,6 @@ _SKILL_HANDLERS = {
     'memorize': handle_memory,     # backward-compat alias
     'introspect': handle_introspect,
     'schedule': handle_scheduler,
-    'autobiography': handle_autobiography,
     'list': handle_list,
     'goal_pursuit': handle_goal_pursuit,
     'document': handle_document,
@@ -67,7 +65,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["memory"] = lambda channel, action: handle_memory(channel, action)
     dispatcher.handlers["introspect"] = lambda channel, action: handle_introspect(channel, action)
     dispatcher.handlers["schedule"] = lambda channel, action: handle_scheduler(channel, action)
-    dispatcher.handlers["autobiography"] = lambda channel, action: handle_autobiography(channel, action)
     dispatcher.handlers["list"] = lambda channel, action: handle_list(channel, action)
     dispatcher.handlers["goal_pursuit"] = lambda channel, action: handle_goal_pursuit(channel, action)
     dispatcher.handlers["document"] = lambda channel, action: handle_document(channel, action)
@@ -86,19 +83,18 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["internal_reasoning"] = lambda channel, action: handle_memory(channel, action)
     dispatcher.handlers["semantic_query"] = lambda channel, action: handle_memory(channel, action)
 
-    # Register on_demand tools from the tool registry (dynamic plugins)
+    # Register on_demand tools from the tool registry (dynamic plugins).
+    # Uses registry.execute() which returns {'text': ...} — same shape as
+    # innate skill handlers. The dispatcher unwraps the dict automatically.
     try:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
         for tool_name in registry.get_on_demand_tools():
-            # Innate skills take precedence over same-named external tools
             if tool_name in dispatcher.handlers:
                 logging.debug(f"[INNATE SKILLS] Skipping dynamic tool '{tool_name}' — innate skill registered")
                 continue
-            # Strip "type" key before passing to registry — action dict
-            # contains type for dispatcher routing, tools don't need it
             dispatcher.handlers[tool_name] = (
-                lambda topic, action, tn=tool_name: registry.invoke(
+                lambda topic, action, tn=tool_name: registry.execute(
                     tn, topic,
                     {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
                     exchange_id=action.get('exchange_id', ''),

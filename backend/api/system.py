@@ -340,37 +340,6 @@ def observability_tools():
         return jsonify({"error": "Failed to retrieve tool data"}), 500
 
 
-@system_bp.route('/system/observability/identity', methods=['GET'])
-@require_session
-def observability_identity():
-    """Identity vector states."""
-    try:
-        from services.identity_service import IdentityService
-        from services.database_service import get_shared_db_service
-
-        svc = IdentityService(get_shared_db_service())
-        raw = svc.get_vectors()
-
-        vectors = {}
-        for name, state in raw.items():
-            vectors[name] = {
-                'baseline': state.get('baseline_weight', 0.5),
-                'activation': state.get('current_activation', 0.5),
-                'plasticity': state.get('plasticity_rate', 0),
-                'inertia': state.get('inertia_rate', 0),
-                'reinforcements': state.get('reinforcement_count', 0),
-                'min': state.get('min_cap', 0),
-                'max': state.get('max_cap', 1),
-            }
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'vectors': vectors,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/identity error: {e}")
-        return jsonify({"error": "Failed to retrieve identity data"}), 500
-
 
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
@@ -400,49 +369,6 @@ def observability_tasks():
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")
         return jsonify({"error": "Failed to retrieve task data"}), 500
-
-
-@system_bp.route('/system/observability/autobiography', methods=['GET'])
-@require_session
-def observability_autobiography():
-    """Current autobiography narrative with delta information."""
-    try:
-        from services.autobiography_service import AutobiographyService
-        from services.autobiography_delta_service import AutobiographyDeltaService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        narrative_data = AutobiographyService(db).get_current_narrative()
-        delta_data = AutobiographyDeltaService(db).get_changed_sections()
-
-        result = {
-            'generated_at': _now_iso(),
-            'narrative': None,
-            'version': None,
-            'episodes_since': None,
-            'created_at': None,
-            'delta': None,
-        }
-
-        if narrative_data:
-            result['narrative'] = narrative_data.get('narrative')
-            result['version'] = narrative_data.get('version')
-            result['episodes_since'] = narrative_data.get('episodes_since')
-            created = narrative_data.get('created_at')
-            result['created_at'] = str(created) if created and not isinstance(created, str) else created
-
-        if delta_data:
-            result['delta'] = {
-                'changed': delta_data.get('changed', []),
-                'unchanged': delta_data.get('unchanged', []),
-                'from_version': delta_data.get('from_version'),
-                'to_version': delta_data.get('to_version'),
-            }
-
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/autobiography error: {e}")
-        return jsonify({"error": "Failed to retrieve autobiography data"}), 500
 
 
 @system_bp.route('/system/observability/traits', methods=['GET'])

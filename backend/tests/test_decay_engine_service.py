@@ -267,8 +267,8 @@ class TestDecayEngineService:
         # Seed tool_calls — one per transcript row
         for tid in transcript_ids:
             db.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, invoked_by, created_at) "
-                "VALUES (?, 'memory', 'llm', datetime('now'))",
+                "INSERT INTO tool_calls (transcript_id, tool_name, created_at) "
+                "VALUES (?, 'memory', datetime('now'))",
                 (tid,),
             )
         db.commit()
@@ -301,8 +301,8 @@ class TestDecayEngineService:
         db.commit()
         tid = db.execute("SELECT id FROM transcript ORDER BY id DESC LIMIT 1").fetchone()[0]
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, invoked_by) "
-            "VALUES (?, 'memory', 'llm')",
+            "INSERT INTO tool_calls (transcript_id, tool_name) "
+            "VALUES (?, 'memory')",
             (tid,),
         )
         db.commit()

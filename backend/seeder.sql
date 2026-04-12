@@ -21,8 +21,7 @@ ORDER BY created_at;
 INSERT OR IGNORE INTO job_provider_assignments (job_name, provider_id)
 SELECT job_name, (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) AS provider_id
 FROM (
-    SELECT 'autobiography'                  AS job_name
-    UNION ALL SELECT 'frontal-cortex'
+    SELECT 'frontal-cortex'
     UNION ALL SELECT 'frontal-cortex-unified'
     UNION ALL SELECT 'cognitive-triage'
     UNION ALL SELECT 'frontal-cortex-act'

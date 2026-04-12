@@ -38,10 +38,8 @@ TOOL_CALLS_DDL = [
         tool_name     TEXT NOT NULL,
         params        TEXT DEFAULT '{}',
         result        TEXT DEFAULT '',
-        invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
         created_at    TEXT NOT NULL DEFAULT (datetime('now')),
         ephemeral     INTEGER NOT NULL DEFAULT 0,
-        tool_call_id  TEXT,
         FOREIGN KEY (transcript_id) REFERENCES transcript(id)
     )
     """,
@@ -153,11 +151,6 @@ class TestStore:
         svc.store(transcript_id, 'memory', '{"raw": true}', 'ok')
         rows = _all_rows(db_service)
         assert rows[0]['params'] == '{"raw": true}'
-
-    def test_store_invoked_by_system(self, svc, db_service, transcript_id):
-        svc.store(transcript_id, 'user_steer', {}, 'steer text', invoked_by='system')
-        rows = _all_rows(db_service)
-        assert rows[0]['invoked_by'] == 'system'
 
 
 class TestStoreBatch:
@@ -306,13 +299,13 @@ class TestGetFindToolsResults:
         # Two find_tools calls with overlapping discovered tools
         with db_service.connection() as conn:
             conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, ephemeral) "
-                "VALUES (?, 'find_tools', ?, '', 'llm', 1)",
+                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
+                "VALUES (?, 'find_tools', ?, '', 1)",
                 (transcript_id, json.dumps({'discovered': ['send_email', 'read_email']})),
             )
             conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, ephemeral) "
-                "VALUES (?, 'find_tools', ?, '', 'llm', 1)",
+                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
+                "VALUES (?, 'find_tools', ?, '', 1)",
                 (transcript_id, json.dumps({'discovered': ['read_email', 'delete_email']})),
             )
 
@@ -331,8 +324,8 @@ class TestGetFindToolsResults:
     def test_get_find_tools_results_handles_malformed_params(self, svc, db_service, transcript_id):
         with db_service.connection() as conn:
             conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, ephemeral) "
-                "VALUES (?, 'find_tools', 'not valid json', '', 'llm', 1)",
+                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
+                "VALUES (?, 'find_tools', 'not valid json', '', 1)",
                 (transcript_id,),
             )
         # Malformed JSON must not raise — returns empty gracefully
@@ -342,8 +335,8 @@ class TestGetFindToolsResults:
     def test_get_find_tools_results_ignores_other_tools(self, svc, db_service, transcript_id):
         with db_service.connection() as conn:
             conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, invoked_by, ephemeral) "
-                "VALUES (?, 'memory', ?, '', 'llm', 0)",
+                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
+                "VALUES (?, 'memory', ?, '', 0)",
                 (transcript_id, json.dumps({'discovered': ['should_not_appear']})),
             )
         results = svc.get_find_tools_results(transcript_id)

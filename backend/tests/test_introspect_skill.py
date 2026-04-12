@@ -3,9 +3,8 @@ Tests for services/innate_skills/introspect_skill.py
 
 Tests use the real `db` fixture (fully-migrated SQLite) for all database
 interactions.  Non-DB services (SelfModelService, KnowledgeService,
-IdentityService, AutobiographyService, MemoryClientService)
-remain mocked where needed because they pull data from Redis/memory stores or
-perform complex internal logic that is not under test here.
+MemoryClientService) remain mocked where needed because they pull data from
+Redis/memory stores or perform complex internal logic that is not under test here.
 """
 
 import pytest
@@ -19,8 +18,6 @@ _SELF_MODEL  = 'services.self_model_service.SelfModelService'
 _DB          = 'services.database_service.get_shared_db_service'
 _KNOWLEDGE   = 'services.knowledge_service.KnowledgeService'
 _MEMORY_CLI  = 'services.memory_client.MemoryClientService'
-_IDENTITY    = 'services.identity_service.IdentityService'
-_AUTO_SVC    = 'services.autobiography_service.AutobiographyService'
 _UTC_NOW     = 'services.innate_skills.introspect_skill.utc_now'
 
 # A fixed "now" for deterministic relative-time assertions.
@@ -435,47 +432,10 @@ class TestIdentityScope:
 
         assert 'formal' in result
 
-    @patch(_IDENTITY)
-    def test_identity_personality_top_dimensions(self, mock_id_cls, db):
-        mock_id_cls.return_value.get_vectors.return_value = {
-            'curiosity':   {'current_activation': 0.9},
-            'warmth':      {'current_activation': 0.85},
-            'playfulness': {'current_activation': 0.4},   # below 0.6 threshold — must be excluded
-        }
-
-        from services.innate_skills.introspect_skill import _identity_personality
-        result = _identity_personality()
-
-        assert 'curious' in result
-        assert 'warm'    in result
-        assert 'playful' not in result
-
-    @patch(_IDENTITY)
-    def test_identity_personality_max_three_dimensions(self, mock_id_cls, db):
-        mock_id_cls.return_value.get_vectors.return_value = {
-            'curiosity':            {'current_activation': 0.95},
-            'warmth':               {'current_activation': 0.90},
-            'assertiveness':        {'current_activation': 0.85},
-            'skepticism':           {'current_activation': 0.80},
-            'playfulness':          {'current_activation': 0.75},
-            'uncertainty_tolerance':{'current_activation': 0.70},
-        }
-
-        from services.innate_skills.introspect_skill import _identity_personality
-        result = _identity_personality()
-
-        # The implementation caps at 3 dimensions
-        count = result.count(' and ')
-        # "A and B and C" has 2 occurrences of " and "
-        # "A and B" has 1
-        assert count <= 2
-
-    @patch(_AUTO_SVC)
-    @patch(_IDENTITY)
     @patch(_KNOWLEDGE)
     @patch(_DB)
     def test_identity_graceful_degradation(
-        self, mock_db_fn, mock_ks_cls, mock_id_cls, mock_auto_cls
+        self, mock_db_fn, mock_ks_cls
     ):
         """When every identity sub-service fails the scope returns the fallback string."""
         mock_db_fn.return_value = MagicMock(
@@ -484,8 +444,6 @@ class TestIdentityScope:
             )
         )
         mock_ks_cls.return_value.get.side_effect = RuntimeError
-        mock_id_cls.return_value.get_vectors.side_effect = RuntimeError
-        mock_auto_cls.return_value.get_current_narrative.side_effect = RuntimeError
 
         from services.innate_skills.introspect_skill import _scope_identity_snapshot
         result = _scope_identity_snapshot()

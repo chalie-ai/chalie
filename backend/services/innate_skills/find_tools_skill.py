@@ -53,7 +53,7 @@ def handle_find_tools(channel: str, params: dict) -> dict:
     query = params.get("query", "").strip()
     logger.info(f"{LOG_PREFIX} query='{query}' limit={params.get('limit', 5)}")
     if not query:
-        return {"text": f"{LOG_PREFIX} Error: 'query' is required.", "_discovered_tools": []}
+        return {"text": "ERROR: 'query' is required.", "_discovered_tools": []}
 
     limit = min(params.get("limit", 5), 10)
 
@@ -96,7 +96,7 @@ def handle_find_tools(channel: str, params: dict) -> dict:
 
     if not rows:
         return {
-            "text": f"{LOG_PREFIX} No tools found matching '{query}'.",
+            "text": _format_no_tools(query),
             "_discovered_tools": [],
         }
 
@@ -110,35 +110,26 @@ def handle_find_tools(channel: str, params: dict) -> dict:
     available_tools = _filter_available(rows, query)
 
     if not available_tools:
-        # Collect matching innate skill names so the model knows what to use
-        matched_skills = []
-        for row in rows:
-            tool_type = row[1] if not isinstance(row, dict) else row['tool_type']
-            if tool_type == 'skill':
-                name = row[0] if not isinstance(row, dict) else row['tool_name']
-                summary = row[2] if not isinstance(row, dict) else row['short_summary']
-                matched_skills.append((name, summary))
-        if matched_skills:
-            skill_lines = "\n".join(
-                f"  - **{name}**: {summary}" for name, summary in matched_skills[:5]
-            )
-            hint = (
-                f"{LOG_PREFIX} No external tools match '{query}', but these "
-                f"built-in skills are already available to you:\n{skill_lines}\n"
-                "Call them directly — they are in your current tool list."
-            )
-        else:
-            hint = f"{LOG_PREFIX} No tools found matching '{query}'."
         return {
-            "text": hint,
+            "text": _format_no_tools(query),
             "_discovered_tools": [],
         }
 
     # Cap to requested limit
     available_tools = available_tools[:limit]
 
-    discovered_names = [t['tool_name'] for t in available_tools]
-    text = _format_search_results(query, available_tools)
+    text = _format_added_tools(available_tools)
+
+    # Only inject tools that survived the relevance filter
+    import json
+    added = json.loads(text).get('added_tools', [])
+    discovered_names = [t['name'] for t in added]
+
+    if not discovered_names:
+        return {
+            "text": _format_no_tools(query),
+            "_discovered_tools": [],
+        }
 
     return {"text": text, "_discovered_tools": discovered_names}
 
@@ -196,6 +187,7 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
             'domain': domain,
             'effort': effort,
             'score': score,
+            'distance': distance,
         })
 
     # Lower score = better (closer semantically + more keyword matches)
@@ -203,63 +195,31 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
     return results
 
 
-def _format_search_results(query: str, tools: List[Dict]) -> str:
-    """Format search results for the LLM."""
-    lines = [f"{LOG_PREFIX} Found {len(tools)} tool(s) matching '{query}':\n"]
+_MIN_RELEVANCE = 0.15
 
+
+def _format_added_tools(tools: List[Dict]) -> str:
+    """Format discovered tools as JSON for tool_calls storage.
+
+    Relevance derived from raw sqlite-vec distance (0–2 range, lower=closer).
+    Keyword bonus already baked into sort order via score; relevance is purely
+    the semantic signal so the LLM knows how confident the match is.
+    """
+    import json
+    entries = []
     for t in tools:
-        param_str = _get_param_summary(t['tool_name'])
-        # Translate internal score to match quality (lower score = better)
-        score = t['score']
-        if score <= 2.0:
-            quality = "excellent"
-        elif score <= 4.0:
-            quality = "good"
-        elif score <= 6.0:
-            quality = "fair"
-        else:
-            quality = "weak"
-
-        lines.append(f"- **{t['tool_name']}** (match={quality}, {t['effort']}): {t['short_summary']}")
-        if param_str:
-            lines.append(f"  Parameters: {param_str}")
-
-    lines.append("\nThese tools are now available for you to call directly.")
-    return "\n".join(lines)
+        dist = t.get('distance', 2.0)
+        relevance = round(max(0.0, min(1.0, 1.0 - dist / 2.0)), 2)
+        if relevance < _MIN_RELEVANCE:
+            continue
+        entries.append({"name": t['tool_name'], "relevance": relevance})
+    return json.dumps({"added_tools": entries})
 
 
-def _get_param_summary(tool_name: str) -> str:
-    """Get compact parameter summary from tool manifest."""
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        tool_data = registry.tools.get(tool_name)
-        if not tool_data:
-            return ""
+def _format_no_tools(query: str) -> str:
+    """Format the no-new-tools message."""
+    return f'INFO: The best tools for "{query}" are already available.'
 
-        manifest = tool_data['manifest']
-
-        if 'input_schema' in manifest:
-            schema_props = manifest['input_schema'].get('properties', {})
-            schema_required = manifest['input_schema'].get('required', [])
-            if not schema_props:
-                return "(no parameters)"
-            parts = []
-            for pname in schema_props:
-                parts.append(pname if pname in schema_required else f"{pname}?")
-            return f"({', '.join(parts)})"
-
-        params = manifest.get('parameters', {})
-        if not params:
-            return "(no parameters)"
-
-        parts = []
-        for pname, pdef in params.items():
-            required = pdef.get('required', False)
-            parts.append(pname if required else f"{pname}?")
-        return f"({', '.join(parts)})"
-    except Exception:
-        return ""
 
 
 # -- Fallback --------------------------------------------------------------
@@ -290,28 +250,25 @@ def _fallback_keyword_search(query: str, limit: int) -> dict:
 
         if not rows:
             return {
-                "text": f"{LOG_PREFIX} No tools found matching '{query}' (keyword fallback).",
+                "text": _format_no_tools(query),
                 "_discovered_tools": [],
             }
 
         discovered = []
-        lines = [f"{LOG_PREFIX} Found {len(rows)} tool(s) matching '{query}' (keyword search):\n"]
         for row in rows:
             name = row[0] if not isinstance(row, dict) else row['tool_name']
-            summary = row[2] if not isinstance(row, dict) else row['short_summary']
-            effort = row[4] if not isinstance(row, dict) else row['effort']
-            param_str = _get_param_summary(name)
-            lines.append(f"- **{name}** ({effort}): {summary}")
-            if param_str:
-                lines.append(f"  Parameters: {param_str}")
             discovered.append(name)
 
-        lines.append("\nThese tools are now available for you to call directly.")
-        return {"text": "\n".join(lines), "_discovered_tools": discovered}
+        import json
+        entries = [{"name": n, "relevance": 0.5} for n in discovered]
+        return {
+            "text": json.dumps({"added_tools": entries}),
+            "_discovered_tools": discovered,
+        }
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Keyword fallback also failed: {e}")
         return {
-            "text": f"{LOG_PREFIX} Tool search unavailable. Error: {e}",
+            "text": f"ERROR: Tool search unavailable — {e}",
             "_discovered_tools": [],
         }

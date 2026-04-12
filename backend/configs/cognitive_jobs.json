@@ -1,12 +1,6 @@
 {
   "jobs": [
     {
-      "id": "autobiography",
-      "name": "Autobiography Synthesis",
-      "desc": "Synthesises personal narrative prose from all memory layers (6h cycle).",
-      "caps": { "reasoning": "high", "structured": "low", "creativity": "high", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "frontal-cortex-unified",
       "name": "Frontal Cortex (Unified)",
       "desc": "Unified generation path for user messages. Logs under this name; assign provider here.",

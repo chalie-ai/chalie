@@ -5,6 +5,7 @@ Routes queries to best provider(s) via embedding similarity,
 or allows explicit provider selection. Falls back to DDG.
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -40,10 +41,15 @@ def _load_providers() -> dict:
 
 
 def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict:
-    """Search across providers. Params: query (str), provider (str, optional), limit (int, optional)."""
+    """Search across providers. Params: query (str), provider (str, optional), limit (int, optional).
+
+    Returns {'text': json_or_error} where text is either:
+    - JSON: {"results":[{"title":"...","desc":"...","url":"..."},...]}
+    - Plain error string on failure (timeout, rate limit, no results)
+    """
     query = (params.get('query') or '').strip()
     if not query:
-        return {'results': [], 'count': 0, 'providers_used': [], '_meta': {}}
+        return {'text': 'No results found'}
 
     limit = max(1, min(10, int(params['limit']) if params.get('limit') is not None else 5))
     forced = (params.get('provider') or '').strip().lower()
@@ -65,7 +71,14 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
             meta['ddg_fallback'] = True
 
     logger.info('[SEARCH] query="%s" providers=%s count=%d', query, used, len(results))
-    return {'results': results, 'count': len(results), 'providers_used': used, '_meta': meta}
+
+    if not results:
+        return {'text': 'No results found'}
+
+    return {'text': json.dumps({'results': [
+        {'title': r.get('title', ''), 'desc': r.get('snippet', ''), 'url': r.get('url', '')}
+        for r in results
+    ]})}
 
 
 def _search_forced(query: str, provider_name: str, limit: int):

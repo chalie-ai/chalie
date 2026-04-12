@@ -1,7 +1,7 @@
 """
 API endpoint existence tests.
 
-Absorbs nightly scenarios 070, 074, 075 — those scenarios validated
+Absorbs nightly scenarios 070, 074 — those scenarios validated
 endpoint availability against a live running server.  Route-registration tests
 catch the same regressions on every commit without requiring a running instance.
 """
@@ -17,7 +17,6 @@ class TestAPIEndpointExistence:
     Absorbs nightly scenarios:
       070 — /system/status endpoint exists and returns 200 with a status field
       074 — /system/observability/tasks endpoint exists and accepts GET
-      075 — /system/observability/autobiography endpoint exists and accepts GET
     """
 
     @pytest.fixture
@@ -95,25 +94,3 @@ class TestAPIEndpointExistence:
             "/system/observability/tasks returned 404 — blueprint not registered"
         )
 
-    # ------------------------------------------------------------------
-    # scenario 075 — /system/observability/autobiography
-    # ------------------------------------------------------------------
-
-    def test_observability_autobiography_route_registered(self, registered_routes):
-        """Absorbs scenario 075: /system/observability/autobiography must be a registered GET route."""
-        assert '/system/observability/autobiography' in registered_routes, (
-            "/system/observability/autobiography is not registered in Flask's URL map"
-        )
-        assert 'GET' in registered_routes['/system/observability/autobiography'], (
-            "/system/observability/autobiography does not accept GET requests"
-        )
-
-    def test_observability_autobiography_endpoint_reachable(self, authed_client):
-        """Absorbs scenario 075 (reachability): endpoint must not 404."""
-        client, _db, _mock_store = authed_client
-
-        response = client.get('/system/observability/autobiography')
-
-        assert response.status_code != 404, (
-            "/system/observability/autobiography returned 404 — blueprint not registered"
-        )

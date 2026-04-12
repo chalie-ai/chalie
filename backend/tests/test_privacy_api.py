@@ -98,7 +98,7 @@ class TestDataSummary:
 
         required_tables = [
             'episodes', 'knowledge', 'transcript',
-            'autobiography', 'scheduled_items',
+            'scheduled_items',
             'lists', 'place_fingerprints',
             'interaction_log',
         ]
@@ -117,7 +117,7 @@ class TestExportData:
 
         required_tables = [
             'episodes', 'knowledge',
-            'transcript', 'autobiography', 'scheduled_items',
+            'transcript', 'scheduled_items',
             'lists', 'list_items', 'place_fingerprints',
         ]
         for table in required_tables:

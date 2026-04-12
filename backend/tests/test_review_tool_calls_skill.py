@@ -36,7 +36,6 @@ TOOL_CALLS_DDL = [
         tool_name     TEXT NOT NULL,
         params        TEXT DEFAULT '{}',
         result        TEXT DEFAULT '',
-        invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
         created_at    TEXT NOT NULL DEFAULT (datetime('now')),
         ephemeral     INTEGER NOT NULL DEFAULT 0
     )
@@ -100,7 +99,7 @@ def patched_db(db_service):
         yield db_service
 
 
-def _insert_tool_call(db_service, tool_name, params, result, created_at, invoked_by='llm', ephemeral=0):
+def _insert_tool_call(db_service, tool_name, params, result, created_at, ephemeral=0):
     """Helper: insert a raw tool_call row with a fixed created_at."""
     with db_service.connection() as conn:
         # Insert a dummy transcript entry first
@@ -111,14 +110,13 @@ def _insert_tool_call(db_service, tool_name, params, result, created_at, invoked
         transcript_id = cursor.lastrowid
         cursor.execute(
             "INSERT INTO tool_calls "
-            "(transcript_id, tool_name, params, result, invoked_by, created_at, ephemeral) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(transcript_id, tool_name, params, result, created_at, ephemeral) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 transcript_id,
                 tool_name,
                 json.dumps(params) if isinstance(params, dict) else params,
                 result,
-                invoked_by,
                 created_at,
                 ephemeral,
             ),

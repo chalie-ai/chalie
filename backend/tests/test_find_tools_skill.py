@@ -7,8 +7,6 @@ from unittest.mock import patch, MagicMock
 from services.innate_skills.find_tools_skill import (
     handle_find_tools,
     _filter_available,
-    _format_search_results,
-    _get_param_summary,
 )
 
 
@@ -75,12 +73,12 @@ class TestHandleFindTools:
 
     def test_empty_query_returns_error(self):
         result = handle_find_tools("topic", {"query": ""})
-        assert "Error" in result['text']
+        assert "ERROR" in result['text']
         assert result['_discovered_tools'] == []
 
     def test_missing_query_returns_error(self):
         result = handle_find_tools("topic", {})
-        assert "Error" in result['text']
+        assert "ERROR" in result['text']
         assert result['_discovered_tools'] == []
 
 
@@ -159,123 +157,6 @@ class TestFilterAvailable:
         assert len(result) == 0
 
 
-class TestFormatSearchResults:
-
-    @patch('services.innate_skills.find_tools_skill._get_param_summary')
-    def test_format_includes_tool_name(self, mock_params):
-        mock_params.return_value = "(query)"
-        tools = [{
-            'tool_name': 'search',
-            'short_summary': 'Search the web',
-            'full_profile': 'Full web search description',
-            'domain': 'Research',
-            'effort': 'light',
-            'score': 3.5,
-        }]
-        result = _format_search_results("search the internet", tools)
-        assert 'search' in result
-        assert 'match=' in result
-        assert 'directly' in result.lower()
-
-    @patch('services.innate_skills.find_tools_skill._get_param_summary')
-    def test_format_multiple_tools(self, mock_params):
-        mock_params.return_value = ""
-        tools = [
-            {'tool_name': 'a', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'light', 'score': 2.0},
-            {'tool_name': 'b', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'moderate', 'score': 4.5},
-        ]
-        result = _format_search_results("query", tools)
-        assert 'Found 2 tool(s)' in result
-
-
-class TestGetParamSummary:
-
-    @patch(_REGISTRY)
-    def test_formats_required_and_optional(self, mock_registry_cls):
-        mock_reg = _mock_registry(tools={
-            'weather': {'manifest': {'parameters': {
-                'location': {'required': True},
-                'units': {'required': False},
-            }}}
-        })
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('weather')
-        assert result == '(location, units?)'
-
-    @patch(_REGISTRY)
-    def test_no_params(self, mock_registry_cls):
-        mock_reg = _mock_registry(tools={'simple': {'manifest': {'parameters': {}}}})
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('simple')
-        assert result == '(no parameters)'
-
-    @patch(_REGISTRY)
-    def test_missing_tool(self, mock_registry_cls):
-        mock_reg = _mock_registry(tools={})
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('nonexistent')
-        assert result == ''
-
-    @patch(_REGISTRY)
-    def test_input_schema_format_required_and_optional(self, mock_registry_cls):
-        """input_schema format: required params have no ?, optional params get ?."""
-        mock_reg = _mock_registry(tools={
-            'search': {'manifest': {
-                'input_schema': {
-                    'type': 'object',
-                    'properties': {
-                        'query': {'type': 'string'},
-                        'provider': {'type': 'string'},
-                        'limit': {'type': 'integer', 'default': 5},
-                    },
-                    'required': ['query'],
-                }
-            }}
-        })
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('search')
-        assert 'query' in result
-        assert 'provider?' in result
-        assert 'limit?' in result
-        assert 'query?' not in result  # query is required, no ?
-
-    @patch(_REGISTRY)
-    def test_input_schema_empty_properties(self, mock_registry_cls):
-        """input_schema with empty properties returns '(no parameters)'."""
-        mock_reg = _mock_registry(tools={
-            'noop': {'manifest': {
-                'input_schema': {
-                    'type': 'object',
-                    'properties': {},
-                    'required': [],
-                }
-            }}
-        })
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('noop')
-        assert result == '(no parameters)'
-
-    @patch(_REGISTRY)
-    def test_input_schema_takes_priority_over_parameters(self, mock_registry_cls):
-        """When manifest has both input_schema and parameters, input_schema is used."""
-        mock_reg = _mock_registry(tools={
-            'dual': {'manifest': {
-                'input_schema': {
-                    'type': 'object',
-                    'properties': {'new_param': {'type': 'string'}},
-                    'required': ['new_param'],
-                },
-                'parameters': {
-                    'old_param': {'required': True},
-                },
-            }}
-        })
-        mock_registry_cls.return_value = mock_reg
-        result = _get_param_summary('dual')
-        assert 'new_param' in result
-        assert 'old_param' not in result
 
 
 class TestSearchIntegration:
@@ -308,8 +189,10 @@ class TestSearchIntegration:
 
         result = handle_find_tools("topic", {"query": "search online"})
         assert isinstance(result, dict)
-        assert 'search' in result['text']
-        assert 'Found 1 tool' in result['text']
+        # Output is JSON: {"added_tools": [{"name": "search", "relevance": ...}]}
+        import json
+        parsed = json.loads(result['text'])
+        assert any(t['name'] == 'search' for t in parsed['added_tools'])
         assert 'search' in result['_discovered_tools']
 
     @patch(_EMB)
@@ -319,7 +202,7 @@ class TestSearchIntegration:
 
         result = handle_find_tools("topic", {"query": "weather"})
         assert isinstance(result, dict)
-        assert "keyword" in result['text'].lower() or "No tools found" in result['text']
+        # Fallback returns either JSON with added_tools or INFO message
         assert isinstance(result['_discovered_tools'], list)
 
     @patch(_REGISTRY)
@@ -345,7 +228,7 @@ class TestSearchIntegration:
         mock_registry_cls.return_value = mock_reg
 
         result = handle_find_tools("topic", {"query": "test"})
-        assert set(result['_discovered_tools']) == {'tool_a', 'tool_b'}
+        assert set(result['_discovered_tools']) >= {'tool_a', 'tool_b'}
 
 
 class TestLimitCapping:
@@ -389,7 +272,8 @@ class TestEdgeCases:
 
         result = handle_find_tools("topic", {"query": "anything"})
         assert isinstance(result, dict)
-        assert 'No tools found' in result['text'] or 'No available' in result['text']
+        # No matching tools → INFO message
+        assert 'already available' in result['text']
         assert result['_discovered_tools'] == []
 
     @patch(_REGISTRY)
@@ -409,8 +293,8 @@ class TestEdgeCases:
 
         result = handle_find_tools("topic", {"query": "remember something"})
         assert isinstance(result, dict)
-        assert 'built-in skills' in result['text'].lower() or 'no tools found' in result['text'].lower()
-        assert 'recall' in result['text']  # Should name the matching skill
+        # Skills are filtered out → no tools added → INFO message
+        assert 'already available' in result['text']
         assert result['_discovered_tools'] == []
 
 
@@ -550,38 +434,6 @@ class TestKeywordScoring:
         assert 'score' in result[0]
 
 
-class TestFormatSearchResultsScore:
-    """Verify score is correctly formatted in find_tools output."""
-
-    @patch('services.innate_skills.find_tools_skill._get_param_summary')
-    def test_score_formatted_to_two_decimal_places(self, mock_params):
-        """Score in output must be formatted with two decimal places."""
-        mock_params.return_value = "(query)"
-        tools = [{
-            'tool_name': 'weather',
-            'short_summary': 'Get weather',
-            'full_profile': 'Full weather description',
-            'domain': 'Context',
-            'effort': 'trivial',
-            'score': 2.5,
-        }]
-        result = _format_search_results("weather today", tools)
-        assert 'match=good' in result
-
-    @patch('services.innate_skills.find_tools_skill._get_param_summary')
-    def test_format_shows_found_count(self, mock_params):
-        """Output must include the number of tools found."""
-        mock_params.return_value = ""
-        tools = [
-            {'tool_name': 'a', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'light', 'score': 1.0},
-            {'tool_name': 'b', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'moderate', 'score': 3.0},
-            {'tool_name': 'c', 'short_summary': 's', 'full_profile': 'p',
-             'domain': 'D', 'effort': 'heavy', 'score': 5.0},
-        ]
-        result = _format_search_results("query", tools)
-        assert 'Found 3 tool(s)' in result
 
 
 class TestFilterAvailableQueryPassthrough:

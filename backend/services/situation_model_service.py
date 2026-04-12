@@ -77,7 +77,7 @@ def get_situation_model_service() -> "SituationModelService":
 
 class SituationModelService:
     """
-    Binding layer that aggregates ambient, focus, topic, identity, client, engagement,
+    Binding layer that aggregates ambient, focus, topic, client, engagement,
     relationship phase, world state, and conversation thread signals into a single
     structured state object with composite scores and behavioral directives.
     """
@@ -190,30 +190,6 @@ class SituationModelService:
             "updated_at": utc_now().isoformat(),
         }
         return defaults
-
-    def _collect_identity(self) -> dict:
-        """Read identity vectors from IdentityService."""
-        defaults = {
-            "assertiveness": 0.5,
-            "warmth": 0.5,
-            "updated_at": utc_now().isoformat(),
-        }
-        try:
-            from services.database_service import get_shared_db_service
-            from services.identity_service import IdentityService
-            db = get_shared_db_service()
-            svc = IdentityService(db)
-            vectors = svc.get_vectors()
-            if not vectors:
-                return defaults
-            return {
-                "assertiveness": vectors.get("assertiveness", {}).get("current_activation", 0.5),
-                "warmth": vectors.get("warmth", {}).get("current_activation", 0.5),
-                "updated_at": utc_now().isoformat(),
-            }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Identity signal failed: {e}")
-            return defaults
 
     def _collect_client(self) -> dict:
         """Read device, battery, and timezone from ClientContextService."""
@@ -682,7 +658,6 @@ class SituationModelService:
         if full:
             focus = {"active": False, "topic": None, "distraction": 0.0, "updated_at": utc_now().isoformat()}
             topic = self._collect_topic()
-            identity = self._collect_identity()
             engagement = self._collect_engagement()
             spark = self._collect_spark()
             world_state = self._collect_world_state()
@@ -693,7 +668,6 @@ class SituationModelService:
             cached = self._load_cached_raw()
             focus = cached.get("focus", {"active": False, "topic": None, "distraction": 0.0, "updated_at": now_iso})
             topic = cached.get("topic", {"name": None, "confidence": 0.5, "is_new": False, "updated_at": now_iso})
-            identity = cached.get("identity", self._collect_identity())
             engagement = cached.get("engagement", self._collect_engagement())
             spark = cached.get("spark", self._collect_spark())
             world_state = cached.get("world_state", {"items": [], "updated_at": now_iso})
@@ -704,7 +678,6 @@ class SituationModelService:
             "ambient": ambient,
             "focus": focus,
             "topic": topic,
-            "identity": identity,
             "client": client,
             "engagement": engagement,
             "spark": spark,

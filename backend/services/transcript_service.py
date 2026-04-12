@@ -580,138 +580,64 @@ def _embed_entry(rowid: int, content: str) -> None:
         logger.debug(f"{LOG_PREFIX} Embedding failed for rowid {rowid}: {e}")
 
 
-def append_atomic_turn(
-    channel: str,
-    role: str,
-    raw_input: str,
-    llm_response: str,
-    pending_tool_calls: list,
-) -> int:
-    """Atomically persist a full turn inside a single DB transaction.
+def write_input_row(channel: str, role: str, content: str) -> int:
+    """Write the input transcript row. Returns the row ID.
 
-    Writes three categories of rows in one transaction:
-    1. The input transcript row (role = caller's ``role`` argument).
-    2. One ``tool_calls`` row per DTO in ``pending_tool_calls``, sorted by
-       ``timestamp`` (stable sort preserves insertion order on ties — the
-       tiebreaker for same-millisecond entries).
-    3. The assistant transcript row (role = 'assistant').
-
-    Returns the ``transcript.id`` of the input row.
-
-    Post-commit hooks fire as daemon threads OUTSIDE the transaction so they
-    cannot block the response or roll back committed data:
-    - ``_embed_entry`` for the input row.
-    - ``_embed_entry`` for the assistant row.
-    - ``_trigger_episode_extraction`` for the assistant row (every 25th
-      entry by global rowid — same rolling trigger pattern as ``append()``).
-
-    Raises on any DB error, propagating the exception to the caller after the
-    transaction has been rolled back. No partial rows land in the DB.
+    Fires an embedding hook in a daemon thread if the content is long enough.
     """
-    import json
-
     from services.database_service import get_shared_db_service
-    from services.time_utils import utc_now
 
     db = get_shared_db_service()
-
-    # Sort DTOs chronologically. Python's sorted() is stable, so DTOs with
-    # identical timestamps preserve their insertion order — that is the
-    # tiebreaker contract defined in the north star.
-    sorted_dtos = sorted(pending_tool_calls, key=lambda d: d.get('timestamp', ''))
-
     with db.connection() as conn:
         cursor = conn.cursor()
-
-        # Step 1: insert input transcript row
         cursor.execute(
             "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-            (channel, role, raw_input),
+            (channel, role, content),
         )
-        input_row_id = cursor.lastrowid
-
-        # Step 2: insert tool_call rows linked to the input row
-        now = utc_now().isoformat()
-        for dto in sorted_dtos:
-            tool_name = dto.get('name', 'unknown')
-            if not tool_name:
-                logger.warning(
-                    "%s append_atomic_turn: DTO missing 'name', using 'unknown'", LOG_PREFIX
-                )
-                tool_name = 'unknown'
-
-            params = dto.get('params', {})
-            if params is None:
-                params = {}
-            # JSON serialisation errors propagate — they are programmer bugs.
-            params_str = json.dumps(params)
-
-            result = dto.get('result', '')
-            if result is None:
-                result = ''
-
-            ephemeral = dto.get('ephemeral', 1)
-            # invoked_by is a load-bearing audit field — schema enforces
-            # CHECK IN ('system','llm'). If a DTO arrives without it, log
-            # a warning and default to 'llm' (the handleTool producer default)
-            # so missing-field bugs are visible rather than silently
-            # attributed as 'system'.
-            if 'invoked_by' not in dto:
-                logger.warning(
-                    "%s append_atomic_turn: DTO missing 'invoked_by' — defaulting to 'llm'. "
-                    "tool_name=%s", LOG_PREFIX, tool_name
-                )
-                invoked_by = 'llm'
-            else:
-                invoked_by = dto['invoked_by']
-            created_at = dto.get('timestamp') or now
-
-            cursor.execute(
-                "INSERT INTO tool_calls "
-                "(transcript_id, tool_name, params, result, invoked_by, created_at, ephemeral) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (input_row_id, tool_name, params_str, result, invoked_by, created_at, ephemeral),
-            )
-
-        # Step 3: insert assistant transcript row
-        cursor.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-            (channel, 'assistant', llm_response),
-        )
-        assistant_row_id = cursor.lastrowid
+        row_id = cursor.lastrowid
         cursor.close()
 
-    # Transaction committed — fire post-commit hooks outside the transaction
-    # as daemon threads so they cannot block the response path or roll back
-    # the already-committed rows.
-    #
-    # Embedding hooks mirror append()'s _EMBED_TOKEN_THRESHOLD gate (50
-    # tokens). Short turns (DMN one-liners, scheduled pings, tool steers)
-    # do not warrant embedding compute — matches legacy append() behaviour
-    # verbatim so parallel paths stay in operational lockstep.
-
-    def _embed_input():
+    def _embed():
         try:
-            if estimate_tokens(raw_input) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(input_row_id, raw_input)
+            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
+                _embed_entry(row_id, content)
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} embed-input hook crashed: {exc}")
 
-    def _embed_assistant():
+    threading.Thread(target=_embed, daemon=True).start()
+    return row_id
+
+
+def write_assistant_row(channel: str, content: str) -> int:
+    """Write the assistant transcript row. Returns the row ID.
+
+    Fires an embedding hook and rolling episode extraction trigger.
+    """
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    with db.connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            (channel, 'assistant', content),
+        )
+        row_id = cursor.lastrowid
+        cursor.close()
+
+    def _embed():
         try:
-            if estimate_tokens(llm_response) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(assistant_row_id, llm_response)
+            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
+                _embed_entry(row_id, content)
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} embed-assistant hook crashed: {exc}")
 
-    threading.Thread(target=_embed_input, daemon=True).start()
-    threading.Thread(target=_embed_assistant, daemon=True).start()
+    threading.Thread(target=_embed, daemon=True).start()
 
-    # Rolling episode extraction trigger — same 25-entry cadence as append()
-    if assistant_row_id % 25 == 0:
-        _trigger_episode_extraction(channel, assistant_row_id)
+    if row_id % 25 == 0:
+        _trigger_episode_extraction(channel, row_id)
 
-    return input_row_id
+    return row_id
 
 
 def _keyword_search(

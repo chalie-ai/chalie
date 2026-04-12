@@ -84,7 +84,6 @@ class TestSchemaConvergence:
             "settings",
             "schema_migrations",
             "schema_version",
-            "identity_vectors",
             "documents",
             "document_chunks",
             "providers",
@@ -362,24 +361,6 @@ class TestSchemaConvergence:
 
     # ── 8. Seed data on fresh DB ──────────────────────────────────────────────
 
-    def test_identity_vectors_seeded_on_fresh_db(self, tmp_path):
-        """identity_vectors table is populated with default archetype rows on fresh DB."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT vector_name FROM identity_vectors ORDER BY vector_name"
-            ).fetchall()
-
-        names = {r[0] for r in rows}
-        expected = {
-            "curiosity", "assertiveness", "warmth",
-            "playfulness", "skepticism", "emotional_intensity",
-            "uncertainty_tolerance",
-        }
-        assert expected.issubset(names), f"Missing identity vectors: {expected - names}"
-
     def test_settings_seeded_on_fresh_db(self, tmp_path):
         """settings table contains the api_key seed row on a fresh DB."""
         db = _make_db(tmp_path)
@@ -412,10 +393,10 @@ class TestSchemaConvergence:
 
         with db.connection() as conn:
             count = conn.execute(
-                "SELECT COUNT(*) FROM identity_vectors WHERE vector_name='curiosity'"
+                "SELECT COUNT(*) FROM settings WHERE key='api_key'"
             ).fetchone()[0]
 
-        assert count == 1, f"Expected 1 curiosity row, got {count}"
+        assert count == 1, f"Expected 1 api_key row, got {count}"
 
     # ── 9. Migration stamping on fresh DB ─────────────────────────────────────
 
@@ -834,7 +815,7 @@ class TestConvergeJobAssignments:
         db = _make_db(tmp_path)
         _converge(db)  # creates schema
 
-        # Pick a real job from the actual config (first one is 'autobiography')
+        # Pick a real job from the actual config (first one is 'frontal-cortex-unified')
         real_jobs_path = (
             Path(__file__).resolve().parent.parent / "configs" / "cognitive_jobs.json"
         )
@@ -907,7 +888,7 @@ class TestConvergeJobAssignments:
         # Seed a row that should survive
         with db.connection() as conn:
             provider_id = _seed_provider(conn)
-            _seed_job_assignment(conn, "autobiography", provider_id)
+            _seed_job_assignment(conn, "frontal-cortex-unified", provider_id)
             count_before = _count_assignments(conn)
 
         svc = SchemaConvergenceService(db, embedding_dimensions=256)
@@ -948,7 +929,7 @@ class TestConvergeJobAssignments:
 
         with db.connection() as conn:
             provider_id = _seed_provider(conn)
-            _seed_job_assignment(conn, "autobiography", provider_id)
+            _seed_job_assignment(conn, "frontal-cortex-unified", provider_id)
             count_before = _count_assignments(conn)
 
         # Write a config file with invalid JSON
@@ -998,7 +979,7 @@ class TestConvergeJobAssignments:
 
         with db.connection() as conn:
             provider_id = _seed_provider(conn)
-            _seed_job_assignment(conn, "autobiography", provider_id)
+            _seed_job_assignment(conn, "frontal-cortex-unified", provider_id)
             _seed_job_assignment(conn, "episodic-memory", provider_id)
             count_before = _count_assignments(conn)
 

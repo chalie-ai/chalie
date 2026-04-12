@@ -56,8 +56,8 @@ def data_summary():
         with db.connection() as conn:
             for table in [
                 "episodes", "knowledge", "transcript",
-                "autobiography", "scheduled_items",
-                "lists", "list_items", "identity_vectors", "place_fingerprints",
+                "scheduled_items",
+                "lists", "list_items", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
                 "documents", "document_chunks",
             ]:
@@ -94,9 +94,9 @@ def export_data():
 
     user_data_tables = [
         "episodes", "knowledge",
-        "transcript", "autobiography",
+        "transcript",
         "scheduled_items", "lists", "list_items",
-        "list_events", "identity_vectors", "identity_events",
+        "list_events",
         "place_fingerprints",
         "interaction_log", "cortex_iterations",
         "user_tool_preferences",
@@ -105,7 +105,6 @@ def export_data():
 
     store_patterns = [
         "working_memory:*",
-        "identity_state:*",
     ]
 
     MAX_EXPORT_ROWS = 10000

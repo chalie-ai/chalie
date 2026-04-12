@@ -238,28 +238,13 @@ class UserMessageProcessor(MessageProcessor):
         return super().getTools()
 
     def _run_memory_seed(self) -> None:
-        """Auto-seed memory once at turn start. Runs before getUserPrompt().
-
-        Calls recall_episodes(caller='seed') directly so the telemetry row in
-        memory_recall_log carries caller='seed'. This distinguishes the pre-turn
-        seed from LLM-driven recall calls (caller='llm_recall') and allows the
-        meta-harness to tune SEED_RADIUS_BASELINE independently.
-
-        The result is stored in self._memory_seed and self._memory_seed_radius,
-        and a durable (ephemeral=0) DTO is appended to self._pending_tool_calls
-        so store() can write it linked to self._uid.
-
-        Does NOT re-run on ACT iterations (send() calls this once, before the
-        loop). Does NOT re-run on steers.
-
-        Errors are logged and swallowed — a failed seed does not abort the turn.
-        """
+        """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
         from services.innate_skills.memory_skill import (
             recall_episodes, SEED_RADIUS_BASELINE, _format_results,
         )
-        from services.time_utils import utc_now
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
 
-        radius = SEED_RADIUS_BASELINE  # 0.2 per memory_skill.py module constant
+        radius = SEED_RADIUS_BASELINE
 
         try:
             hits, _status = recall_episodes(
@@ -277,16 +262,14 @@ class UserMessageProcessor(MessageProcessor):
         if seed_text:
             self._memory_seed = seed_text
             self._memory_seed_radius = radius
-            self._pending_tool_calls.append({
-                'name': 'memory',
-                'params': {'action': 'recall', 'radius': radius},
-                'result': seed_text,
-                'ephemeral': 0,        # durable — replays in Previous Messages
-                'invoked_by': 'system',
-                'timestamp': utc_now().isoformat(),
-            })
+            ToolRenderAndRecordService(
+                tool_name='memory',
+                params={'action': 'recall', 'radius': radius},
+                result=seed_text,
+                ephemeral=False,
+                transcript_id=self._uid,
+            ).renderAndRecord()
         else:
-            # Seed returned nothing — still valid, just no injection in getUserPrompt()
             logger.debug("[USER MSG] Memory auto-seed: no result returned")
 
     def _emit_narration(self, text: str, iteration: int) -> None:
@@ -491,38 +474,8 @@ class UserMessageProcessor(MessageProcessor):
             return ''
 
     def _get_voice_modulation(self) -> str:
-        """Per-turn cached voice modulation string for the Voice section of the system prompt.
-
-        Calls IdentityService + VoiceMapperService to generate a behavioural style string
-        (e.g. "Speak warmly with a tone of patient curiosity."). This string is injected into
-        the {{voice_modulation}} placeholder in _UNIFIED_PROMPT by getSystemPrompt().
-
-        Consumed only by getSystemPrompt(). Not called from getUserDefinition().
-
-        Read-only: does NOT call identity.check_coherence() — that is a DB-writing
-        path and belongs in postTurn() or a background service, not the per-turn
-        prompt build which runs on every ACT iteration.
-
-        Falls back to 'Engage naturally as a peer.' on any error.
-        """
-        if self._voice_modulation_cached is not None:
-            return self._voice_modulation_cached
-        try:
-            from services.identity_service import IdentityService
-            from services.voice_mapper_service import VoiceMapperService
-            from services.database_service import get_shared_db_service
-
-            db = get_shared_db_service()
-            identity = IdentityService(db)
-            mapper = VoiceMapperService()
-
-            vectors = identity.get_vectors()
-            modulation = mapper.generate_modulation(vectors)
-            self._voice_modulation_cached = modulation if modulation else "Engage naturally as a peer."
-        except Exception as e:
-            logger.warning(f"[USER MSG] _get_voice_modulation failed: {e}")
-            self._voice_modulation_cached = "Engage naturally as a peer."
-        return self._voice_modulation_cached
+        """Static voice modulation string for the system prompt."""
+        return "Engage naturally as a peer."
 
     def _get_adaptive_directives(self) -> str:
         """Get adaptive response directives for system prompt placeholder injection.

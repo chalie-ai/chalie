@@ -25,7 +25,6 @@ DATA_TABLES = [
     'interaction_log',
     'transcript',
     'scheduled_items',
-    'autobiography',
     'lists',
     'list_items',
     'list_events',

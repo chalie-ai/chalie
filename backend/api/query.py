@@ -9,7 +9,6 @@ Routes:
   GET  /api/query/situation          — current situation assessment
   GET  /api/query/relevance?q=<text> — relevance ranking for a topic
   GET  /api/query/world-state        — salience-scored world model items
-  GET  /api/query/identity           — identity vectors + style metrics
   GET  /api/query/memory?q=<query>&k=5 — semantic memory search
   POST /api/query/composite          — multiple slices in one call
 
@@ -52,12 +51,6 @@ def _get_episodic_service():
     """Return EpisodicService class (lazy, fail-open)."""
     from services.episodic_service import EpisodicService
     return EpisodicService
-
-
-def _get_identity_service():
-    """Return IdentityService class (lazy, fail-open)."""
-    from services.identity_service import IdentityService
-    return IdentityService
 
 
 def _get_memory_client():
@@ -266,48 +259,6 @@ def _slice_world_state(query: str = "") -> dict:
         return {"items": []}
 
 
-def _slice_identity() -> dict:
-    """Return identity vectors and current style metrics.
-
-    Delegates to IdentityService (vectors) and reads last-measured style
-    metrics from MemoryStore key ``style_metrics:last``.
-
-    Returns:
-        dict with keys ``vectors`` (identity dimensions keyed by name, each
-        with ``baseline`` and ``activation`` floats) and ``style`` (measured
-        style metrics dict, empty when not yet recorded).
-    """
-    vectors: dict = {}
-    style: dict = {}
-
-    # Identity vectors
-    try:
-        IdentityService = _get_identity_service()
-        db = _get_db_service()
-        svc = IdentityService(db)
-        raw_vectors = svc.get_vectors()
-
-        for name, v in raw_vectors.items():
-            vectors[name] = {
-                "baseline": v.get("baseline_weight"),
-                "activation": v.get("current_activation"),
-            }
-    except Exception as e:
-        logger.debug("[Query API] identity vectors failed: %s", e)
-
-    # Style metrics — read last measured value from MemoryStore
-    try:
-        MemoryClientService = _get_memory_client()
-        store = MemoryClientService.create_connection()
-        raw = store.get("style_metrics:last")
-        if raw:
-            style = json.loads(raw)
-    except Exception as e:
-        logger.debug("[Query API] style metrics lookup failed: %s", e)
-
-    return {"vectors": vectors, "style": style}
-
-
 def _slice_memory(query: str, k: int) -> dict:
     """Search episodic memory semantically.
 
@@ -372,8 +323,6 @@ def _dispatch_slice(slice_name: str) -> dict:
         return _slice_relevance(param.strip())
     elif name in ("world-state", "world_state"):
         return _slice_world_state(param.strip())
-    elif name == "identity":
-        return _slice_identity()
     elif name == "memory":
         parts = param.split("&k=", 1)
         q = parts[0].strip()
@@ -464,30 +413,6 @@ def get_world_state():
 
 
 # ---------------------------------------------------------------------------
-# GET /api/query/identity
-# ---------------------------------------------------------------------------
-
-@query_bp.route("/identity", methods=["GET"])
-@require_auth
-def get_identity():
-    """Return identity vectors and current style metrics.
-
-    Response JSON:
-        vectors (dict): Identity dimensions with ``baseline`` and ``activation``
-            per entry.
-        style (dict): Most recently measured style metrics (may be empty).
-
-    Returns:
-        200 with identity dict.
-        403 if bearer token lacks ``"identity"`` query permission.
-    """
-    if not _check_query_permission("identity"):
-        return _permission_denied("identity")
-
-    return jsonify(_slice_identity()), 200
-
-
-# ---------------------------------------------------------------------------
 # GET /api/query/memory
 # ---------------------------------------------------------------------------
 
@@ -536,7 +461,7 @@ def get_composite():
             (e.g. ``"relevance:auth tests"``).
 
     Supported slice names:
-        ``situation``, ``relevance``, ``world-state``, ``identity``, ``memory``,
+        ``situation``, ``relevance``, ``world-state``, ``memory``,
         ``world_state`` (alias for ``world-state``).
 
     Permission model:

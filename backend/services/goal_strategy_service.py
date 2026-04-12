@@ -120,43 +120,28 @@ def _gather_evidence_context(goal_id: str) -> str:
 
 def _get_user_context() -> str:
     """
-    Extract Values & Goals and Active Threads sections from the autobiography narrative.
+    Fetch user context from data_graph (user_specific traits) for strategy generation.
 
     Returns:
-        Truncated autobiography excerpt (~500 chars) or empty string on failure.
+        Truncated user context string (~500 chars) or empty string on failure.
     """
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        traits = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC', limit=20)
 
-        from services.autobiography_service import AutobiographyService
-        auto_service = AutobiographyService(db)
-        narrative_data = auto_service.get_current_narrative()
-
-        if not narrative_data:
+        if not traits:
             return ""
 
-        narrative = narrative_data.get('narrative', '')
-        if not narrative:
-            return ""
+        lines = []
+        for t in traits:
+            key = t.get('key') or ''
+            value = t.get('value') or ''
+            if key and value:
+                lines.append(f"{key}: {value}")
 
-        # Extract relevant sections
-        relevant_sections = []
-        target_headers = ('## values', '## goals', '## active threads', '## focus')
+        excerpt = "\n".join(lines).strip()
 
-        lines = narrative.splitlines()
-        in_section = False
-
-        for line in lines:
-            line_lower = line.lower().strip()
-            if line_lower.startswith('## '):
-                in_section = any(line_lower.startswith(h) for h in target_headers)
-            if in_section:
-                relevant_sections.append(line)
-
-        excerpt = "\n".join(relevant_sections).strip()
-
-        # Truncate to keep the LLM prompt lightweight
         if len(excerpt) > _USER_CONTEXT_MAX_CHARS:
             excerpt = excerpt[:_USER_CONTEXT_MAX_CHARS] + "..."
 
@@ -220,7 +205,7 @@ def _call_strategy_llm(
         description: Goal description text.
         goal_type: One of stated, inferred, emergent, developmental.
         evidence_context: Formatted evidence string from _gather_evidence_context.
-        user_context: Autobiography excerpt from _get_user_context.
+        user_context: User context string from _get_user_context.
 
     Returns:
         Strategy text (truncated to 500 chars) or None on failure.
@@ -240,7 +225,7 @@ def _call_strategy_llm(
         if user_context:
             user_message_parts += [
                 "",
-                "User context (from autobiography):",
+                "User context:",
                 user_context,
             ]
 

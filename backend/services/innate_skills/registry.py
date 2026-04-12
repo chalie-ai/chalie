@@ -5,13 +5,13 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 13 skills + backward-compat aliases).
+register_innate_skills() in __init__.py (currently 12 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
     'memory', 'introspect',
-    'schedule', 'autobiography', 'list',
+    'schedule', 'list',
     'goal_pursuit', 'document',
     'read', 'find_tools', 'goals',
     'rich_render', 'review_tool_calls',
@@ -54,7 +54,6 @@ SKILL_DESCRIPTIONS: dict = {
     'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
-    'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
     'goal_pursuit': 'Use this tool to launch a separate instance of yourself with unconstrained limits to research or perform long running tasks. Only use this if you expect a request to take longer than 2 minutes to complete. If not, use other tools to resolve the request.',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
@@ -73,7 +72,6 @@ SKILL_EFFORT: dict = {
     'introspect': 'trivial',
     'list': 'trivial',
     'schedule': 'light',
-    'autobiography': 'light',
     'goal_pursuit': 'deep',
     'document': 'light',
     'read': 'light',
@@ -92,7 +90,6 @@ SKILL_CATEGORIES: dict = {
     'introspect': 'cognition',
     'list': 'productivity',
     'schedule': 'productivity',
-    'autobiography': 'identity',
     'goal_pursuit': 'task_management',
     'document': 'knowledge',
     'read': 'research',

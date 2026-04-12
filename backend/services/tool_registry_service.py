@@ -164,17 +164,17 @@ class ToolRegistryService:
         from services.tool_output_utils import build_tool_telemetry
         return build_tool_telemetry(raw_telemetry)
 
-    def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
-        """Invoke a tool on an external interface via HTTP.
+    def _execute_interface_tool(self, tool_name: str, tool: dict, params: dict) -> dict:
+        """Execute an interface tool via HTTP and return structured result.
 
-        Uses InterfaceRegistryService.execute_capability() which does:
-        POST interface_host:port/execute {capability, params}
+        Returns:
+            Dict with 'text' key (plain result text).
         """
         from services.invocation_tracker import track
 
         interface_id = tool.get("interface_id")
         if not interface_id:
-            return f"[TOOL:{tool_name}] No interface_id for interface tool [/TOOL]"
+            return {'text': 'No interface_id for interface tool'}
 
         start_time = time.time()
         try:
@@ -183,19 +183,18 @@ class ToolRegistryService:
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] Interface execution error: {e} [/TOOL]"
+            return {'text': f'Interface execution error: {e}'}
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         if not isinstance(result, dict):
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] {result} [/TOOL]"
+            return {'text': str(result) if result else '(no output)'}
 
         if result.get("error"):
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] Error: {result['error']} [/TOOL]"
+            return {'text': f"Error: {result['error']}"}
 
-        # Format result like any other tool
         text = result.get("text", "")
         html = result.get("html")
 
@@ -207,33 +206,41 @@ class ToolRegistryService:
 
         output = "\n".join(output_parts) if output_parts else "(no output)"
 
-        # Apply standard sanitization and length limits
         if len(output) > self.MAX_OUTPUT_CHARS:
             output = output[:self.MAX_OUTPUT_CHARS] + "\n...(truncated)"
 
         track(name=tool_name, success=True, latency_ms=elapsed_ms)
-        return f"[TOOL:{tool_name}] {output} [/TOOL]"
+        return {'text': output}
 
-    def invoke(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> str:
+    def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
+        """Invoke an interface tool and return [TOOL:]-wrapped string.
+
+        Legacy wrapper around _execute_interface_tool for callers that
+        expect the wrapped format (e.g. output_service notifications).
         """
-        Invoke a tool by name.
+        result = self._execute_interface_tool(tool_name, tool, params)
+        text = result.get('text', '')
+        return f"[TOOL:{tool_name}] {text} [/TOOL]"
 
-        First-party tools are called directly in-process via their handler.
-        Interface tools are routed via HTTP to the paired interface.
+    def execute(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> dict:
+        """Execute a tool and return structured result without [TOOL:] wrapping.
+
+        Same execution pipeline as invoke() (validation, config, telemetry,
+        HTML cleanup, truncation) but returns a plain dict for callers that
+        handle their own rendering (e.g. ActDispatcherService handlers).
 
         Returns:
-            Formatted result string: [TOOL:name] ... [/TOOL]
+            Dict with 'text' key containing plain result text.
         """
         if not self._enabled:
-            return f"[TOOL:{tool_name}] Tools are disabled. [/TOOL]"
+            return {'text': 'Tools are disabled.'}
 
         tool = self.tools.get(tool_name)
         if not tool:
-            return f"[TOOL:{tool_name}] Unknown tool: {tool_name} [/TOOL]"
+            return {'text': f'Unknown tool: {tool_name}'}
 
-        # Interface tool — route via HTTP to the interface
         if tool.get("source_type") == "interface":
-            return self._invoke_interface_tool(tool_name, tool, params)
+            return self._execute_interface_tool(tool_name, tool, params)
 
         manifest = tool["manifest"]
         if "input_schema" in manifest:
@@ -243,7 +250,6 @@ class ToolRegistryService:
         else:
             validated_params = self._validate_params(params, manifest.get("parameters", {}))
 
-        # Fetch DB-stored config
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
@@ -252,10 +258,8 @@ class ToolRegistryService:
             logger.debug(f"[TOOL REGISTRY] Failed to load tool config for '{tool_name}': {e}", exc_info=True)
             settings = {}
 
-        # OAuth token refresh
         settings = self._refresh_oauth_token(tool_name, manifest, settings)
 
-        # Build telemetry
         raw_telemetry = {}
         try:
             from services.client_context_service import ClientContextService
@@ -264,11 +268,10 @@ class ToolRegistryService:
             logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for '{tool_name}': {e}", exc_info=True)
         flattened_telemetry = self._build_telemetry(raw_telemetry)
 
-        # Resolve handler from library
         from services.tool_library_service import get_handler
         handler = get_handler(tool_name)
         if not handler:
-            return f"[TOOL:{tool_name}] No handler registered for '{tool_name}' [/TOOL]"
+            return {'text': f"No handler registered for '{tool_name}'"}
 
         start_time = time.time()
         success = False
@@ -284,14 +287,10 @@ class ToolRegistryService:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
             self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class="internal")
-            return (
-                f"[TOOL:{tool_name}] Error: {str(e)[:200]} "
-                f"(cost: {elapsed_ms}ms) [/TOOL]"
-            )
+            return {'text': f"Error: {str(e)[:200]}"}
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text and html from formalized contract output
         result_text = ""
         result_html = None
         result_error = None
@@ -300,25 +299,16 @@ class ToolRegistryService:
             result_text = result.get("text", "")
             result_html = result.get("html")
             result_error = result.get("error")
-            # Fallback: if runner didn't set "text", convert dict to readable text
             if not result_text:
                 result_text = self._format_result(result)
         else:
-            # Fallback for non-dict responses
             result_text = str(result) if result else ""
 
-        # Handle error path — tool self-declares failure_class ('internal'/'external')
         if result_error:
-            output = f"[TOOL:{tool_name}] Error: {result_error} (cost: {elapsed_ms}ms) [/TOOL]"
             tool_failure_class = result.get("failure_class", "internal") if isinstance(result, dict) else "internal"
             self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class=tool_failure_class)
-            return output
+            return {'text': f"Error: {result_error}"}
 
-        # Clean tool output via the shared text extraction pipeline (same service used by doc processor).
-        # If result_text is empty but HTML was returned, derive clean text from the HTML.
-        # If result_text contains actual HTML tags, extract plain text from it.
-        # Plain text passes through unchanged. The regex check avoids false positives
-        # on comparison operators (e.g., "Rust < C++") in user-generated content.
         import re
         from services.text_extractor import extract_html as _extract_html
         if not result_text and result_html:
@@ -328,16 +318,27 @@ class ToolRegistryService:
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
-        # Return text response (possibly synthesized by frontal cortex)
-        token_estimate = len(result_text) // 4
-        output = (
-            f"[TOOL:{tool_name}] {result_text}\n"
-            f"(cost: {elapsed_ms}ms, ~{token_estimate} tokens)"
+        self._log_outcome(tool_name, success, channel, elapsed_ms)
+        return {'text': result_text}
+
+    def invoke(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> str:
+        """Invoke a tool by name and return [TOOL:]-wrapped result string.
+
+        Calls execute() for the actual work, then wraps the result in the
+        legacy [TOOL:name] ... [/TOOL] format used by output_service
+        notifications.
+        """
+        result = self.execute(tool_name, channel, params, exchange_id)
+        text = result.get('text', '')
+        is_error = text.startswith('Error:') or 'Unknown tool' in text
+        if is_error:
+            return f"[TOOL:{tool_name}] {text} [/TOOL]"
+        token_estimate = len(text) // 4
+        return (
+            f"[TOOL:{tool_name}] {text}\n"
+            f"(~{token_estimate} tokens)"
             f" [/TOOL]"
         )
-
-        self._log_outcome(tool_name, success, channel, elapsed_ms)
-        return output
 
     def _validate_params(self, params: dict, schema: dict) -> dict:
         """Validate and coerce parameters against manifest schema."""

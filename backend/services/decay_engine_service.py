@@ -91,8 +91,8 @@ class DecayEngineService:
         """Run one full decay cycle across all memory types.
 
         When richness < 0.3, only essential sub-cycles run (episodic + knowledge).
-        Non-essential sub-cycles (identity, external knowledge) are skipped to
-        conserve resources on sparse memory systems.
+        Non-essential sub-cycles (external knowledge) are skipped to conserve
+        resources on sparse memory systems.
 
         Args:
             richness: Current memory richness score in [0.0, 1.0].  Values below
@@ -109,10 +109,9 @@ class DecayEngineService:
 
         # Non-essential sub-cycles gated on sufficient memory richness
         if richness >= 0.3:
-            identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
         else:
-            identity_count = external_count = 0
+            external_count = 0
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
@@ -124,7 +123,6 @@ class DecayEngineService:
             f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
             f"tool_calls_purged={tool_calls_purged}, "
-            f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
             f"goals={goal_decay_count} decayed"
         )
@@ -433,26 +431,6 @@ class DecayEngineService:
         except Exception as e:
             logger.error(f"[DECAY ENGINE] External knowledge decay failed: {e}")
             return 0
-
-    def _apply_identity_inertia(self) -> int:
-        """Pull identity activations toward their baselines via the inertia mechanism.
-
-        Returns:
-            Number of identity vectors whose activation was adjusted.
-        """
-        try:
-            from .database_service import get_shared_db_service
-            db_service = get_shared_db_service()
-            try:
-                from .identity_service import IdentityService
-                identity = IdentityService(db_service)
-                return identity.apply_inertia()
-            finally:
-                db_service.close_pool()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Identity inertia failed: {e}")
-            return 0
-
 
 def decay_engine_worker(shared_state=None):
     """

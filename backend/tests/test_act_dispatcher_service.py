@@ -256,6 +256,3 @@ class TestEstimateConfidenceDirectly:
         """Read action with None result gets the lowest read confidence."""
         assert _estimate_confidence('recall', None) == 0.40
 
-    def test_autobiography_follows_read_rules(self):
-        """'autobiography' is a read action and follows length-based confidence."""
-        assert _estimate_confidence('autobiography', 'z' * 200) == 0.75

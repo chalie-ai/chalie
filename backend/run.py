@@ -162,7 +162,6 @@ def main():
     from services.dmn_service import dmn_worker
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.scheduler_service import scheduler_worker
-    from services.autobiography_service import autobiography_synthesis_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
 
@@ -174,7 +173,6 @@ def main():
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("scheduler-service", scheduler_worker)
-    manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
 

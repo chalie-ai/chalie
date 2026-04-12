@@ -143,40 +143,6 @@ class TestSchemaValidation:
 
         schema_db.rollback()
 
-    # ── Scenario 215 ─────────────────────────────────────────────────────────
-
-    def test_tolerance_vector_baseline(self, schema_db):
-        """Absorbs scenario 215: identity_vectors table exists and uncertainty_tolerance is seeded.
-
-        schema.sql seeds all identity vectors including uncertainty_tolerance via
-        INSERT OR IGNORE. This test verifies the table structure and confirms the
-        seed row is present after loading the schema.
-        """
-        tables = _get_tables(schema_db)
-        assert 'identity_vectors' in tables, (
-            "identity_vectors table missing from schema"
-        )
-
-        columns = _get_columns(schema_db, 'identity_vectors')
-        required_cols = {'vector_name', 'baseline_weight', 'min_cap', 'max_cap'}
-        missing = required_cols - columns
-        assert not missing, (
-            f"identity_vectors missing columns: {missing}"
-        )
-
-        row = schema_db.execute(
-            "SELECT vector_name, baseline_weight, min_cap, max_cap "
-            "FROM identity_vectors WHERE vector_name = 'uncertainty_tolerance'"
-        ).fetchone()
-        assert row is not None, (
-            "uncertainty_tolerance seed row missing from identity_vectors"
-        )
-        vector_name, baseline_weight, min_cap, max_cap = row
-        assert vector_name == 'uncertainty_tolerance'
-        assert baseline_weight == pytest.approx(0.5)
-        assert min_cap == pytest.approx(0.2)
-        assert max_cap == pytest.approx(0.8)
-
     # ── Scenario 230 ─────────────────────────────────────────────────────────
 
     def test_interaction_log_event_type_column(self, schema_db):

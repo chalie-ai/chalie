@@ -51,7 +51,6 @@ class TestPrivacyAPI:
             assert "episodes" in data
             assert "knowledge" in data
             assert "transcript" in data
-            assert "autobiography" in data
             assert "scheduled_items" in data
             assert "place_fingerprints" in data
 

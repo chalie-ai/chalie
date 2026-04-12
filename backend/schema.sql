@@ -161,56 +161,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
 
 -- topics table removed — dropped by migration 035_channel_migration.sql
 
--- ────────────────────────────────────────────────────────────────
--- IDENTITY VECTORS — 6 personality dimensions
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS identity_vectors (
-    id TEXT PRIMARY KEY,
-    vector_name TEXT NOT NULL UNIQUE,
-    baseline_weight REAL NOT NULL DEFAULT 0.5,
-    current_activation REAL NOT NULL DEFAULT 0.5,
-    plasticity_rate REAL NOT NULL DEFAULT 0.05,
-    inertia_rate REAL NOT NULL DEFAULT 0.1,
-    min_cap REAL NOT NULL DEFAULT 0.2,
-    max_cap REAL NOT NULL DEFAULT 0.8,
-    reinforcement_count INTEGER DEFAULT 0,
-    signal_history TEXT DEFAULT '[]',         -- JSONB
-    baseline_drift_today REAL DEFAULT 0,
-    drift_window_start TEXT DEFAULT (datetime('now')),
-    created_at TEXT DEFAULT (datetime('now')),
-    last_updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- Seed default archetype
-INSERT OR IGNORE INTO identity_vectors (id, vector_name, baseline_weight, current_activation, plasticity_rate, inertia_rate, min_cap, max_cap)
-VALUES
-    ('iv-curiosity',             'curiosity',             0.7, 0.7, 0.05, 0.10, 0.3, 0.9),
-    ('iv-assertiveness',         'assertiveness',         0.6, 0.6, 0.04, 0.10, 0.3, 0.8),
-    ('iv-warmth',                'warmth',                0.6, 0.6, 0.05, 0.10, 0.3, 0.8),
-    ('iv-playfulness',           'playfulness',           0.4, 0.4, 0.04, 0.10, 0.2, 0.7),
-    ('iv-skepticism',            'skepticism',            0.5, 0.5, 0.03, 0.10, 0.2, 0.7),
-    ('iv-emotional_intensity',   'emotional_intensity',   0.4, 0.4, 0.02, 0.15, 0.2, 0.6),
-    -- Uncertainty tolerance: how willing Chalie is to sit with unresolved contradictions.
-    -- High = surface less, resolve more silently. Low = surface sooner, clarify more.
-    -- Self-tunes: user corrections lower it; user ignoring surfacings raises it.
-    ('iv-uncertainty_tolerance', 'uncertainty_tolerance', 0.5, 0.5, 0.02, 0.20, 0.2, 0.8);
-
--- Identity event log
-CREATE TABLE IF NOT EXISTS identity_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    vector_name TEXT NOT NULL,
-    old_activation REAL NOT NULL,
-    new_activation REAL NOT NULL,
-    signal_source TEXT NOT NULL,
-    signal_value REAL,
-    channel TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_identity_events_time ON identity_events(created_at);
-CREATE INDEX IF NOT EXISTS idx_identity_events_vector ON identity_events(vector_name, created_at);
-
--- user_traits removed — replaced by unified knowledge table.
+-- identity_vectors + identity_events removed — personality dimensions ripped out.
 
 -- threads table removed — dropped by migration 035_channel_migration.sql
 -- thread_exchanges table removed — dropped by migration 035_channel_migration.sql
@@ -376,24 +327,6 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid);
 
--- ────────────────────────────────────────────────────────────────
--- AUTOBIOGRAPHY — user narrative synthesis
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS autobiography (
-    id TEXT PRIMARY KEY,
-    version INTEGER NOT NULL DEFAULT 1,
-    narrative TEXT NOT NULL,
-    section_hashes TEXT NOT NULL DEFAULT '{}',  -- JSONB
-    episode_cursor TEXT,
-    episodes_since INTEGER NOT NULL DEFAULT 0,
-    synthesis_model TEXT,
-    synthesis_ms INTEGER,
-    delta_summary TEXT,                        -- JSONB
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(version)
-);
-
-CREATE INDEX IF NOT EXISTS idx_autobiography_version ON autobiography(version DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- LISTS
@@ -833,10 +766,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     tool_name     TEXT NOT NULL,
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
-    invoked_by    TEXT NOT NULL CHECK(invoked_by IN ('system', 'llm')),
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     ephemeral     INTEGER NOT NULL DEFAULT 0,
-    tool_call_id  TEXT,
     FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 

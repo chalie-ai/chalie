@@ -49,7 +49,7 @@ class BackgroundLLMProxy:
 
         Args:
             agent_name: Logical name of the calling background service
-                (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+                (e.g. ``"goal-strategy"``, ``"cognitive-drift"``).
                 Used for queue-depth logging and job tracking.
         """
         self.agent_name = agent_name
@@ -162,7 +162,7 @@ def create_background_llm_proxy(agent_name: str) -> BackgroundLLMProxy:
 
     Args:
         agent_name: Logical name of the calling background service
-            (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+            (e.g. ``"goal-strategy"``, ``"cognitive-drift"``).
 
     Returns:
         BackgroundLLMProxy instance ready to accept send_message() calls.

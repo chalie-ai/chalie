@@ -20,8 +20,8 @@ TOOL_SCHEMA = {
         "covering four scopes: memory health (episode/concept counts, working memory depth, "
         "consolidation recency), skill and tool usage (table with counts and last results), "
         "reasoning state (active focus, upcoming reminders, recent autonomous actions), "
-        "and identity (relationship depth, communication style, personality, "
-        "autobiography recency). All deterministic — no LLM calls. "
+        "and identity (relationship depth, communication style, personality). "
+        "All deterministic — no LLM calls. "
         "Use when the user asks about system state, capabilities, or what you have been doing, "
         "or when you need to gauge how much context you have before deciding what to do."
     ),
@@ -30,16 +30,6 @@ TOOL_SCHEMA = {
         "properties": {},
         "required": [],
     },
-}
-
-# Identity dimension labels and their natural-language descriptions
-_DIMENSION_LABELS = {
-    'curiosity': 'curious',
-    'warmth': 'warm',
-    'assertiveness': 'assertive',
-    'skepticism': 'skeptical',
-    'playfulness': 'playful',
-    'uncertainty_tolerance': 'uncertainty-tolerant',
 }
 
 # Communication style dimension humanisation
@@ -380,16 +370,6 @@ def _scope_identity_snapshot() -> str:
     if style_line:
         parts.append(style_line)
 
-    # Personality from identity vectors
-    personality_line = _identity_personality()
-    if personality_line:
-        parts.append(personality_line)
-
-    # Autobiography recency
-    auto_line = _identity_autobiography()
-    if auto_line:
-        parts.append(auto_line)
-
     if not parts:
         return 'Identity data unavailable.'
     return ' '.join(parts)
@@ -471,53 +451,6 @@ def _identity_communication_style() -> str:
         return f'Communication style: {", ".join(descriptors)}.'
     except Exception as e:
         logger.debug(f'[INTROSPECT] identity_communication_style failed: {e}')
-        return ''
-
-
-def _identity_personality() -> str:
-    try:
-        from services.identity_service import IdentityService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        vectors = IdentityService(db).get_vectors()
-        if not vectors:
-            return ''
-
-        # Pick top dimensions by current_activation, threshold > 0.6
-        scored = []
-        for dim_name, data in vectors.items():
-            activation = data.get('current_activation', 0.0)
-            if activation > 0.6 and dim_name in _DIMENSION_LABELS:
-                scored.append((activation, _DIMENSION_LABELS[dim_name]))
-
-        scored.sort(reverse=True)
-        top = [label for _, label in scored[:3]]
-        if not top:
-            return ''
-        return f'Personality leans toward {" and ".join(top)}.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_personality failed: {e}')
-        return ''
-
-
-def _identity_autobiography() -> str:
-    try:
-        from services.autobiography_service import AutobiographyService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        narrative = AutobiographyService(db).get_current_narrative()
-        if not narrative:
-            return 'No self-narrative synthesized yet.'
-
-        created_at = narrative.get('created_at', '')
-        if created_at:
-            when = _relative_time(created_at)
-            return f'Self-narrative last updated {when}.'
-        return 'Self-narrative exists.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_autobiography failed: {e}')
         return ''
 
 

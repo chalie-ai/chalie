@@ -17,8 +17,7 @@ LOG_PREFIX = "[TOOL CALLS]"
 class ToolCallService:
     """Unified API for recording tool call audit entries."""
 
-    def store(self, transcript_id, tool_name, params, result, invoked_by='llm', ephemeral=False,
-              tool_call_id=None):
+    def store(self, transcript_id, tool_name, params, result, ephemeral=False):
         """Store a single tool call record.
 
         Args:
@@ -26,9 +25,7 @@ class ToolCallService:
             tool_name: Name of the tool invoked.
             params: Dict of parameters — serialized to JSON internally.
             result: String result from the tool invocation.
-            invoked_by: 'llm' or 'system'.
             ephemeral: If True, marks the record as ephemeral (not surfaced in history).
-            tool_call_id: The LLM-generated tool call ID (e.g. Anthropic's tc_id / OpenAI's call_id).
         """
         db = get_shared_db_service()
         params_str = json.dumps(params) if isinstance(params, dict) else (params or '{}')
@@ -39,22 +36,21 @@ class ToolCallService:
             with db.connection() as conn:
                 conn.execute(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at, tool_call_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_str, result, invoked_by, ephemeral_int, now, tool_call_id),
+                    "(transcript_id, tool_name, params, result, ephemeral, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (transcript_id, tool_name, params_str, result, ephemeral_int, now),
                 )
                 conn.commit()
         except Exception:
             logger.exception(f"{LOG_PREFIX} Failed to store tool call: tool={tool_name!r} transcript={transcript_id}")
 
-    def store_batch(self, transcript_id, tool_calls, results, invoked_by='llm', ephemeral=True):
+    def store_batch(self, transcript_id, tool_calls, results, ephemeral=True):
         """Store multiple tool call records from a single LLM response.
 
         Args:
             transcript_id: ID of the transcript entry this call belongs to.
             tool_calls: List of dicts with {'id': str, 'name': str, 'input': dict}.
             results: List of dispatcher result dicts with 'action_type', 'status', 'result', etc.
-            invoked_by: 'llm' or 'system'.
             ephemeral: If True, marks the records as ephemeral.
         """
         if not tool_calls:
@@ -76,15 +72,14 @@ class ToolCallService:
                 params_str = json.dumps(tc.get('input', {}))
 
             result_str = str(r.get('result', ''))
-            tc_id = tc.get('id')
-            rows.append((transcript_id, tool_name, params_str, result_str, invoked_by, ephemeral_int, now, tc_id))
+            rows.append((transcript_id, tool_name, params_str, result_str, ephemeral_int, now))
 
         try:
             with db.connection() as conn:
                 conn.executemany(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, invoked_by, ephemeral, created_at, tool_call_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(transcript_id, tool_name, params, result, ephemeral, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     rows,
                 )
                 conn.commit()
@@ -202,15 +197,15 @@ class ToolCallService:
 
         if include_ephemeral:
             sql = (
-                f"SELECT id, transcript_id, tool_name, params, result, invoked_by, "
-                f"ephemeral, created_at, tool_call_id "
+                f"SELECT id, transcript_id, tool_name, params, result, "
+                f"ephemeral, created_at "
                 f"FROM tool_calls WHERE transcript_id IN ({placeholders}) "
                 f"ORDER BY created_at"
             )
         else:
             sql = (
-                f"SELECT id, transcript_id, tool_name, params, result, invoked_by, "
-                f"ephemeral, created_at, tool_call_id "
+                f"SELECT id, transcript_id, tool_name, params, result, "
+                f"ephemeral, created_at "
                 f"FROM tool_calls WHERE transcript_id IN ({placeholders}) AND ephemeral = 0 "
                 f"ORDER BY created_at"
             )

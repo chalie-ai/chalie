@@ -160,7 +160,6 @@ class MessageProcessor:
         # Never persisted — cleared when the instance is discarded.
         self._memory_query_history: list[dict] = []
         self._act_trail: list[str] = []
-        self._pending_tool_calls: list[dict] = []
         self._discovered_tools: list[dict] = []
         self._uid: int | None = None
 
@@ -304,6 +303,7 @@ class MessageProcessor:
         """
         from services import compaction_service, transcript_service
         from services.tool_call_service import ToolCallService
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
 
         compaction = compaction_service.get_compaction(self.CHANNEL)
         watermark = compaction['compacted_up_to_id'] if compaction else 0
@@ -338,7 +338,7 @@ class MessageProcessor:
             ts = _format_ts(entry.get('created_at'), row_kind='transcript', row_id=entry.get('id'))
             raw_role = (entry.get('role') or 'unknown')
             role_label = 'Assistant' if raw_role == 'assistant' else raw_role
-            content = entry.get('content') or ''
+            content = (entry.get('content') or '').replace('\n', ' ').strip()
             lines.append(f"[{ts}] {role_label}: {content}")
 
             # Interleave durable tool_calls under this transcript row.
@@ -353,106 +353,43 @@ class MessageProcessor:
                 tc_params = _parse_tc_params(tc.get('params'))
                 tc_result = tc.get('result') or ''
                 lines.append(
-                    f"[{tc_name}({self._render_params(tc_params)})] {tc_result}"
+                    ToolRenderAndRecordService.render_static(
+                        tc_name, tc_params, tc_result
+                    )
                 )
 
         return '\n'.join(lines)
 
-    def _render_params(self, params: dict) -> str:
-        """Render a params dict as ``key=value;key=value`` for the ACT trail
-        and for durable tool_call rendering in Previous Messages.
-
-        Empty dict → empty string (renders as ``[tool_name()] …``).
-        Values are stringified with ``str()`` — no JSON escaping.
-        Insertion order is preserved (Py 3.7+ guarantee).
-        Separator is ``;``, matching the north star ACT loop trail format.
-
-        **Canonical source.** This is the single implementation used by both
-        live rendering (``handleTool()`` in Commit 3, which appends to
-        ``self._act_trail``) and historical rendering
-        (``getPreviousMessages()`` replaying durable tool_calls from the DB).
-        Siblings must not re-implement this — they share it via identity.
-        """
-        if not params:
-            return ''
-        return ';'.join(f"{k}={v}" for k, v in params.items())
-
-    # ── Stubs (real bodies arrive in later commits) ───────────────────────────
+    # ── Tool dispatch ──────────────────────────────────────────────────────────
 
     def handleTool(self, tc: dict) -> str:
-        """Dispatch a single LLM tool call and record the attempt.
+        """Dispatch a single LLM tool call, record it, and add to context.
 
-        Single chokepoint for all LLM-requested tool execution during an ACT
-        loop. **Exceptions are NEVER re-raised** — they become ERROR strings
-        the LLM sees on the next iteration. The entire body runs inside one
-        protective ``try/except`` so that no matter what fails (dispatch,
-        malformed ``tc``, ``_render_params`` bug, ``utc_now`` crash, append
-        failure), a DTO still lands in ``self._pending_tool_calls`` and a
-        matching line still lands in ``self._act_trail``. Lockstep is the
-        contract.
+        Uses self._dispatcher (created once per turn in send()) so that
+        tools discovered mid-turn via find_tools are registered as handlers
+        and dispatched through the same path as innate skills.
 
-        Appends a DTO to ``self._pending_tool_calls`` and a rendered line to
-        ``self._act_trail`` in lockstep, regardless of success or failure.
-        Returns the result string so ``send()`` can pass it back to the LLM.
-
-        ``find_tools`` side effect: extends ``self._discovered_tools`` with
-        any newly discovered tool schemas (deduped by name). The LLM only sees
-        the confirmation string; ``getTools()`` exposes the schemas on the next
-        ACT iteration. The side effect only fires on ``status == 'success'``
-        dispatches — error dispatches never mutate discovered tools.
-
-        Note: the DTO's ``invoked_by='llm'`` stays set here (not injected by
-        ``store()`` in Commit 4). Future pseudo-tool DTOs produced by
-        ``_run_memory_seed`` (Commit 5), ``tool_synthesis``/``user_steer``
-        (Commit 6), and ``compaction``/``act_restart`` (Commit 7) will carry
-        ``invoked_by='system'``. ``invoked_by`` is per-DTO state — varies by
-        origin — so it cannot be injected uniformly by ``store()``.
-
-        Ordering note: sibling DTOs produced within the same millisecond share
-        an identical ``timestamp``. Commit 4's ``store()`` is the owner of
-        turn-level ordering; it will use list insertion order (or a monotonic
-        sequence counter) as the stable tiebreaker. Do not add per-call
-        sequence counters here.
+        Never re-raises — errors become strings the LLM sees next iteration.
         """
-        from services.act_dispatcher_service import ActDispatcherService
-        from services.time_utils import utc_now
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
         from services.tool_schema_service import get_external_tool_schemas
 
-        # Defensive name extraction — must survive malformed tc
-        # (missing key, None value, entirely empty dict).
         tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
 
-        # Guard empty CHANNEL — base class default is ''. Subclasses MUST
-        # override. If we ever end up here with an empty channel something
-        # is badly wired; log loudly but do not crash the ACT loop.
-        if not self.CHANNEL:
-            logger.warning(
-                "[MessageProcessor.handleTool] CHANNEL is empty on %s; "
-                "dispatch will likely fail routing",
-                type(self).__name__,
-            )
-
         result_text = ''
         try:
-            try:
-                dispatch = ActDispatcherService(
-                    execution_gate=False
-                ).dispatch_action(self.CHANNEL, {'type': tool_name, **tc_input})
-                result_text = str(dispatch.get('result', ''))
-            except Exception as exc:
-                result_text = f"ERROR: {tool_name} failed: {exc}"
-                logger.error(
-                    "[MessageProcessor.handleTool] tool=%s raised: %s",
-                    tool_name, exc,
-                    exc_info=True,
-                )
-                dispatch = {}
+            # 1. Dispatch via the per-turn dispatcher
+            dispatch = self._dispatcher.dispatch_action(
+                self.CHANNEL, {'type': tool_name, **tc_input}
+            )
+            result_text = str(dispatch.get('result', ''))
 
-            # find_tools side effect — only on successful dispatch.
-            # Error dispatches ({}) or status!='success' never mutate state.
+            # find_tools side effect — inject discovered schemas AND
+            # register discovered tools as handlers on self._dispatcher
+            # so subsequent iterations dispatch through the same path.
             if (
                 tool_name == 'find_tools'
                 and dispatch.get('status') == 'success'
@@ -468,57 +405,64 @@ class MessageProcessor:
                         if name and name not in existing_names:
                             self._discovered_tools.append(s)
                             existing_names.add(name)
-        except Exception as exc:
-            # Belt-and-braces: any failure in the find_tools side effect
-            # (or anywhere above) gets caught here so the DTO + trail still
-            # land in the ``finally`` block below.
-            if not result_text:
-                result_text = f"ERROR: {tool_name} failed: {exc}"
-            logger.error(
-                "[MessageProcessor.handleTool] post-dispatch failure tool=%s: %s",
-                tool_name, exc,
-                exc_info=True,
-            )
-        finally:
-            # Lockstep append — ALWAYS runs, even if everything above crashed.
-            # Any failure in this block is the last line of defence; we swallow
-            # it to preserve the never-re-raise contract.
-            try:
-                self._pending_tool_calls.append({
-                    'name': tool_name,
-                    'params': tc_input,
-                    'result': result_text,
-                    'ephemeral': 1,
-                    'invoked_by': 'llm',
-                    'timestamp': utc_now().isoformat(),
-                })
-            except Exception as exc:
-                logger.error(
-                    "[MessageProcessor.handleTool] DTO append failed tool=%s: %s",
-                    tool_name, exc,
-                    exc_info=True,
-                )
-            try:
-                rendered = self._render_params(tc_input)
-            except Exception as exc:
-                rendered = ''
-                logger.error(
-                    "[MessageProcessor.handleTool] _render_params failed tool=%s: %s",
-                    tool_name, exc,
-                    exc_info=True,
-                )
-            try:
-                self._act_trail.append(
-                    f"[{tool_name}({rendered})] {result_text}"
-                )
-            except Exception as exc:
-                logger.error(
-                    "[MessageProcessor.handleTool] trail append failed tool=%s: %s",
-                    tool_name, exc,
-                    exc_info=True,
-                )
 
+                    # Register as dispatcher handlers so they dispatch
+                    # through the standard handler path (no fallback needed).
+                    self._register_discovered_tools(discovered)
+
+        except Exception as exc:
+            result_text = f"ERROR: {tool_name} failed: {exc}"
+            logger.error(
+                "[MessageProcessor.handleTool] tool=%s raised: %s",
+                tool_name, exc, exc_info=True,
+            )
+
+        # 2. Render + Record
+        try:
+            rendered = ToolRenderAndRecordService(
+                tool_name=tool_name,
+                params=tc_input,
+                result=result_text,
+                ephemeral=True,
+                transcript_id=self._uid,
+            ).renderAndRecord()
+        except Exception as exc:
+            rendered = f"[{tool_name}()] {result_text}"
+            logger.error(
+                "[MessageProcessor.handleTool] renderAndRecord failed tool=%s: %s",
+                tool_name, exc, exc_info=True,
+            )
+
+        # 3. Add to context
+        self._act_trail.append(rendered)
         return result_text
+
+    def _register_discovered_tools(self, tool_names: list[str]) -> None:
+        """Register discovered tool names as handlers on self._dispatcher.
+
+        Called after find_tools returns results. Uses registry.execute()
+        which returns {'text': ...} — same shape as innate skill handlers,
+        so the dispatcher unwraps them identically.
+        """
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            for tn in tool_names:
+                if tn in self._dispatcher.handlers:
+                    continue
+                self._dispatcher.handlers[tn] = (
+                    lambda topic, action, _tn=tn: registry.execute(
+                        _tn, topic,
+                        {k: v for k, v in action.items()
+                         if k not in ('type', 'exchange_id')},
+                        exchange_id=action.get('exchange_id', ''),
+                    )
+                )
+        except Exception as exc:
+            logger.warning(
+                "[MessageProcessor] Failed to register discovered tools: %s",
+                exc,
+            )
 
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.
@@ -568,15 +512,23 @@ class MessageProcessor:
           thinking, not a final answer. Storing it would violate north star
           § Storage Model ("final ACT-loop response only").
         """
+        from services.act_dispatcher_service import ActDispatcherService
         from services.providers import Providers
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        from services.transcript_service import write_input_row
 
         with bind_current_processor(self):
+            # Write input row BEFORE the loop so transcript_id is available
+            # for ToolRenderAndRecordService during tool dispatch.
+            self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
+
+            # Single dispatcher for the entire turn. Tools discovered
+            # mid-turn via find_tools are registered as handlers on this
+            # instance so all tools dispatch through the same path.
+            self._dispatcher = ActDispatcherService(execution_gate=False)
+
             self._run_memory_seed()
 
-            # Fetch context limit once before the loop — avoid per-iteration
-            # round-trips (Ollama/Gemini may hit the provider on each call).
-            # Sanitise the return value: MagicMock in tests, None/0 from an
-            # unconfigured provider all become the safe fallback of 32 000.
             raw_limit = Providers.instance().get_context_limit(job=self.JOB)
             context_limit: int = (
                 int(raw_limit)
@@ -662,46 +614,34 @@ class MessageProcessor:
                 # Model shows tool_synthesis preceding the tool_call DTOs
                 # for the same iteration.
                 if llm_response.text:
-                    # Audit-only pseudo-tool DTO. Ephemeral=1 so it does
-                    # not replay in future Previous Messages — the final
-                    # assistant response is what matters for continuity.
-                    self._pending_tool_calls.append({
-                        'name': 'tool_synthesis',
-                        'params': {},
-                        'result': llm_response.text,
-                        'ephemeral': 1,
-                        'invoked_by': 'system',
-                        'timestamp': utc_now().isoformat(),
-                    })
-                    self._act_trail.append(f"[tool_synthesis] {llm_response.text}")
-                    # North star § ACT Loop step 4: callback exceptions are
-                    # logged and swallowed — they must never kill the loop.
+                    rendered = ToolRenderAndRecordService(
+                        tool_name='tool_synthesis',
+                        params={},
+                        result=llm_response.text,
+                        ephemeral=True,
+                        transcript_id=self._uid,
+                    ).renderAndRecord()
+                    self._act_trail.append(rendered)
                     try:
                         self._emit_narration(llm_response.text, iteration)
                     except Exception as exc:
                         logger.error(
-                            "[MessageProcessor.send] _emit_narration raised "
-                            "(swallowed per north star § ACT Loop step 4): %s",
-                            exc,
-                            exc_info=True,
+                            "[MessageProcessor.send] _emit_narration raised: %s",
+                            exc, exc_info=True,
                         )
 
                 for tc in llm_response.tool_calls:
                     self.handleTool(tc)  # never raises; appends DTO + trail
 
-                # Drain any mid-loop steering messages the user sent during this turn.
                 for steer in self._drain_steering(request_id):
-                    self._pending_tool_calls.append({
-                        'name': 'user_steer',
-                        'params': {},
-                        'result': steer,
-                        'ephemeral': 1,
-                        'invoked_by': 'system',
-                        'timestamp': utc_now().isoformat(),
-                    })
-                    self._act_trail.append(
-                        f"[steer(User added the following feedback, observe in detail before proceeding)] {steer}"
-                    )
+                    rendered = ToolRenderAndRecordService(
+                        tool_name='user_steer',
+                        params={},
+                        result=steer,
+                        ephemeral=True,
+                        transcript_id=self._uid,
+                    ).renderAndRecord()
+                    self._act_trail.append(rendered)
 
                 iteration += 1
 
@@ -765,31 +705,8 @@ class MessageProcessor:
     def _run_full_compaction(self) -> 'str | None':
         """Run a full checkpoint compaction for this channel.
 
-        Reads transcript entries since the current watermark, renders them
-        in the north star § Context Compaction format
-        (``[YYYY-MM-DD HH:MM] <role>: <content>``), enforces the 90% hard
-        cap on the compaction input by dropping oldest rows first (the
-        previous checkpoint is NEVER dropped), calls the LLM with
-        ``COMPACTION_PROMPT``, upserts the result into the compactions
-        table, and appends a durable ``compaction`` DTO
-        (``ephemeral=0``, ``invoked_by='system'``) to
-        ``self._pending_tool_calls``.
-
-        Returns the compacted text on success, None on LLM failure, empty
-        response, or nothing to compact (no entries AND no prior
-        checkpoint). Caller must handle None gracefully.
-
-        UPSERT omits overflow_content — that column belongs to the legacy
-        overflow path and must not be clobbered.
-
-        Ordering note: the ``compactions`` UPSERT commits before the
-        ``compaction`` DTO is appended to ``self._pending_tool_calls``.
-        A crash in the narrow window between these two operations would
-        leave the checkpoint updated on disk without a corresponding
-        audit row. This is acceptable under single-process semantics —
-        the next turn's ``_wrap_with_checkpoint`` will still read the
-        new checkpoint correctly; only the tool_calls audit trail for
-        this one compaction event is lost.
+        Returns the compacted text on success, None on failure.
+        Records via ToolRenderAndRecordService (ephemeral=False).
         """
         from services import compaction_service
         from services.database_service import get_shared_db_service
@@ -942,15 +859,14 @@ class MessageProcessor:
             )
             return None
 
-        # Append durable audit DTO — ephemeral=0 so it lands in tool_calls history.
-        self._pending_tool_calls.append({
-            'name': 'compaction',
-            'params': {},
-            'result': compacted_text,
-            'ephemeral': 0,
-            'invoked_by': 'system',
-            'timestamp': utc_now().isoformat(),
-        })
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        ToolRenderAndRecordService(
+            tool_name='compaction',
+            params={},
+            result=compacted_text,
+            ephemeral=False,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
         logger.info(
             "[COMPACTION] %s: full compaction written, watermark=%d, tokens=%d",
@@ -959,18 +875,10 @@ class MessageProcessor:
         return compacted_text
 
     def _run_stage1_tool_compaction(self) -> None:
-        """Stage 1 mid-ACT compaction: compress the current tool-use trail.
+        """Stage 1 mid-ACT compaction: compress the tool-use trail via LLM.
 
-        Calls the LLM with TOOL_COMPACTION_PROMPT against the accumulated
-        act_trail text. Replaces raw tool DTOs in _pending_tool_calls with a
-        single tool_compaction DTO. Resets _act_trail to a single summary line.
-
-        Preserved entries (not dropped):
-        - ephemeral=0 DTOs (e.g. memory seed, any prior compaction)
-        - user_steer DTOs (carry user intent — must not be summarised away)
-
-        On LLM failure or empty response: logs a warning and returns without
-        mutating state — the turn continues with the uncompacted trail.
+        Resets _act_trail to a single summary line and records via
+        ToolRenderAndRecordService. On failure, returns without mutating state.
         """
         from services.providers import Providers
 
@@ -1000,42 +908,21 @@ class MessageProcessor:
             )
             return
 
-        # Drop every ephemeral=1 DTO whose name is not in the preserved set.
-        # Preserved: memory (ephemeral=0), user_steer (ephemeral=1 but carries
-        # user intent), compaction (ephemeral=0).
-        _STAGE1_PRESERVED_EPHEMERAL = frozenset({'user_steer'})
-        self._pending_tool_calls = [
-            dto for dto in self._pending_tool_calls
-            if dto.get('ephemeral') == 0
-            or dto.get('name') in _STAGE1_PRESERVED_EPHEMERAL
-        ]
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        rendered = ToolRenderAndRecordService(
+            tool_name='tool_compaction',
+            params={},
+            result=summary_text,
+            ephemeral=True,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
-        # Reset trail to a single summary line, then append the DTO.
-        self._act_trail = [f"[tool_compaction] {summary_text}"]
-        self._pending_tool_calls.append({
-            'name': 'tool_compaction',
-            'params': {},
-            'result': summary_text,
-            'ephemeral': 1,
-            'invoked_by': 'system',
-            'timestamp': utc_now().isoformat(),
-        })
+        self._act_trail = [rendered]
 
     def _run_stage2_act_restart(self) -> bool:
-        """Stage 2 mid-ACT compaction: full compaction + ACT loop restart.
+        """Stage 2: full compaction + ACT loop restart.
 
-        Calls _run_full_compaction() to write a checkpoint, then collapses all
-        ephemeral=1 DTOs in _pending_tool_calls into a single act_restart DTO.
-        Resets _act_trail and _discovered_tools so the loop restarts cleanly.
-
-        Returns True to signal the outer loop should reset iteration = 0.
-        Returns False if the compaction LLM call failed — caller continues the
-        loop naturally (will likely hit the cap and exit with final_text='').
-
-        Note: loop_start is NOT reset when iteration resets to 0. The wall-clock
-        MAX_TIMEOUT guard is a safety net against runaway turns; compaction calls
-        count against it. This is deliberate — Stage 2 is a last-resort path and
-        its LLM call time must be included in the overall turn budget.
+        Returns True → reset iteration to 0. False → compaction failed.
         """
         compacted_text = self._run_full_compaction()
         if compacted_text is None:
@@ -1046,26 +933,14 @@ class MessageProcessor:
             )
             return False
 
-        # Collapse ephemeral=1 DTOs into a single act_restart DTO.
-        # Preserved (north star § Context Compaction line: "memory auto-seed,
-        # any user_steer entries, and the compaction DTO from this restart
-        # all remain in the list untouched"):
-        #   - all ephemeral=0 DTOs (memory seed + the compaction DTO we just
-        #     appended inside _run_full_compaction)
-        #   - all user_steer DTOs (ephemeral=1 but carry user intent)
-        self._pending_tool_calls = [
-            dto for dto in self._pending_tool_calls
-            if dto.get('ephemeral') == 0
-            or dto.get('name') == 'user_steer'
-        ]
-        self._pending_tool_calls.append({
-            'name': 'act_restart',
-            'params': {},
-            'result': 'ACT loop restarted after context compaction',
-            'ephemeral': 1,
-            'invoked_by': 'system',
-            'timestamp': utc_now().isoformat(),
-        })
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        ToolRenderAndRecordService(
+            tool_name='act_restart',
+            params={},
+            result='ACT loop restarted after context compaction',
+            ephemeral=True,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
         self._act_trail = []
         self._discovered_tools = []
@@ -1073,60 +948,21 @@ class MessageProcessor:
         return True
 
     def store(self, llm_response: str) -> None:
-        """Persist the turn atomically via transcript_service.append_atomic_turn.
-
-        Calls append_atomic_turn() which opens a single DB transaction and
-        writes the input row, all pending tool_call DTOs, and the assistant row
-        atomically. Sets self._uid to the input transcript row id on success.
-
-        If self.ROLE is empty a warning is logged but the write proceeds —
-        the empty string is passed through as-is. Downstream CHECK constraints
-        or callers are responsible for rejecting it.
-
-        Does NOT catch exceptions. If the write fails the exception propagates
-        to send(), leaving self._uid as None. The transaction guarantees that
-        either all rows land or none do.
+        """Write the assistant transcript row. Input row was already written
+        at the top of send(). Tool calls were recorded inline via
+        ToolRenderAndRecordService during the ACT loop.
         """
-        if not self.ROLE:
-            logger.warning(
-                "[MessageProcessor.store] ROLE is empty on %s; "
-                "writing empty-string role to transcript",
-                type(self).__name__,
-            )
-
-        from services.transcript_service import append_atomic_turn
-
-        self._uid = append_atomic_turn(
-            channel=self.CHANNEL,
-            role=self.ROLE,
-            raw_input=self._raw_input,
-            llm_response=llm_response,
-            pending_tool_calls=self._pending_tool_calls,
-        )
+        from services.transcript_service import write_assistant_row
+        write_assistant_row(self.CHANNEL, llm_response)
 
     # ── Overridable hooks ────────────────────────────────────────────────────
 
     def _run_memory_seed(self) -> None:
-        """Pre-ACT-loop memory auto-seed hook.
+        """Pre-ACT-loop memory auto-seed hook. Base is a no-op.
 
-        Base is a **no-op**. ``UserMessageProcessor`` overrides in Commit 8 to
-        dispatch the ``memory`` skill once at the start of a turn, populate
-        ``self._memory_seed``, and append a durable ``memory`` DTO
-        (``ephemeral=0``, ``invoked_by='system'``) to ``self._pending_tool_calls``
-        so the seed lands in transcript history via the atomic ``store()`` call.
-
-        Exists on the base so ``send()`` (Commit 6) can call it unconditionally
-        without polymorphic branching or hasattr checks. Per-channel subclasses
-        that have no seeding concept (DMN, goal-pursuit, scheduled) inherit the
-        no-op and nothing happens.
-
-        Contract for overrides:
-        - MUST be idempotent within a single turn (``send()`` calls it exactly
-          once, immediately before the ACT loop begins).
-        - MUST NOT raise. Seed failures degrade to "no seed this turn" and
-          should be logged, not propagated — the turn still runs.
-        - MUST leave ``self._memory_seed = None`` if no seed was produced, so
-          ``getUserPrompt()`` can test truthiness cleanly.
+        UserMessageProcessor overrides to dispatch the memory skill once at
+        turn start, populate self._memory_seed, and record via
+        ToolRenderAndRecordService (ephemeral=False).
         """
         pass
 
