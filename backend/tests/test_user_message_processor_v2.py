@@ -457,9 +457,8 @@ class TestRunMemorySeed:
             proc._run_memory_seed()
 
         assert proc._memory_seed == 'memories text'
-        # SEED_RADIUS_BASELINE tuned 0.2 → 0.3 by upstream 2c3682f; assertion
-        # must track the constant.
-        assert proc._memory_seed_radius == 0.3
+        # SEED_RADIUS_BASELINE is 0.2 (tuned at df1c08d).
+        assert proc._memory_seed_radius == 0.2
         assert len(proc._pending_tool_calls) == 1
 
         dto = proc._pending_tool_calls[0]

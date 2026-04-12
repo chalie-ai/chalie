@@ -46,11 +46,20 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def db_service(tmp_path):
     """DatabaseService backed by a real SQLite file with the full schema loaded."""
-    from tests.test_helpers import load_schema_sql
+    import re
+    from pathlib import Path
+    raw = (Path(__file__).parent.parent / 'schema.sql').read_text()
+    # Strip vec0/FTS5 virtual tables — extension not available in unit-test env.
+    schema_sql = re.sub(
+        r'CREATE\s+VIRTUAL\s+TABLE\s+.*?;',
+        '',
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     db_path = str(tmp_path / "test_domain_confidence.db")
     conn = sqlite3.connect(db_path)
-    conn.executescript(load_schema_sql())
+    conn.executescript(schema_sql)
     conn.commit()
     conn.close()
 

@@ -25,8 +25,16 @@ from services.contradiction_classifier_service import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _schema_sql():
-    from tests.test_helpers import load_schema_sql
-    return load_schema_sql()
+    import re
+    from pathlib import Path
+    raw = (Path(__file__).parent.parent / 'schema.sql').read_text()
+    # Strip vec0/FTS5 virtual tables — extension not available in unit-test env.
+    return re.sub(
+        r'CREATE\s+VIRTUAL\s+TABLE\s+.*?;',
+        '',
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def _pack_embedding(values: list) -> bytes:
