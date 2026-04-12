@@ -31,6 +31,7 @@ Test groups:
 
 import time
 from unittest.mock import MagicMock, call, patch
+from services.act_dispatcher_service import ActDispatcherService
 
 import pytest
 
@@ -211,13 +212,18 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='Searching…', tool_calls=[tc])
         iter2 = _make_llm_response(text='Done.', tool_calls=None)
 
+        # Use real dispatcher and inject handler
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'result text'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'result text'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             p.send()
 
-        assert mock_ht.call_count == 1
+        # One tool_synthesis DTO + one actual tool DTO = 2
+        assert len(p._pending_tool_calls) == 2
+        assert p._pending_tool_calls[1]['result'] == 'result text'
 
     def test_pending_tool_calls_has_tool_synthesis_dto(self):
         """After iteration 1 with narration text, a tool_synthesis DTO is appended."""
@@ -228,9 +234,11 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='Looking into this…', tool_calls=[tc])
         iter2 = _make_llm_response(text='Done.', tool_calls=None)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'result'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'result'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             p.send()
 
@@ -245,9 +253,11 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='', tool_calls=[tc])
         iter2 = _make_llm_response(text='result', tool_calls=None)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             p.send()
 
@@ -262,9 +272,11 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='step', tool_calls=[tc])
         iter2 = _make_llm_response(text='final', tool_calls=None)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             p.send()
 
@@ -280,9 +292,11 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='narration here', tool_calls=[tc])
         iter2 = _make_llm_response(text='final', tool_calls=None)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             p.send()
 
@@ -296,9 +310,11 @@ class TestTwoIteration:
         iter1 = _make_llm_response(text='thinking', tool_calls=[tc])
         iter2 = _make_llm_response(text='the answer', tool_calls=None)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['search'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.side_effect = [iter1, iter2]
             result = p.send()
 
@@ -366,9 +382,11 @@ class TestMaxIterationsCap:
         tc = {'name': 'loop_tool', 'input': {}}
         response_with_tools = _make_llm_response(text='', tool_calls=[tc])
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['loop_tool'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.return_value = response_with_tools
             p.send()
 
@@ -384,9 +402,11 @@ class TestMaxIterationsCap:
         tc = {'name': 'loop_tool', 'input': {}}
         response_with_tools = _make_llm_response(text='step', tool_calls=[tc])
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['loop_tool'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht:
-            mock_ht.return_value = 'r'
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher):
             mock_inst.return_value.send_messages.return_value = response_with_tools
             p.send()
 
@@ -462,11 +482,13 @@ class TestMaxTimeoutCap:
         # Third call onwards returns 11.0 which trips the MAX_TIMEOUT=10 gate.
         now = self._counter_time(trip_after=2, elapsed=11.0)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['slow_tool'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht, \
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher), \
              patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
-            mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.side_effect = [
                 response_with_tools,
                 response_clean,
@@ -487,11 +509,13 @@ class TestMaxTimeoutCap:
         # Same trip_after=2 pattern as above.
         now = self._counter_time(trip_after=2, elapsed=6.0)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['slow_tool'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht, \
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher), \
              patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
-            mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.return_value = response
             p.send()
 
@@ -511,11 +535,13 @@ class TestMaxTimeoutCap:
 
         now = self._counter_time(trip_after=2, elapsed=11.0)
 
+        dispatcher = ActDispatcherService(execution_gate=False)
+        dispatcher.handlers['slow_tool'] = lambda ch, act: 'r'
+
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch.object(p, 'handleTool') as mock_ht, \
+             patch('services.act_dispatcher_service.ActDispatcherService', return_value=dispatcher), \
              patch('services.message_processor.time') as mock_time:
             mock_time.time.side_effect = now
-            mock_ht.return_value = 'r'
             mock_inst.return_value.send_messages.return_value = response_with_tools
             result = p.send()
 
