@@ -19,7 +19,7 @@ export class Chat {
 
     // Scroll-up pagination state
     this._historyOffset = 0;
-    this._historyTotal = 0;
+
     this._historyLoading = false;
     this._historyExhausted = false;
     this._historyLimit = 12;
@@ -231,9 +231,9 @@ export class Chat {
         offset: this._historyOffset,
       });
 
-      const exchanges = data.exchanges || [];
+      const messages = data.messages || [];
 
-      if (exchanges.length === 0 && this._historyOffset === 0) {
+      if (messages.length === 0 && this._historyOffset === 0) {
         this._historyExhausted = true;
         this._showHistoryEndPill();
         return;
@@ -241,28 +241,21 @@ export class Chat {
 
       const isInitialLoad = this._historyOffset === 0;
       if (isInitialLoad) {
-        // Initial load — append in chronological order; use in_working_memory from API
-        for (const exchange of exchanges) {
-          this._appendExchange(exchange, exchange.in_working_memory !== false);
-        }
+        for (const msg of messages) this._appendMessage(msg, true);
       } else {
-        // Subsequent pages — prepend in reverse so oldest ends up at top
-        for (let i = exchanges.length - 1; i >= 0; i--) {
-          this._prependExchange(exchanges[i], false);
+        for (let i = messages.length - 1; i >= 0; i--) {
+          this._prependMessage(messages[i], false);
         }
       }
 
-      this._historyOffset += exchanges.length;
-      this._historyTotal = data.total ?? this._historyOffset;
+      this._historyOffset += messages.length;
 
       if (!data.has_more || this._historyOffset >= this._historyMaxTurns) {
         this._historyExhausted = true;
         this._showHistoryEndPill();
       }
 
-      // After initial load, force-scroll to show the latest message.
-      // Uses instant scroll to avoid race with smooth scroll + scroll tracking.
-      if (isInitialLoad && exchanges.length > 0) {
+      if (isInitialLoad && messages.length > 0) {
         this._renderer.forceScrollToBottom();
       }
     } catch (err) {
@@ -281,29 +274,19 @@ export class Chat {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  _appendExchange(exchange, inWorkingMemory) {
-    if (exchange.prompt) {
-      this._renderer.appendUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
-    }
-    if (exchange.blocks?.length) {
-      this._renderer.appendChalieForm(exchange.blocks, {
-        topic: exchange.topic,
-        ts: exchange.timestamp,
-        exchange_id: exchange.id,
-      }, { inWorkingMemory });
+  _appendMessage(msg, inWorkingMemory) {
+    if (msg.role === 'user') {
+      this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
+    } else if (msg.blocks?.length) {
+      this._renderer.appendChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 
-  _prependExchange(exchange, inWorkingMemory) {
-    if (exchange.blocks?.length) {
-      this._renderer.prependChalieForm(exchange.blocks, {
-        topic: exchange.topic,
-        ts: exchange.timestamp,
-        exchange_id: exchange.id,
-      }, { inWorkingMemory });
-    }
-    if (exchange.prompt) {
-      this._renderer.prependUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
+  _prependMessage(msg, inWorkingMemory) {
+    if (msg.role === 'user') {
+      this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
+    } else if (msg.blocks?.length) {
+      this._renderer.prependChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 
