@@ -76,8 +76,7 @@ frontend/
 ### Core Services (`backend/services/`)
 
 #### Routing & Decision Making
-- **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker. **User messages bypass this entirely** — they go directly to `UserMessageProcessor`. The router is only consulted for non-user flows (DMN, fallback).
-- `routing_stability_regulator_service.py` — Single authority for router weight mutation. **Service file currently absent** (registered as optional at boot, fails gracefully; inactive).
+- Mode routing has been removed. All message processing flows through `MessageProcessor` subclasses directly — each channel is its own orchestrator.
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — Thin legacy facade preserving public API. Actual prompt assembly in `prompt_assembly_service.py`, LLM dispatch in `response_generation_service.py` and ultimately `providers.py`.
@@ -249,7 +248,7 @@ Built-in cognitive skills always available to the LLM:
 ## Key Architectural Decisions
 
 ### Unified Message Processing Path
-- **User messages bypass the mode router entirely** — they go directly to `UserMessageProcessor(raw_input, metadata, on_narration).send(request_id)`. One instance per turn; no singleton; no `.process()` entry method.
+- **User messages** go directly to `UserMessageProcessor(raw_input, metadata, on_narration).send(request_id)`. One instance per turn; no singleton; no `.process()` entry method.
 - **Non-user flows** (DMN, goal pursuit, scheduled prompts) each instantiate their own `MessageProcessor` subclass directly. No central dispatcher. Each channel is its own orchestrator.
 - **History as literal text** — `getPreviousMessages()` renders the channel transcript as a `## Previous Messages` block inside the user message body. The provider receives a single-element `messages[]` array — not a multi-turn array with `role='tool'` entries.
 - **Atomic persistence** — `store()` calls `transcript_service.append_atomic_turn()` in one transaction at the end of the ACT loop. No mid-loop DB writes.

@@ -7,6 +7,8 @@ import logging
 from datetime import datetime, timezone
 from flask import Blueprint, Response, request, jsonify, stream_with_context
 
+from services.time_utils import utc_now
+
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -216,120 +218,22 @@ def delete_all():
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
 
     try:
-        from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
 
-        # Clear MemoryStore — all user-data patterns
-        store = MemoryClientService.create_connection()
-        for pattern in [
-            # Memory layer
-            "working_memory:*", "world_state:*",
-
-            # Threads
-            "thread:*", "active_thread:*",
-            "thread_conv:*", "thread_conv_index:*",
-
-            # Identity & context
-            "identity_state:*",
-            "client_context:*",
-            "ambient:*",
-
-            # Autonomous action state
-            "proactive:*",
-            "reflection:*",
-            "plan:*",
-
-            # DMN (proactive intelligence)
-            "dmn:*",
-            "world_model:items",
-            "drift:*",
-            "experience_assimilation_state",
-            "experience_assimilation_cooldowns",
-            "tool_reflection:pending",
-            "semantic_consolidation:*",
-            "reflex:*",
-            "adaptive_fork_*",
-            "adaptive_growth_*",
-
-            # Output & notifications
-            "notifications:recent",
-            "output:*", "output-queue",
-
-            # Sessions (invalidate all — current session still valid for this request)
-            "auth_session:*",
-
-            # Tool state
-            "tool_state:*",
-            "tool_triage_summaries",
-
-            # Metrics (contain user-derived data)
-            "metrics:timing:*",
-            "metrics:counter:*",
-
-            # Misc
-            "fok:*",
-            "bg_llm:*",
-        ]:
-            keys = store.keys(pattern)
-            if keys:
-                store.delete(*keys)
-
-        # Delete all user data from SQLite tables.
-        # PRAGMA foreign_keys=OFF lets us delete in any order without FK constraint
-        # errors — re-enabled immediately after. interaction_log is cleared here;
-        # the audit entry below is written into the freshly-emptied table.
         db = get_shared_db_service()
         truncate_failures = []
         with db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("PRAGMA foreign_keys=OFF")
-            for table in [
-                # User-personal data (critical)
-                "episodes",
-                "knowledge",
-                "transcript",
-                "compactions",
-                "autobiography",
-                "scheduled_items",
-                "lists",
-                "list_items",
-                "list_events",
-                "identity_vectors",
-                "identity_events",
-                "place_fingerprints",
-
-                # Documents (watched-folder docs)
-                "document_chunks",
-                "documents",
-                "watched_folders",
-
-                # Behavioral/derived data
-                "interaction_log",
-                "cortex_iterations",
-                "tool_performance_metrics",
-                "user_tool_preferences",
-            ]:
+            # FK order: tool_calls → transcript (tool_calls.transcript_id FK)
+            for table in ["tool_calls", "episodes", "transcript"]:
                 try:
                     cursor.execute(f"DELETE FROM {table}")
                 except Exception as e:
                     logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                     truncate_failures.append(table)
-            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
-        # Audit trail — log the deletion event AFTER truncation so it persists
-        try:
-            from services.interaction_log_service import InteractionLogService
-            log_service = InteractionLogService()
-            log_service.log_event(
-                event_type="privacy_delete_all",
-                payload={"timestamp": datetime.now(timezone.utc).isoformat()}
-            )
-        except Exception:
-            pass
-
-        ts = datetime.now(timezone.utc).isoformat()
-        result = {"deleted": True, "timestamp": ts}
+        result = {"deleted": True, "timestamp": utc_now().isoformat()}
         if truncate_failures:
             result["warnings"] = f"Failed to truncate: {', '.join(truncate_failures)}"
         return jsonify(result), 200
