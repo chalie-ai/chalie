@@ -158,11 +158,11 @@ class DMNService:
         with self._db.connection() as conn:
             cursor = conn.cursor()
 
-            # Top concepts by confidence
+            # Top user_specific rows by retrieval_weight
             cursor.execute(
-                "SELECT key, value FROM knowledge "
-                "WHERE kind = 'concept' AND deleted_at IS NULL "
-                "ORDER BY confidence DESC LIMIT 30"
+                "SELECT key, value FROM data_graph "
+                "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1 "
+                "ORDER BY retrieval_weight DESC LIMIT 30"
             )
             concepts = cursor.fetchall()
             if concepts:

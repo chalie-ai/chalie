@@ -49,7 +49,6 @@ SEVERITY_MISSING_PROVIDER = 0.8
 SEVERITY_DEAD_THREADS = 0.6
 SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
-SEVERITY_HIGH_RECALL_FAILURE = 0.3
 SEVERITY_LOW_ACTIVATION = 0.2
 
 
@@ -233,9 +232,7 @@ class SelfModelService:
             "context_warmth": context_warmth,
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
-            "recall_failure_rate": self._get_recall_failure_rate(channel),
             "focus_active": False,
-            "skill_reliability": self._get_skill_reliability(),
         }
 
     def _get_working_memory_depth(self, channel: str) -> int:
@@ -253,61 +250,6 @@ class SelfModelService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get FOK signal: {e}", exc_info=True)
             return 0
-
-    def _get_recall_failure_rate(self, channel: str) -> float:
-        """Per-channel recall failure rate from procedural memory."""
-        try:
-            from services.knowledge_service import KnowledgeService
-            db = self._get_db()
-            entry = KnowledgeService(db).get('chalie', 'recall')
-            import json as _json
-            data = entry.get('data', {}) if entry else {}
-            if isinstance(data, str):
-                try:
-                    data = _json.loads(data)
-                except Exception:
-                    data = {}
-            context_stats = data.get("context_stats") or {}
-            if channel in context_stats:
-                channel_stats = context_stats[channel]
-                total = channel_stats.get("total", 0)
-                failures = channel_stats.get("failures", 0)
-                if total > 0:
-                    return round(failures / total, 3)
-            return 0.0
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
-            return 0.0
-
-    def _get_skill_reliability(self) -> dict:
-        """Condensed skill reliability: only skills with >= 5 attempts."""
-        try:
-            from services.knowledge_service import KnowledgeService
-            import json as _json
-            db = self._get_db()
-            procedures = KnowledgeService(db).get_ranked_procedures(limit=50)
-
-            result = {}
-            for proc in procedures:
-                data = proc.get('data', {})
-                if isinstance(data, str):
-                    try:
-                        data = _json.loads(data)
-                    except Exception:
-                        data = {}
-                attempts = data.get("total_attempts", 0)
-                if attempts < 5:
-                    continue
-                successes = data.get("total_successes", 0)
-                reliability = (successes + 1) / (attempts + 2)  # Laplace smoothing
-                result[proc.get('key', '')] = {
-                    "reliability": round(reliability, 3),
-                    "attempts": attempts,
-                }
-            return result
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get skill reliability: {e}", exc_info=True)
-            return {}
 
     # ── Operational layer ───────────────────────────────────────
 
@@ -382,15 +324,14 @@ class SelfModelService:
                 episode_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM knowledge "
-                    "WHERE kind = 'concept' AND deleted_at IS NULL"
+                    "SELECT COUNT(*) FROM data_graph "
+                    "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
                 )
                 concept_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM knowledge "
-                    "WHERE kind IN ('trait', 'preference') "
-                    "AND entity = 'user' AND deleted_at IS NULL"
+                    "SELECT COUNT(*) FROM data_graph "
+                    "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
                 )
                 trait_count = cursor.fetchone()[0]
 
@@ -631,14 +572,6 @@ class SelfModelService:
             notes.append({
                 "signal": f"LLM queue congested ({bg_depth}/25)",
                 "severity": SEVERITY_QUEUE_CONGESTION,
-            })
-
-        # High recall failure rate (severity: 0.3)
-        rfr = ep.get("recall_failure_rate", 0)
-        if rfr > 0.4:
-            notes.append({
-                "signal": f"Memory recall unreliable for current topic (failure rate: {rfr:.0%})",
-                "severity": SEVERITY_HIGH_RECALL_FAILURE,
             })
 
         # Low average memory activation (severity: 0.2)

@@ -125,21 +125,21 @@ class TestDetectPlan:
 
     def test_detects_workout_plan(self, service, mock_store):
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness', 'thread1')
+            result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness')
 
         assert result is not None
         assert result['content_type'] == 'plan'
 
     def test_detects_day_by_day_itinerary(self, service, mock_store):
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(DAY_BY_DAY_PLAN, 'travel', 'thread1')
+            result = service.detect_saveable_content(DAY_BY_DAY_PLAN, 'travel')
 
         assert result is not None
         assert result['content_type'] == 'plan'
 
     def test_rejects_short_response(self, service, mock_store):
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(SHORT_RESPONSE, 'chat', 'thread1')
+            result = service.detect_saveable_content(SHORT_RESPONSE, 'chat')
 
         assert result is None
 
@@ -150,7 +150,7 @@ class TestDetectRecipe:
 
     def test_detects_recipe(self, service, mock_store):
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(RECIPE, 'cooking', 'thread1')
+            result = service.detect_saveable_content(RECIPE, 'cooking')
 
         assert result is not None
         assert result['content_type'] == 'recipe'
@@ -169,7 +169,7 @@ class TestDetectRecipe:
 2. Bake
 """
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(no_qty, 'cooking', 'thread1')
+            result = service.detect_saveable_content(no_qty, 'cooking')
 
         # Should not match: too short (< 300 chars)
         assert result is None
@@ -181,7 +181,7 @@ class TestDetectStructuredList:
 
     def test_detects_gear_list(self, service, mock_store):
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(STRUCTURED_LIST, 'camping', 'thread1')
+            result = service.detect_saveable_content(STRUCTURED_LIST, 'camping')
 
         assert result is not None
         assert result['content_type'] == 'list'
@@ -190,7 +190,7 @@ class TestDetectStructuredList:
         """A short inline list without headers should not match."""
         short_list = "Here are some options:\n- Option A\n- Option B\n- Option C"
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(short_list, 'chat', 'thread1')
+            result = service.detect_saveable_content(short_list, 'chat')
 
         assert result is None
 
@@ -202,15 +202,15 @@ class TestFalsePositiveGuards:
     def test_conversational_short_response_rejected(self, service, mock_store):
         """Short conversational openers don't trigger save."""
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(CONVERSATIONAL, 'chat', 'thread1')
+            result = service.detect_saveable_content(CONVERSATIONAL, 'chat')
 
         assert result is None
 
     def test_cooldown_prevents_detection(self, service, mock_store):
         """If cooldown key exists, detection returns None."""
-        mock_store.set('save_suggest:cooldown:thread1', '1')  # pre-populate cooldown key
+        mock_store.set('save_suggest:cooldown', '1')  # pre-populate cooldown key
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness', 'thread1')
+            result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness')
 
         assert result is None
 
@@ -222,21 +222,21 @@ class TestFlagLifecycle:
     def test_flag_set_and_get(self, service, mock_store):
         """``flag_saveable`` writes flag JSON with correct key, TTL, and payload."""
         with patch.object(service, '_get_store', return_value=mock_store):
-            service.flag_saveable('thread1', 'fitness', 'plan', 'ex123')
+            service.flag_saveable('fitness', 'plan', 'ex123')
 
-        raw = mock_store.get('saveable:thread1')
+        raw = mock_store.get('saveable')
         assert raw is not None, "flag key must exist in store after flag_saveable"
         data = json.loads(raw)
         assert data['content_type'] == 'plan'
         assert data['exchange_id'] == 'ex123'
-        assert 0 < mock_store.ttl('saveable:thread1') <= 1800  # 30-min TTL
+        assert 0 < mock_store.ttl('saveable') <= 1800  # 30-min TTL
 
     def test_get_flag_returns_data(self, service, mock_store):
         """``get_saveable_flag`` deserialises an existing flag from the store."""
         flag_data = json.dumps({'content_type': 'plan', 'topic': 'fitness', 'ts': 123})
-        mock_store.set('saveable:thread1', flag_data)
+        mock_store.set('saveable', flag_data)
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.get_saveable_flag('thread1')
+            result = service.get_saveable_flag()
 
         assert result is not None
         assert result['content_type'] == 'plan'
@@ -245,17 +245,17 @@ class TestFlagLifecycle:
         """``get_saveable_flag`` returns None when no flag key exists."""
         # fresh empty store → get() returns None by default
         with patch.object(service, '_get_store', return_value=mock_store):
-            result = service.get_saveable_flag('thread1')
+            result = service.get_saveable_flag()
 
         assert result is None
 
     def test_clear_flag(self, service, mock_store):
         """``clear_flag`` removes the saveable flag key from the store."""
-        mock_store.set('saveable:thread1', 'some_data')
+        mock_store.set('saveable', 'some_data')
         with patch.object(service, '_get_store', return_value=mock_store):
-            service.clear_flag('thread1')
+            service.clear_flag()
 
-        assert mock_store.get('saveable:thread1') is None
+        assert mock_store.get('saveable') is None
 
 
 # ── Trigger Signal Detection ─────────────────────────────────
@@ -302,11 +302,11 @@ class TestRateLimiting:
     def test_record_rejection_sets_cooldown_and_reject(self, service, mock_store):
         """``record_rejection`` persists both the per-thread cooldown and the topic-rejection keys."""
         with patch.object(service, '_get_store', return_value=mock_store):
-            service.record_rejection('thread1', 'fitness')
+            service.record_rejection('fitness')
 
         # Both keys must exist with non-zero TTLs after a rejection
-        assert mock_store.exists('save_suggest:cooldown:thread1'), "cooldown key must be set"
-        assert mock_store.exists('save_suggest:reject:thread1:fitness'), "topic reject key must be set"
+        assert mock_store.exists('save_suggest:cooldown'), "cooldown key must be set"
+        assert mock_store.exists('save_suggest:reject:fitness'), "topic reject key must be set"
 
     def test_duplicate_prevention(self, service, mock_store):
         """First call returns False (not duplicate); second call returns True (already seen)."""
@@ -347,7 +347,7 @@ class TestDocumentCreation:
 
             with patch('services.database_service.get_shared_db_service'), \
                  patch('services.document_service.DocumentService', return_value=mock_doc_svc):
-                doc_id = service.create_document_from_conversation('thread1', 'fitness', 'plan')
+                doc_id = service.create_document_from_conversation('fitness', 'plan')
 
         assert doc_id == 'abc12345'
         mock_doc_svc.create_document_from_text.assert_called_once()
@@ -356,7 +356,7 @@ class TestDocumentCreation:
         """Returns None if no conversation content found."""
         with patch.object(service, '_get_store', return_value=mock_store), \
              patch.object(service, '_get_conversation_window', return_value=None):
-            result = service.create_document_from_conversation('thread1', 'topic', 'plan')
+            result = service.create_document_from_conversation('topic', 'plan')
 
         assert result is None
 
@@ -368,6 +368,6 @@ class TestDocumentCreation:
 
         with patch.object(service, '_get_store', return_value=mock_store), \
              patch.object(service, '_get_conversation_window', return_value=conv):
-            result = service.create_document_from_conversation('thread1', 'topic', 'plan')
+            result = service.create_document_from_conversation('topic', 'plan')
 
         assert result is None

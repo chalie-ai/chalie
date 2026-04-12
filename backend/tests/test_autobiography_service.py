@@ -79,7 +79,11 @@ def db_service(tmp_path):
 
 @pytest.fixture
 def service(db_service):
-    return AutobiographyService(db_service)
+    from unittest.mock import patch
+    from services.data_graph_service import DataGraphService
+    dgs = DataGraphService(db_service)
+    with patch('services.data_graph_service.get_data_graph_service', return_value=dgs):
+        yield AutobiographyService(db_service)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,17 +120,16 @@ def _insert_episode(db_service, gist="test episode", salience=5, channel="genera
 
 def _insert_trait(db_service, key="fav_color", value="blue",
                   category="preference", confidence=0.8):
-    """Insert a knowledge row of kind 'trait' (replaces old user_traits)."""
+    """Insert a data_graph row of kind 'user_specific' for trait testing."""
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-               VALUES ('trait', 'user', ?, ?, ?, ?)""",
-            (key, value, json.dumps({"category": category}), confidence)
+            """INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+               VALUES ('user_specific', ?, ?, ?, 'test')""",
+            (key, value, confidence)
         )
-    # Return the rowid of the inserted row
     with db_service.connection() as conn:
         row = conn.execute(
-            "SELECT id FROM knowledge WHERE key = ? ORDER BY id DESC LIMIT 1", (key,)
+            "SELECT id FROM data_graph WHERE key = ? ORDER BY id DESC LIMIT 1", (key,)
         ).fetchone()
     return str(row[0]) if row else None
 
@@ -134,45 +137,33 @@ def _insert_trait(db_service, key="fav_color", value="blue",
 def _insert_concept(db_service, name="Python", ctype="knowledge",
                     definition="A programming language", domain="tech",
                     strength=0.9):
-    """Insert a knowledge row of kind 'concept' (replaces old semantic_concepts)."""
+    """Insert a data_graph row of kind 'user_specific' for concept testing."""
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-               VALUES ('concept', 'chalie', ?, ?, ?, ?)""",
-            (name, definition,
-             json.dumps({"concept_type": ctype, "domain": domain, "strength": strength}),
-             strength)
+            """INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+               VALUES ('user_specific', ?, ?, ?, 'test')""",
+            (name, definition, strength)
         )
     with db_service.connection() as conn:
         row = conn.execute(
-            "SELECT id FROM knowledge WHERE key = ? AND kind = 'concept' ORDER BY id DESC LIMIT 1",
-            (name,)
+            "SELECT id FROM data_graph WHERE key = ? ORDER BY id DESC LIMIT 1", (name,)
         ).fetchone()
     return str(row[0]) if row else None
 
 
-def _insert_relationship(db_service, source_id, target_id, rel_type="uses",
+def _insert_relationship(db_service, source_name, target_name, rel_type="uses",
                           strength=0.85):
-    """Insert a knowledge row of kind 'relationship' (replaces old semantic_relationships)."""
-    # Resolve source and target concept names from their IDs
-    with db_service.connection() as conn:
-        src_row = conn.execute("SELECT key FROM knowledge WHERE id = ?", (source_id,)).fetchone()
-        tgt_row = conn.execute("SELECT key FROM knowledge WHERE id = ?", (target_id,)).fetchone()
-    source_name = src_row[0] if src_row else "unknown"
-    target_name = tgt_row[0] if tgt_row else "unknown"
-    rel_key = f"{source_name}__{rel_type}__{target_name}"
+    """Insert a data_graph row with contact: prefix key for relationship testing."""
+    contact_key = f"contact:{target_name.lower()}@test.com"
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-               VALUES ('relationship', 'chalie', ?, ?, ?, ?)""",
-            (rel_key, f"{source_name} {rel_type} {target_name}",
-             json.dumps({"source_name": source_name, "target_name": target_name,
-                         "relationship_type": rel_type, "strength": strength}),
-             strength)
+            """INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+               VALUES ('user_specific', ?, ?, ?, 'test')""",
+            (contact_key, target_name, strength)
         )
     with db_service.connection() as conn:
         row = conn.execute(
-            "SELECT id FROM knowledge WHERE key = ? ORDER BY id DESC LIMIT 1", (rel_key,)
+            "SELECT id FROM data_graph WHERE key = ? ORDER BY id DESC LIMIT 1", (contact_key,)
         ).fetchone()
     return str(row[0]) if row else None
 
@@ -300,7 +291,7 @@ class TestGatherSynthesisInputs:
         assert gist.endswith("...")
 
     def test_gathers_traits_above_confidence_threshold(self, db_service, service):
-        """Only traits with confidence > 0.3 are included."""
+        """Only traits with retrieval_weight > 0.3 are included."""
         _insert_trait(db_service, key="visible", value="yes", confidence=0.5)
         _insert_trait(db_service, key="hidden", value="no", confidence=0.2)
 
@@ -309,37 +300,38 @@ class TestGatherSynthesisInputs:
         assert len(result["traits"]) == 1
         assert result["traits"][0]["key"] == "visible"
         assert result["traits"][0]["value"] == "yes"
-        assert result["traits"][0]["category"] == "preference"
+        assert result["traits"][0]["category"] == "general"
 
     def test_gathers_concepts(self, db_service, service):
-        """Concepts are gathered with correct field mapping."""
+        """Concepts are gathered with correct field mapping from data_graph."""
         _insert_concept(db_service, name="Flask", ctype="framework",
                         definition="A web framework", domain="tech", strength=0.7)
 
         result = service.gather_synthesis_inputs()
 
-        assert len(result["concepts"]) == 1
-        assert result["concepts"][0] == {
+        # Concepts and traits both read from data_graph user_specific;
+        # concepts list includes all rows (traits + concepts share the query)
+        found = [c for c in result["concepts"] if c["name"] == "Flask"]
+        assert len(found) == 1
+        assert found[0] == {
             "name": "Flask",
-            "type": "framework",
+            "type": "user_specific",
             "definition": "A web framework",
-            "domain": "tech",
+            "domain": "general",
             "strength": 0.7,
         }
 
     def test_gathers_relationships(self, db_service, service):
-        """Relationships resolve concept IDs to names via JOIN."""
-        src_id = _insert_concept(db_service, name="Python", strength=0.9)
-        tgt_id = _insert_concept(db_service, name="Flask", strength=0.7)
-        _insert_relationship(db_service, src_id, tgt_id, "uses", 0.85)
+        """Relationships are gathered from contact: prefix keys in data_graph."""
+        _insert_relationship(db_service, "user", "Flask", "contact", 0.85)
 
         result = service.gather_synthesis_inputs()
 
         assert len(result["relationships"]) == 1
         assert result["relationships"][0] == {
-            "source": "Python",
+            "source": "user",
             "target": "Flask",
-            "type": "uses",
+            "type": "contact",
             "strength": 0.85,
         }
 

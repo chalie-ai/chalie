@@ -474,26 +474,14 @@ class ClientContextService:
             return
 
         try:
-            from services.knowledge_service import KnowledgeService
-            from services.database_service import DatabaseService
+            from services.data_graph_service import get_data_graph_service
+            dgs = get_data_graph_service()
+            dgs.store(kind='user_specific', key='culture_region', value=culture,
+                      source='demographic_seeding')
 
-            db = DatabaseService()
-            ks = KnowledgeService(db)
-            ks.store(
-                kind='trait', entity='user', key='culture_region', value=culture,
-                data={'category': 'core'},
-                decay_class='permanent', confidence=0.3,
-                source='demographic_seeding',
-            )
-
-            # Also seed language preference
             if language:
-                ks.store(
-                    kind='trait', entity='user', key='language_preference', value=language,
-                    data={'category': 'core'},
-                    decay_class='permanent', confidence=0.5,
-                    source='demographic_seeding',
-                )
+                dgs.store(kind='user_specific', key='language_preference', value=language,
+                          source='demographic_seeding')
 
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
             logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")

@@ -48,8 +48,14 @@ class TestMemoryAPI:
 
     def test_search_returns_results(self, client):
         """GET /memory/search with q returns results array."""
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = [
+            {"id": 1, "key": "coffee", "value": "a beverage",
+             "retrieval_weight": 0.8, "evidence_count": 1, "composite_score": 0.8},
+        ]
+
         with patch('services.episodic_service.EpisodicService') as mock_er_cls, \
-             patch('services.knowledge_service.KnowledgeService') as mock_ks_cls, \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
 
             mock_er = MagicMock()
@@ -57,12 +63,6 @@ class TestMemoryAPI:
                 {"gist": "user likes coffee", "composite_score": 0.9, "created_at": "2026-01-01"},
             ]
             mock_er_cls.return_value = mock_er
-
-            mock_ks = MagicMock()
-            mock_ks.recall.return_value = [
-                {"key": "coffee", "value": "a beverage", "confidence": 0.8, "kind": "concept", "rrf_score": 0.8},
-            ]
-            mock_ks_cls.return_value = mock_ks
 
             response = client.get('/memory/search?q=coffee')
 

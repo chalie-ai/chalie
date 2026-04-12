@@ -83,9 +83,8 @@ def unauthed_client():
 class TestUpdateBelief:
     def test_cookie_auth_stores_trait(self, cookie_client):
         svc_mock = MagicMock()
-        svc_mock.store.return_value = True
-        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
-             patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
+        svc_mock.store.return_value = {'id': 1, 'key': 'risk_tolerance', 'value': 'conservative'}
+        with patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
             resp = cookie_client.post(
                 "/api/updates/belief",
                 json={"key": "risk_tolerance", "value": "conservative", "confidence": 0.8},
@@ -123,25 +122,22 @@ class TestUpdateBelief:
     def test_invalid_category_defaults_to_preference(self, cookie_client):
         """An unrecognised category should be silently coerced to preference."""
         svc_mock = MagicMock()
-        svc_mock.store.return_value = True
-        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
-             patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
+        svc_mock.store.return_value = {'id': 1, 'key': 'language', 'value': 'English'}
+        with patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
             resp = cookie_client.post(
                 "/api/updates/belief",
                 json={"key": "language", "value": "English", "category": "gibberish"},
                 content_type="application/json",
             )
         assert resp.status_code == 200
-        call_kwargs = svc_mock.store.call_args
-        # Category is now passed inside data dict, not as top-level kwarg
-        assert call_kwargs.kwargs.get("data") == {"category": "preference"}
+        # DataGraphService.store is called with kind='user_specific'
+        assert svc_mock.store.call_args.kwargs['kind'] == 'user_specific'
 
     def test_trait_validation_failure_returns_422(self, cookie_client):
-        """KnowledgeService.store() returning False (validation rejection) yields 422."""
+        """DataGraphService.store() returning None (validation rejection) yields 422."""
         svc_mock = MagicMock()
-        svc_mock.store.return_value = False
-        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
-             patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
+        svc_mock.store.return_value = None
+        with patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
             resp = cookie_client.post(
                 "/api/updates/belief",
                 json={"key": "x", "value": "y"},
@@ -178,10 +174,9 @@ class TestUpdateBelief:
             permissions={"update": ["belief"]}
         )
         svc_mock = MagicMock()
-        svc_mock.store.return_value = True
+        svc_mock.store.return_value = {'id': 1, 'key': 'risk_tolerance', 'value': 'moderate'}
         with patch_session, patch_auth, \
-             patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
-             patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
+             patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
             with app.test_client() as client:
                 resp = client.post(
                     "/api/updates/belief",

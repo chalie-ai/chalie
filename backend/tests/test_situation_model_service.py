@@ -827,7 +827,7 @@ class TestConversationPhaseStub:
         svc = _make_service()
         # ConversationPhaseService not importable in test env
         with patch("builtins.__import__", side_effect=ImportError("not installed")):
-            result = svc._collect_phase("thread-123")
+            result = svc._collect_phase()
         # Should fall through to default
         assert result["current"] == "unknown"
         assert result["momentum"] == 0.5

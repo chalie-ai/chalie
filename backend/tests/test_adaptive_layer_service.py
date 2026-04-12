@@ -90,6 +90,7 @@ class TestColdStartGate:
         svc = _service()
         style = _make_style(_observation_count=0)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
+             patch.object(svc, '_get_observation_count', return_value=0), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -99,6 +100,7 @@ class TestColdStartGate:
         svc = _service()
         style = _make_style(_observation_count=1)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
+             patch.object(svc, '_get_observation_count', return_value=1), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -325,7 +327,7 @@ class TestForkDirective:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result == ""
 
@@ -338,11 +340,11 @@ class TestForkDirective:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result != ""
         # Assert on store state instead of mock call: pending key should be written
-        assert store.get("adaptive_fork_pending:thread-123") is not None
+        assert store.get("adaptive_fork_pending") is not None
 
     def test_cooldown_blocks_fork(self):
         svc = _service()
@@ -350,10 +352,10 @@ class TestForkDirective:
 
         # Pre-populate cooldown key so exists() returns True — fork must be suppressed
         store = MemoryStore()
-        store.set("adaptive_fork_cooldown:thread-123", "1")
+        store.set("adaptive_fork_cooldown", "1")
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result == ""
 

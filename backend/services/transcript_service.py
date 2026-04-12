@@ -475,7 +475,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             from services.episodic_service import EpisodicService
             from services.salience_service import SalienceService
             from services.embedding_service import get_embedding_service
-            from services.knowledge_service import KnowledgeService
+            from services.data_graph_service import get_data_graph_service
             from services.config_service import ConfigService
 
             db = get_shared_db_service()
@@ -524,7 +524,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             episodic_svc = EpisodicService(db, episodic_config)
             salience_svc = SalienceService()
             emb_svc = get_embedding_service()
-            knowledge_svc = KnowledgeService(db)
+            dgs = get_data_graph_service()
 
             for ep in episodes:
                 try:
@@ -542,13 +542,11 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     for trait in ep.get('traits', []):
                         if not isinstance(trait, dict):
                             continue
-                        knowledge_svc.store(
-                            kind=trait.get('kind', 'trait'),
-                            entity='user',
-                            key=trait.get('key', ''),
-                            value=trait.get('value'),
-                            decay_class=trait.get('decay_class', 'standard'),
-                        )
+                        key = trait.get('key', '')
+                        value = trait.get('value')
+                        if key and value:
+                            dgs.store(kind='user_specific', key=key, value=value,
+                                      source='episode_extraction')
 
                 except Exception as ep_err:
                     logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")

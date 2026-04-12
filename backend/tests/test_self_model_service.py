@@ -124,21 +124,14 @@ class TestGetSnapshot:
                 (f"ep-{i}", f"gist {i}", 5),
             )
 
-        # Seed 15 concepts in knowledge table
+        # Seed 15 user_specific rows in data_graph.
+        # _get_memory_pressure counts kind='user_specific' for both concept_count
+        # and trait_count (identical queries), so both will equal 15.
         for i in range(15):
             db.execute(
-                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
-                " VALUES (?, ?, ?, 'concept', 0.8, 'standard')",
-                ("system", f"concept_{i}", f"value_{i}"),
-            )
-
-        # Seed 8 user traits/preferences in knowledge table
-        for i in range(8):
-            kind = 'trait' if i < 5 else 'preference'
-            db.execute(
-                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
-                " VALUES (?, ?, ?, ?, 0.8, 'permanent')",
-                ("user", f"trait_{i}", f"value_{i}", kind),
+                "INSERT INTO data_graph (kind, key, value, source)"
+                " VALUES ('user_specific', ?, ?, 'test')",
+                (f"concept_{i}", f"value_{i}"),
             )
 
         db.commit()
@@ -148,7 +141,7 @@ class TestGetSnapshot:
 
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
-        assert pressure["trait_count"] == 8
+        assert pressure["trait_count"] == 15
         assert pressure["avg_activation"] == 1.0
 
     def test_queue_depth_from_store(self, mock_store):

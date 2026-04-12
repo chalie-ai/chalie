@@ -188,88 +188,77 @@ def test_parse_vcard_org_list_flattened():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def mock_ks():
-    ks = MagicMock()
-    with patch(
-        "capabilities.mail_capability.carddav_handler._get_knowledge_service",
-        return_value=ks,
-    ):
-        yield ks
-
-
 @pytest.mark.unit
-def test_index_contacts_uses_confidence_09(mock_ks):
+def test_index_contacts_calls_index_person(mock_contacts_patch=None):
+    """index_contacts delegates to contact_resolver.index_person per email."""
     handler = _make_handler()
     contacts = [{"fn": "Sarah Chen", "emails": ["s.chen@acme.com"], "phones": [], "org": "", "title": "", "given_name": "", "family_name": ""}]
 
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+        handler.index_contacts(contacts)
 
-    mock_ks.store.assert_called_once()
-    call_kwargs = mock_ks.store.call_args.kwargs
-    assert call_kwargs["confidence"] == 0.9
-    assert call_kwargs["key"] == "s.chen@acme.com"
-    assert call_kwargs["value"] == "Sarah Chen"
-    assert call_kwargs["kind"] == "relationship"
-    assert call_kwargs["entity"] == "person"
-    assert call_kwargs["source"] == "carddav"
+    mock_ip.assert_called_once_with("s.chen@acme.com", "Sarah Chen", source="carddav")
 
 
 @pytest.mark.unit
-def test_index_contacts_skips_no_emails(mock_ks):
+def test_index_contacts_skips_no_emails():
     handler = _make_handler()
     contacts = [{"fn": "Ghost User", "emails": [], "phones": []}]
 
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+        handler.index_contacts(contacts)
 
-    mock_ks.store.assert_not_called()
+    mock_ip.assert_not_called()
 
 
 @pytest.mark.unit
-def test_index_contacts_skips_blank_fn(mock_ks):
+def test_index_contacts_skips_blank_fn():
     handler = _make_handler()
     contacts = [{"fn": "  ", "emails": ["nobody@example.com"], "phones": []}]
 
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+        handler.index_contacts(contacts)
 
-    mock_ks.store.assert_not_called()
+    mock_ip.assert_not_called()
 
 
 @pytest.mark.unit
-def test_index_contacts_enriches_data_dict(mock_ks):
+def test_index_contacts_multiple_emails_each_indexed():
+    """Each email address in the contact gets its own index_person call."""
     handler = _make_handler()
     contacts = [{
         "fn": "Alice Wang",
-        "emails": ["alice@corp.com"],
-        "phones": ["+1-555-9999"],
-        "org": "Corp Ltd",
-        "title": "CTO",
-        "given_name": "Alice",
-        "family_name": "Wang",
+        "emails": ["alice@corp.com", "alice@personal.com"],
+        "phones": [],
+        "org": "",
+        "title": "",
+        "given_name": "",
+        "family_name": "",
     }]
 
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+        handler.index_contacts(contacts)
 
-    data = mock_ks.store.call_args.kwargs["data"]
-    assert data["org"] == "Corp Ltd"
-    assert data["title"] == "CTO"
-    assert data["given_name"] == "Alice"
-    assert data["family_name"] == "Wang"
-    assert "+1-555-9999" in data["phones"]
+    assert mock_ip.call_count == 2
+    emails_indexed = {c.args[0] for c in mock_ip.call_args_list}
+    assert "alice@corp.com" in emails_indexed
+    assert "alice@personal.com" in emails_indexed
 
 
 @pytest.mark.unit
-def test_index_contacts_survives_store_exception(mock_ks):
-    mock_ks.store.side_effect = RuntimeError("db down")
+def test_index_contacts_survives_index_person_exception():
+    """Exception from index_person must not propagate."""
     handler = _make_handler()
     contacts = [{"fn": "Test User", "emails": ["test@example.com"], "phones": []}]
 
-    # Must not raise
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person",
+               side_effect=RuntimeError("db down")):
+        # Must not raise
+        handler.index_contacts(contacts)
 
 
 @pytest.mark.unit
-def test_index_contacts_multiple_emails_per_contact(mock_ks):
+def test_index_contacts_multiple_emails_per_contact():
     handler = _make_handler()
     contacts = [{
         "fn": "Dave Lee",
@@ -281,9 +270,10 @@ def test_index_contacts_multiple_emails_per_contact(mock_ks):
         "family_name": "",
     }]
 
-    handler.index_contacts(contacts)
+    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+        handler.index_contacts(contacts)
 
-    assert mock_ks.store.call_count == 2
+    assert mock_ip.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +282,7 @@ def test_index_contacts_multiple_emails_per_contact(mock_ks):
 
 
 @pytest.mark.unit
-def test_list_contacts_delegates_to_resolve_when_query_given(mock_ks):
-    with patch("capabilities.mail_capability.carddav_handler.CarddavHandler.list_contacts") as _:
-        pass  # just verify the resolve path below
-
+def test_list_contacts_delegates_to_resolve_when_query_given():
     with patch("capabilities.contact_resolver.resolve") as mock_resolve:
         mock_resolve.return_value = [{"email": "s.chen@acme.com", "name": "Sarah Chen"}]
         handler = _make_handler()
@@ -308,18 +295,22 @@ def test_list_contacts_delegates_to_resolve_when_query_given(mock_ks):
 
 
 @pytest.mark.unit
-def test_list_contacts_queries_ks_when_no_query(mock_ks):
-    mock_ks.recall.return_value = [
-        {"key": "a@b.com", "value": "A B"},
-        {"key": "c@d.com", "value": "C D"},
+def test_list_contacts_uses_dgs_fetch_when_no_query():
+    mock_dgs = MagicMock()
+    mock_dgs.fetch.return_value = [
+        {"key": "contact:a@b.com", "value": "A B"},
+        {"key": "contact:c@d.com", "value": "C D"},
     ]
     handler = _make_handler()
 
-    result = handler.list_contacts({})
+    with patch("capabilities.mail_capability.carddav_handler._dgs", return_value=mock_dgs):
+        result = handler.list_contacts({})
 
-    mock_ks.recall.assert_called_once()
+    mock_dgs.fetch.assert_called_once()
     assert result["count"] == 2
-    assert result["contacts"][0]["email"] == "a@b.com"
+    emails = {c["email"] for c in result["contacts"]}
+    assert "a@b.com" in emails
+    assert "c@d.com" in emails
 
 
 @pytest.mark.unit
@@ -335,11 +326,13 @@ def test_list_contacts_caps_limit_at_50():
 
 
 @pytest.mark.unit
-def test_list_contacts_returns_empty_on_ks_failure(mock_ks):
-    mock_ks.recall.side_effect = RuntimeError("db error")
+def test_list_contacts_returns_empty_on_dgs_failure():
+    mock_dgs = MagicMock()
+    mock_dgs.fetch.side_effect = RuntimeError("db error")
     handler = _make_handler()
 
-    result = handler.list_contacts({})
+    with patch("capabilities.mail_capability.carddav_handler._dgs", return_value=mock_dgs):
+        result = handler.list_contacts({})
 
     assert result == {"contacts": [], "count": 0}
 

@@ -325,29 +325,20 @@ class AdaptiveLayerService:
             List of human-readable preference strings (may be empty).
         """
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT key, confidence
-                    FROM knowledge
-                    WHERE kind IN ('trait', 'preference')
-                      AND entity = 'user'
-                      AND deleted_at IS NULL
-                      AND json_extract(data, '$.category') = 'micro_preference'
-                      AND confidence > 0.4
-                    ORDER BY confidence DESC
-                    LIMIT 3
-                """)
-                rows = cursor.fetchall()
-                cursor.close()
-
+            from services.data_graph_service import get_data_graph_service
+            rows = get_data_graph_service().fetch(
+                kinds=['user_specific'], order_by='retrieval_weight DESC', limit=50
+            )
+            micro_pref_keys = set(PREF_LABELS.keys())
             labels: List[str] = []
-            for trait_key, _confidence in rows:
-                label = PREF_LABELS.get(trait_key)
-                if label:
-                    labels.append(label)
+            for r in rows:
+                k = r.get('key', '')
+                if k in micro_pref_keys and (r.get('retrieval_weight') or 0) > 0.4:
+                    label = PREF_LABELS.get(k)
+                    if label:
+                        labels.append(label)
+                if len(labels) >= 3:
+                    break
             return labels
         except Exception as e:
             logger.warning(f"[adaptive_layer] _get_micro_preferences failed: {e}")
@@ -357,33 +348,18 @@ class AdaptiveLayerService:
         """
         Retrieve explicit challenge tolerance float (1-10) from user_traits.
 
-        Stored as trait_key='challenge_tolerance', category='micro_preference'.
+        Stored as key='challenge_tolerance' in data_graph user_specific.
 
         Returns:
             float if found, None otherwise.
         """
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT value
-                    FROM knowledge
-                    WHERE kind IN ('trait', 'preference')
-                      AND entity = 'user'
-                      AND deleted_at IS NULL
-                      AND key = 'challenge_tolerance'
-                      AND json_extract(data, '$.category') = 'micro_preference'
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                """)
-                row = cursor.fetchone()
-                cursor.close()
-
-            if not row:
+            from services.data_graph_service import get_data_graph_service
+            rows = get_data_graph_service().fetch(kinds=['user_specific'])
+            match = next((r for r in rows if r.get('key') == 'challenge_tolerance'), None)
+            if not match:
                 return None
-            return float(row[0])
+            return float(match['value'])
         except Exception as e:
             logger.warning(f"[adaptive_layer] _get_challenge_tolerance failed: {e}")
             return None

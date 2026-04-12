@@ -35,8 +35,7 @@ def _detect_fork_response(text: str):
     import re as _re
     try:
         from services.memory_client import MemoryClientService
-        from services.database_service import get_shared_db_service
-        from services.knowledge_service import KnowledgeService
+        from services.data_graph_service import get_data_graph_service
 
         store = MemoryClientService.create_connection()
         fork_type = store.get('adaptive_fork_pending')
@@ -47,12 +46,8 @@ def _detect_fork_response(text: str):
         text_lower = text.lower()
         for pref_key, patterns in _FORK_RESPONSE_PATTERNS.items():
             if any(_re.search(p, text_lower) for p in patterns):
-                db_service = get_shared_db_service()
-                ks = KnowledgeService(db_service)
-                ks.store(
-                    kind='trait', entity='user', key=pref_key, value='true',
-                    data={'category': 'preference'},
-                    decay_class='standard', confidence=0.75,
+                get_data_graph_service().store(
+                    kind='user_specific', key=pref_key, value='true',
                     source='fork_response',
                 )
                 logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")

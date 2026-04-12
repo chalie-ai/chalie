@@ -191,24 +191,18 @@ class DomainConfidenceService:
 
         Returns 0.0 when no matching traits exist.
         """
-        sql = """
-            SELECT COUNT(*) AS cnt,
-                   AVG(confidence) AS avg_conf
-            FROM knowledge
-            WHERE kind IN ('trait', 'preference')
-              AND entity = 'user'
-              AND deleted_at IS NULL
-              AND (
-                lower(json_extract(data, '$.category')) LIKE lower(?)
-                OR lower(key) LIKE lower(?)
-                OR lower(value) LIKE lower(?)
-            )
-        """
         pattern = f"%{domain}%"
         try:
             with self._db.connection() as conn:
                 conn.row_factory = __import__('sqlite3').Row
-                row = conn.execute(sql, (pattern, pattern, pattern)).fetchone()
+                row = conn.execute(
+                    """SELECT COUNT(*) AS cnt, AVG(retrieval_weight) AS avg_rw
+                       FROM data_graph
+                       WHERE kind = 'user_specific'
+                         AND deleted_at IS NULL AND active=1
+                         AND (lower(key) LIKE lower(?) OR lower(value) LIKE lower(?))""",
+                    (pattern, pattern)
+                ).fetchone()
         except Exception:
             logger.debug(f"{LOG_PREFIX} trait_density query failed", exc_info=True)
             return 0.0
@@ -286,23 +280,18 @@ class DomainConfidenceService:
 
         Returns 0.0 when no matching concepts exist.
         """
-        sql = """
-            SELECT COUNT(*) AS cnt,
-                   AVG(confidence) AS avg_conf
-            FROM knowledge
-            WHERE kind = 'concept'
-              AND deleted_at IS NULL
-              AND (
-                  lower(json_extract(data, '$.domain')) LIKE lower(?)
-                  OR lower(key) LIKE lower(?)
-                  OR lower(value) LIKE lower(?)
-              )
-        """
         pattern = f"%{domain}%"
         try:
             with self._db.connection() as conn:
                 conn.row_factory = __import__('sqlite3').Row
-                row = conn.execute(sql, (pattern, pattern, pattern)).fetchone()
+                row = conn.execute(
+                    """SELECT COUNT(*) AS cnt, AVG(retrieval_weight) AS avg_rw
+                       FROM data_graph
+                       WHERE kind = 'user_specific'
+                         AND deleted_at IS NULL AND active=1
+                         AND (lower(key) LIKE lower(?) OR lower(value) LIKE lower(?))""",
+                    (pattern, pattern)
+                ).fetchone()
         except Exception:
             logger.debug(f"{LOG_PREFIX} concept_depth query failed", exc_info=True)
             return 0.0

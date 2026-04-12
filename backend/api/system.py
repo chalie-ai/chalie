@@ -137,8 +137,8 @@ def system_status():
                 cursor = conn.cursor()
                 for table_label, query in [
                     ("episodes", "SELECT COUNT(*) FROM episodes"),
-                    ("concepts", "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"),
-                    ("traits", "SELECT COUNT(*) FROM knowledge WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"),
+                    ("concepts", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
+                    ("traits", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
                 ]:
                     try:
                         cursor.execute(query)
@@ -200,15 +200,15 @@ def observability_memory():
         avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
 
         concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM knowledge "
-            "WHERE kind = 'concept' AND deleted_at IS NULL"
+            "SELECT COUNT(*) AS cnt FROM data_graph "
+            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
         )
         concepts = concept_row[0]['cnt'] if concept_row else 0
 
         trait_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
-            "FROM knowledge "
-            "WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_conf "
+            "FROM data_graph "
+            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
         )
         traits = trait_row[0]['cnt'] if trait_row else 0
         avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
@@ -448,39 +448,26 @@ def observability_autobiography():
 @system_bp.route('/system/observability/traits', methods=['GET'])
 @require_session
 def observability_traits():
-    """User traits grouped by category."""
+    """User traits grouped by kind."""
     try:
-        from services.database_service import get_shared_db_service
+        from services.data_graph_service import get_data_graph_service
 
-        db = get_shared_db_service()
+        rows = get_data_graph_service().fetch(
+            kinds=['user_specific'],
+            order_by='retrieval_weight DESC',
+        )
         categories = {}
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT key, value, confidence, "
-                "json_extract(data, '$.category') AS category, "
-                "evidence_count, updated_at "
-                "FROM knowledge "
-                "WHERE kind IN ('trait', 'preference') "
-                "AND entity = 'user' "
-                "AND deleted_at IS NULL "
-                "ORDER BY category, confidence DESC"
-            )
-            rows = cursor.fetchall()
-
-            for row in rows:
-                cat = row[3] or 'general'
-                if cat not in categories:
-                    categories[cat] = []
-                updated = row[5]
-                categories[cat].append({
-                    'key': row[0],
-                    'value': row[1],
-                    'confidence': round(float(row[2] or 0), 3),
-                    'reinforcement_count': row[4] or 0,
-                    'updated_at': str(updated) if updated and not isinstance(updated, str) else updated,
-                })
+        for row in rows:
+            cat = 'general'
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append({
+                'key': row.get('key'),
+                'value': row.get('value'),
+                'confidence': round(float(row.get('retrieval_weight') or 0), 3),
+                'reinforcement_count': row.get('evidence_count') or 0,
+                'updated_at': row.get('last_confirmed_at'),
+            })
 
         return jsonify({
             'generated_at': _now_iso(),
@@ -496,16 +483,14 @@ def observability_traits():
 def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
-        from services.database_service import get_shared_db_service
-        from services.knowledge_service import KnowledgeService
-
-        db = get_shared_db_service()
-        deleted = KnowledgeService(db).forget('user', trait_key)
-
-        if deleted:
-            return jsonify({'ok': True, 'deleted': trait_key}), 200
-        else:
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        rows = dgs.fetch(kinds=['user_specific'])
+        match = next((r for r in rows if r.get('key') == trait_key), None)
+        if not match:
             return jsonify({'error': 'Trait not found'}), 404
+        dgs.soft_delete_by_id(match['id'])
+        return jsonify({'ok': True, 'deleted': trait_key}), 200
     except Exception as e:
         logger.error(f"[REST API] observability/traits DELETE error: {e}")
         return jsonify({"error": "Failed to delete trait"}), 500
@@ -586,21 +571,6 @@ def activity_feed():
         return jsonify({"error": "Failed to retrieve activity feed"}), 500
 
 
-
-@system_bp.route('/system/observability/failures', methods=['GET'])
-@require_session
-def observability_failures():
-    """Return failure-analysis blame distribution and lesson statistics."""
-    try:
-        from services.database_service import get_shared_db_service
-        from services.failure_analysis_service import FailureAnalysisService
-        db = get_shared_db_service()
-        fas = FailureAnalysisService(db)
-        stats = fas.get_stats()
-        return jsonify({'generated_at': _now_iso(), **stats}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/failures error: {e}")
-        return jsonify({"error": "Failed to retrieve failure stats"}), 500
 
 
 @system_bp.route('/system/observability/situation', methods=['GET'])

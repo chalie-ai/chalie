@@ -155,6 +155,8 @@ class TestSystemAPI:
 
     def test_observability_memory_returns_all_layers(self, client, db):
         """GET /system/observability/memory returns flat counts from SQLite and MemoryStore."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+
         # Seed episodes
         for i in range(42):
             db.execute(
@@ -163,30 +165,23 @@ class TestSystemAPI:
                 "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
                 (f'ep-{i}',),
             )
-        # Seed concept knowledge entries
-        for i in range(15):
-            db.execute(
-                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
-                "VALUES ('concept', 'system', ?, 'val', 0.5)",
-                (f'concept-{i}',),
-            )
-        # Seed trait/preference knowledge entries
+        # Seed user_specific data_graph entries — these count as both concepts AND traits
+        # The endpoint counts data_graph WHERE kind='user_specific' for both.
         for i in range(8):
             db.execute(
-                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
-                "VALUES (?, 'user', ?, 'val', ?)",
-                ('trait' if i < 4 else 'preference', f'trait-{i}', 0.6234),
+                "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+                "first_seen_at, last_confirmed_at) "
+                "VALUES ('user_specific', ?, 'val', 0.6234, ?, ?)",
+                (f'trait-{i}', now_iso, now_iso),
             )
         db.commit()
 
         store = MemoryStore()
-        # Seed 2 working-memory lists matching the 'working_memory:*' pattern,
-        # with 3 and 5 entries respectively (total 8 turns).
         for _ in range(3):
             store.rpush('working_memory:t1', 'x')
         for _ in range(5):
             store.rpush('working_memory:t2', 'x')
-        # No facts:* keys → service falls back to traits count (8).
+        # No facts:* keys → falls back to traits count (8).
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/system/observability/memory')
@@ -194,12 +189,13 @@ class TestSystemAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['episodes'] == 42
-        assert data['concepts'] == 15
+        # concepts and traits both count data_graph user_specific rows
+        assert data['concepts'] == 8
         assert data['traits'] == 8
         assert data['facts'] == 8  # falls back to traits when no facts:* keys
         assert data['avg_episode_activation'] == 1.0
-        assert data['avg_trait_strength'] == 0.6234
-        assert data['working_memory'] == 8  # 3 + 5 turns across two threads
+        assert data['avg_trait_strength'] == pytest.approx(0.6234, abs=0.001)
+        assert data['working_memory'] == 8
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -365,25 +361,20 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_traits_returns_categories(self, client, db):
-        """GET /system/observability/traits returns traits grouped by category."""
-        # Seed knowledge rows with trait/preference kinds and category in data JSON
+        """GET /system/observability/traits returns traits from data_graph."""
+        # Seed data_graph rows (endpoint now reads data_graph, not knowledge)
+        now_iso = '2026-02-25T00:00:00+00:00'
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "evidence_count, data, updated_at) "
-            "VALUES ('trait', 'user', 'favorite_drink', 'coffee', 0.92, 3, "
-            "'{\"category\": \"preferences\"}', '2026-02-25 00:00:00')"
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "evidence_count, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'favorite_drink', 'coffee', 0.92, 3, ?, ?)",
+            (now_iso, now_iso)
         )
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "evidence_count, data, updated_at) "
-            "VALUES ('trait', 'user', 'name', 'Dylan', 0.99, 5, "
-            "'{\"category\": \"identity\"}', '2026-02-20 00:00:00')"
-        )
-        db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "evidence_count, data, updated_at) "
-            "VALUES ('preference', 'user', 'language', 'english', 0.85, 1, "
-            "'{\"category\": \"preferences\"}', '2026-02-18')"
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "evidence_count, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'name', 'Dylan', 0.99, 5, ?, ?)",
+            (now_iso, now_iso)
         )
         db.commit()
 
@@ -392,24 +383,18 @@ class TestSystemAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         categories = data['categories']
-        assert 'preferences' in categories
-        assert 'identity' in categories
-        assert len(categories['preferences']) == 2
-        assert len(categories['identity']) == 1
+        # All user_specific rows go under 'general' in current implementation
+        assert 'general' in categories
+        assert len(categories['general']) == 2
 
-        pref0 = categories['preferences'][0]
-        assert pref0['key'] == 'favorite_drink'
-        assert pref0['value'] == 'coffee'
-        assert pref0['confidence'] == 0.92
-        assert pref0['reinforcement_count'] == 3
-        assert pref0['updated_at'] == '2026-02-25 00:00:00'
+        keys = {r['key'] for r in categories['general']}
+        assert 'favorite_drink' in keys
+        assert 'name' in keys
 
-        ident0 = categories['identity'][0]
-        assert ident0['key'] == 'name'
-
-        # String updated_at should be left as-is
-        pref1 = categories['preferences'][1]
-        assert pref1['updated_at'] == '2026-02-18'
+        drink = next(r for r in categories['general'] if r['key'] == 'favorite_drink')
+        assert drink['value'] == 'coffee'
+        assert drink['confidence'] == pytest.approx(0.92, abs=0.01)
+        assert drink['reinforcement_count'] == 3
 
         assert 'generated_at' in data
 

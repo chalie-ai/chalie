@@ -138,17 +138,17 @@ def _query_last_consolidation(db) -> str:
 
 
 def _query_semantic_structure(db) -> str:
-    """Summarise the knowledge graph: top kinds, relationship count, density."""
+    """Summarise the data graph: top kinds, relationship count, density."""
     try:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Top kinds in knowledge table
+            # Top kinds in data_graph table
             cursor.execute(
                 """
                 SELECT kind, COUNT(*) AS c
-                FROM knowledge
-                WHERE deleted_at IS NULL
+                FROM data_graph
+                WHERE deleted_at IS NULL AND active=1
                 GROUP BY kind
                 ORDER BY c DESC
                 LIMIT 5
@@ -156,15 +156,17 @@ def _query_semantic_structure(db) -> str:
             )
             kind_rows = cursor.fetchall()
 
-            # Relationship count (kind='relationship')
+            # Contact count (contact: prefix in user_specific)
             cursor.execute(
-                "SELECT COUNT(*) FROM knowledge WHERE kind = 'relationship' AND deleted_at IS NULL"
+                "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' "
+                "AND key LIKE 'contact:%' AND deleted_at IS NULL AND active=1"
             )
             rel_count = cursor.fetchone()[0] or 0
 
-            # Concept count for density
+            # user_specific count for density
             cursor.execute(
-                "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"
+                "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' "
+                "AND deleted_at IS NULL AND active=1"
             )
             concept_count = cursor.fetchone()[0] or 0
 
@@ -197,9 +199,6 @@ def _query_semantic_structure(db) -> str:
 def _scope_skill_tool_usage() -> str:
     rows = []
 
-    # Innate skills via KnowledgeService (procedural entries)
-    rows.extend(_innate_skill_rows())
-
     # External tools via user_tool_preferences
     rows.extend(_external_tool_rows())
 
@@ -214,46 +213,6 @@ def _scope_skill_tool_usage() -> str:
     )
     table_rows = '\n'.join(rows)
     return f'{header}\n{table_rows}'
-
-
-def _innate_skill_rows() -> list:
-    try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
-        from services.innate_skills.registry import ALL_SKILL_NAMES, SKILL_DESCRIPTIONS
-
-        db = get_shared_db_service()
-        ks = KnowledgeService(db)
-        rows = []
-
-        for skill_name in sorted(ALL_SKILL_NAMES):
-            entry = ks.get('chalie', skill_name)
-            if not entry or entry.get('kind') != 'procedure':
-                continue
-            data = entry.get('data', {})
-            if isinstance(data, str):
-                import json
-                try:
-                    data = json.loads(data)
-                except (json.JSONDecodeError, TypeError):
-                    data = {}
-            attempts = data.get('total_attempts', 0)
-            if attempts == 0:
-                continue
-
-            successes = data.get('total_successes', 0)
-            updated_at = entry.get('updated_at', '')
-            last_used = _relative_time(updated_at) if updated_at else 'never'
-            last_result = 'success' if successes >= attempts * 0.5 else 'failed'
-            summary = SKILL_DESCRIPTIONS.get(skill_name, '')[:50]
-
-            rows.append(
-                f'| {skill_name:<15} | {summary:<50}| {attempts:<4} | {last_used:<13} | {last_result:<11} |'
-            )
-        return rows
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] innate_skill_rows failed: {e}')
-        return []
 
 
 def _external_tool_rows() -> list:
@@ -466,16 +425,15 @@ def _identity_relationship_depth() -> str:
 
 def _identity_communication_style() -> str:
     try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        rows = dgs.fetch(kinds=['user_specific'])
 
-        db = get_shared_db_service()
-        ks = KnowledgeService(db)
-
-        # Look up communication style traits from knowledge table
+        # Look up communication style traits from data_graph
         style = {}
         for dim in ('verbosity', 'directness', 'formality'):
-            entry = ks.get('user', f'communication_style_{dim}')
+            key = f'communication_style_{dim}'
+            entry = next((r for r in rows if r.get('key') == key), None)
             if entry and entry.get('value'):
                 try:
                     style[dim] = float(entry['value'])

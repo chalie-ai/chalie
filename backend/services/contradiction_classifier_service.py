@@ -556,39 +556,44 @@ class ContradictionClassifierService:
 
         memories = []
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            from services.data_graph_service import get_data_graph_service
+            dgs = get_data_graph_service()
+            rows = dgs.fetch(
+                kinds=['user_specific'],
+                order_by='retrieval_weight DESC',
+                limit=n_traits,
+            )
+            for row in rows:
+                if (row.get('retrieval_weight') or 0) <= 0.3:
+                    continue
+                meta = {
+                    'confidence': row.get('retrieval_weight', 0),
+                    'reinforcement_count': row.get('evidence_count', 1),
+                    'created_at': row.get('first_seen_at', ''),
+                }
+                meta['established'] = _is_established('trait', meta)
 
-                # Sample top traits by confidence
-                cursor.execute("""
-                    SELECT k.id, k.key, k.value, k.confidence,
-                           k.evidence_count,
-                           v.embedding, k.created_at
-                    FROM knowledge k
-                    LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
-                    WHERE k.kind IN ('trait', 'preference')
-                      AND k.entity = 'user'
-                      AND k.deleted_at IS NULL
-                      AND k.confidence > 0.3
-                    ORDER BY k.confidence DESC, k.evidence_count DESC
-                    LIMIT ?
-                """, (n_traits,))
-                for row in cursor.fetchall():
-                    meta = {
-                        'confidence': row[3],
-                        'reinforcement_count': row[4],
-                        'created_at': row[6],
-                    }
-                    meta['established'] = _is_established('trait', meta)
-                    memories.append({
-                        'id': row[0],
-                        'type': 'trait',
-                        'text': f"{row[1]}: {row[2]}",
-                        'embedding': _unpack_embedding(row[5]),
-                        'meta': meta,
-                    })
+                # Load embedding from data_graph_value_vec if available
+                embedding = None
+                if self.db:
+                    try:
+                        with self.db.connection() as conn:
+                            vec_row = conn.execute(
+                                "SELECT embedding FROM data_graph_value_vec WHERE rowid=?",
+                                (row['id'],)
+                            ).fetchone()
+                        if vec_row and vec_row[0]:
+                            embedding = _unpack_embedding(vec_row[0])
+                    except Exception:
+                        pass
 
-                cursor.close()
+                memories.append({
+                    'id': row['id'],
+                    'type': 'trait',
+                    'text': f"{row['key']}: {row['value']}",
+                    'embedding': embedding,
+                    'meta': meta,
+                })
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} sample_memories_for_reconcile failed: {e}")
 

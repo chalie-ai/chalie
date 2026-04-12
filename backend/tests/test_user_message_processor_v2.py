@@ -20,7 +20,7 @@ Test groups:
   E. getTools() — voice-mode filter
   F. _run_memory_seed() — DTO shape, empty-result no-op, exception swallow
   G. store() override — _last_response capture, exception propagation
-  H. postTurn() 9-service fan-out — call counts, ordering, isolation
+  H. postTurn() 9-service fan-out — call counts, ordering, isolation, thread_id
   I. _emit_narration() — callback invocation, exception swallow, None guard
   J. Smoke — constructor to postTurn without full send()
 """
@@ -96,38 +96,38 @@ class TestSubclassShape:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# B. getUserDefinition() — user synthesis from KnowledgeService
+# B. getUserDefinition() — user synthesis from DataGraphService
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FALLBACK_USER_DEF = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
 
 
 class TestGetUserDefinition:
-    """getUserDefinition() returns user synthesis from knowledge store, not voice modulation."""
+    """getUserDefinition() returns user synthesis from data_graph, not voice modulation."""
 
     def test_b1_returns_user_synthesis_when_record_exists(self):
-        """Returns the value field of the user_summary knowledge record."""
+        """Returns the value of the user_summary row from data_graph kind='system'."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = {'value': 'Dylan is a software engineer based in Malta.'}
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'user_summary', 'value': 'Dylan is a software engineer based in Malta.'}
+        ]
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = proc.getUserDefinition()
 
         assert result == 'Dylan is a software engineer based in Malta.'
-        mock_ks.get.assert_called_once_with('system', 'user_summary')
+        mock_dgs.fetch.assert_called_once_with(kinds=['system'], order_by='retrieval_weight DESC')
 
     def test_b2_returns_fallback_when_no_record(self):
-        """Returns fallback string when knowledge store returns None."""
+        """Returns fallback string when data_graph has no user_summary row."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = None
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = []
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = proc.getUserDefinition()
 
         assert result == _FALLBACK_USER_DEF
@@ -136,11 +136,12 @@ class TestGetUserDefinition:
         """getUserDefinition() must NOT call VoiceMapperService — that belongs in _get_voice_modulation()."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = {'value': 'some user summary'}
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'user_summary', 'value': 'some user summary'}
+        ]
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'), \
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.voice_mapper_service.VoiceMapperService') as MockVms:
             proc.getUserDefinition()
 
@@ -457,8 +458,8 @@ class TestRunMemorySeed:
             proc._run_memory_seed()
 
         assert proc._memory_seed == 'memories text'
-        # SEED_RADIUS_BASELINE is 0.2 (tuned at df1c08d).
-        assert proc._memory_seed_radius == 0.2
+        from services.innate_skills.memory_skill import SEED_RADIUS_BASELINE
+        assert proc._memory_seed_radius == SEED_RADIUS_BASELINE
         assert len(proc._pending_tool_calls) == 1
 
         dto = proc._pending_tool_calls[0]
@@ -579,7 +580,7 @@ class TestPostTurn:
 
     def test_h1_all_seven_services_called_in_order(self):
         """Verify each of the seven services fires and ordering is load-bearing."""
-        proc = self._make_proc_for_postturn()
+        proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-1'})
 
         call_log = []
 
@@ -618,7 +619,7 @@ class TestPostTurn:
     # ── H2: ConversationPhaseService two calls ────────────────────────────────
 
     def test_h3_phase_two_calls(self):
-        proc = self._make_proc_for_postturn()
+        proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-2'})
         mock_phase = MagicMock()
 
         with patch('services.conversation_phase_service.get_conversation_phase_service',
@@ -649,6 +650,7 @@ class TestPostTurn:
     def test_h4_save_trigger_then_detect(self):
         """5a fires emit_save_card + clear_flag, then 5b detect_saveable fires."""
         proc = self._make_proc_for_postturn(
+            metadata={'thread_id': 'tid-save'},
             last_response='Here is the summary of your meeting.',
         )
         call_log = []
@@ -771,12 +773,113 @@ class TestPostTurn:
         mock_metrics.record_counter.assert_called()
         mock_compaction.assert_called_once()
 
+    # ── H8: thread_id from metadata ──────────────────────────────────────────
+
+    def test_h8_thread_id_from_metadata_when_present(self):
+        proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-123'})
+        mock_phase = MagicMock()
+        mock_situation = MagicMock()
+
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
+                   return_value=mock_phase), \
+             patch('services.situation_model_service.get_situation_model_service',
+                   return_value=mock_situation), \
+             patch('services.save_suggestion_service.SaveSuggestionService',
+                   return_value=MagicMock(
+                       get_saveable_flag=MagicMock(return_value=None),
+                       detect_saveable_content=MagicMock(return_value=None),
+                   )), \
+             patch('workers.post_exchange_hooks._detect_fork_response'), \
+             patch('workers.post_exchange_hooks._store_adaptive_signals'), \
+             patch('services.dmn_service.get_dmn_service', return_value=MagicMock()), \
+             patch('services.metrics_service.MetricsService',
+                   return_value=MagicMock()), \
+             patch('services.compaction_service.check_and_compact'):
+            proc.postTurn()
+
+        # SituationModel and Phase both receive 'tid-123'
+        situation_call_arg = mock_situation.update_on_message.call_args[0][0]
+        assert situation_call_arg == 'tid-123'
+
+        # At least one phase.update call has tid-123 as first positional arg
+        for c in mock_phase.update.call_args_list:
+            if c.args:
+                assert c.args[0] == 'tid-123'
+            else:
+                assert c.kwargs.get('thread_id') == 'tid-123'
+
+    # ── H9: thread_id resolved from MemoryStore ───────────────────────────────
+
+    def test_h9_thread_id_resolved_from_memory_store_when_metadata_missing(self, store):
+        """When metadata has no thread_id, fall back to MemoryStore key.
+
+        MemoryStore.set() coerces its value to str(), so callers store plain
+        strings. The production code decodes bytes if needed (Redis compat),
+        but MemoryStore returns str directly — store a plain string here.
+        """
+        store.set('active_channel:default', 'tid-456')
+
+        proc = self._make_proc_for_postturn(metadata={})
+        mock_situation = MagicMock()
+
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
+                   return_value=MagicMock()), \
+             patch('services.situation_model_service.get_situation_model_service',
+                   return_value=mock_situation), \
+             patch('services.save_suggestion_service.SaveSuggestionService',
+                   return_value=MagicMock(
+                       get_saveable_flag=MagicMock(return_value=None),
+                       detect_saveable_content=MagicMock(return_value=None),
+                   )), \
+             patch('workers.post_exchange_hooks._detect_fork_response'), \
+             patch('workers.post_exchange_hooks._store_adaptive_signals'), \
+             patch('services.dmn_service.get_dmn_service', return_value=MagicMock()), \
+             patch('services.metrics_service.MetricsService',
+                   return_value=MagicMock()), \
+             patch('services.compaction_service.check_and_compact'):
+            proc.postTurn()
+
+        arg = mock_situation.update_on_message.call_args[0][0]
+        assert arg == 'tid-456'
+
+    # ── H10: thread_id is None when both sources missing ─────────────────────
+
+    def test_h10_thread_id_none_when_both_missing(self, store):
+        """No metadata thread_id + no MemoryStore key → services receive None."""
+        # Ensure the key is absent
+        store.delete('active_channel:default')
+
+        proc = self._make_proc_for_postturn(metadata={})
+        mock_situation = MagicMock()
+
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
+                   return_value=MagicMock()), \
+             patch('services.situation_model_service.get_situation_model_service',
+                   return_value=mock_situation), \
+             patch('services.save_suggestion_service.SaveSuggestionService',
+                   return_value=MagicMock(
+                       get_saveable_flag=MagicMock(return_value=None),
+                       detect_saveable_content=MagicMock(return_value=None),
+                   )), \
+             patch('workers.post_exchange_hooks._detect_fork_response'), \
+             patch('workers.post_exchange_hooks._store_adaptive_signals'), \
+             patch('services.dmn_service.get_dmn_service', return_value=MagicMock()), \
+             patch('services.metrics_service.MetricsService',
+                   return_value=MagicMock()), \
+             patch('services.compaction_service.check_and_compact'):
+            # Must not raise
+            proc.postTurn()
+
+        # Service called with None — must not have exploded
+        arg = mock_situation.update_on_message.call_args[0][0]
+        assert arg is None
+
     # ── H11: flag_saveable uses exchange_id string, not _uid int ─────────────
 
     def test_h11_flag_saveable_uses_exchange_id_string_not_uid(self):
         """When exchange_id is in metadata, flag_saveable receives that string."""
         proc = self._make_proc_for_postturn(
-            metadata={'exchange_id': 'ex-123'},
+            metadata={'thread_id': 'tid-1', 'exchange_id': 'ex-123'},
             uid=42,
         )
         proc._last_response = 'a document to save'
@@ -809,7 +912,7 @@ class TestPostTurn:
 
     def test_h12_flag_saveable_falls_back_to_str_uid(self):
         """No exchange_id in metadata → flag_saveable receives str(_uid)."""
-        proc = self._make_proc_for_postturn(uid=42)
+        proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-1'}, uid=42)
         proc._last_response = 'a note to save'
         mock_save = MagicMock()
         mock_save.get_saveable_flag.return_value = None
