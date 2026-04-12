@@ -140,8 +140,8 @@ class TestExportData:
         from api.privacy import export_data
         src = inspect.getsource(export_data)
 
-        # gist:* and fact:* removed in Stream 1 (memory chunker killed)
-        for pattern in ['working_memory:*', 'identity_state:*']:
+        # gist:*, fact:*, identity_state:* removed (services deleted)
+        for pattern in ['working_memory:*']:
             assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):
