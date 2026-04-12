@@ -24,7 +24,7 @@ Coverage:
 import json
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -445,7 +445,7 @@ class TestAppendAtomicTurnEmptyPendingCalls:
 
         with patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
-            input_id = append_atomic_turn(
+            append_atomic_turn(
                 channel=_CHANNEL,
                 role='user',
                 raw_input='hello',
@@ -494,7 +494,7 @@ class TestAppendAtomicTurnEmbeddingHookFires:
         with patch('services.transcript_service._EMBED_TOKEN_THRESHOLD', 0), \
              patch('services.transcript_service._embed_entry', side_effect=fake_embed), \
              patch('services.transcript_service._trigger_episode_extraction'):
-            input_id = append_atomic_turn(
+            append_atomic_turn(
                 channel=_CHANNEL,
                 role='user',
                 raw_input='input text',
@@ -819,7 +819,7 @@ class TestMessageProcessorStoreExceptionPropagates:
         p = _make_processor()
         p._pending_tool_calls = []
 
-        def _raise(*args, **kwargs):
+        def _raise(*_args, **_kwargs):
             raise RuntimeError('forced failure')
 
         with patch('services.transcript_service.append_atomic_turn', side_effect=_raise):
@@ -832,7 +832,7 @@ class TestMessageProcessorStoreExceptionPropagates:
         p = _make_processor()
         p._pending_tool_calls = []
 
-        def _raise(*args, **kwargs):
+        def _raise(*_args, **_kwargs):
             raise RuntimeError('forced failure')
 
         with patch('services.transcript_service.append_atomic_turn', side_effect=_raise):
@@ -870,13 +870,10 @@ class TestAppendAtomicTurnStep3Rollback:
         from services.database_service import get_shared_db_service
 
         db_svc = get_shared_db_service()
-        real_cursor = db_svc.connection
 
         # Inject a failure on the second INSERT INTO transcript (assistant row).
         # We monkey-patch the connection to raise on the assistant INSERT by
         # counting transcript INSERTs.
-        import services.transcript_service as ts_mod
-
         real_connection = db_svc.connection
         call_state = {'transcript_inserts': 0}
 
@@ -2394,7 +2391,7 @@ class TestRunFullCompaction:
         captured_jobs = []
         llm_resp = _make_compact_llm_response(text='compacted')
 
-        def fake_send(system_prompt, messages, job=None, tools=None):
+        def fake_send(_system_prompt, _messages, job=None, **_kw):  # noqa: ARG001
             captured_jobs.append(job)
             return llm_resp
 
