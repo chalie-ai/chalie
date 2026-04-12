@@ -204,7 +204,7 @@ Triggered when the rendered user-message body (including checkpoint envelope) ex
 
 Runs synchronously inside `send()` after `store()` commits, before `send()` returns. The final response is already in the caller's hands (streamed via narration callback); `postTurn()` latency does not delay the user.
 
-Personal facts (traits) are captured by the LLM-native memory skill path: `frontal-cortex-unified.md:7` instructs the LLM to call `memory.store` for personal disclosures, `memory_skill._handle_store()` auto-classifies the entry as `kind='trait'`, and `_check_trait_contradiction` fires synchronously inside `memory_skill._handle_store()` when `kind == 'trait'` and the stored entry has a valid `id`. The background `enqueue_trait_extraction` pipeline was deleted (2026-04-11) as redundant.
+Personal facts are captured by the LLM-native memory skill path: the system prompt instructs the LLM to call `memory.store` for personal disclosures, and `memory_skill._handle_store()` delegates to `DataGraphService.store()` which handles contradiction detection internally (temporal_change, true_contradiction, ambiguous) per the kind's policy. The LLM chooses the kind (`user_specific`, `system`, `misc`) via the tool schema enum.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -352,7 +352,7 @@ tool_calls                 store() → append_atomic_turn()    getPreviousMessag
 compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
 interaction_log            postTurn() (every turn)           observability endpoints
 episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
-knowledge                  memory_skill._handle_store()      memory_skill, knowledge endpoints
+data_graph                 DataGraphService.store()           memory_skill, data_graph callers
 memory_recall_log          recall_episodes() chokepoint      meta-harness tuning
 ```
 
