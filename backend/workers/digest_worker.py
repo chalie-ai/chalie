@@ -37,7 +37,6 @@ import logging
 
 from services import FrontalCortexService
 from services.world_state_service import WorldStateService
-from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
@@ -446,19 +445,12 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         thread_id = thread_id.decode()
     metadata['thread_id'] = thread_id
 
-    # Mark channel as busy — prevents observer from trimming WM mid-response
+    # Mark channel as busy
     _busy_store = _channel_store
     _busy_store.setex(f"thread_busy:{thread_id}", 30, "1")
 
     # Step 2a: Initialize services
     world_state_service = WorldStateService()
-
-    # Initialize working memory (keyed by thread_id)
-    max_working_memory_turns = cortex_config.get('max_working_memory_turns', 10)
-    working_memory = WorkingMemoryService(max_turns=max_working_memory_turns)
-
-    # Hydrate working memory from SQLite if empty (e.g. after container restart)
-    working_memory.hydrate_from_db(thread_id)
 
     # Initialize interaction log
     interaction_log = None
@@ -485,9 +477,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 3: Derive context topic from thread_id (thread-scoped, no classifier needed)
     context_topic = thread_id
     source = metadata.get('source', 'unknown') if metadata else 'unknown'
-
-    # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
-    working_memory.append_turn(thread_id, 'user', text)
 
     # Persist user turn to topic transcript (durable, searchable)
     _user_transcript_id = None
@@ -617,9 +606,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     )
 
     # Step 4b: Calculate context warmth for cost scaling
-    wm_turns = working_memory.get_recent_turns(thread_id)
     context_warmth = calculate_context_warmth(
-        working_memory_len=len(wm_turns),
+        working_memory_len=0,
         gists=[],
         world_state_nonempty=bool(world_state)
     )
@@ -692,25 +680,18 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         pass
 
     # Step 9c: Compute memory_confidence
-    # Use FOK + context warmth + working memory depth as density proxy
     store = _busy_store
     raw_fok = store.get(f"fok:{channel}") if channel else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
-    wm_depth_score = min(1.0, len(wm_turns) / 6.0)
-
     memory_confidence = (
         0.4 * fok_score
         + 0.4 * context_warmth
-        + 0.2 * wm_depth_score
     )
     if classification_result.get('is_new_topic', False):
         memory_confidence *= 0.7
     memory_confidence = round(memory_confidence, 3)
-
-    # Get working memory turn count
-    working_memory_turns = len(wm_turns) if wm_turns else 0
 
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
@@ -718,7 +699,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _nlp = compute_nlp_signals(text)
         _signals = {
             'context_warmth': context_warmth,
-            'working_memory_turns': working_memory_turns,
+            'working_memory_turns': 0,
             'gist_count': 0,
             'fact_count': 0,
             'fact_keys': [],
@@ -820,9 +801,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # ═══════════════════════════════════════════════════════════
     # PHASE D: POST-RESPONSE COMMIT
     # ═══════════════════════════════════════════════════════════
-
-    # Step 11a: Append assistant turn to working memory (keyed by thread_id)
-    working_memory.append_turn(thread_id, 'assistant', response_data['response'])
 
     # Persist assistant turn to topic transcript (durable, searchable)
     try:

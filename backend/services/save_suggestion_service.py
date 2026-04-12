@@ -44,7 +44,14 @@ MIN_RESPONSE_LENGTH = 300
 
 
 class SaveSuggestionService:
-    """Detects saveable conversation content and orchestrates save suggestions."""
+    """Detects saveable conversation content and orchestrates save suggestions.
+
+    .. deprecated::
+        This service is scheduled for removal. Its conversation-window
+        functionality depended on WorkingMemoryService (now deleted) and
+        its card emission (emit_save_card) targets a removed card system.
+        Do not add new callers.
+    """
 
     # ──────────────────────────────────────────────────────────────────────────
     # Detection (called from digest_worker Phase D)
@@ -386,28 +393,8 @@ class SaveSuggestionService:
         return MemoryClientService.create_connection()
 
     def _get_conversation_window(self, thread_id: str) -> Optional[str]:
-        """Get recent conversation turns formatted for LLM synthesis."""
-        try:
-            from services.working_memory_service import WorkingMemoryService
-
-            wm = WorkingMemoryService()
-            turns = wm.get_recent_turns(thread_id, n=10)
-            if not turns:
-                return None
-
-            lines = []
-            for turn in turns:
-                role = turn.get('role', 'unknown')
-                content = turn.get('content', '')
-                if role == 'user':
-                    lines.append(f"User: {content}")
-                elif role == 'assistant':
-                    lines.append(f"Assistant: {content}")
-
-            return '\n\n'.join(lines)
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _get_conversation_window failed: {e}")
-            return None
+        """Get recent conversation turns. Always returns None — WorkingMemoryService deleted."""
+        return None
 
     def _synthesize_document(self, conversation: str, content_type: str) -> Optional[str]:
         """Use LLM to synthesize clean markdown from conversation."""

@@ -217,7 +217,7 @@ Personal facts (traits) are captured by the LLM-native memory skill path: `front
 │  2. SituationModelService            📤 M  (sync)                  │
 │     update_on_message(thread_id)                                    │
 │                         │                                           │
-│  3. SaveSuggestionService            📥📤 M  (sync)                │
+│  3. SaveSuggestionService  [DEPRECATED]  📥📤 M  (sync)            │
 │     3a. detect_save_trigger(user_text) → emit_save_card if flagged  │
 │     3b. detect_saveable_content(response) → flag_saveable if hit    │
 │                         │                                           │

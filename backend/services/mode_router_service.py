@@ -105,7 +105,6 @@ def collect_routing_signals(
     text: str,
     topic: str,
     context_warmth: float,
-    working_memory,
     world_state_service,
     classification_result: dict,
 ) -> Dict[str, Any]:
@@ -118,17 +117,13 @@ def collect_routing_signals(
         text: User's raw prompt text
         topic: Resolved topic name
         context_warmth: Pre-computed warmth (0.0-1.0)
-        working_memory: WorkingMemoryService instance
         world_state_service: WorldStateService instance
         classification_result: Dict from topic classifier
 
     Returns:
         Dict of routing signals
     """
-    # Context signals (from existing services, all MemoryStore reads)
-    wm_turns = working_memory.get_recent_turns(topic) if topic else []
-    working_memory_turns = len(wm_turns)
-
+    # Context signals
     world_state = world_state_service.get_world_state(topic) if topic else ""
     world_state_present = bool(world_state and world_state.strip())
 
@@ -146,12 +141,9 @@ def collect_routing_signals(
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
-    wm_depth_score = min(1.0, working_memory_turns / 6.0)
-
     memory_confidence = (
         0.4 * fok_score
         + 0.4 * context_warmth
-        + 0.2 * wm_depth_score
     )
     if is_new_topic:
         memory_confidence *= 0.7
@@ -163,7 +155,7 @@ def collect_routing_signals(
     signals = {
         # Context signals
         'context_warmth': context_warmth,
-        'working_memory_turns': working_memory_turns,
+        'working_memory_turns': 0,
         'gist_count': 0,
         'fact_count': 0,
         'fact_keys': [],

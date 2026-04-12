@@ -282,13 +282,6 @@ class TestUnifiedSystemMessagePrompt:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_vms.assert_not_called()
 
-    def test_get_prompt_does_not_touch_working_memory_service(self):
-        """Y1: WorkingMemoryService lookup is gone."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with patch('services.working_memory_service.WorkingMemoryService') as mock_wms:
-            UnifiedSystemMessagePrompt().getPrompt()
-        mock_wms.assert_not_called()
-
     def test_get_prompt_does_not_call_load_configs(self):
         """Prompt is a Python constant — no config loading at call time."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt

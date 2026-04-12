@@ -563,11 +563,6 @@ class UserMessageProcessor(MessageProcessor):
 
         The {{adaptive_directives}} placeholder in the UNIFIED template receives
         this value. Reads adaptive signals from MemoryStore keyed by thread_id.
-
-        NOTE: This method does NOT use WorkingMemoryService (deprecated per
-        project_memory_reduction.md and cleanup audit). The adaptive signals
-        snapshot from MemoryStore is sufficient — WorkingMemoryService's
-        get_recent_turns() was the only remaining consumer here.
         """
         try:
             from services.adaptive_layer_service import AdaptiveLayerService
@@ -593,7 +588,7 @@ class UserMessageProcessor(MessageProcessor):
 
             return service.generate_directives(
                 thread_id=thread_id,
-                working_memory_turns=[],  # WorkingMemoryService dropped
+                working_memory_turns=[],
                 current_signals=current_signals,
                 current_message=self._raw_input,
             ) or ''

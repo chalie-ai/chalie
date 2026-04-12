@@ -630,19 +630,9 @@ class PromptAssemblyService:
         try:
             from services.adaptive_layer_service import AdaptiveLayerService
             from services.database_service import get_shared_db_service
-            from services.working_memory_service import WorkingMemoryService
 
             db_service = get_shared_db_service()
             service = AdaptiveLayerService(db_service)
-
-            # Get raw working memory turns for cognitive load estimation
-            working_memory_turns = []
-            if thread_id:
-                try:
-                    wm_service = WorkingMemoryService()
-                    working_memory_turns = wm_service.get_recent_turns(thread_id) or []
-                except Exception:
-                    pass
 
             # Build current signals — start with prompt length, augment from MemoryStore snapshot
             current_signals = {
@@ -662,7 +652,7 @@ class PromptAssemblyService:
 
             return service.generate_directives(
                 thread_id=thread_id,
-                working_memory_turns=working_memory_turns,
+                working_memory_turns=[],
                 current_signals=current_signals,
                 current_message=original_prompt,
             )
