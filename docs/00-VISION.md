@@ -132,7 +132,7 @@ Decides what deserves attention, chooses depth of reasoning based on value, esca
 ### 4. Maintains Continuity
 Remembers context and priorities, understands recurring patterns, avoids requiring users to repeat themselves.
 
-*Codebase: memory hierarchy (working → episode → concept), decay engine, autobiography service, user traits.*
+*Codebase: memory hierarchy (working → episode → concept), decay engine, data graph (traits, facts, preferences).*
 
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
@@ -193,7 +193,7 @@ Brevity, timing, and restraint build trust. Verbosity erodes it.
 ### 6. Continuity Over Transactions
 Each interaction builds long-term understanding. Memory, identity, and history are first-class concerns, not afterthoughts.
 
-*Codebase anchor: memory hierarchy with decay engine, autobiography service (6h synthesis cycle), user traits with category-specific persistence, episodic retrieval with activation weighting.*
+*Codebase anchor: memory hierarchy with decay engine, data graph (traits, facts, preferences, procedures) with category-specific persistence, episodic retrieval with activation weighting.*
 
 ---
 

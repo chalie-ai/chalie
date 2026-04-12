@@ -79,10 +79,10 @@ frontend/
 - Mode routing has been removed. All message processing flows through `MessageProcessor` subclasses directly — each channel is its own orchestrator.
 
 #### Response Generation
-- **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
+- Voice modulation is handled inline by `UserMessageProcessor.getSystemPrompt()` — no separate service.
 
 #### Message Processing
-- **`message_processor.py`** — Abstract base class for all LLM turns. One instance per turn — no singletons, no `.instance()`, no `.process()`. Constructor: `__init__(raw_input, metadata=None)`. Entry method: `send(request_id=None) -> str`. Per-turn state lives on the instance: `_pending_tool_calls`, `_act_trail`, `_discovered_tools`, `_memory_seed`, `_uid`. Provides `send()` (full ACT loop), `store()` (atomic persistence via `transcript_service.append_atomic_turn()`), `handleTool()` (single dispatch chokepoint, never re-raises), `getSystemPrompt()`, `getTools()`, `getPreviousMessages()`. Subclasses implement `getUserDefinition()` and `getUserPrompt()`. Subclasses override `postTurn()` for per-channel service fan-out. History is delivered as a literal `## Previous Messages` text block inside `getUserPrompt()` — the provider sees a single-element `messages[]`, not a multi-turn array. Two-stage mid-ACT compaction fires at 80% of the provider's context window (Stage 1: tool-trail compaction in place; Stage 2: full checkpoint + ACT loop restart). ContextVar-based `current_processor()` / `bind_current_processor()` allow innate skills to reach the running processor without it being passed as a parameter.
+- **`message_processor.py`** — Abstract base class for all LLM turns. One instance per turn — no singletons, no `.instance()`, no `.process()`. Constructor: `__init__(raw_input, metadata=None)`. Entry method: `send(request_id=None) -> str`. Per-turn state lives on the instance: `_act_trail`, `_discovered_tools`, `_memory_seed`, `_uid`, `_dispatcher`. `self._dispatcher` (ActDispatcherService) is created once per turn in `send()` — all tools (innate + external) dispatch through the same handler path. `_register_discovered_tools()` registers find_tools results as handlers mid-turn. Provides `send()` (full ACT loop), `store()` (atomic persistence), `handleTool()` (single dispatch chokepoint, never re-raises), `getSystemPrompt()`, `getTools()`, `getPreviousMessages()`. Tool output is rendered and recorded by `ToolRenderAndRecordService`. Subclasses implement `getUserDefinition()` and `getUserPrompt()`. Subclasses override `postTurn()` for per-channel service fan-out. History is delivered as a literal `## Previous Messages` text block inside `getUserPrompt()` — the provider sees a single-element `messages[]`, not a multi-turn array. Two-stage mid-ACT compaction fires at 80% of the provider's context window (Stage 1: tool-trail compaction in place; Stage 2: full checkpoint + ACT loop restart). ContextVar-based `current_processor()` / `bind_current_processor()` allow innate skills to reach the running processor without it being passed as a parameter.
 - **`system_message_prompt.py`** — `SystemMessagePrompt` abstract base + four concrete subclasses: `UnifiedSystemMessagePrompt` (user channel), `DMNSystemMessagePrompt` (DMN channel), `GoalPursuitSystemMessagePrompt` (goal-pursuit channel), `ScheduledSystemMessagePrompt` (scheduled channel). Every prompt body lives as a Python constant on the subclass via the shared `_SYSTEM_PROMPT` class attribute — no file reads, no fallbacks, no `_FileBackedSystemMessagePrompt`. `_SYSTEM_PROMPT` is declared `@property @abstractmethod` on the base, so a subclass that forgets to override it raises `TypeError` at construction time (Python's ABCMeta machinery). A plain class attribute in the subclass satisfies the contract. `getPrompt()` lives on the base and returns `self._SYSTEM_PROMPT` verbatim. One instance per turn, per `MessageProcessor.getSystemPrompt()` call. The `getUserDefinition()` line is prepended by the base `getSystemPrompt()` method — subclasses only build the body. `UserMessageProcessor.getSystemPrompt()` weaves `{{voice_modulation}}` and `{{adaptive_directives}}` into the Unified template on every turn.
 - **`user_message_processor.py`** — `UserMessageProcessor(MessageProcessor)` subclass for the user channel. `CHANNEL='user'`, `ROLE='user'`, `NATIVE_TOOLS=ALL_SKILL_NAMES`, `MAX_ITERATIONS=30`, `MAX_TIMEOUT=900s`. Constructor adds `on_narration: Callable[[str, int], None] | None`. `_run_memory_seed()` auto-seeds episodes once per turn (`caller='seed'`, durable `ephemeral=0` DTO). `getUserPrompt()` assembles: world state, system awareness, `## Previous Messages`, memory seed line, current turn, ACT trail. `getSystemPrompt()` weaves `{{voice_modulation}}` and `{{adaptive_directives}}` into the unified template. `getTools()` excludes `rich_render` for voice-mode turns. `postTurn()` runs 8-service fan-out (see `docs/13-MESSAGE-FLOW.md` §4). Personal facts are captured inline by the LLM-native memory skill (`kind='trait'`); `_check_trait_contradiction` fires synchronously inside `memory_skill._handle_store()` — no background trait pipeline.
 - **`dmn_message_processor.py`** — `DMNMessageProcessor(MessageProcessor)` subclass. `CHANNEL='dmn'`, `ROLE='proactive_thought'`, `MAX_ITERATIONS=15`, `MAX_TIMEOUT=300s`. Excludes `goal_pursuit` from `NATIVE_TOOLS`. `postTurn()` logs `dmn_reflection` event + metrics only.
@@ -124,14 +124,14 @@ frontend/
 - **`services/act_memory_keys.py`** — Centralized MemoryStore key patterns for the tool system (deferred cards, tool caches, heartbeat, reflection queue).
 
 #### Tool Integration
-- **`tool_registry_service.py`** — Tool discovery, metadata management; loads first-party tools from ToolLibraryService, registers interface tools via HTTP; invokes first-party tools directly in-process
+- **`tool_registry_service.py`** — Tool discovery, metadata management; loads first-party tools from ToolLibraryService, registers interface tools via HTTP. `execute()` returns `{'text': result}` dicts (same shape as innate skills); `invoke()` wraps in legacy `[TOOL:name]...[/TOOL]` format for output_service notifications
+- **`tool_render_and_record_service.py`** — Central render+record for tool output: formats as `[tool_name(key="val",key2=0.3)] result` and writes to `tool_calls` table via `ToolCallService`
 - **`tool_config_service.py`** — Tool configuration persistence; OAuth token management
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
 - **`tool_profile_service.py`** — Tool capability profiles powering the `find_tools` innate skill. Profiles include a `keywords` column (comma-separated, 256 char cap). Embeddings are generated from `short_summary + keywords` (not the full profile). Retrieval uses 2-axis scoring: semantic k-NN distance + keyword match count; score = `(distance * 10) - kw_match_count` (lower is better). Single-word keywords use set intersection; multi-word keywords use substring match. Results are labeled excellent/good/fair/weak instead of exposing raw scores. A dynamic TOC (one line per tool, showing its first keyword) is injected into the `find_tools` skill description at startup. Built-in tools use hardcoded profiles from `BUILTIN_TOOL_PROFILES` in `tool_library_service.py`, seeded at startup via `seed_builtin_profiles()` — bypasses the LLM profiler entirely. Interface tools still go through the LLM profiler. Staleness detection uses `manifest_hash` so re-seeding is skipped when nothing changed.
 
 #### Identity & Learning
-- **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
-- **`identity_state_service.py`** — Tracks identity state changes and evolution
+- Identity is now derived from the data graph (traits, facts, preferences). No dedicated identity service.
 
 #### Infrastructure
 - **`database_service.py`** — SQLite connection management (WAL mode, thread-local connections)
@@ -151,7 +151,6 @@ Built-in cognitive skills always available to the LLM:
 - **`memory_skill.py`** — Unified recall + store across ALL memory layers. `recall_episodes()` is the single chokepoint for all episodic retrieval (seed + LLM recall); computes dynamic radius (redundancy narrowing + drift expansion), writes `memory_recall_log` telemetry row per call.
 - **`introspect_skill.py`** — Comprehensive internal state report: 4 natural-language scopes (memory health, skill/tool usage, reasoning state, identity); supports "why did you do that?" via audit trail
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
-- **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`goal_pursuit_skill.py`** — Spawn a background goal pursuit: takes a single `goal` string, creates a `GoalPursuitProcessor` daemon thread (`CHANNEL='goal_pursuit'`, `pursuit_id` stored in `metadata`), returns immediately; result surfaces as a proactive message when complete
 - **`document_skill.py`** — Document search and management: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly
@@ -326,7 +325,7 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`memory`** — Memory search, fact management
 - **`proactive`** — Outreach/notifications, upcoming tasks
 - **`privacy`** — Data deletion, export
-- **`system`** — Health, version, settings, observability (routing, memory, tools, identity, tasks, autobiography, traits)
+- **`system`** — Health, version, settings, observability (memory, tools, tasks, traits)
 - **`tools`** — Tool execution, configuration
 - **`providers`** — LLM provider configuration
 - **`push`** — Push notification subscription
@@ -338,9 +337,7 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`routing`** — Mode router decision distribution and recent activity
 - **`memory`** — Memory layer counts and health indicators
 - **`tools`** — Tool performance stats
-- **`identity`** — Identity vector states
 - **`tasks`** — Active goal pursuit threads
-- **`autobiography`** — Current autobiography narrative with delta (changed/unchanged sections)
 - **`traits`** (GET) — User traits grouped by category with confidence scores
 - **`traits/<key>`** (DELETE) — Remove a specific learned trait (user correction)
 

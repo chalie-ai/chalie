@@ -130,7 +130,7 @@ The Brain dashboard (`http://localhost:8081/brain/`) is the admin and observabil
 - Routing decision distribution
 - Memory layer health
 - Active curiosity threads and persistent tasks
-- User traits and autobiography narrative
+- User traits and data graph
 - Tool performance metrics
 - Identity vector states
 
