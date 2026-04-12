@@ -210,38 +210,34 @@ Personal facts (traits) are captured by the LLM-native memory skill path: `front
 ┌─────────────────────────────────────────────────────────────────────┐
 │  UserMessageProcessor.postTurn()                                    │
 │                                                                     │
-│  1. InteractionLogService            📤 DB  (sync)                 │
-│     log_event('user_input', channel=CHANNEL)                        │
-│     log_event('system_response', channel=CHANNEL)                   │
-│                         │                                           │
-│  2. ConversationPhaseService         📤 M  (sync)                  │
+│  1. ConversationPhaseService         📤 M  (sync)                  │
 │     update(thread_id, user_text, is_user=True)                      │
 │     update(thread_id, response, is_user=False)  [if response != ''] │
 │                         │                                           │
-│  3. SituationModelService            📤 M  (sync)                  │
+│  2. SituationModelService            📤 M  (sync)                  │
 │     update_on_message(thread_id)                                    │
 │                         │                                           │
-│  4. SaveSuggestionService            📥📤 M  (sync)                │
-│     4a. detect_save_trigger(user_text) → emit_save_card if flagged  │
-│     4b. detect_saveable_content(response) → flag_saveable if hit    │
+│  3. SaveSuggestionService            📥📤 M  (sync)                │
+│     3a. detect_save_trigger(user_text) → emit_save_card if flagged  │
+│     3b. detect_saveable_content(response) → flag_saveable if hit    │
 │                         │                                           │
-│  5. Adaptive layer       📤 M  (sync)                              │
+│  4. Adaptive layer       📤 M  (sync)                              │
 │     _detect_fork_response(text, thread_id)                          │
 │     _store_adaptive_signals(thread_id, text)                        │
 │                         │                                           │
-│  6. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
+│  5. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
 │     Defers DMN idle timer — must fire on every user turn            │
 │                         │                                           │
-│  7. MetricsService       📤 M  (sync)                              │
+│  6. MetricsService       📤 M  (sync)                              │
 │     record_counter('requests_total')                                │
 │     record_counter('user_messages_total')                           │
 │                         │                                           │
-│  8. compaction_service.check_and_compact()   📥📤 DB  (sync)       │
+│  7. compaction_service.check_and_compact()   📥📤 DB  (sync)       │
 │     End-turn backstop — safety net if mid-loop compaction missed    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Background subclasses (`DMNMessageProcessor`, `GoalPursuitProcessor`, `ScheduledMessageProcessor`) run a minimal `postTurn()` — only `InteractionLogService` + `MetricsService`. No phase updates, no DMN reset.
+Background subclasses (`DMNMessageProcessor`, `GoalPursuitProcessor`, `ScheduledMessageProcessor`) run a minimal `postTurn()` — only `MetricsService`. No phase updates, no DMN reset.
 
 ---
 
@@ -265,7 +261,7 @@ Operates completely independently of user messages.
 │    CHANNEL = 'dmn', ROLE = 'proactive_thought'                      │
 │    MAX_ITERATIONS = 15, MAX_TIMEOUT = 300s                          │
 │    getUserPrompt(): proactive_thought: <context>                    │
-│    postTurn(): interaction_log (dmn_reflection) + metrics           │
+│    postTurn(): metrics only                                         │
 │                                                                     │
 │  Exits silently if response contains DMN_NO_ACTION                  │
 │  Otherwise: OutputService.enqueue_proactive()  📤 M                │
@@ -290,7 +286,7 @@ A daemon thread is spawned by the `goal_pursuit` innate skill when the LLM calls
 │  MAX_ITERATIONS = 50, MAX_TIMEOUT = 7200s (2h)                     │
 │                                                                     │
 │  getUserPrompt(): goal_pursuit: <goal>  + ACT trail                 │
-│  postTurn(): interaction_log (goal_pursuit_turn) + metrics          │
+│  postTurn(): metrics only                                           │
 │                                                                     │
 │  On completion: OutputService.enqueue_proactive()  📤 M            │
 │                 → pub/sub → WS → user                              │
@@ -313,9 +309,7 @@ Fired by the scheduler service when a scheduled item comes due.
 │  Excludes 'schedule' + 'goal_pursuit' from NATIVE_TOOLS             │
 │                                                                     │
 │  getUserPrompt(): scheduled: <prompt>  + ACT trail                  │
-│  postTurn(): interaction_log (scheduled_prompt_turn)                │
-│              metrics                                                │
-│              mark scheduled item executed (best-effort)            │
+│  postTurn(): metrics + mark executed (best-effort)                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -350,7 +344,7 @@ Table                      When Written                      When Read
 transcript                 store() → append_atomic_turn()    getPreviousMessages()
 tool_calls                 store() → append_atomic_turn()    getPreviousMessages() (ephemeral=0 only)
 compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
-interaction_log            postTurn() (every turn)           observability endpoints
+interaction_log            non-turn events only              observability endpoints
 episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
 knowledge                  memory_skill._handle_store()      memory_skill, knowledge endpoints
 memory_recall_log          recall_episodes() chokepoint      meta-harness tuning
