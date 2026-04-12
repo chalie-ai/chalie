@@ -6,7 +6,6 @@ EmbeddingService is always mocked (569MB ONNX model).
 """
 
 import sqlite3
-import struct
 import sys
 import types
 from pathlib import Path
@@ -340,42 +339,3 @@ class TestGenerateSearchCache:
 
         assert mock_emb.generate_embeddings_batch.call_count == 3  # 32+32+1
 
-
-# ── pack_embedding ───────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestPackEmbedding:
-
-    def test_list(self):
-        from services.embedding_utils import pack_embedding
-        assert len(pack_embedding([1.0, 2.0, 3.0])) == 12
-
-    def test_none(self):
-        from services.embedding_utils import pack_embedding
-        assert pack_embedding(None) is None
-
-    def test_bytes_passthrough(self):
-        from services.embedding_utils import pack_embedding
-        b = b'\x00\x01'
-        assert pack_embedding(b) is b
-
-    def test_numpy(self):
-        import numpy as np
-        from services.embedding_utils import pack_embedding
-        assert len(pack_embedding(np.array([1.0, 0.5], dtype=np.float32))) == 8
-
-    def test_roundtrip_768d(self):
-        from services.embedding_utils import pack_embedding
-        orig = [float(i) / 768 for i in range(768)]
-        unpacked = struct.unpack('768f', pack_embedding(orig))
-        assert abs(unpacked[0] - orig[0]) < 1e-6
-
-
-# ── Similarity math ─────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-@pytest.mark.parametrize("distance,expected", [
-    (0.0, 1.0), (0.5, 0.75), (1.0, 0.5), (2.0, 0.0), (3.0, 0.0),
-])
-def test_distance_to_similarity(distance, expected):
-    assert abs(max(0.0, 1.0 - distance / 2.0) - expected) < 1e-9

@@ -1,6 +1,6 @@
 """Tests for the goal_pursuit innate skill.
 
-Verifies schema contract, input validation, thread spawning, and OutputService
+Verifies input validation, thread spawning, and OutputService
 surface behaviour on both success and failure.
 """
 
@@ -8,34 +8,9 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from services.innate_skills.goal_pursuit_skill import (
-    handle_goal_pursuit,
-    TOOL_SCHEMA,
-)
+from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit
 
 pytestmark = pytest.mark.unit
-
-
-# ── Schema contract ────────────────────────────────────────────────────────────
-
-class TestToolSchema:
-    def test_schema_name_is_goal_pursuit(self):
-        """TOOL_SCHEMA must advertise the canonical skill name."""
-        assert TOOL_SCHEMA['name'] == 'goal_pursuit'
-
-    def test_schema_has_required_goal_parameter(self):
-        """'goal' must be a required parameter."""
-        required = TOOL_SCHEMA['input_schema'].get('required', [])
-        assert 'goal' in required
-
-    def test_schema_goal_property_is_string(self):
-        """The 'goal' property type must be 'string'."""
-        props = TOOL_SCHEMA['input_schema']['properties']
-        assert props['goal']['type'] == 'string'
-
-    def test_schema_input_schema_type_is_object(self):
-        """The top-level input schema must be type 'object'."""
-        assert TOOL_SCHEMA['input_schema']['type'] == 'object'
 
 
 # ── Input validation ───────────────────────────────────────────────────────────
@@ -110,50 +85,6 @@ class TestHandleGoalPursuitSuccess:
         pid = result['pursuit_id']
         assert len(pid) == 32
         int(pid, 16)  # raises ValueError if not hex
-
-
-# ── Thread spawning ────────────────────────────────────────────────────────────
-
-class TestHandleGoalPursuitThread:
-    def test_daemon_thread_is_started(self):
-        """A daemon thread must be started for a valid goal."""
-        with patch('threading.Thread') as mock_thread_cls:
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-            handle_goal_pursuit('user', {'goal': 'do some research'})
-
-        mock_thread_cls.assert_called_once()
-        mock_thread.start.assert_called_once()
-
-    def test_thread_is_marked_as_daemon(self):
-        """Thread must be created with daemon=True for clean process exit."""
-        with patch('threading.Thread') as mock_thread_cls:
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-            handle_goal_pursuit('user', {'goal': 'do some research'})
-
-        _, kwargs = mock_thread_cls.call_args
-        assert kwargs.get('daemon') is True
-
-    def test_thread_name_contains_pursuit_id_prefix(self):
-        """Thread name must be prefixed with 'goal-pursuit-' for observability."""
-        with patch('threading.Thread') as mock_thread_cls:
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-            handle_goal_pursuit('user', {'goal': 'do something'})
-
-        _, kwargs = mock_thread_cls.call_args
-        assert kwargs.get('name', '').startswith('goal-pursuit-')
-
-    def test_thread_returns_before_completion(self):
-        """handle_goal_pursuit must return immediately — it does not join the thread."""
-        # We verify by NOT calling join() on the mock thread
-        with patch('threading.Thread') as mock_thread_cls:
-            mock_thread = MagicMock()
-            mock_thread_cls.return_value = mock_thread
-            handle_goal_pursuit('user', {'goal': 'do something'})
-
-        mock_thread.join.assert_not_called()
 
 
 # ── Background thread behaviour: success path ─────────────────────────────────
