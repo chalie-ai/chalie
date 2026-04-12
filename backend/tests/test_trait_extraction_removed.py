@@ -64,12 +64,17 @@ class TestDigestWorkerTraitExtractionRemoval:
 
 class TestMemorySkillTraitContradictionLift:
 
-    def test_check_trait_contradiction_is_module_local_in_memory_skill(self):
-        """_check_trait_contradiction must be importable directly from memory_skill."""
-        from services.innate_skills.memory_skill import _check_trait_contradiction
-        assert callable(_check_trait_contradiction), (
-            "_check_trait_contradiction is not callable in memory_skill — "
-            "the lift from digest_worker failed"
+    def test_check_trait_contradiction_removed_from_memory_skill(self):
+        """_check_trait_contradiction must NOT exist in memory_skill.
+
+        After the data_graph refactor (Part 2), contradiction checking is handled
+        entirely inside DataGraphService.store() — the standalone helper in
+        memory_skill.py was dead code and was deleted.
+        """
+        import services.innate_skills.memory_skill as mod
+        assert not hasattr(mod, "_check_trait_contradiction"), (
+            "_check_trait_contradiction still present in memory_skill — "
+            "it should have been deleted as dead code in the data_graph refactor"
         )
 
     def test_memory_skill_does_not_import_check_trait_contradiction_from_digest_worker(self):
