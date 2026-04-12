@@ -51,9 +51,7 @@ DEFAULT_MODELS_REPO = "chalie-ai/models"
 # Models that should be auto-downloaded on boot.
 # Each entry: (subdirectory_name, github_repo_or_None_for_default, release_asset_prefix)
 MODEL_REGISTRY = [
-    ("mode-tiebreaker", None, "mode-tiebreaker"),
     ("contradiction", None, "contradiction"),
-    ("trait-detector", None, "trait-detector"),
 ]
 
 # Shared base model config
@@ -154,7 +152,7 @@ class OnnxInferenceService:
     Usage:
         svc = OnnxInferenceService("/models")
         svc.ensure_models()
-        label, confidence = svc.predict("mode-tiebreaker", input_text)
+        label, confidence = svc.predict("contradiction", input_text)
     """
 
     def __init__(self, models_dir: str):
