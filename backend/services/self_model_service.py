@@ -369,13 +369,7 @@ class SelfModelService:
             logger.debug(f"{LOG_PREFIX} Failed to get bg_llm queue depth: {e}", exc_info=True)
             bg_llm = 0
 
-        try:
-            prompt_queue = self._store.llen("prompt-queue")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get prompt queue depth: {e}", exc_info=True)
-            prompt_queue = 0
-
-        return {"bg_llm": bg_llm, "prompt_queue": prompt_queue}
+        return {"bg_llm": bg_llm}
 
     def _get_memory_pressure(self) -> dict:
         """Episode/concept/trait counts and average activation from SQLite."""

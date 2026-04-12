@@ -3,8 +3,7 @@ Identity State Service — Zero-latency MemoryStore-backed identity authority.
 
 Stores explicit identity fields (name, etc.) written synchronously when the user
 makes an explicit identity statement (e.g., "call me Dylan"). Read by
-FrontalCortexService before user_traits so identity is available immediately,
-before the async memory-chunker pipeline has run.
+UserMessageProcessor before user_traits so identity is available immediately.
 
 MemoryStore key: identity_state
 TTL: 7 days, refreshed on every write.

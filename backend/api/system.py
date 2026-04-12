@@ -39,7 +39,7 @@ def health_check():
 
 @system_bp.route('/ready', methods=['GET'])
 def readiness_check():
-    """Readiness probe — true only when SQLite, MemoryStore, and prompt-queue worker are all available."""
+    """Readiness probe — true only when SQLite, MemoryStore, embeddings, and ONNX are ready."""
     components = {}
 
     # SQLite
@@ -64,16 +64,6 @@ def readiness_check():
     except Exception as e:
         logger.debug(f'[READY] memory store not ready: {e}')
         components['memory_store'] = {'status': 'error', 'message': str(e)}
-
-    # prompt-queue worker (PromptQueue is an in-process thread dispatcher — always available
-    # once the module is importable; _locks is lazily populated on first enqueue so checking
-    # it causes a false 503 on every cold boot before the first message arrives)
-    try:
-        from services.prompt_queue import PromptQueue  # noqa: F401 — import-only check
-        components['workers'] = {'status': 'ok'}
-    except Exception as e:
-        logger.debug(f'[READY] worker check failed: {e}')
-        components['workers'] = {'status': 'error', 'message': str(e)}
 
     # Embedding model — lazy-loaded on first use. Ready once the ONNX session
     # and tokenizer are initialised.
@@ -162,7 +152,7 @@ def system_status():
             result["database_error"] = str(e)
 
         # Queue depths
-        for queue_name in ["prompt-queue", "output-queue"]:
+        for queue_name in ["output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
             except Exception as e:
@@ -243,7 +233,7 @@ def observability_memory():
             fact_keys = store.keys("facts:*")
             facts = len(fact_keys) if fact_keys else traits
 
-            for q in ["prompt-queue", "output-queue"]:
+            for q in ["output-queue"]:
                 depth = store.llen(q)
                 if depth:
                     queues[q] = depth
@@ -530,7 +520,7 @@ def observability_world_state():
 
         svc = WorldStateService()
         summary = svc.get_world_model_summary()
-        formatted = svc.get_world_state(topic='', thread_id=None, message_embedding=None)
+        formatted = svc.get_world_state(topic='', message_embedding=None)
 
         return jsonify({
             'generated_at': _now_iso(),

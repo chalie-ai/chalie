@@ -119,19 +119,16 @@ class SituationModelService:
         state = self.get_current()
         return state.get("scores", {}).get(score_name)
 
-    def update_on_message(self, thread_id: str = None) -> dict:
+    def update_on_message(self) -> dict:
         """
         Full refresh: collect all signals, recompute all scores, persist.
         Called by the digest worker on every user message.
-
-        Args:
-            thread_id: Active thread identifier (used for focus + thread signals).
 
         Returns:
             Updated state dict.
         """
         with self._lock:
-            return self._compute_and_store(thread_id=thread_id, full=True)
+            return self._compute_and_store(full=True)
 
     def update_on_heartbeat(self) -> dict:
         """
@@ -142,7 +139,7 @@ class SituationModelService:
             Updated state dict.
         """
         with self._lock:
-            return self._compute_and_store(thread_id=None, full=False)
+            return self._compute_and_store(full=False)
 
     def get_directive(self) -> Optional[str]:
         """
@@ -184,7 +181,7 @@ class SituationModelService:
             logger.debug(f"{LOG_PREFIX} Ambient signal failed: {e}")
             return defaults
 
-    def _collect_topic(self, thread_id: Optional[str]) -> dict:
+    def _collect_topic(self) -> dict:
         """Read current topic from the threads table via DatabaseService."""
         defaults = {
             "name": None,
@@ -192,27 +189,6 @@ class SituationModelService:
             "is_new": False,
             "updated_at": utc_now().isoformat(),
         }
-        if not thread_id:
-            return defaults
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT current_topic FROM threads WHERE thread_id = ?",
-                    (thread_id,),
-                )
-                row = cursor.fetchone()
-                if row and row[0]:
-                    return {
-                        "name": row[0],
-                        "confidence": 0.75,
-                        "is_new": False,
-                        "updated_at": utc_now().isoformat(),
-                    }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Topic signal failed: {e}")
         return defaults
 
     def _collect_identity(self) -> dict:
@@ -312,7 +288,7 @@ class SituationModelService:
             # SparkStateService not yet available — use default
             return defaults
 
-    def _collect_world_state(self, thread_id: Optional[str]) -> dict:
+    def _collect_world_state(self) -> dict:
         """Read salient world state items from WorldStateService."""
         defaults = {
             "items": [],
@@ -338,54 +314,16 @@ class SituationModelService:
             logger.debug(f"{LOG_PREFIX} World state signal failed: {e}")
             return defaults
 
-    def _collect_thread(self, thread_id: Optional[str]) -> dict:
-        """Read exchange count for the current channel from the transcript table."""
+    def _collect_thread(self) -> dict:
+        """Read exchange count from the transcript table."""
         defaults = {
             "exchange_count": 0,
             "age_minutes": 0.0,
             "updated_at": utc_now().isoformat(),
         }
-        if not thread_id:
-            return defaults
-        try:
-            from services.database_service import get_shared_db_service
-            from services.time_utils import parse_utc
+        return defaults
 
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT COUNT(*) FROM transcript WHERE channel = ? AND role = 'user'",
-                    (thread_id,),
-                )
-                row = cursor.fetchone()
-                exchange_count = row[0] if row else 0
-
-                # Approximate age from first transcript entry for this channel
-                age_minutes = 0.0
-                try:
-                    cursor.execute(
-                        "SELECT created_at FROM transcript WHERE channel = ? ORDER BY id ASC LIMIT 1",
-                        (thread_id,),
-                    )
-                    first_row = cursor.fetchone()
-                    if first_row and first_row[0]:
-                        created_at = parse_utc(first_row[0])
-                        now = utc_now()
-                        age_minutes = (now - created_at).total_seconds() / 60.0
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Channel age query failed: {e}")
-
-            return {
-                "exchange_count": exchange_count,
-                "age_minutes": round(age_minutes, 1),
-                "updated_at": utc_now().isoformat(),
-            }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Thread signal failed: {e}")
-            return defaults
-
-    def _collect_phase(self, thread_id: Optional[str]) -> dict:
+    def _collect_phase(self) -> dict:
         """
         Read conversation phase from ConversationPhaseService.
         Stubs to unknown/0.5/sustaining when the service isn't available yet.
@@ -396,11 +334,9 @@ class SituationModelService:
             "direction": "sustaining",
             "updated_at": utc_now().isoformat(),
         }
-        if not thread_id:
-            return defaults
         try:
             from services.conversation_phase_service import ConversationPhaseService
-            phase_data = ConversationPhaseService().get_phase(thread_id)
+            phase_data = ConversationPhaseService().get_phase()
             if phase_data:
                 return {
                     "current": phase_data.get("current", "unknown"),
@@ -730,12 +666,11 @@ class SituationModelService:
 
     # ── Core compute pipeline ─────────────────────────────────────────────────
 
-    def _compute_and_store(self, thread_id: Optional[str], full: bool) -> dict:
+    def _compute_and_store(self, full: bool) -> dict:
         """
         Collect signals, compute scores, persist state.
 
         Args:
-            thread_id: Active thread ID (may be None on heartbeat updates).
             full: If True, collect all signals. If False, only ambient + client.
         """
         now_iso = utc_now().isoformat()
@@ -746,13 +681,13 @@ class SituationModelService:
 
         if full:
             focus = {"active": False, "topic": None, "distraction": 0.0, "updated_at": utc_now().isoformat()}
-            topic = self._collect_topic(thread_id)
+            topic = self._collect_topic()
             identity = self._collect_identity()
             engagement = self._collect_engagement()
             spark = self._collect_spark()
-            world_state = self._collect_world_state(thread_id)
-            thread = self._collect_thread(thread_id)
-            phase = self._collect_phase(thread_id)
+            world_state = self._collect_world_state()
+            thread = self._collect_thread()
+            phase = self._collect_phase()
         else:
             # Lightweight heartbeat — preserve existing values from cache
             cached = self._load_cached_raw()

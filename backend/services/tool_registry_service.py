@@ -12,7 +12,6 @@ Tool output is sanitized and wrapped in [TOOL:name]...[/TOOL] markers.
 Cost metadata is appended to every result.
 """
 
-import json
 import logging
 import threading
 import time
@@ -578,7 +577,7 @@ class ToolRegistryService:
         """Return names of registered tools whose trigger type is ``on_demand``.
 
         On-demand tools are invoked explicitly by the LLM during a conversation
-        turn, as opposed to webhook tools (HTTP-push). Scheduled work uses the
+        turn. Scheduled work uses the
         ``schedule`` innate skill via ``ScheduledMessageProcessor``.
 
         Returns:
@@ -704,89 +703,4 @@ class ToolRegistryService:
         tool = self.tools.get(tool_name)
         return tool["manifest"] if tool else None
 
-    def invoke_webhook(self, tool_name: str, webhook_body: dict, dialog_callback=None) -> dict:
-        """
-        Invoke a webhook-triggered tool.
-
-        Loads state from MemoryStore, builds payload with _webhook key, runs subprocess
-        interactively (so "tool" output dialogs work), persists returned state.
-
-        Args:
-            tool_name: Registered tool name (must have trigger.type == "webhook").
-            webhook_body: Parsed JSON body from the webhook POST.
-            dialog_callback: Optional callable(result_dict) -> str for "tool" output.
-                If None, "tool" output is treated as silent.
-
-        Returns:
-            Final result dict from subprocess.
-
-        Raises:
-            ValueError: If tool not found or not a webhook trigger.
-        """
-        tool = self.tools.get(tool_name)
-        if not tool:
-            raise ValueError(f"Unknown tool: {tool_name}")
-
-        manifest = tool["manifest"]
-        trigger = manifest.get("trigger", {})
-        if trigger.get("type") != "webhook":
-            raise ValueError(
-                f"Tool '{tool_name}' is not a webhook tool (type={trigger.get('type')})"
-            )
-
-        try:
-            from services.tool_config_service import ToolConfigService
-            from services.database_service import get_shared_db_service
-            settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to load webhook tool config for '{tool_name}': {e}", exc_info=True)
-            settings = {}
-
-        # OAuth token refresh
-        settings = self._refresh_oauth_token(tool_name, manifest, settings)
-
-        raw_telemetry = {}
-        try:
-            from services.client_context_service import ClientContextService
-            raw_telemetry = ClientContextService().get()
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for webhook '{tool_name}': {e}", exc_info=True)
-        flattened_telemetry = self._build_telemetry(raw_telemetry)
-
-        # Load persisted tool state from MemoryStore (webhook tools share state across calls)
-        tool_state = {}
-        state_key = f"tool_state:{tool_name}"
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            state_json = store.get(state_key)
-            if state_json:
-                tool_state = json.loads(state_json)
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to load persisted webhook tool state for '{tool_name}': {e}", exc_info=True)
-
-        payload = {
-            "params": {"_webhook": webhook_body, "_state": tool_state},
-            "settings": settings,
-            "telemetry": flattened_telemetry,
-        }
-
-        timeout = manifest.get("constraints", {}).get("timeout_seconds", 120)
-        from services.tool_subprocess_service import ToolSubprocessService
-        result = ToolSubprocessService().run_interactive(
-            tool["runner_path"], payload,
-            timeout=timeout,
-            on_tool_output=dialog_callback,
-        )
-
-        # Persist returned state
-        if isinstance(result, dict) and "_state" in result:
-            try:
-                from services.memory_client import MemoryClientService
-                store = MemoryClientService.create_connection()
-                store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] {tool_name}: failed to persist webhook state: {e}")
-
-        return result
 

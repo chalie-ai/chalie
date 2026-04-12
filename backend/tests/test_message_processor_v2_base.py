@@ -1007,7 +1007,7 @@ class TestGetSystemPromptFileBackedDMN:
 # ─────────────────────────────────────────────────────────────────────────────
 # 19. getSystemPrompt() — UnifiedSystemMessagePrompt zero-arg construction
 #     Verifies the base passes no positional args to SYSTEM_PROMPT_CLASS()
-#     so UnifiedSystemMessagePrompt's defaults (original_prompt='', thread_id=None)
+#     so UnifiedSystemMessagePrompt's defaults (original_prompt='')
 #     are used.  This is the Commit 2 contract; Commit 8 will pass explicit args.
 # ─────────────────────────────────────────────────────────────────────────────
 

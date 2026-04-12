@@ -18,20 +18,9 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-COMMIT 8 STATUS: Amber.
-    - Removes UserMessageProcessor.instance() singleton
-    - Removes UserMessageProcessor.process()
-    - Wires full postTurn() eight-service fan-out
-    - Wires getUserPrompt() absorbing UserPromptAssemblyService
-    - Wires getUserDefinition() absorbing identity modulation + adaptive directives
-    - Wires _run_memory_seed() with ephemeral=0 DTO
-    - Wires _emit_narration() callback
-    - getSystemPrompt() override weaves {{adaptive_directives}} into the
-      UnifiedSystemMessagePrompt template
-
-LEAVE IN PLACE until Commit 11:
-    - backend/services/user_prompt_assembly_service.py
-    - backend/services/system_prompt_assembly_service.py
+Implements the full postTurn() eight-service fan-out, memory seeding, narration
+callback, and getSystemPrompt() override weaving {{adaptive_directives}} into the
+UnifiedSystemMessagePrompt template.
 """
 
 import logging
@@ -214,9 +203,8 @@ class UserMessageProcessor(MessageProcessor):
         """
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
 
-        thread_id = self._metadata.get('thread_id')
         template = template.replace('{{voice_modulation}}', self._get_voice_modulation())
-        template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives(thread_id=thread_id))
+        template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
         return f"{self.getUserDefinition()}\n\n{template}"
 
@@ -368,22 +356,6 @@ class UserMessageProcessor(MessageProcessor):
         text = self._raw_input
         response = self._last_response
         metadata = self._metadata
-        source = metadata.get('source', 'unknown')
-
-        # thread_id: websocket.py does NOT inject thread_id into metadata.
-        # Resolve it from MemoryStore active_channel key, exactly as
-        # digest_worker.py:717 does. Fall back to metadata dict if caller
-        # (e.g. tests) pre-injects it.
-        thread_id = metadata.get('thread_id')
-        if not thread_id:
-            try:
-                from services.memory_client import MemoryClientService
-                _store = MemoryClientService.create_connection()
-                _raw = _store.get('active_channel:default')
-                if _raw:
-                    thread_id = _raw.decode() if isinstance(_raw, bytes) else _raw
-            except Exception as _tid_e:
-                logger.debug(f"[POSTTURN] thread_id resolution failed: {_tid_e}")
 
         # 1. Conversation phase — TWO calls (user text + assistant response).
         # Skip the assistant-side update on empty response (cap-exit turns):
@@ -392,16 +364,16 @@ class UserMessageProcessor(MessageProcessor):
         try:
             from services.conversation_phase_service import get_conversation_phase_service
             phase = get_conversation_phase_service()
-            phase.update(thread_id, text, is_user=True, topic=channel)
+            phase.update(channel, text, is_user=True, topic=channel)
             if response:
-                phase.update(thread_id, response, is_user=False, topic=channel)
+                phase.update(channel, response, is_user=False, topic=channel)
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
         # 2. Situation model (sync, MemoryStore-only write)
         try:
             from services.situation_model_service import get_situation_model_service
-            get_situation_model_service().update_on_message(thread_id)
+            get_situation_model_service().update_on_message(channel)
         except Exception as e:
             logger.debug(f"[POSTTURN] Situation update failed: {e}", exc_info=True)
 
@@ -412,22 +384,22 @@ class UserMessageProcessor(MessageProcessor):
             save_svc = SaveSuggestionService()
 
             # 3a: User-side completion/deferral trigger — clears existing flag
-            save_flag = save_svc.get_saveable_flag(thread_id)
+            save_flag = save_svc.get_saveable_flag(channel)
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
                 if trigger:
                     save_svc.emit_save_card(
-                        thread_id,
+                        channel,
                         save_flag.get('topic', channel),
                         save_flag['content_type'],
                     )
-                    save_svc.clear_flag(thread_id)
+                    save_svc.clear_flag(channel)
 
             # 3b: Response-side saveable content detection — sets new flag.
             # NOTE: flag_saveable expects exchange_id (UUID string) for window
             # correlation, not the integer transcript row id (self._uid). Prefer
             # the UUID from metadata; fall back to a stringified row id if absent.
-            saveable = save_svc.detect_saveable_content(response, channel, thread_id)
+            saveable = save_svc.detect_saveable_content(response, channel, channel)
             if saveable:
                 exchange_id_for_flag = (
                     metadata.get('exchange_id')
@@ -435,7 +407,7 @@ class UserMessageProcessor(MessageProcessor):
                     or str(self._uid)
                 )
                 save_svc.flag_saveable(
-                    thread_id, channel, saveable['content_type'], exchange_id_for_flag
+                    channel, channel, saveable['content_type'], exchange_id_for_flag
                 )
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
@@ -443,8 +415,8 @@ class UserMessageProcessor(MessageProcessor):
         # 4. Adaptive layer — fork detection + signal write (sync, MemoryStore)
         try:
             from workers.post_exchange_hooks import _store_adaptive_signals, _detect_fork_response
-            _detect_fork_response(text, thread_id)
-            _store_adaptive_signals(thread_id, text)
+            _detect_fork_response(text)
+            _store_adaptive_signals(text)
         except Exception as e:
             logger.debug(f"[POSTTURN] Adaptive signals failed: {e}", exc_info=True)
 
@@ -470,8 +442,7 @@ class UserMessageProcessor(MessageProcessor):
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
         # 7. End-turn compaction backstop (safety net; mid-loop compaction in send()
-        # should handle most cases — this mirrors digest_worker behaviour and
-        # can be deleted in a follow-up once mid-loop compaction is confirmed).
+        # should handle most cases).
         # WARNING level — silent compaction failure leads to context overflow
         # (Commit 8 critic P1-2).
         try:
@@ -485,9 +456,8 @@ class UserMessageProcessor(MessageProcessor):
     def _context_budget(self) -> int:
         """Estimate the context budget for end-turn compaction check.
 
-        Mirrors digest_worker logic: reads the context limit from the provider
-        for JOB, caps at 60% of that limit or 150,000 tokens, falls back to
-        32,000 on error.
+        Reads the context limit from the provider for JOB, caps at 60% of that
+        limit or 150,000 tokens, falls back to 32,000 on error.
         """
         try:
             from services.providers import Providers
@@ -500,13 +470,10 @@ class UserMessageProcessor(MessageProcessor):
         """Get world state string from WorldStateService.
 
         Returns empty string on error — getUserPrompt() skips the section.
-        thread_id is extracted from metadata so WorldStateService can
-        scope calendar/location data to the active thread if needed.
         """
         try:
             from services.world_state_service import WorldStateService
-            thread_id = self._metadata.get('thread_id')
-            return WorldStateService().get_world_state(self.CHANNEL, thread_id=thread_id)
+            return WorldStateService().get_world_state(self.CHANNEL)
         except Exception as e:
             logger.debug(f"[USER MSG] World state unavailable: {e}")
             return ''
@@ -558,11 +525,11 @@ class UserMessageProcessor(MessageProcessor):
             self._voice_modulation_cached = "Engage naturally as a peer."
         return self._voice_modulation_cached
 
-    def _get_adaptive_directives(self, thread_id: str | None = None) -> str:
+    def _get_adaptive_directives(self) -> str:
         """Get adaptive response directives for system prompt placeholder injection.
 
         The {{adaptive_directives}} placeholder in the UNIFIED template receives
-        this value. Reads adaptive signals from MemoryStore keyed by thread_id.
+        this value. Reads adaptive signals from MemoryStore.
         """
         try:
             from services.adaptive_layer_service import AdaptiveLayerService
@@ -574,20 +541,18 @@ class UserMessageProcessor(MessageProcessor):
             current_signals = {
                 'prompt_token_count': len(self._raw_input.split()),
             }
-            if thread_id:
-                try:
-                    from services.memory_client import MemoryClientService
-                    import json as _json
-                    store = MemoryClientService.create_connection()
-                    snapshot_raw = store.get(f"adaptive_signals:{thread_id}")
-                    if snapshot_raw:
-                        snapshot = _json.loads(snapshot_raw)
-                        current_signals.update(snapshot)
-                except Exception:
-                    pass
+            try:
+                from services.memory_client import MemoryClientService
+                import json as _json
+                store = MemoryClientService.create_connection()
+                snapshot_raw = store.get('adaptive_signals')
+                if snapshot_raw:
+                    snapshot = _json.loads(snapshot_raw)
+                    current_signals.update(snapshot)
+            except Exception:
+                pass
 
             return service.generate_directives(
-                thread_id=thread_id,
                 working_memory_turns=[],
                 current_signals=current_signals,
                 current_message=self._raw_input,

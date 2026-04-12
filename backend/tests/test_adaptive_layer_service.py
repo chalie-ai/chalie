@@ -315,12 +315,6 @@ class TestEnergyMirror:
 
 class TestForkDirective:
 
-    def test_no_thread_id_returns_empty(self):
-        svc = _service()
-        style = _make_style(verbosity=5)
-        result = svc._get_fork_directive(style, None)
-        assert result == ""
-
     def test_extreme_dimensions_do_not_fork(self):
         """When ALL fork-trigger dimensions are outside 4-7, no fork fires."""
         svc = _service()

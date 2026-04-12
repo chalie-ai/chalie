@@ -118,35 +118,7 @@ class TestBackgroundLLMQueueTTL:
 
 
 # ---------------------------------------------------------------------------
-# 3. goal_proactive_service — rpush to prompt-queue
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestGoalProactiveServiceQueueTTL:
-    """After rpush to prompt-queue, expire(prompt-queue, 3600) must fire."""
-
-    def test_proactive_push_sets_ttl_on_prompt_queue(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.goal_proactive_service import _execute_via_proactive_push
-
-            goal = {
-                "id": "goal-001",
-                "description": "Read more",
-                "confidence": 0.75,
-                "salience": 0.8,
-                "strategy": "Schedule 30 min daily",
-                "evidence_count": 3,
-                "type": "emergent",
-            }
-            _execute_via_proactive_push(goal, "ask")
-
-        assert _has_ttl(store, "prompt-queue"), "prompt-queue must have a TTL after rpush"
-
-
-# ---------------------------------------------------------------------------
-# 4. event_bus_service — rpush to event_bus:{event_type}
+# 3. event_bus_service — rpush to event_bus:{event_type}
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit

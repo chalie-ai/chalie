@@ -535,19 +535,15 @@ def augment_document(doc_id):
 def create_from_conversation():
     """Create a document from conversation content (save suggestion accept)."""
     data = request.get_json(silent=True) or {}
-    thread_id = (data.get('thread_id') or '').strip()
     topic = (data.get('topic') or '').strip()
     content_type = (data.get('content_type') or '').strip()
-
-    if not thread_id:
-        return jsonify({"error": "thread_id is required"}), 400
 
     try:
         from services.save_suggestion_service import SaveSuggestionService
 
         save_svc = SaveSuggestionService()
         doc_id = save_svc.create_document_from_conversation(
-            thread_id, topic, content_type,
+            topic, content_type,
         )
         if not doc_id:
             return jsonify({"error": "Failed to create document"}), 500
@@ -564,18 +560,14 @@ def create_from_conversation():
 def dismiss_save():
     """Track save suggestion rejection for rate limiting."""
     data = request.get_json(silent=True) or {}
-    thread_id = (data.get('thread_id') or '').strip()
     topic = (data.get('topic') or '').strip()
-
-    if not thread_id:
-        return jsonify({"error": "thread_id is required"}), 400
 
     try:
         from services.save_suggestion_service import SaveSuggestionService
 
         save_svc = SaveSuggestionService()
-        save_svc.clear_flag(thread_id)
-        save_svc.record_rejection(thread_id, topic)
+        save_svc.clear_flag()
+        save_svc.record_rejection(topic)
 
         return jsonify({"status": "dismissed"}), 200
 

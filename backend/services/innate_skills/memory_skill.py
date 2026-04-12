@@ -188,7 +188,7 @@ def handle_memory(channel: str, params: dict) -> str:
 # ── Store ────────────────────────────────────────────────────────────
 
 
-def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, thread_id: str, source: str = 'chat'):
+def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence: float, channel: str, source: str = 'chat'):
     """
     Runs synchronously after a trait is stored.
     - temporal_change + source=chat → hard-delete old trait
@@ -241,13 +241,12 @@ def _check_trait_contradiction(ks, new_id: int, key: str, value: str, confidence
             pending_svc = PendingContradictionService(db)
             pending_svc.create(new_id, existing['id'], question, source)
 
-            if thread_id:
-                OutputService().enqueue_proactive(
-                    topic=thread_id,
-                    response=question,
-                    source='contradiction',
-                )
-                logger.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
+            OutputService().enqueue_proactive(
+                topic=channel,
+                response=question,
+                source='contradiction',
+            )
+            logger.info(f"[CONTRADICTION] Surfaced to user: {question[:80]}")
 
     except Exception as e:
         logger.debug(f"[CONTRADICTION] Check failed: {e}")
@@ -303,7 +302,7 @@ def _handle_store(channel: str, params: dict) -> str:
                     if new_id:
                         _check_trait_contradiction(
                             ks, new_id, key, str(value), 1.0,
-                            thread_id=channel,
+                            channel,
                             source='chat',
                         )
                 except Exception as _ctc_exc:

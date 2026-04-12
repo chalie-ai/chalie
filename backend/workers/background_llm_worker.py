@@ -2,9 +2,9 @@
 Background LLM Worker — single-process consumer for bg_llm:queue.
 
 Processes background LLM calls sequentially with adaptive back-off:
-  - Idle  (>5 min since last user message, no active prompt-queue): ~1s sleep
-  - Normal (2-5 min since last message):                            ~5s sleep
-  - Busy  (<2 min since last message OR prompt-queue has items):    ~10s sleep
+  - Idle  (>5 min since last user message): ~1s sleep
+  - Normal (2-5 min since last message):    ~5s sleep
+  - Busy  (<2 min since last message):      ~10s sleep
 
 ±10% jitter on all tiers prevents rhythmic provider bursts.
 
@@ -38,7 +38,6 @@ QUEUE_KEY = "bg_llm:queue"
 RESULT_KEY_PREFIX = "bg_llm:result:"
 HEARTBEAT_KEY = "bg_llm:last_heartbeat"
 LAST_INTERACTION_KEY = "proactive:default:last_interaction_ts"
-PROMPT_QUEUE_KEY = "prompt-queue"
 
 # Thresholds & limits
 STALE_THRESHOLD = 300    # seconds — discard jobs older than this
@@ -59,25 +58,20 @@ def _get_sleep_interval(store) -> float:
     """
     Return adaptive sleep duration based on system activity signals.
 
-    Checks two O(1) MemoryStore reads:
-      1. prompt-queue length (message being processed right now)
-      2. last user interaction timestamp (recently chatting?)
+    Checks last user interaction timestamp to determine current load tier.
     """
     try:
-        if store.llen(PROMPT_QUEUE_KEY) > 0:
-            base = BUSY_SLEEP
+        last_ts = store.get(LAST_INTERACTION_KEY)
+        if not last_ts:
+            base = IDLE_SLEEP
         else:
-            last_ts = store.get(LAST_INTERACTION_KEY)
-            if not last_ts:
-                base = IDLE_SLEEP
+            gap = time.time() - float(last_ts)
+            if gap < 120:
+                base = BUSY_SLEEP
+            elif gap < 300:
+                base = NORMAL_SLEEP
             else:
-                gap = time.time() - float(last_ts)
-                if gap < 120:
-                    base = BUSY_SLEEP
-                elif gap < 300:
-                    base = NORMAL_SLEEP
-                else:
-                    base = IDLE_SLEEP
+                base = IDLE_SLEEP
     except Exception as e:
         logger.debug("%s MemoryStore read failed, using NORMAL_SLEEP: %s", LOG_PREFIX, e)
         base = NORMAL_SLEEP  # safe default on any MemoryStore error

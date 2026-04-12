@@ -157,14 +157,11 @@ class TestGetSnapshot:
 
         for i in range(7):
             mock_store.lpush(QUEUE_KEY, f"job-{i}")
-        for i in range(3):
-            mock_store.lpush("prompt-queue", f"task-{i}")
 
         svc = _make_service()
         qd = svc.get_snapshot()["operational"]["queue_depth"]
 
         assert qd["bg_llm"] == 7
-        assert qd["prompt_queue"] == 3
 
 
 @pytest.mark.unit

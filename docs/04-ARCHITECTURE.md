@@ -9,7 +9,7 @@ Chalie is a **persistent cognitive agent** — a continuously running cognitive 
 ### System Type
 - **Synthetic cognitive brain** using LLMs to replicate human brain functions
 - **Tech Stack**: Python backend, SQLite (WAL mode + sqlite-vec + FTS5), MemoryStore (in-memory, thread-safe), Ollama (configurable LLMs), Vanilla JavaScript frontend (Radiant design system)
-- **Core Pattern**: Single-process architecture with daemon threads; all LLM calls run through `MessageProcessor` subclasses; PromptQueue/digest_worker is a deprecated legacy path pending removal
+- **Core Pattern**: Single-process architecture with daemon threads; all LLM calls run through `MessageProcessor` subclasses
 
 ### Communication Pattern
 1. Client connects to `/ws` (WebSocket via flask-sock)
@@ -79,7 +79,6 @@ frontend/
 - Mode routing has been removed. All message processing flows through `MessageProcessor` subclasses directly — each channel is its own orchestrator.
 
 #### Response Generation
-- **`frontal_cortex_service.py`** — Thin legacy facade preserving public API. Actual prompt assembly in `prompt_assembly_service.py`, LLM dispatch in `response_generation_service.py` and ultimately `providers.py`.
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Message Processing
@@ -89,10 +88,8 @@ frontend/
 - **`dmn_message_processor.py`** — `DMNMessageProcessor(MessageProcessor)` subclass. `CHANNEL='dmn'`, `ROLE='proactive_thought'`, `MAX_ITERATIONS=15`, `MAX_TIMEOUT=300s`. Excludes `goal_pursuit` from `NATIVE_TOOLS`. `postTurn()` logs `dmn_reflection` event + metrics only.
 - **`goal_pursuit_processor.py`** — `GoalPursuitProcessor(MessageProcessor)` subclass. `CHANNEL='goal_pursuit'` (flat — `pursuit_id` in `metadata` only, never in the channel string). `MAX_ITERATIONS=50`, `MAX_TIMEOUT=7200s`. `postTurn()` logs `goal_pursuit_turn` event + metrics.
 - **`scheduled_message_processor.py`** — `ScheduledMessageProcessor(MessageProcessor)` subclass. `CHANNEL='scheduled'` (flat — `item_id` in `metadata` only). Excludes `schedule` and `goal_pursuit` from `NATIVE_TOOLS`. `postTurn()` logs `scheduled_prompt_turn` + metrics + marks item executed.
-- **`context_window_service.py`** — Legacy DB-backed context window helper. `build_messages(channel)` reconstructs a multi-turn `messages[]` array from the transcript and tool_calls tables. `check_and_compact()` triggers compaction at 80% of the context limit. **Not used by the `MessageProcessor` subclasses** — the user/DMN/goal-pursuit/scheduled channels use `getPreviousMessages()` (literal-text block) and the two-stage in-loop compaction inside `send()`. Still called by `digest_worker.py` (legacy) and the end-turn backstop in `UserMessageProcessor.postTurn()`.
+- **`context_window_service.py`** — Legacy DB-backed context window helper. `build_messages(channel)` reconstructs a multi-turn `messages[]` array from the transcript and tool_calls tables. `check_and_compact()` triggers compaction at 80% of the context limit. **Not used by the `MessageProcessor` subclasses** — the user/DMN/goal-pursuit/scheduled channels use `getPreviousMessages()` (literal-text block) and the two-stage in-loop compaction inside `send()`. Called by the end-turn backstop in `UserMessageProcessor.postTurn()`.
 - **`providers.py`** — Thin singleton gateway wrapping provider resolution and LLM send. Resolves the correct LLM provider for a given job (e.g. `frontal-cortex-unified`), sends messages, returns a raw `LLMResponse`. No response parsing.
-- **`user_prompt_assembly_service.py`** — **DEPRECATED** (rc-0.3.2). `UserMessageProcessor.getUserPrompt()` absorbs its responsibility for the user channel. Retained on disk only because `digest_worker.py` still imports it. Do not extend; do not add callers.
-- **`system_prompt_assembly_service.py`** — **DEPRECATED** (rc-0.3.2). `SystemMessagePrompt` subclasses absorb its responsibility. Retained on disk only because `digest_worker.py` still imports it. Do not extend; do not add callers.
 
 #### Memory System
 - **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning; fires rolling episode extraction trigger at `id % 25`
@@ -129,10 +126,9 @@ frontend/
 
 #### Tool Integration
 - **`tool_registry_service.py`** — Tool discovery, metadata management; loads first-party tools from ToolLibraryService, registers interface tools via HTTP; invokes first-party tools directly in-process
-- **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
+- **`tool_config_service.py`** — Tool configuration persistence; OAuth token management
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
 - **`tool_profile_service.py`** — Tool capability profiles powering the `find_tools` innate skill. Profiles include a `keywords` column (comma-separated, 256 char cap). Embeddings are generated from `short_summary + keywords` (not the full profile). Retrieval uses 2-axis scoring: semantic k-NN distance + keyword match count; score = `(distance * 10) - kw_match_count` (lower is better). Single-word keywords use set intersection; multi-word keywords use substring match. Results are labeled excellent/good/fair/weak instead of exposing raw scores. A dynamic TOC (one line per tool, showing its first keyword) is injected into the `find_tools` skill description at startup. Built-in tools use hardcoded profiles from `BUILTIN_TOOL_PROFILES` in `tool_library_service.py`, seeded at startup via `seed_builtin_profiles()` — bypasses the LLM profiler entirely. Interface tools still go through the LLM profiler. Staleness detection uses `manifest_hash` so re-seeding is skipped when nothing changed.
-- **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
@@ -169,8 +165,7 @@ Built-in cognitive skills always available to the LLM:
 
 ## Worker Processes (`backend/workers/`)
 
-### Legacy Queue Workers (Daemon Threads — Deprecated)
-- **Digest Worker** (`digest_worker.py`) — **Deprecated, pending removal.** Retained only because a handful of internal callers have not yet been migrated to `MessageProcessor` subclasses. WebSocket user messages bypass it entirely.
+### Workers (Daemon Threads)
 - **Episodic Memory Worker** — Utility functions for goal emergence detection; episode extraction itself runs inline via the rolling transcript trigger (`id % 25`).
 
 ### Services/Daemons (Daemon Threads)

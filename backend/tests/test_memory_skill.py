@@ -537,7 +537,7 @@ class TestHandleStoreTraitContradictionCheckFires:
     """Test A — _check_trait_contradiction fires for trait entries."""
 
     def test_a1_explicit_trait_kind_fires_check(self):
-        """kind='trait' → _check_trait_contradiction called with (ks, rowid, key, value, 1.0, thread_id, source='chat')."""
+        """kind='trait' → _check_trait_contradiction called with (ks, rowid, key, value, 1.0, channel, source='chat')."""
         fake_ks = _FakeKS(stored_entry={'rowid': 42})
 
         with patch('services.knowledge_service.KnowledgeService', return_value=fake_ks), \
@@ -549,7 +549,7 @@ class TestHandleStoreTraitContradictionCheckFires:
         assert 'Stored' in result
         mock_ctc.assert_called_once_with(
             fake_ks, 42, 'user_name', 'Alice', 1.0,
-            thread_id='ch-1',
+            'ch-1',
             source='chat',
         )
 
@@ -565,12 +565,12 @@ class TestHandleStoreTraitContradictionCheckFires:
 
         assert 'Stored' in result
         assert mock_ctc.call_count == 1
-        _, called_new_id, called_key, called_value, called_conf = mock_ctc.call_args.args
+        _, called_new_id, called_key, called_value, called_conf, called_channel = mock_ctc.call_args.args
         assert called_new_id == 7
         assert called_key == 'user_name'
         assert called_value == 'Bob'
         assert called_conf == 1.0
-        assert mock_ctc.call_args.kwargs['thread_id'] == 'ch-2'
+        assert called_channel == 'ch-2'
         assert mock_ctc.call_args.kwargs['source'] == 'chat'
 
     def test_a3_rowid_preferred_over_id_when_both_present(self):

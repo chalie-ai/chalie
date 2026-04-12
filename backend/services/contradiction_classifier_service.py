@@ -5,7 +5,7 @@ Core question: "Can these two memories both be true simultaneously?"
 Output: classification enum + confidence + recommended resolution.
 
 Used by:
-  - Ingestion detection subprocess (digest_worker) via check_new_trait
+  - memory_skill._handle_store() via _check_trait_contradiction
 
 Classifications (STATIC — changing these requires retraining the ONNX model):
   A: temporal_change   — old belief replaced by new one (job switch, relocation, etc.)

@@ -110,9 +110,8 @@ class TestSystemAPI:
         for ns in ('working_memory', 'gist_index', 'fact_index'):
             store.set(f'{ns}:a', 'x')
             store.set(f'{ns}:b', 'x')
-        # Seed queues with 5 items each so llen == 5.
+        # Seed output-queue with 5 items so llen == 5.
         for _ in range(5):
-            store.rpush('prompt-queue', 'x')
             store.rpush('output-queue', 'x')
         # Seed DMN delivery ZSET with a recent entry.
         store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
@@ -130,9 +129,9 @@ class TestSystemAPI:
         assert data['memory']['working_memory_keys'] == 2
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
-        # Queue depths
-        for q in ['prompt-queue', 'output-queue']:
-            assert data['queues'][q] == 5
+        # Queue depth
+        assert data['queues']['output-queue'] == 5
+        assert 'prompt-queue' not in data['queues']
 
     def test_system_status_degraded_when_store_fails(self, client, db):
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
@@ -566,14 +565,13 @@ class TestSystemAPI:
     # GET /ready
     # ────────────────────────────────────────────
 
-    def _ready_patches(self, db_ok=True, store_ok=True, worker_ok=True):
-        """Build patch context for /ready — all three components can be individually broken.
+    def _ready_patches(self, db_ok=True, store_ok=True):
+        """Build patch context for /ready — database and store can be individually broken.
 
         Args:
             db_ok (bool): When False, patches get_shared_db_service() to raise.
             store_ok (bool): When True, uses a real MemoryStore (Category A). When False,
                 uses a broken_store MagicMock whose ping() raises (Category C).
-            worker_ok (bool): When False, patches PromptQueue to raise ImportError.
 
         Returns:
             dict: Mapping of patch target strings to mock/real values for use with
@@ -612,8 +610,6 @@ class TestSystemAPI:
             mock_db.connection.side_effect = Exception('db down')
             patches['services.database_service.get_shared_db_service'] = MagicMock(return_value=mock_db)
 
-        if not worker_ok:
-            patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))
         return patches
 
     def test_ready_all_ok_returns_200_with_component_status(self, client, db):
@@ -630,7 +626,7 @@ class TestSystemAPI:
         assert data['ready'] is True
         assert data['database'] == {'status': 'ok', 'connected': True}
         assert data['memory_store'] == {'status': 'ok'}
-        assert data['workers'] == {'status': 'ok'}
+        assert 'workers' not in data
 
     def test_ready_db_failure_returns_503(self, client, db):
         """/ready with database down returns 503 and error status in database component."""
@@ -648,7 +644,6 @@ class TestSystemAPI:
         assert data['database']['connected'] is False
         assert 'message' in data['database']
         assert data['memory_store']['status'] == 'ok'
-        assert data['workers']['status'] == 'ok'
 
     def test_ready_store_failure_returns_503(self, client, db):
         """/ready with memory store down returns 503 and error in memory_store component."""

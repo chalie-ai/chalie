@@ -14,7 +14,6 @@ from services.memory_client import MemoryClientService
 # Event type constants
 ENCODE_EVENT = 'encode_event'
 UPDATE_POLICY = 'update_policy'
-INTERACTION_LOGGED = 'interaction_logged'
 
 
 class EventBusService:

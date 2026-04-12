@@ -25,7 +25,6 @@ def _ensure_services_package_loadable():
     _BASE = str(__file__).replace('/tests/conftest.py', '/services')
 
     _LOCKED_MODULES = [
-        ('services.response_generation_service', f"{_BASE}/response_generation_service.py", 'services'),
         ('services.innate_skills.memory_skill', f"{_BASE}/innate_skills/memory_skill.py", 'services.innate_skills'),
     ]
 

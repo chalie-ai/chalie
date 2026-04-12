@@ -282,12 +282,11 @@ class TestUnifiedSystemMessagePrompt:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_vms.assert_not_called()
 
-    def test_get_prompt_does_not_call_load_configs(self):
-        """Prompt is a Python constant — no config loading at call time."""
+    def test_get_prompt_returns_non_empty_string(self):
+        """Prompt is a Python constant — getPrompt() returns a non-empty string."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with patch('workers.digest_singletons.load_configs') as mock_lc:
-            UnifiedSystemMessagePrompt().getPrompt()
-        mock_lc.assert_not_called()
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        assert isinstance(result, str) and len(result) > 0
 
     # ── Subclassing contract ──────────────────────────────────────────────────
 

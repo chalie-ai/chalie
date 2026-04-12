@@ -1,7 +1,7 @@
 """
 Document Worker — background thread worker for document processing jobs.
 
-Jobs are dispatched via PromptQueue (daemon threads), not RQ/subprocess.
+Jobs are dispatched via daemon threads, not RQ/subprocess.
 Timeout is enforced with threading.Thread.join() — signal.alarm() cannot
 be used in non-main threads.
 """

@@ -528,7 +528,6 @@ class ChalieApp {
         message_text: text,
         exchange_id: meta.exchange_id || '',
         topic: meta.topic || '',
-        thread_id: meta.thread_id || '',
       };
 
       try {

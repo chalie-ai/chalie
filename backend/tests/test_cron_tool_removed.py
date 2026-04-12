@@ -68,27 +68,6 @@ class TestToolRegistryServiceCronRemoval:
         )
 
 
-# ── Part A: digest_worker ────────────────────────────────────────────────────
-
-class TestDigestWorkerCronRemoval:
-
-    def test_handle_cron_tool_result_removed(self):
-        """_handle_cron_tool_result must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_handle_cron_tool_result"), (
-            "_handle_cron_tool_result still present in digest_worker — "
-            "should have been deleted with cron-tool support"
-        )
-
-    def test_run_response_pipeline_removed(self):
-        """_run_response_pipeline must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_run_response_pipeline"), (
-            "_run_response_pipeline still present in digest_worker — "
-            "should have been deleted with cron-tool support"
-        )
-
-
 # ── Part A: InteractionLogService ────────────────────────────────────────────
 
 class TestInteractionLogServiceCronRemoval:
@@ -207,60 +186,6 @@ class TestDeletedPromptFile:
         assert not prompt_path.exists(), (
             "frontal-cortex-scheduled-tool.md still exists — "
             "it should have been deleted along with the cron-tool job config"
-        )
-
-
-# ── Part A: frontal-cortex-act chain removal ────────────────────────────────
-
-class TestFrontalCortexActChainRemoval:
-    """Guard against the dead frontal-cortex-act chain creeping back.
-
-    ``frontal-cortex-act`` was a legacy ACT-mode prompt that got replaced by
-    the unified path in 2026-04-04 (project_act_synthesis_removal). The
-    cron-tool removal pass walked the rest of the dead chain:
-
-    - the prompt file ``backend/prompts/frontal-cortex-act.md``
-    - the ``act_prompt`` load in ``workers/digest_singletons.load_configs``
-    - the ``'ACT'`` entry in the returned ``prompt_map`` dict
-
-    None of that was ever read after the unified-path migration, but it kept
-    a dead LLM prompt in memory on every startup. These tests make sure none
-    of it silently comes back.
-    """
-
-    def test_digest_singletons_has_no_frontal_cortex_act(self):
-        """workers/digest_singletons.py must contain no 'frontal-cortex-act' reference."""
-        source = (_BACKEND_ROOT / "workers" / "digest_singletons.py").read_text()
-        assert "frontal-cortex-act" not in source, (
-            "'frontal-cortex-act' still referenced in digest_singletons.py — "
-            "the dead ACT-mode prompt chain was supposed to be fully removed"
-        )
-
-    def test_frontal_cortex_act_prompt_file_deleted(self):
-        """backend/prompts/frontal-cortex-act.md must not exist."""
-        prompt_path = _BACKEND_ROOT / "prompts" / "frontal-cortex-act.md"
-        assert not prompt_path.exists(), (
-            "frontal-cortex-act.md still exists — "
-            "it should have been deleted along with the dead ACT chain"
-        )
-
-    def test_load_configs_prompt_map_has_unified_but_no_act(self):
-        """load_configs() must return prompt_map with UNIFIED and without ACT.
-
-        Import-only test: we call ``inspect.getsource`` rather than executing
-        ``load_configs()`` because it depends on ``ConfigService`` being
-        initialised. The source-level assertion is sufficient to prove the
-        dead key is gone.
-        """
-        from workers.digest_singletons import load_configs
-        source = inspect.getsource(load_configs)
-        assert "'UNIFIED'" in source, (
-            "load_configs() no longer exposes 'UNIFIED' in prompt_map — "
-            "this is the live cortex prompt and its key must remain"
-        )
-        assert "'ACT'" not in source, (
-            "load_configs() still exposes 'ACT' in prompt_map — "
-            "the dead ACT key was supposed to be removed"
         )
 
 

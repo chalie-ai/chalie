@@ -1,9 +1,6 @@
 from .config_service import ConfigService
 from .ollama_service import OllamaService
 from .memory_client import MemoryClientService
-from .prompt_queue import PromptQueue
-from .frontal_cortex_service import FrontalCortexService
-from .orchestrator_service import OrchestratorService
 from .world_state_service import WorldStateService
 from .database_service import DatabaseService
 from .episodic_service import EpisodicService
@@ -12,8 +9,7 @@ from .salience_service import SalienceService
 
 __all__ = [
     'ConfigService', 'OllamaService',
-    'MemoryClientService', 'PromptQueue',
-    'FrontalCortexService', 'OrchestratorService',
+    'MemoryClientService',
     'WorldStateService', 'DatabaseService',
     'EpisodicService', 'SalienceService',
 ]

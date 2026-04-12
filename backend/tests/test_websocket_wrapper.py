@@ -66,7 +66,7 @@ class TestIntentDelivery:
             intent_id=str(uuid.uuid4()),
             intent_type='present_response',
             target_wrapper='__chat_ui__',
-            payload={'content': 'Hello back', 'thread_id': 'thread-1', 'output_id': 'out-1', 'mode': 'UNIFIED'},
+            payload={'content': 'Hello back', 'output_id': 'out-1', 'mode': 'UNIFIED'},
             urgency='normal',
             confidence=1.0,
         )
@@ -92,7 +92,7 @@ class TestIntentDelivery:
             intent_id=intent_id,
             intent_type='present_response',
             target_wrapper='__chat_ui__',
-            payload={'content': 'Hello', 'thread_id': 't', 'output_id': 'o', 'mode': 'UNIFIED'},
+            payload={'content': 'Hello', 'output_id': 'o', 'mode': 'UNIFIED'},
         )
         svc.emit(intent)
 
@@ -109,7 +109,7 @@ class TestIntentDelivery:
             'intent_id': 'id-999',
             'intent_type': 'present_response',
             'target_wrapper': '__chat_ui__',
-            'payload': {'content': 'Hi', 'thread_id': 't', 'output_id': 'o', 'mode': 'UNIFIED'},
+            'payload': {'content': 'Hi', 'output_id': 'o', 'mode': 'UNIFIED'},
             'urgency': 'normal',
             'confidence': 1.0,
         }

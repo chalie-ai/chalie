@@ -19,49 +19,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-class TestDigestWorkerTraitExtractionRemoval:
-
-    def test_enqueue_trait_extraction_removed(self):
-        """enqueue_trait_extraction must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "enqueue_trait_extraction"), (
-            "enqueue_trait_extraction still present in digest_worker — "
-            "the background trait-extraction pipeline was supposed to be deleted"
-        )
-
-    def test_check_trait_contradiction_removed(self):
-        """_check_trait_contradiction must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_check_trait_contradiction"), (
-            "_check_trait_contradiction still present in digest_worker — "
-            "it was lifted to memory_skill.py and deleted from digest_worker"
-        )
-
-    def test_extract_traits_removed(self):
-        """_extract_traits must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_extract_traits"), (
-            "_extract_traits still present in digest_worker — "
-            "this nested closure was deleted with enqueue_trait_extraction"
-        )
-
-    def test_load_trait_prompt_removed(self):
-        """_load_trait_prompt must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_load_trait_prompt"), (
-            "_load_trait_prompt still present in digest_worker — "
-            "this nested closure was deleted with enqueue_trait_extraction"
-        )
-
-    def test_synthesize_user_sentence_removed(self):
-        """_synthesize_user_sentence must not exist in workers.digest_worker."""
-        import workers.digest_worker as mod
-        assert not hasattr(mod, "_synthesize_user_sentence"), (
-            "_synthesize_user_sentence still present in digest_worker — "
-            "this nested closure was deleted with enqueue_trait_extraction"
-        )
-
-
 class TestMemorySkillTraitContradictionLift:
 
     def test_check_trait_contradiction_is_module_local_in_memory_skill(self):

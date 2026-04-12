@@ -833,12 +833,6 @@ class TestConversationPhaseStub:
         assert result["momentum"] == 0.5
         assert result["direction"] == "sustaining"
 
-    def test_collect_phase_no_thread_id(self):
-        svc = _make_service()
-        result = svc._collect_phase(None)
-        assert result["current"] == "unknown"
-        assert "updated_at" in result
-
 
 # ═══ SparkStateService stub ═══════════════════════════════════════════════════
 

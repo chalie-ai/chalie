@@ -133,7 +133,6 @@ class AdaptiveLayerService:
 
     def generate_directives(
         self,
-        thread_id: Optional[str] = None,
         current_signals: Optional[Dict] = None,
         working_memory_turns: Optional[List[Dict]] = None,
         current_message: Optional[str] = None,
@@ -142,8 +141,6 @@ class AdaptiveLayerService:
         Build the full adaptive directive block for injection into an LLM prompt.
 
         Args:
-            thread_id:            Active conversation thread ID (used for EMA baseline
-                                  and fork cooldown tracking).
             current_signals:      Dict with optional keys:
                                     'prompt_token_count' (int),
                                     'explicit_feedback' (str|None).
@@ -162,14 +159,14 @@ class AdaptiveLayerService:
             measured = StyleMetricsService().measure(current_message or "")
 
             # -- 2. Blend with EMA baseline (smooths noise) -----------------------
-            style = self._blend_with_baseline(measured, thread_id)
+            style = self._blend_with_baseline(measured)
 
             # -- 3. Cold-start gate -----------------------------------------------
-            obs_count = self._get_observation_count(thread_id)
+            obs_count = self._get_observation_count()
             if obs_count < _MIN_OBSERVATION_COUNT:
-                self._increment_observation_count(thread_id)
+                self._increment_observation_count()
                 return ""
-            self._increment_observation_count(thread_id)
+            self._increment_observation_count()
 
             # -- 4. Fetch supporting data -----------------------------------------
             micro_prefs   = self._get_micro_preferences()
@@ -230,7 +227,7 @@ class AdaptiveLayerService:
                 directives.append(mirror_directive)
 
             # -- 8. Fork directive (at most one) ----------------------------------
-            fork_directive = self._get_fork_directive(style, thread_id)
+            fork_directive = self._get_fork_directive(style)
 
             # -- 9. Assemble output ----------------------------------------------
             if not directives and not micro_prefs and not fork_directive:
@@ -259,25 +256,21 @@ class AdaptiveLayerService:
     # EMA baseline helpers (MemoryStore)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _blend_with_baseline(self, measured: dict, thread_id: Optional[str]) -> dict:
+    def _blend_with_baseline(self, measured: dict) -> dict:
         """Blend measured style with stored EMA baseline.
 
         If no baseline exists, measured values are used as-is.
 
         Args:
             measured: Dict of 5 dimension scores from StyleMetricsService.
-            thread_id: Thread identifier for per-thread baseline key.
 
         Returns:
             Blended style dict (same 5 keys).
         """
         try:
-            if not thread_id:
-                return measured
-
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            key = f"style_baseline:{thread_id}"
+            key = "style_baseline"
             raw = store.get(key)
             if not raw:
                 store.set(key, json.dumps(measured), ex=_BASELINE_TTL)
@@ -296,26 +289,22 @@ class AdaptiveLayerService:
             logger.debug(f"[adaptive_layer] baseline blend failed: {e}")
             return measured
 
-    def _get_observation_count(self, thread_id: Optional[str]) -> int:
-        """Read per-thread observation counter from MemoryStore."""
+    def _get_observation_count(self) -> int:
+        """Read observation counter from MemoryStore."""
         try:
-            if not thread_id:
-                return _MIN_OBSERVATION_COUNT  # no gating when thread unknown
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            val = store.get(f"style_obs_count:{thread_id}")
+            val = store.get("style_obs_count")
             return int(val) if val else 0
         except Exception:
             return _MIN_OBSERVATION_COUNT
 
-    def _increment_observation_count(self, thread_id: Optional[str]) -> None:
-        """Increment per-thread observation counter."""
+    def _increment_observation_count(self) -> None:
+        """Increment observation counter."""
         try:
-            if not thread_id:
-                return
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            key = f"style_obs_count:{thread_id}"
+            key = "style_obs_count"
             store.incr(key)
             store.expire(key, _BASELINE_TTL)
         except Exception:
@@ -533,30 +522,27 @@ class AdaptiveLayerService:
     def _get_fork_directive(
         self,
         style: dict,
-        thread_id: Optional[str],
     ) -> str:
         """
         Suggest a response-path fork when a dimension is in the ambiguous mid-range.
 
         Only fires when:
-          - thread_id is provided
           - a dimension in FORK_TRIGGERS sits in the 4-7 mid-range (ambiguous)
           - the MemoryStore cooldown key is not set
 
-        Sets adaptive_fork_pending:{thread_id} (TTL 600s) when a fork is chosen.
+        Sets adaptive_fork_pending (TTL 600s) when a fork is chosen.
 
         Returns:
             str: Fork suggestion sentence, or "" if conditions are not met.
         """
         try:
-            if not thread_id or not style:
+            if not style:
                 return ""
 
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
 
-            cooldown_key = f"adaptive_fork_cooldown:{thread_id}"
-            if store.exists(cooldown_key):
+            if store.exists("adaptive_fork_cooldown"):
                 return ""
 
             candidates: List[tuple] = []
@@ -575,8 +561,7 @@ class AdaptiveLayerService:
             candidates.sort(key=lambda x: x[0])
             _, chosen_dim, fork_text = candidates[0]
 
-            pending_key = f"adaptive_fork_pending:{thread_id}"
-            store.set(pending_key, chosen_dim, ex=_FORK_PENDING_TTL)
+            store.set("adaptive_fork_pending", chosen_dim, ex=_FORK_PENDING_TTL)
 
             return fork_text
 

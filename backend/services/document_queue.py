@@ -1,6 +1,6 @@
 """Document Processing Queue — concurrent background document processing.
 
-Replaces the old serial PromptQueue approach with a proper queue.Queue + worker pool.
+Uses queue.Queue + worker pool for concurrent background processing.
 - FIFO ordering (queue.Queue)
 - Configurable concurrency (WORKER_COUNT workers process in parallel)
 - Deduplication (won't re-enqueue a doc_id already queued or being processed)

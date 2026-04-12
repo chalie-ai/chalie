@@ -75,7 +75,6 @@ class WorldStateService:
     def get_world_state(
         self,
         topic: str,
-        thread_id: str = None,
         message_embedding: list = None,
     ) -> str:
         """
@@ -83,7 +82,6 @@ class WorldStateService:
 
         Args:
             topic: Current topic (unused, kept for API compat)
-            thread_id: Thread ID for in-thread ACT step lookup
             message_embedding: Embedding of current message for semantic scoring.
                                When None, falls back to temporal-only scoring.
 
@@ -97,11 +95,7 @@ class WorldStateService:
         if telemetry_line:
             items.append({'label': telemetry_line, 'salience': 100})
 
-        # 1. Active ACT steps (always high salience when present)
-        if thread_id:
-            items.extend(self._get_active_steps(thread_id))
-
-        # 2–4. Scheduled items, tasks, lists — try cache first, fall back to DB
+        # 1. Scheduled items, tasks, lists — try cache first, fall back to DB
         cache_items = self._get_items_from_cache(message_embedding)
         if cache_items is not None:
             items.extend(cache_items)
@@ -742,7 +736,7 @@ class WorldStateService:
 
     # ── Signal Collectors ────────────────────────────────────────────────────
 
-    def _get_active_steps(self, thread_id: str) -> list:
+    def _get_active_steps(self) -> list:
         """Get in-flight ACT loop steps — always treated as maximally salient."""
         return []
 

@@ -314,9 +314,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         return  # Nothing to process — silently drop
 
     # If user sent only images with no text, provide a sensible fallback.
-    # Image resolution (polling MemoryStore for analysis results) is handled by
-    # digest_worker._resolve_image_contexts() with a longer timeout (30s).
-    # The WS handler simply passes image_ids through in metadata.
+    # Image resolution (polling MemoryStore for analysis results) is handled
+    # in UserMessageProcessor. The WS handler passes image_ids through in metadata.
     if not text and image_ids:
         text = '[Image attached]'
 
@@ -346,27 +345,12 @@ def _handle_chat(ws, store, msg, active_request=None):
             from services.user_message_processor import UserMessageProcessor
             from services.output_service import OutputService
 
-            # Resolve thread_id ONCE per request from MemoryStore active_channel
-            # so postTurn() services (adaptive directives, phase, situation,
-            # save suggestions, signals) can scope writes correctly. Without
-            # this injection every postTurn service receives thread_id=None and
-            # adaptive signal storage / per-thread state are silently broken
-            # (Commit 8 critic P1-1). Reuses the outer `store` from line 113.
-            thread_id = None
-            try:
-                _raw_tid = store.get('active_channel:default')
-                if _raw_tid:
-                    thread_id = _raw_tid.decode() if isinstance(_raw_tid, bytes) else _raw_tid
-            except Exception as _tid_err:
-                logger.debug(f"[WS] thread_id resolution failed: {_tid_err}")
-
             metadata = {
                 'uuid': request_id,
                 'exchange_id': request_id,
                 'source': source,
                 'image_ids': image_ids,
                 'channel': 'user',
-                'thread_id': thread_id,
             }
 
             def _on_narration(text, step=0):

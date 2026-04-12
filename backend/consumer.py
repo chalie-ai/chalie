@@ -10,7 +10,6 @@
 Consumer — Master supervisor for Chalie's single-process architecture.
 
 All workers run as daemon threads in one Python process.
-PromptQueue handles job dispatch via threads (no RQ dependency).
 SQLite replaces PostgreSQL, MemoryStore replaces Redis.
 """
 

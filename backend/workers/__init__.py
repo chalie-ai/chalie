@@ -1,17 +1,13 @@
 """
-Workers package — Background queue-consumer and scheduled worker callables.
+Workers package — Background worker callables.
 
-Each worker module exposes a single callable that is registered with
-``PromptQueue`` or launched as a long-running background process by the
-service runtime.  This package re-exports the primary worker functions for
-convenient import by the consumer and service layers.
+Each worker module exposes a single callable that is launched as a
+long-running background process by the service runtime.
 
 Exported workers:
-    - ``digest_worker``: Main LLM response pipeline (prompt-queue consumer).
     - ``rest_api_worker``: REST API request handler worker.
 """
 
-from .digest_worker import digest_worker
 from .rest_api_worker import rest_api_worker
 
-__all__ = ['digest_worker', 'rest_api_worker']
+__all__ = ['rest_api_worker']

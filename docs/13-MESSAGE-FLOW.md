@@ -75,7 +75,6 @@ BACKGROUND (always running, independent of user messages):
   PATH B  ──  DMN Service            (60min idle / 6h cadence)  (see §5)
   PATH C  ──  Goal Pursuit daemon    (spawned per goal)          (see §6)
   PATH D  ──  Scheduled Prompts      (60s poll)                  (see §7)
-  PATH E  ──  digest_worker          (legacy — tool-webhook/cron)(see §8)
 ```
 
 ---
@@ -211,19 +210,19 @@ Personal facts (traits) are captured by the LLM-native memory skill path: `front
 │  UserMessageProcessor.postTurn()                                    │
 │                                                                     │
 │  1. ConversationPhaseService         📤 M  (sync)                  │
-│     update(thread_id, user_text, is_user=True)                      │
-│     update(thread_id, response, is_user=False)  [if response != ''] │
+│     update(user_text, is_user=True)                                 │
+│     update(response, is_user=False)  [if response != '']            │
 │                         │                                           │
 │  2. SituationModelService            📤 M  (sync)                  │
-│     update_on_message(thread_id)                                    │
+│     update_on_message()                                             │
 │                         │                                           │
 │  3. SaveSuggestionService  [DEPRECATED]  📥📤 M  (sync)            │
 │     3a. detect_save_trigger(user_text) → emit_save_card if flagged  │
 │     3b. detect_saveable_content(response) → flag_saveable if hit    │
 │                         │                                           │
 │  4. Adaptive layer       📤 M  (sync)                              │
-│     _detect_fork_response(text, thread_id)                          │
-│     _store_adaptive_signals(thread_id, text)                        │
+│     _detect_fork_response(text)                                     │
+│     _store_adaptive_signals(text)                                   │
 │                         │                                           │
 │  5. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
 │     Defers DMN idle timer — must fire on every user turn            │
@@ -315,15 +314,7 @@ Fired by the scheduler service when a scheduled item comes due.
 
 ---
 
-## 8. Path E — digest_worker (Legacy, Parallel Path — Out of Scope)
-
-`digest_worker.py` is a legacy background worker retained because the tool-webhook entry point (`/api/tools/webhook/<name>`) has not yet been migrated to a `MessageProcessor` subclass. It is **not** in the user message path — all WebSocket user messages bypass it entirely.
-
-`UserPromptAssemblyService` and `SystemPromptAssemblyService` are deprecated and exist on disk solely because `digest_worker.py` still imports them. Both files carry deprecation banners in their module docstrings. They must not be extended.
-
----
-
-## 9. Storage Access Map
+## 8. Storage Access Map
 
 ### MemoryStore Keys Reference
 
@@ -332,7 +323,7 @@ Key Pattern                        TTL        Read/Written by
 ─────────────────────────────────────────────────────────────────────
 steer:{request_id}                 short      UserMessageProcessor._drain_steering
 sse:{request_id}                   short      OutputService / narration callback
-active_channel:default             —          postTurn() thread_id resolution
+active_channel:default             —          reset-thread channel advancement
 fok:{channel}                      —          memory system
 ```
 
