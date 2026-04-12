@@ -872,3 +872,58 @@ CREATE TABLE IF NOT EXISTS browser_credentials (
     last_used_at    TEXT,
     UNIQUE(account_id, domain, label)
 );
+
+-- ────────────────────────────────────────────────────────────────
+-- DATA GRAPH — research-informed knowledge graph (replaces knowledge)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS data_graph (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind              TEXT NOT NULL CHECK (kind IN (
+                          'user_specific', 'system', 'misc', 'moment'
+                      )),
+    key               TEXT NOT NULL,
+    value             TEXT,
+    storage_strength  REAL NOT NULL DEFAULT 0.5,
+    retrieval_weight  REAL NOT NULL DEFAULT 1.0,
+    salience_score    REAL NOT NULL DEFAULT 0.0,
+    evidence_count    INTEGER NOT NULL DEFAULT 1,
+    first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    last_confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_accessed_at  TEXT,
+    source            TEXT,
+    deleted_at        TEXT,
+    active            INTEGER NOT NULL DEFAULT 1,
+    search_queries    TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_graph_kind         ON data_graph(kind);
+CREATE INDEX IF NOT EXISTS idx_data_graph_key          ON data_graph(key);
+CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval    ON data_graph(retrieval_weight DESC);
+CREATE INDEX IF NOT EXISTS idx_data_graph_active       ON data_graph(kind, active) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed    ON data_graph(last_confirmed_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
+    key, value, kind, search_queries,
+    content='data_graph', content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_key_vec   USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_value_vec USING vec0(embedding float[768]);
+
+-- ────────────────────────────────────────────────────────────────
+-- DATA GRAPH EDGES — typed join table for graph traversal
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS data_graph_edges (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id          INTEGER NOT NULL REFERENCES data_graph(id) ON DELETE CASCADE,
+    to_id            INTEGER NOT NULL REFERENCES data_graph(id) ON DELETE CASCADE,
+    edge_type        TEXT NOT NULL DEFAULT 'related',
+    strength         REAL NOT NULL DEFAULT 1.0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    last_accessed_at TEXT,
+    UNIQUE (from_id, to_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_graph_edges_from ON data_graph_edges(from_id, edge_type);
+CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, edge_type);

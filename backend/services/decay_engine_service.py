@@ -102,6 +102,7 @@ class DecayEngineService:
         reconsolidation_count = self._process_pending_reconsolidation()
         consolidation_count = self._run_episode_consolidation()
         knowledge_count = self._decay_knowledge()
+        data_graph_count = self._decay_data_graph()
         goal_decay_count = self._decay_goals()
         transcript_cleaned = self._cleanup_transcript()
         tool_calls_purged = self._purge_tool_calls()
@@ -120,6 +121,7 @@ class DecayEngineService:
             f"reconsolidation={reconsolidation_count} processed, "
             f"consolidation={consolidation_count} super-episodes, "
             f"knowledge={knowledge_count} updated, "
+            f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
             f"tool_calls_purged={tool_calls_purged}, "
             f"identity={identity_count} inertia-adjusted, "
@@ -310,6 +312,21 @@ class DecayEngineService:
                 db.close_pool()
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
+            return 0
+
+    def _decay_data_graph(self) -> int:
+        """Apply decay to data_graph via DataGraphService."""
+        try:
+            from .database_service import get_shared_db_service
+            from .data_graph_service import DataGraphService
+            db = get_shared_db_service()
+            try:
+                svc = DataGraphService(db)
+                return svc.decay_cycle()
+            finally:
+                db.close_pool()
+        except Exception as e:
+            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}", exc_info=True)
             return 0
 
     def _cleanup_legacy_store_keys(self) -> None:

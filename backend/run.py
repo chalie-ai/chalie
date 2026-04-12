@@ -108,6 +108,13 @@ def main():
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
+    # Seed data_graph from legacy knowledge table (runs once — idempotent check inside)
+    try:
+        from services.data_graph_service import seed_from_legacy_knowledge
+        seed_from_legacy_knowledge(database_service)
+    except Exception as _seed_err:
+        logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
+
     # Clean up expired auth sessions from SQLite
     try:
         from services.auth_session_service import cleanup_expired_sessions
