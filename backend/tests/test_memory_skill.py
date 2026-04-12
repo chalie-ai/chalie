@@ -1,12 +1,12 @@
 """Tests for memory_skill — DataGraphService-backed store/recall entry point."""
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from services.innate_skills.memory_skill import (
     handle_memory,
     TOOL_SCHEMA,
-    _salience_label,
+    _relevance_label,
     _search_data_graph,
 )
 
@@ -14,36 +14,36 @@ from services.innate_skills.memory_skill import (
 pytestmark = pytest.mark.unit
 
 
-# ── Salience bucketing ──────────────────────────────────────────────
+# ── Relevance bucketing ──────────────────────────────────────────────
 
-class TestSalienceLabel:
+class TestRelevanceLabel:
 
     def test_high_at_0_7(self):
-        assert _salience_label(0.7) == "high"
+        assert _relevance_label(0.7) == "high"
 
     def test_high_above_0_7(self):
-        assert _salience_label(1.0) == "high"
+        assert _relevance_label(1.0) == "high"
 
     def test_medium_at_0_4(self):
-        assert _salience_label(0.4) == "medium"
+        assert _relevance_label(0.4) == "medium"
 
     def test_medium_below_0_7(self):
-        assert _salience_label(0.69) == "medium"
+        assert _relevance_label(0.69) == "medium"
 
     def test_low_below_0_4(self):
-        assert _salience_label(0.39) == "low"
+        assert _relevance_label(0.39) == "low"
 
     def test_low_at_zero(self):
-        assert _salience_label(0.0) == "low"
+        assert _relevance_label(0.0) == "low"
 
 
 # ── TOOL_SCHEMA ─────────────────────────────────────────────────────
 
 class TestToolSchema:
 
-    def test_schema_actions_are_store_and_recall_only(self):
+    def test_schema_actions_are_store_recall_reflect(self):
         action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
-        assert set(action_enum) == {'store', 'recall'}
+        assert set(action_enum) == {'store', 'recall', 'reflect'}
 
     def test_schema_has_no_update_action(self):
         action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
@@ -240,14 +240,13 @@ class TestHandleMemoryRecall:
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'user name'})
 
         assert 'user_name' in result
         assert 'Dylan' in result
 
-    def test_recall_formats_salience_high(self):
+    def test_recall_formats_relevance_high(self):
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
             {'id': 1, 'key': 'fav_food', 'value': 'pizza',
@@ -256,13 +255,12 @@ class TestHandleMemoryRecall:
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'food'})
 
-        assert 'salience: high' in result
+        assert 'relevance:high' in result
 
-    def test_recall_formats_salience_medium(self):
+    def test_recall_formats_relevance_medium(self):
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
             {'id': 1, 'key': 'city', 'value': 'Valletta',
@@ -271,13 +269,12 @@ class TestHandleMemoryRecall:
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'city'})
 
-        assert 'salience: medium' in result
+        assert 'relevance:medium' in result
 
-    def test_recall_formats_salience_low(self):
+    def test_recall_formats_relevance_low(self):
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
             {'id': 1, 'key': 'old_fact', 'value': 'stale',
@@ -286,86 +283,37 @@ class TestHandleMemoryRecall:
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'fact'})
 
-        assert 'salience: low' in result
+        assert 'relevance:low' in result
 
-    def test_recall_empty_returns_no_matches(self):
+    def test_recall_empty_returns_no_memories(self):
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = []
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'ghost'})
 
-        assert 'No matches' in result
+        assert 'No memories found' in result
+        assert 'ghost' in result
 
-    def test_recall_always_searches_transcript(self):
+    def test_recall_output_format_id_relevance_value(self):
+        """Output must match: [id:{key},relevance:{level}] {value}"""
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
-            {'id': 1, 'key': 'k', 'value': 'v', 'retrieval_weight': 0.9,
-             'evidence_count': 1, 'composite_score': 1.0},
+            {'id': 1, 'key': 'partner_name', 'value': 'Sarah',
+             'retrieval_weight': 0.75, 'evidence_count': 2, 'composite_score': 2.1},
         ]
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')) as mock_ts, \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
-            handle_memory('topic', {'action': 'recall', 'query': 'something'})
+            result = handle_memory('topic', {'action': 'recall', 'query': 'partner'})
 
-        mock_ts.assert_called_once()
-
-    def test_recall_empty_knowledge_still_searches_transcript(self):
-        mock_dgs = MagicMock()
-        mock_dgs.recall.return_value = []
-
-        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
-             patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')) as mock_ts, \
-             patch('services.innate_skills.memory_skill._store_fok_signal'):
-            handle_memory('topic', {'action': 'recall', 'query': 'anything'})
-
-        mock_ts.assert_called_once()
-
-    def test_recall_transcript_results_appear_in_output(self):
-        mock_dgs = MagicMock()
-        mock_dgs.recall.return_value = []
-
-        transcript_hit = {
-            'role': 'user',
-            'content': 'I like hiking on weekends',
-            'similarity': 0.8,
-            'created_at': '2026-01-01T00:00:00+00:00',
-            'tool_name': None,
-            'channel': 'topic',
-        }
-
-        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
-             patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.transcript_service.search', return_value=[transcript_hit]), \
-             patch('services.innate_skills.memory_skill._store_fok_signal'):
-            result = handle_memory('topic', {'action': 'recall', 'query': 'hiking'})
-
-        assert 'transcript' in result
-        assert 'hiking' in result
-
-    def test_recall_empty_results_mentions_all_three_layers(self):
-        mock_dgs = MagicMock()
-        mock_dgs.recall.return_value = []
-
-        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
-             patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._store_fok_signal'):
-            result = handle_memory('topic', {'action': 'recall', 'query': 'nothing'})
-
-        assert 'knowledge' in result
-        assert 'episodes' in result
-        assert 'transcript' in result
+        assert '[id:partner_name,relevance:high] Sarah' in result
 
 
 # ── Invalid / unknown actions ────────────────────────────────────────
@@ -381,6 +329,7 @@ class TestHandleMemoryInvalid:
         result = handle_memory('topic', {'action': 'explode'})
         assert 'store' in result
         assert 'recall' in result
+        assert 'reflect' in result
 
     def test_update_action_rejected_as_unknown(self):
         result = handle_memory('topic', {'action': 'update', 'key': 'k', 'value': 'v'})
@@ -431,12 +380,24 @@ class TestDeadCodeRemoved:
         import services.innate_skills.memory_skill as ms
         assert not hasattr(ms, '_PROCEDURE_KEYS')
 
+    def test_search_transcript_does_not_exist(self):
+        import services.innate_skills.memory_skill as ms
+        assert not hasattr(ms, '_search_transcript')
+
+    def test_format_empty_does_not_exist(self):
+        import services.innate_skills.memory_skill as ms
+        assert not hasattr(ms, '_format_empty')
+
+    def test_salience_label_does_not_exist(self):
+        import services.innate_skills.memory_skill as ms
+        assert not hasattr(ms, '_salience_label')
+
 
 # ── _search_data_graph unit ──────────────────────────────────────────
 
 class TestSearchDataGraph:
 
-    def test_returns_formatted_d6_lines(self):
+    def test_returns_id_relevance_text_shape(self):
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
             {'id': 1, 'key': 'user_name', 'value': 'Dylan',
@@ -447,9 +408,9 @@ class TestSearchDataGraph:
             hits, status = _search_data_graph("name", 10)
 
         assert len(hits) == 1
-        assert '**user_name**' in hits[0]['content']
-        assert 'salience: high' in hits[0]['content']
-        assert 'Dylan' in hits[0]['content']
+        assert hits[0]['id'] == 'user_name'
+        assert hits[0]['text'] == 'Dylan'
+        assert hits[0]['relevance'] == 'high'
         assert '1 matches' in status
 
     def test_empty_result_returns_zero_matches_status(self):
@@ -473,24 +434,103 @@ class TestSearchDataGraph:
         assert 'error' in status
 
 
-# ── Recall output format integration (D6) ───────────────────────────
+# ── Reflect ──────────────────────────────────────────────────────────
 
-class TestRecallOutputFormatD6:
+class TestHandleMemoryReflect:
 
-    def test_d6_format_key_bold_salience_value(self):
-        """Output must match: **{key}** (salience: low|medium|high): {value}"""
+    def test_reflect_missing_query_returns_error(self):
+        result = handle_memory('topic', {'action': 'reflect', 'query': ''})
+        assert 'Error' in result
+
+    def test_reflect_no_episodes_no_dg_returns_no_memories(self):
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = []
+
+        with patch('services.innate_skills.memory_skill.recall_episodes', return_value=([], '0 matches')), \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = handle_memory('topic', {'action': 'reflect', 'query': 'cats'})
+
+        assert 'No memories found' in result
+        assert 'cats' in result
+
+    def test_reflect_with_episode_shows_main_memory(self):
+        fake_ep = {
+            'id': 'ep-1', 'gist': 'User has a cat named Blake',
+            'salience': 0.9, 'composite_score': 50,
+            'transcript_ids': '[]', 'consolidated_from': '[]',
+        }
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = []
+
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   return_value=([fake_ep], '1 matches')), \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = handle_memory('topic', {'action': 'reflect', 'query': 'cat'})
+
+        assert '## Main Memory' in result
+        assert 'User has a cat named Blake' in result
+
+    def test_reflect_includes_supporting_facts(self):
+        fake_ep = {
+            'id': 'ep-1', 'gist': 'User has a cat',
+            'salience': 0.9, 'composite_score': 50,
+            'transcript_ids': '[]', 'consolidated_from': '[]',
+        }
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
-            {'id': 1, 'key': 'partner_name', 'value': 'Sarah',
-             'retrieval_weight': 0.75, 'evidence_count': 2, 'composite_score': 2.1},
+            {'id': 10, 'key': 'cat_name', 'value': 'Blake',
+             'retrieval_weight': 0.9, 'composite_score': 2.0},
+            {'id': 11, 'key': 'cat_age', 'value': '16 years',
+             'retrieval_weight': 0.5, 'composite_score': 1.0},
         ]
 
-        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
-             patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._search_transcript', return_value=([], '0 matches')), \
-             patch('services.innate_skills.memory_skill._store_fok_signal'):
-            result = handle_memory('topic', {'action': 'recall', 'query': 'partner'})
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   return_value=([fake_ep], '1 matches')), \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = handle_memory('topic', {'action': 'reflect', 'query': 'cat'})
 
-        assert '**partner_name**' in result
-        assert '(salience: high)' in result
-        assert 'Sarah' in result
+        assert '### Supporting facts:' in result
+        assert '[cat_name] Blake' in result
+        assert '[cat_age] 16 years' in result
+
+    def test_reflect_dg_limited_to_2(self):
+        """Data graph results must be capped at 2 in reflect mode."""
+        fake_ep = {
+            'id': 'ep-1', 'gist': 'Test episode',
+            'salience': 0.5, 'composite_score': 30,
+            'transcript_ids': '[]', 'consolidated_from': '[]',
+        }
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = [
+            {'id': i, 'key': f'k{i}', 'value': f'v{i}',
+             'retrieval_weight': 0.9, 'composite_score': 2.0}
+            for i in range(5)
+        ]
+
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   return_value=([fake_ep], '1 matches')), \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = handle_memory('topic', {'action': 'reflect', 'query': 'test'})
+
+        # _search_data_graph called with limit=2, so mock returns all 5
+        # but the function passes limit=2 to dgs.recall
+        mock_dgs.recall.assert_called_once_with(query='test', limit=2)
+
+    def test_reflect_no_episodes_falls_back_to_dg_only(self):
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = [
+            {'id': 1, 'key': 'cat_name', 'value': 'Blake',
+             'retrieval_weight': 0.9, 'composite_score': 2.0},
+        ]
+
+        with patch('services.innate_skills.memory_skill.recall_episodes',
+                   return_value=([], '0 matches')), \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = handle_memory('topic', {'action': 'reflect', 'query': 'cat'})
+
+        assert '### Supporting facts:' in result
+        assert '[cat_name] Blake' in result
+
+    def test_reflect_action_accepted_by_schema(self):
+        action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
+        assert 'reflect' in action_enum

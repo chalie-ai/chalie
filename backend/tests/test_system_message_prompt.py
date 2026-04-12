@@ -268,13 +268,6 @@ class TestUnifiedSystemMessagePrompt:
             UnifiedSystemMessagePrompt().getPrompt()
         mock_adl.assert_not_called()
 
-    def test_get_prompt_does_not_touch_voice_mapper_service(self):
-        """Y1: no voice mapper dependency inside the class."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with patch('services.voice_mapper_service.VoiceMapperService') as mock_vms:
-            UnifiedSystemMessagePrompt().getPrompt()
-        mock_vms.assert_not_called()
-
     def test_get_prompt_returns_non_empty_string(self):
         """Prompt is a Python constant — getPrompt() returns a non-empty string."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt

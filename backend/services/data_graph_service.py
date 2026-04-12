@@ -519,6 +519,15 @@ class DataGraphService:
                 except Exception as e:
                     logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
 
+                # ── Relevance floor — drop candidates with no strong signal ──
+                _COSINE_FLOOR = 0.42
+                candidates = {
+                    rid: sigs for rid, sigs in candidates.items()
+                    if sigs['key_cos'] >= _COSINE_FLOOR
+                    or sigs['value_cos'] >= _COSINE_FLOOR
+                    or sigs['fts_bonus'] > 0
+                }
+
                 # ── Fetch full rows ─────────────────────────────────
                 scored = []
                 now_ts = utc_now().timestamp()

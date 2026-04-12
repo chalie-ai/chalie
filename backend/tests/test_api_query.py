@@ -152,16 +152,6 @@ def _make_episodic_service_mock(results=None):
     return instance
 
 
-def _make_identity_service_mock():
-    """Return a mock IdentityService *instance*."""
-    instance = MagicMock()
-    instance.get_vectors.return_value = {
-        "warmth": {"baseline_weight": 0.6, "current_activation": 0.65},
-        "assertiveness": {"baseline_weight": 0.5, "current_activation": 0.55},
-    }
-    return instance
-
-
 def _make_store_mock(style_raw=None):
     """Return a mock MemoryStore connection."""
     store = MagicMock()
@@ -508,108 +498,6 @@ class TestWorldStateEndpoint:
 # Identity endpoint tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestIdentityEndpoint:
-    def _patch_identity_services(self, style_raw=None):
-        identity_instance = _make_identity_service_mock()
-        id_cls = MagicMock(return_value=identity_instance)
-        db_mock = MagicMock()
-        store_mock = _make_store_mock(style_raw)
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store_mock
-
-        stack = ExitStack()
-        stack.enter_context(
-            patch("api.query._get_identity_service", return_value=id_cls)
-        )
-        stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
-        stack.enter_context(
-            patch("api.query._get_memory_client", return_value=mc_cls)
-        )
-        return stack, identity_instance, store_mock
-
-    def test_returns_200(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_identity_services()
-                with stack:
-                    resp = client.get("/api/query/identity")
-        assert resp.status_code == 200
-
-    def test_response_has_vectors_and_style(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_identity_services()
-                with stack:
-                    resp = client.get("/api/query/identity")
-        data = resp.get_json()
-        assert "vectors" in data
-        assert "style" in data
-
-    def test_vectors_have_baseline_and_activation(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_identity_services()
-                with stack:
-                    resp = client.get("/api/query/identity")
-        vectors = resp.get_json()["vectors"]
-        assert "warmth" in vectors
-        assert "baseline" in vectors["warmth"]
-        assert "activation" in vectors["warmth"]
-
-    def test_style_metrics_returned_when_cached(self, cookie_app):
-        style_data = {"verbosity": 4, "directness": 8, "formality": 3}
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_identity_services(
-                    style_raw=json.dumps(style_data)
-                )
-                with stack:
-                    resp = client.get("/api/query/identity")
-        assert resp.get_json()["style"] == style_data
-
-    def test_style_empty_when_not_cached(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_identity_services(style_raw=None)
-                with stack:
-                    resp = client.get("/api/query/identity")
-        assert resp.get_json()["style"] == {}
-
-    def test_service_unavailable_returns_defaults(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_identity_service", side_effect=Exception("no db")), \
-                 patch("api.query._get_db_service", side_effect=Exception("no db")), \
-                 patch("api.query._get_memory_client", side_effect=Exception("no store")):
-                resp = client.get("/api/query/identity")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["vectors"] == {}
-        assert data["style"] == {}
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.get("/api/query/identity")
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.get(
-                        "/api/query/identity",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 403
-
-
 # ---------------------------------------------------------------------------
 # Memory endpoint tests
 # ---------------------------------------------------------------------------
@@ -844,20 +732,20 @@ class TestCompositeEndpoint:
                      patch("api.query._get_wrapper_service", return_value=bearer_svc):
                     resp = client.post(
                         "/api/query/composite",
-                        json={"slices": ["situation", "identity"]},
+                        json={"slices": ["situation", "memory"]},
                         content_type="application/json",
                         headers={"Authorization": "Bearer fake_token"},
                     )
         data = resp.get_json()
         assert resp.status_code == 200
         assert "situation" in data["denied"]
-        assert "identity" in data["denied"]
+        assert "memory" in data["denied"]
         assert data["results"] == {}
 
     def test_partial_permissions(self, bearer_app):
-        """Bearer with situation but not identity gets situation result, identity denied."""
+        """Bearer with situation but not memory gets situation result, memory denied."""
         bearer_svc = MagicMock()
-        # situation → allowed, identity → denied
+        # situation → allowed, memory → denied
         bearer_svc.check_permission.side_effect = (
             lambda wid, op, res: res == "situation"
         )
@@ -870,13 +758,13 @@ class TestCompositeEndpoint:
                      self._patch_situation(situation_mock):
                     resp = client.post(
                         "/api/query/composite",
-                        json={"slices": ["situation", "identity"]},
+                        json={"slices": ["situation", "memory"]},
                         content_type="application/json",
                         headers={"Authorization": "Bearer fake_token"},
                     )
         data = resp.get_json()
         assert "situation" in data["results"]
-        assert "identity" in data["denied"]
+        assert "memory" in data["denied"]
 
     def test_unauthenticated_returns_401(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -960,7 +848,7 @@ class TestCheckQueryPermission:
             g.wrapper_id = "wrp_no_perm"
             with patch("api.query._get_wrapper_service", return_value=wrapper_svc):
                 from api.query import _check_query_permission
-                result = _check_query_permission("identity")
+                result = _check_query_permission("memory")
 
         assert result is False
 
@@ -1030,22 +918,6 @@ class TestDispatchSlice:
         assert "scores" in result
         assert "directive" in result
         assert "phase" in result
-
-    def test_identity_dispatch(self):
-        from api.query import _dispatch_slice
-        id_instance = _make_identity_service_mock()
-        id_cls = MagicMock(return_value=id_instance)
-        store = _make_store_mock()
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store
-
-        with patch("api.query._get_identity_service", return_value=id_cls), \
-             patch("api.query._get_db_service", return_value=MagicMock()), \
-             patch("api.query._get_memory_client", return_value=mc_cls):
-            result = _dispatch_slice("identity")
-
-        assert "vectors" in result
-        assert "style" in result
 
     def test_memory_dispatch(self):
         from api.query import _dispatch_slice

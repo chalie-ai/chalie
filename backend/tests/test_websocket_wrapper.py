@@ -153,7 +153,7 @@ class TestChatUIRegistration:
                 'intents': ['present_response', 'show_card', 'show_narration'],
             },
             permissions={
-                'query': ['situation', 'world-state', 'identity', 'memory', 'relevance'],
+                'query': ['situation', 'world-state', 'memory', 'relevance'],
                 'update': ['context', 'feedback', 'memory', 'belief'],
                 'broadcast': False,
             },

@@ -77,7 +77,6 @@ class TestDecayEngineService:
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_apply_identity_inertia',            side_effect=_record('identity', 3)), \
              patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
 
             svc.run_decay_cycle(richness=0.1)  # below 0.3 gate
@@ -87,7 +86,6 @@ class TestDecayEngineService:
         assert 'knowledge' in call_log
         assert 'goals'     in call_log
         # Non-essential cycles were skipped
-        assert 'identity' not in call_log
         assert 'external' not in call_log
 
     def test_run_decay_cycle_normal_richness_runs_all_cycles(self):
@@ -113,13 +111,12 @@ class TestDecayEngineService:
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_apply_identity_inertia',            side_effect=_record('identity', 2)), \
              patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
 
             svc.run_decay_cycle(richness=1.0)  # above 0.3 gate
 
         # All cycles must have run
-        for name in ('episodic', 'knowledge', 'goals', 'identity', 'external'):
+        for name in ('episodic', 'knowledge', 'goals', 'external'):
             assert name in call_log, f"Expected '{name}' to run at full richness"
 
     # ── Individual decay targets ──────────────────────────────────────
@@ -156,22 +153,6 @@ class TestDecayEngineService:
 
         assert result == 0
 
-
-    def test_apply_identity_inertia_returns_zero_on_failure(self):
-        """Identity inertia should return 0 on any exception."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        with patch(
-            'services.database_service.get_shared_db_service',
-            side_effect=Exception('DB down'),
-        ):
-            result = svc._apply_identity_inertia()
-
-        assert result == 0
 
     # ── Real DB: _decay_episodic ──────────────────────────────────────
 

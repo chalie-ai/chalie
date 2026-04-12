@@ -403,6 +403,16 @@ class EpisodeConsolidationService:
                                 (row[0], blob)
                             )
 
+                # Sync FTS index (external-content table requires explicit insert)
+                fts_row = cursor.execute(
+                    "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
+                ).fetchone()
+                if fts_row:
+                    conn.execute(
+                        "INSERT INTO episodes_fts(rowid, gist, action) VALUES (?, ?, ?)",
+                        (fts_row[0], gist, action),
+                    )
+
                 cursor.close()
 
             logger.info(

@@ -115,6 +115,20 @@ def main():
     except Exception as _seed_err:
         logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
 
+    # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
+    try:
+        import os as _os
+        _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
+        if not _os.path.exists(_sentinel):
+            with database_service.connection() as _conn:
+                _conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
+                _conn.commit()
+            with open(_sentinel, 'w') as _f:
+                _f.write('done')
+            logger.info("[Startup] episodes_fts rebuilt from content table")
+    except Exception as _fts_err:
+        logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
+
     # Clean up expired auth sessions from SQLite
     try:
         from services.auth_session_service import cleanup_expired_sessions

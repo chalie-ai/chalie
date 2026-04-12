@@ -157,6 +157,16 @@ class EpisodicService:
                 if embedding is not None:
                     self._store_embedding(conn, episode_id, embedding)
 
+                # Sync FTS index (external-content table requires explicit insert)
+                rowid = cursor.execute(
+                    "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
+                ).fetchone()
+                if rowid:
+                    conn.execute(
+                        "INSERT INTO episodes_fts(rowid, gist, action) VALUES (?, ?, ?)",
+                        (rowid[0], episode_data['gist'], episode_data['action']),
+                    )
+
                 cursor.close()
 
                 logging.info(f"Stored episode {episode_id} for channel '{episode_data['channel']}'")

@@ -73,7 +73,6 @@ class UserMessageProcessor(MessageProcessor):
         self._user_definition_cached: str | None = None
         # Cached voice modulation string. Per-turn cache — same reasoning as above.
         # Consumed only by getSystemPrompt() during {{voice_modulation}} weave.
-        self._voice_modulation_cached: str | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -254,7 +253,7 @@ class UserMessageProcessor(MessageProcessor):
                 baseline_radius=radius,
                 return_raw=False,
             )
-            seed_text = _format_results(hits, self._raw_input) if hits else ''
+            seed_text = _format_results(hits) if hits else ''
         except Exception as exc:
             logger.warning(f"[USER MSG] Memory auto-seed failed: {exc}")
             seed_text = ''

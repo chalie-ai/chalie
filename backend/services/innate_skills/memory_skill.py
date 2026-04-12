@@ -21,7 +21,7 @@ LOG_PREFIX = "[MEMORY]"
 # ─────────────────────────────────────────────────────────────────────────────
 
 RECALL_RADIUS_BASELINE: float = 0.5
-SEED_RADIUS_BASELINE: float = 0.2
+SEED_RADIUS_BASELINE: float = 0.4
 
 NARROW_MIN_DIST: float = 0.25
 NARROW_MAX_DIST: float = 0.05
@@ -42,8 +42,8 @@ TOOL_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["store", "recall"],
-                "description": "store: save a fact. recall: search memory.",
+                "enum": ["store", "recall", "reflect"],
+                "description": "store: save a fact. recall: search memory - fast. reflect: deep search about a topic",
             },
             "kind": {
                 "type": "string",
@@ -84,10 +84,12 @@ def handle_memory(channel: str, params: dict) -> str:
             return _handle_store(channel, params)
         elif action == "recall":
             return _handle_recall(channel, params)
+        elif action == "reflect":
+            return _handle_reflect(channel, params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
-                f"Valid: store, recall"
+                f"Valid: store, recall, reflect"
             )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
@@ -146,33 +148,213 @@ def _handle_recall(channel: str, params: dict) -> str:
     limit = 10
 
     results: List[Dict] = []
-    layer_status: Dict[str, str] = {}
 
-    hits, status = _search_data_graph(query, limit)
-    layer_status["knowledge"] = status
+    hits, _ = _search_data_graph(query, limit)
     results.extend(hits)
 
-    hits, status = _search_episodes(channel, query, limit)
-    layer_status["episodes"] = status
-    results.extend(hits)
-
-    hits, status = _search_transcript(channel, query, limit)
-    layer_status["transcript"] = status
+    hits, _ = _search_episodes(channel, query, limit)
     results.extend(hits)
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
 
     if not results:
-        return _format_empty(["knowledge", "episodes", "transcript"], layer_status, query)
+        return f'No memories found for the query "{query}"'
 
-    return _format_results(results, query)
+    return _format_results(results)
 
 
-def _salience_label(retrieval_weight: float) -> str:
-    if retrieval_weight >= 0.7:
+# ── Reflect ──────────────────────────────────────────────────────────
+
+
+def _handle_reflect(channel: str, params: dict) -> str:
+    query = params.get("query", "")
+    if not query:
+        return f"{LOG_PREFIX} Error: no query specified for reflect."
+
+    # 1. Top episode (raw dict with transcript_ids / consolidated_from)
+    raw_episodes, _ = recall_episodes(
+        channel=channel,
+        query=query,
+        caller="llm_recall",
+        limit=1,
+        return_raw=True,
+    )
+
+    if not raw_episodes:
+        # Fall back to data_graph only
+        dg_hits, _ = _search_data_graph(query, 2)
+        if not dg_hits:
+            return f'No memories found for the query "{query}"'
+        return _format_reflect(query, None, [], dg_hits)
+
+    top = raw_episodes[0]
+
+    # 2. Expand up to 3 layers deep
+    supporting = _expand_episode_layers(top, channel)
+
+    # 3. Data graph (limit 2)
+    dg_hits, _ = _search_data_graph(query, 2)
+
+    return _format_reflect(query, top, supporting, dg_hits)
+
+
+def _expand_episode_layers(episode: Dict, channel: str) -> List[Dict]:
+    """Recursively expand an episode graph up to 3 levels deep.
+
+    Walks consolidated_from (child episodes) recursively. Transcript
+    entries are leaf nodes. Depth 0 is the top episode itself (not
+    emitted here — it's the Main Memory), so children start at depth 1.
+    """
+    from services.database_service import get_shared_db_service
+
+    try:
+        db = get_shared_db_service()
+        results: List[Dict] = []
+        _expand_recursive(db, episode, results, depth=0, max_depth=3)
+        return results
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} Reflect layer expansion failed: {exc}")
+        return []
+
+
+def _expand_recursive(
+    db, episode: Dict, results: List[Dict], depth: int, max_depth: int
+) -> None:
+    """Recursive walker for episode graph expansion."""
+    if depth >= max_depth:
+        return
+
+    consolidated_from = _parse_json_list(episode.get("consolidated_from"))
+    transcript_ids = _parse_json_list(episode.get("transcript_ids"))
+
+    # Leaf: episode has transcript entries — emit them and stop
+    if transcript_ids and not consolidated_from:
+        results.extend(_fetch_transcript_entries(db, transcript_ids))
+        return
+
+    # Branch: episode consolidated from child episodes — recurse
+    if consolidated_from:
+        children = _fetch_episodes_by_ids(db, consolidated_from)
+        for child in children:
+            results.append({
+                "type": "episode",
+                "content": child.get("gist", ""),
+                "salience": child.get("salience", 0),
+            })
+            _expand_recursive(db, child, results, depth + 1, max_depth)
+
+
+def _parse_json_list(raw) -> list:
+    """Safely parse a JSON list from a string or return as-is if already a list."""
+    if isinstance(raw, list):
+        return raw
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _fetch_episodes_by_ids(db_service, episode_ids: list) -> List[Dict]:
+    """Fetch episode rows by ID, ordered by salience descending."""
+    if not episode_ids:
+        return []
+    try:
+        with db_service.connection() as conn:
+            placeholders = ','.join('?' for _ in episode_ids)
+            cursor = conn.execute(
+                f"SELECT id, gist, salience, transcript_ids, consolidated_from "
+                f"FROM episodes WHERE id IN ({placeholders}) AND deleted_at IS NULL "
+                f"ORDER BY salience DESC",
+                list(episode_ids),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} Episode fetch by IDs failed: {exc}")
+        return []
+
+
+def _fetch_transcript_entries(db_service, transcript_ids: List) -> List[Dict]:
+    """Fetch transcript rows by ID, return as supporting layer entries."""
+    if not transcript_ids:
+        return []
+    try:
+        with db_service.connection() as conn:
+            placeholders = ','.join('?' for _ in transcript_ids)
+            cursor = conn.execute(
+                f"SELECT id, role, content, tool_name, created_at FROM transcript "
+                f"WHERE id IN ({placeholders}) ORDER BY id",
+                list(transcript_ids),
+            )
+            rows = cursor.fetchall()
+
+        entries = []
+        for r in rows:
+            content = r[2] or ""
+            if len(content) > 300:
+                content = content[:300] + "..."
+            entries.append({
+                "type": "transcript",
+                "content": content,
+                "salience": None,
+            })
+        return entries
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} Transcript fetch failed: {exc}")
+        return []
+
+
+def _format_reflect(
+    query: str,
+    top_episode: Dict | None,
+    supporting: List[Dict],
+    dg_hits: List[Dict],
+) -> str:
+    lines = []
+
+    # Main Memory
+    lines.append("## Main Memory")
+    if top_episode:
+        lines.append(f'**The most relevant memory to "{query}"**')
+        lines.append(top_episode.get("gist", ""))
+    else:
+        lines.append(f'No episode memories found for "{query}"')
+
+    # Supporting Memories
+    if supporting:
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("### Supporting Memories")
+        lines.append("__ordered by salience__")
+        lines.append("")
+        for entry in supporting:
+            content = entry.get("content", "")
+            salience = entry.get("salience")
+            if salience is not None:
+                lines.append(f"* {content} [salience: {salience}]")
+            else:
+                lines.append(f"* {content}")
+
+    # Supporting facts from data_graph
+    if dg_hits:
+        lines.append("")
+        lines.append("### Supporting facts:")
+        for hit in dg_hits:
+            key = hit.get("id", "")
+            value = hit.get("text", "")
+            lines.append(f"[{key}] {value}")
+
+    return "\n".join(lines)
+
+
+def _relevance_label(score: float) -> str:
+    if score >= 0.7:
         return "high"
-    if retrieval_weight >= 0.4:
+    if score >= 0.4:
         return "medium"
     return "low"
 
@@ -189,14 +371,11 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
 
         hits = []
         for row in rows:
-            key = row.get("key", "")
-            value = row.get("value", "")
-            rw = row.get("retrieval_weight", 1.0)
-            salience = _salience_label(rw)
             hits.append({
-                "layer": "knowledge",
-                "content": f"**{key}** (salience: {salience}): {value}"[:250],
-                "confidence": rw,
+                "id": row.get("key", ""),
+                "text": row.get("value", ""),
+                "relevance": _relevance_label(row.get("retrieval_weight", 1.0)),
+                "confidence": row.get("retrieval_weight", 1.0),
             })
 
         return hits, f"{len(hits)} matches"
@@ -451,12 +630,12 @@ def recall_episodes(
         hits = []
         for ep in episodes[:limit]:
             gist = ep.get("gist", "")
+            conf = min(1.0, ep.get("composite_score", 0) / 100.0)
             hits.append({
-                "layer": "episodes",
-                "content": gist[:200],
-                "confidence": min(1.0, ep.get("composite_score", 0) / 100.0),
-                "freshness": str(ep.get("created_at", "")),
-                "salience": ep.get("salience", 0),
+                "id": str(ep.get("id", "")),
+                "text": gist[:200],
+                "relevance": _relevance_label(conf),
+                "confidence": conf,
             })
 
         return hits, f"{len(hits)} matches"
@@ -477,41 +656,6 @@ def _search_episodes(
     )
 
 
-def _search_transcript(
-    channel: str, query: str, limit: int
-) -> Tuple[List[Dict], str]:
-    try:
-        from services import transcript_service
-
-        results = transcript_service.search(channel, query, limit=limit)
-
-        if not results:
-            return [], f"0 matches (scope: {channel})"
-
-        hits = []
-        for r in results:
-            content = r.get("content", "")
-            if len(content) > 300:
-                content = content[:300] + "..."
-            role = r.get("role", "unknown")
-            tool_tag = f" [{r['tool_name']}]" if r.get("tool_name") else ""
-            entry_channel = r.get("channel", channel)
-
-            hits.append({
-                "layer": "transcript",
-                "content": f"[{role}{tool_tag}] {content}",
-                "confidence": r.get("similarity", 0.5),
-                "freshness": str(r.get("created_at", "")),
-                "channel": entry_channel,
-            })
-
-        return hits, f"{len(hits)} matches"
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Transcript search failed: {e}")
-        return [], f"error: {e}"
-
-
 def _count_episode_candidates(db_service, channel: str) -> int:
     try:
         with db_service.connection() as conn:
@@ -530,41 +674,13 @@ def _count_episode_candidates(db_service, channel: str) -> int:
 # ── Formatting helpers ───────────────────────────────────────────────
 
 
-def _format_results(results: List[Dict], query: str) -> str:
-    by_layer: Dict[str, List[Dict]] = {}
-    for r in results:
-        layer = r["layer"]
-        if layer not in by_layer:
-            by_layer[layer] = []
-        by_layer[layer].append(r)
-
-    lines = [f"{LOG_PREFIX} {len(results)} results for '{query}':"]
-    for layer, hits in by_layer.items():
-        lines.append(f"\n  [{layer}]")
-        for hit in hits:
-            conf = hit.get("confidence", 0)
-            content = hit["content"]
-            extra = ""
-            if "salience" in hit:
-                extra = f", salience={hit['salience']}"
-            if "channel" in hit:
-                extra += f", channel={hit['channel']}"
-            lines.append(f"    - {content} (confidence={conf:.2f}{extra})")
-
-    return "\n".join(lines)
-
-
-def _format_empty(
-    searched: List[str], layer_status: Dict[str, str], query: str
-) -> str:
-    lines = [f"{LOG_PREFIX} No matches found for '{query}' across {searched}:"]
-    for layer in searched:
-        status = layer_status.get(layer, "not searched")
-        lines.append(f"  - {layer}: {status}")
-    lines.append(
-        "Suggestion: Try broader query terms or use associate "
-        "to explore related concepts."
-    )
+def _format_results(results: List[Dict]) -> str:
+    lines = []
+    for hit in results:
+        rid = hit.get("id", "")
+        relevance = hit.get("relevance", "low")
+        text = hit.get("text", "")
+        lines.append(f"[id:{rid},relevance:{relevance}] {text}")
     return "\n".join(lines)
 
 
