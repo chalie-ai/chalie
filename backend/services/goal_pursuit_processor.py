@@ -50,27 +50,10 @@ class GoalPursuitProcessor(MessageProcessor):
         return '\n'.join(parts)
 
     def postTurn(self) -> None:
-        """Goal pursuit post-turn: interaction log (goal_pursuit_turn) + metrics only.
+        """Goal pursuit post-turn: metrics only.
 
         Pursuit progress tracking lives in the goal_pursuit_skill layer, not here.
         """
-        try:
-            from services.interaction_log_service import InteractionLogService
-            from services.database_service import get_shared_db_service
-            log = InteractionLogService(get_shared_db_service())
-            log.log_event(
-                event_type='goal_pursuit_turn',
-                payload={
-                    'pursuit_id': self._metadata.get('pursuit_id', 'unknown'),
-                },
-                channel=self.CHANNEL,
-                source='goal_pursuit',
-                metadata=self._metadata,
-            )
-        except Exception as e:
-            # WARNING (not DEBUG): audit-trail loss must be visible in production.
-            logger.warning("[GoalPursuit.postTurn] Interaction log failed: %s", e, exc_info=True)
-
         try:
             from services.metrics_service import MetricsService
             m = MetricsService()

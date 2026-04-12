@@ -242,11 +242,11 @@ class TestGetSystemPrompt:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# F. postTurn() — interaction log + metrics + fault isolation
+# F. postTurn() — metrics + fault isolation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPostTurn:
-    """postTurn() fires interaction_log then metrics; each block is independent."""
+    """postTurn() fires metrics; fault isolation keeps it from raising."""
 
     def _make_proc_for_postturn(self, metadata=None):
         proc = _make_gpp(
@@ -256,131 +256,47 @@ class TestPostTurn:
         proc._uid = 1
         return proc
 
-    # ── F1: interaction log called with correct args ──────────────────────────
+    # ── F1: metrics counters ─────────────────────────────────────────────────
 
-    def test_f1_interaction_log_called_once_with_goal_pursuit_turn(self):
-        proc = self._make_proc_for_postturn(metadata={'pursuit_id': 'id-001'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        assert mock_log.log_event.call_count == 1
-        kwargs = mock_log.log_event.call_args.kwargs
-        assert kwargs['event_type'] == 'goal_pursuit_turn'
-        assert kwargs['channel'] == 'goal_pursuit'
-        assert kwargs['source'] == 'goal_pursuit'
-
-    def test_f2_payload_contains_pursuit_id(self):
-        proc = self._make_proc_for_postturn(metadata={'pursuit_id': 'unique-hex-id'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['pursuit_id'] == 'unique-hex-id'
-
-    def test_f3_payload_pursuit_id_defaults_to_unknown_when_missing(self):
-        """Missing pursuit_id in metadata → payload uses 'unknown' fallback."""
-        proc = self._make_proc_for_postturn(metadata={})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['pursuit_id'] == 'unknown'
-
-    # ── F2: metrics counters ──────────────────────────────────────────────────
-
-    def test_f4_metrics_records_requests_total(self):
+    def test_f1_metrics_records_requests_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'requests_total' in counter_names
 
-    def test_f5_metrics_records_goal_pursuit_turns_total(self):
+    def test_f2_metrics_records_goal_pursuit_turns_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'goal_pursuit_turns_total' in counter_names
 
-    def test_f6_exactly_two_metric_counters_incremented(self):
+    def test_f3_exactly_two_metric_counters_incremented(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         assert mock_metrics.record_counter.call_count == 2
 
-    # ── F3: fault isolation ───────────────────────────────────────────────────
+    # ── F2: fault isolation ──────────────────────────────────────────────────
 
-    def test_f7_interaction_log_crash_does_not_prevent_metrics(self):
+    def test_f4_metrics_crash_postturn_still_returns(self):
+        """MetricsService raises → postTurn() must not raise."""
         proc = self._make_proc_for_postturn()
 
-        mock_metrics = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('db down')), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=mock_metrics):
-            proc.postTurn()  # must not raise
-
-        assert mock_metrics.record_counter.call_count == 2
-
-    def test_f8_metrics_crash_does_not_prevent_interaction_log(self):
-        proc = self._make_proc_for_postturn()
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   side_effect=RuntimeError('store down')):
-            proc.postTurn()  # must not raise
-
-        assert mock_log.log_event.call_count == 1
-
-    def test_f9_both_services_crash_postturn_still_returns(self):
-        proc = self._make_proc_for_postturn()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('log crash')), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    side_effect=RuntimeError('metrics crash')):
             proc.postTurn()  # must not raise
 
@@ -396,8 +312,6 @@ class TestSmoke:
         proc = _make_gpp(metadata={'pursuit_id': 'smoke-id'})
         proc._uid = 99
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()):
             proc.postTurn()  # must not raise

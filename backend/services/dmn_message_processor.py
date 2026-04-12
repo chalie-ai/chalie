@@ -2,7 +2,7 @@
 DMNMessageProcessor — Background DMN execution with reduced limits.
 
 MessageProcessor v2 subclass. Hardcodes CHANNEL='dmn', ROLE='proactive_thought'.
-postTurn() logs one interaction_log event + increments metrics counters.
+postTurn() increments metrics counters.
 
 North star: /Volumes/llm/chalie-plans/message-processing.md
 Plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md § Commit 9
@@ -50,26 +50,11 @@ class DMNMessageProcessor(MessageProcessor):
         return '\n'.join(parts)
 
     def postTurn(self) -> None:
-        """DMN post-turn: interaction log (dmn_reflection) + metrics only.
+        """DMN post-turn: metrics only.
 
         No trait extraction, no phase update, no DMNService.on_turn()
         (that would be re-entrant — DMNService already owns the timer reset).
         """
-        try:
-            from services.interaction_log_service import InteractionLogService
-            from services.database_service import get_shared_db_service
-            log = InteractionLogService(get_shared_db_service())
-            log.log_event(
-                event_type='dmn_reflection',
-                payload={'mode': self._metadata.get('mode', 'unknown')},
-                channel=self.CHANNEL,
-                source='dmn',
-                metadata=self._metadata,
-            )
-        except Exception as e:
-            # WARNING (not DEBUG): audit-trail loss must be visible in production.
-            logger.warning("[DMN.postTurn] Interaction log failed: %s", e, exc_info=True)
-
         try:
             from services.metrics_service import MetricsService
             m = MetricsService()

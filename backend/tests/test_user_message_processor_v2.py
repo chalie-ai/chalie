@@ -576,16 +576,13 @@ class TestPostTurn:
         proc._uid = uid
         return proc
 
-    # ── H1: All eight services called ────────────────────────────────────────
+    # ── H1: All seven services called ─────────────────────────────────────────
 
-    def test_h1_all_eight_services_called_in_order(self):
-        """Verify each of the eight services fires and ordering is load-bearing."""
+    def test_h1_all_seven_services_called_in_order(self):
+        """Verify each of the seven services fires and ordering is load-bearing."""
         proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-1'})
 
         call_log = []
-
-        mock_log_svc = MagicMock()
-        mock_log_svc.log_event.side_effect = lambda *a, **kw: call_log.append('interaction_log')
 
         mock_phase = MagicMock()
         mock_phase.update.side_effect = lambda *a, **kw: call_log.append('phase')
@@ -602,10 +599,7 @@ class TestPostTurn:
         mock_metrics.record_counter.side_effect = lambda name: call_log.append(f'metrics:{name}')
         mock_compaction = MagicMock(side_effect=lambda *a, **kw: call_log.append('compaction'))
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log_svc), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=mock_situation), \
@@ -618,54 +612,17 @@ class TestPostTurn:
              patch('services.compaction_service.check_and_compact', mock_compaction):
             proc.postTurn()
 
-        # interaction_log fires before phase
-        assert call_log.index('interaction_log') < call_log.index('phase')
         # dmn fires before metrics
         assert 'dmn' in call_log
         assert 'metrics:requests_total' in call_log
 
-    # ── H2: InteractionLogService two events ─────────────────────────────────
-
-    def test_h2_interaction_log_two_events(self):
-        proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-1'})
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
-                   return_value=MagicMock()), \
-             patch('services.situation_model_service.get_situation_model_service',
-                   return_value=MagicMock()), \
-             patch('services.save_suggestion_service.SaveSuggestionService',
-                   return_value=MagicMock(
-                       get_saveable_flag=MagicMock(return_value=None),
-                       detect_saveable_content=MagicMock(return_value=None),
-                   )), \
-             patch('workers.post_exchange_hooks._detect_fork_response'), \
-             patch('workers.post_exchange_hooks._store_adaptive_signals'), \
-             patch('services.dmn_service.get_dmn_service', return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()), \
-             patch('services.compaction_service.check_and_compact'):
-            proc.postTurn()
-
-        assert mock_log.log_event.call_count == 2
-        event_types = [c.kwargs.get('event_type') or c.args[0]
-                       for c in mock_log.log_event.call_args_list]
-        assert event_types[0] == 'user_input'
-        assert event_types[1] == 'system_response'
-
-    # ── H3: ConversationPhaseService two calls ────────────────────────────────
+    # ── H2: ConversationPhaseService two calls ────────────────────────────────
 
     def test_h3_phase_two_calls(self):
         proc = self._make_proc_for_postturn(metadata={'thread_id': 'tid-2'})
         mock_phase = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -714,10 +671,7 @@ class TestPostTurn:
         )
         mock_save.flag_saveable.side_effect = lambda *a: call_log.append('flag_saveable')
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -742,10 +696,7 @@ class TestPostTurn:
         proc = self._make_proc_for_postturn()
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -772,10 +723,7 @@ class TestPostTurn:
         proc = self._make_proc_for_postturn()
         mock_dmn = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -797,19 +745,15 @@ class TestPostTurn:
     # ── H7: One-service failure does not block others ─────────────────────────
 
     def test_h7_failure_in_one_service_does_not_block_others(self):
-        """InteractionLog raising must not prevent all other services from firing."""
+        """Phase raising must not prevent all other services from firing."""
         proc = self._make_proc_for_postturn()
-        mock_phase = MagicMock()
         mock_situation = MagicMock()
         mock_dmn = MagicMock()
         mock_metrics = MagicMock()
         mock_compaction = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('log exploded')), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
-                   return_value=mock_phase), \
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
+                   side_effect=RuntimeError('phase exploded')), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=mock_situation), \
              patch('services.save_suggestion_service.SaveSuggestionService',
@@ -822,10 +766,8 @@ class TestPostTurn:
              patch('services.dmn_service.get_dmn_service', return_value=mock_dmn), \
              patch('services.metrics_service.MetricsService', return_value=mock_metrics), \
              patch('services.compaction_service.check_and_compact', mock_compaction):
-            # Must not raise even though interaction log failed
             proc.postTurn()
 
-        mock_phase.update.assert_called()
         mock_situation.update_on_message.assert_called_once()
         mock_dmn.on_turn.assert_called_once()
         mock_metrics.record_counter.assert_called()
@@ -838,10 +780,7 @@ class TestPostTurn:
         mock_phase = MagicMock()
         mock_situation = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=mock_phase), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=mock_situation), \
@@ -883,10 +822,7 @@ class TestPostTurn:
         proc = self._make_proc_for_postturn(metadata={})
         mock_situation = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=mock_situation), \
@@ -916,10 +852,7 @@ class TestPostTurn:
         proc = self._make_proc_for_postturn(metadata={})
         mock_situation = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=mock_situation), \
@@ -955,10 +888,7 @@ class TestPostTurn:
         mock_save.detect_saveable_content.return_value = {'content_type': 'note'}
         mock_save.flag_saveable = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -989,10 +919,7 @@ class TestPostTurn:
         mock_save.detect_saveable_content.return_value = {'content_type': 'note'}
         mock_save.flag_saveable = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
+        with patch('services.conversation_phase_service.get_conversation_phase_service',
                    return_value=MagicMock()), \
              patch('services.situation_model_service.get_situation_model_service',
                    return_value=MagicMock()), \
@@ -1010,51 +937,6 @@ class TestPostTurn:
         flag_call = mock_save.flag_saveable.call_args
         exchange_id_arg = flag_call.args[3] if flag_call.args else flag_call.kwargs.get('exchange_id')
         assert exchange_id_arg == '42'
-
-    # ── H13: log_event called with correct kwargs, no topic/thread_id ─────────
-
-    def test_h13_log_event_called_with_correct_kwargs(self):
-        """log_event signature: (event_type, payload, channel, exchange_id,
-        session_id, source, metadata) — NO topic, NO thread_id kwargs."""
-        proc = self._make_proc_for_postturn(
-            metadata={
-                'thread_id': 'tid-1',
-                'exchange_id': 'ex-777',
-                'source': 'web',
-            },
-        )
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.database_service.get_shared_db_service'), \
-             patch('services.conversation_phase_service.get_conversation_phase_service',
-                   return_value=MagicMock()), \
-             patch('services.situation_model_service.get_situation_model_service',
-                   return_value=MagicMock()), \
-             patch('services.save_suggestion_service.SaveSuggestionService',
-                   return_value=MagicMock(
-                       get_saveable_flag=MagicMock(return_value=None),
-                       detect_saveable_content=MagicMock(return_value=None),
-                   )), \
-             patch('workers.post_exchange_hooks._detect_fork_response'), \
-             patch('workers.post_exchange_hooks._store_adaptive_signals'), \
-             patch('services.dmn_service.get_dmn_service', return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()), \
-             patch('services.compaction_service.check_and_compact'):
-            proc.postTurn()
-
-        for c in mock_log.log_event.call_args_list:
-            # Must not pass topic or thread_id as kwargs
-            assert 'topic' not in c.kwargs
-            assert 'thread_id' not in c.kwargs
-            # Must pass channel, session_id
-            if c.kwargs:
-                assert 'channel' in c.kwargs
-                assert 'session_id' in c.kwargs
-                assert c.kwargs['channel'] == 'user'
-                assert c.kwargs['exchange_id'] == 'ex-777'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

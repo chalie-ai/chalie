@@ -353,17 +353,16 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Eight-service fan-out, each individually error-isolated.
+        """Seven-service fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
-          1. InteractionLogService
-          2. ConversationPhaseService — two calls
-          3. SituationModelService
-          4. SaveSuggestionService — user-side trigger THEN response-side detect
-          5. _detect_fork_response + _store_adaptive_signals
-          6. DMNService.on_turn() — R10 critical
-          7. MetricsService — last ("turn closed" signal)
-          8. compaction_service.check_and_compact — end-turn backstop
+          1. ConversationPhaseService — two calls
+          2. SituationModelService
+          3. SaveSuggestionService — user-side trigger THEN response-side detect
+          4. _detect_fork_response + _store_adaptive_signals
+          5. DMNService.on_turn() — R10 critical
+          6. MetricsService — last ("turn closed" signal)
+          7. compaction_service.check_and_compact — end-turn backstop
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
@@ -386,40 +385,7 @@ class UserMessageProcessor(MessageProcessor):
             except Exception as _tid_e:
                 logger.debug(f"[POSTTURN] thread_id resolution failed: {_tid_e}")
 
-        # 1. Interaction log (sync) — two events: user_input + system_response
-        # NOTE: live signature is log_event(event_type, payload, channel,
-        # exchange_id, session_id, source, metadata). No `topic` or `thread_id`
-        # kwargs — `channel` is the topic equivalent, `session_id` carries the
-        # thread context (None tolerated).
-        # Logged at WARNING — audit trail loss must be visible in production
-        # (Commit 8 critic P1-2).
-        try:
-            from services.interaction_log_service import InteractionLogService
-            from services.database_service import get_shared_db_service
-            log = InteractionLogService(get_shared_db_service())
-            exchange_id = metadata.get('exchange_id') or metadata.get('uuid')
-            log.log_event(
-                event_type='user_input',
-                payload={'message': text},
-                channel=channel,
-                exchange_id=exchange_id,
-                session_id=thread_id,
-                source=source,
-                metadata=metadata,
-            )
-            log.log_event(
-                event_type='system_response',
-                payload={'message': response, 'mode': 'UNIFIED'},
-                channel=channel,
-                exchange_id=exchange_id,
-                session_id=thread_id,
-                source=source,
-                metadata=metadata,
-            )
-        except Exception as e:
-            logger.warning(f"[POSTTURN] Interaction log failed: {e}", exc_info=True)
-
-        # 2. Conversation phase — TWO calls (user text + assistant response).
+        # 1. Conversation phase — TWO calls (user text + assistant response).
         # Skip the assistant-side update on empty response (cap-exit turns):
         # feeding '' would drift the phase model toward "silence" wrongly
         # (Commit 8 critic P1-3).
@@ -432,20 +398,20 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 3. Situation model (sync, MemoryStore-only write)
+        # 2. Situation model (sync, MemoryStore-only write)
         try:
             from services.situation_model_service import get_situation_model_service
             get_situation_model_service().update_on_message(thread_id)
         except Exception as e:
             logger.debug(f"[POSTTURN] Situation update failed: {e}", exc_info=True)
 
-        # 4. Save suggestion scan — TWO paths in correct order:
-        #    4a: user-side trigger must fire BEFORE 4b detect (ordering constraint #3)
+        # 3. Save suggestion scan — TWO paths in correct order:
+        #    3a: user-side trigger must fire BEFORE 3b detect (ordering constraint #3)
         try:
             from services.save_suggestion_service import SaveSuggestionService
             save_svc = SaveSuggestionService()
 
-            # 4a: User-side completion/deferral trigger — clears existing flag
+            # 3a: User-side completion/deferral trigger — clears existing flag
             save_flag = save_svc.get_saveable_flag(thread_id)
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
@@ -457,7 +423,7 @@ class UserMessageProcessor(MessageProcessor):
                     )
                     save_svc.clear_flag(thread_id)
 
-            # 4b: Response-side saveable content detection — sets new flag.
+            # 3b: Response-side saveable content detection — sets new flag.
             # NOTE: flag_saveable expects exchange_id (UUID string) for window
             # correlation, not the integer transcript row id (self._uid). Prefer
             # the UUID from metadata; fall back to a stringified row id if absent.
@@ -474,7 +440,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
 
-        # 5. Adaptive layer — fork detection + signal write (sync, MemoryStore)
+        # 4. Adaptive layer — fork detection + signal write (sync, MemoryStore)
         try:
             from workers.post_exchange_hooks import _store_adaptive_signals, _detect_fork_response
             _detect_fork_response(text, thread_id)
@@ -482,7 +448,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Adaptive signals failed: {e}", exc_info=True)
 
-        # 6. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 5. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -492,7 +458,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 7. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 6. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -503,7 +469,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 8. End-turn compaction backstop (safety net; mid-loop compaction in send()
+        # 7. End-turn compaction backstop (safety net; mid-loop compaction in send()
         # should handle most cases — this mirrors digest_worker behaviour and
         # can be deleted in a follow-up once mid-loop compaction is confirmed).
         # WARNING level — silent compaction failure leads to context overflow

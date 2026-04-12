@@ -259,11 +259,11 @@ class TestGetSystemPrompt:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# F. postTurn() — interaction log + metrics + fault isolation
+# F. postTurn() — metrics + fault isolation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPostTurn:
-    """postTurn() fires interaction_log then metrics; each block is independent."""
+    """postTurn() fires metrics; fault isolation keeps it from raising."""
 
     def _make_proc_for_postturn(self, metadata=None):
         proc = _make_dmn(
@@ -273,164 +273,66 @@ class TestPostTurn:
         proc._uid = 1
         return proc
 
-    # ── F1: interaction log called with correct args ──────────────────────────
+    # ── F1: metrics counters ─────────────────────────────────────────────────
 
-    def test_f1_interaction_log_called_once_with_dmn_reflection(self):
-        proc = self._make_proc_for_postturn(metadata={'mode': 'recent'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        assert mock_log.log_event.call_count == 1
-        kwargs = mock_log.log_event.call_args.kwargs
-        assert kwargs['event_type'] == 'dmn_reflection'
-        assert kwargs['channel'] == 'dmn'
-        assert kwargs['source'] == 'dmn'
-        assert kwargs['payload'] == {'mode': 'recent'}
-
-    def test_f2_payload_mode_uses_metadata_value(self):
-        proc = self._make_proc_for_postturn(metadata={'mode': 'salience'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['mode'] == 'salience'
-
-    def test_f3_payload_mode_defaults_to_unknown_when_missing(self):
-        proc = self._make_proc_for_postturn(metadata={})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['mode'] == 'unknown'
-
-    # ── F2: metrics counters ──────────────────────────────────────────────────
-
-    def test_f4_metrics_records_requests_total(self):
+    def test_f1_metrics_records_requests_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'requests_total' in counter_names
 
-    def test_f5_metrics_records_dmn_turns_total(self):
+    def test_f2_metrics_records_dmn_turns_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'dmn_turns_total' in counter_names
 
-    def test_f6_exactly_two_metric_counters_incremented(self):
+    def test_f3_exactly_two_metric_counters_incremented(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         assert mock_metrics.record_counter.call_count == 2
 
-    # ── F3: fault isolation ───────────────────────────────────────────────────
+    # ── F2: fault isolation ──────────────────────────────────────────────────
 
-    def test_f7_interaction_log_crash_does_not_prevent_metrics(self):
-        """InteractionLogService raises → metrics block still executes."""
+    def test_f4_metrics_crash_postturn_still_returns(self):
+        """MetricsService raises → postTurn() must not raise."""
         proc = self._make_proc_for_postturn()
 
-        mock_metrics = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('db unavailable')), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=mock_metrics):
-            # Must not raise
-            proc.postTurn()
-
-        assert mock_metrics.record_counter.call_count == 2
-
-    def test_f8_metrics_crash_does_not_prevent_interaction_log(self):
-        """MetricsService raises → interaction log block still executes."""
-        proc = self._make_proc_for_postturn()
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   side_effect=RuntimeError('store unavailable')):
-            # Must not raise
-            proc.postTurn()
-
-        assert mock_log.log_event.call_count == 1
-
-    def test_f9_both_services_crash_postturn_still_returns(self):
-        """Even if both services crash, postTurn() must not raise."""
-        proc = self._make_proc_for_postturn()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('log crash')), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    side_effect=RuntimeError('metrics crash')):
             proc.postTurn()  # must not raise
 
-    # ── F4: DMNService re-entrancy guard ──────────────────────────────────────
+    # ── F3: DMNService re-entrancy guard ─────────────────────────────────────
 
-    def test_f10_postturn_does_not_call_dmn_service_on_turn(self):
-        """postTurn() must NOT call DMNService.on_turn() — that would be re-entrant.
-
-        Verified behaviorally: if postTurn() called get_dmn_service() we would see it
-        in the patch call count. Neither get_dmn_service nor any dmn_service path is
-        imported or called during the DMN postTurn() fan-out.
-        """
+    def test_f5_postturn_does_not_call_dmn_service_on_turn(self):
+        """postTurn() must NOT call DMNService.on_turn() — that would be re-entrant."""
         proc = self._make_proc_for_postturn()
 
         on_turn_calls = []
-
         mock_dmn_svc = MagicMock()
         mock_dmn_svc.on_turn.side_effect = lambda: on_turn_calls.append(True)
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()), \
              patch('services.dmn_service.get_dmn_service',
                    return_value=mock_dmn_svc) as mock_get_dmn:
             proc.postTurn()
 
-        # get_dmn_service must never have been called from within postTurn()
         mock_get_dmn.assert_not_called()
         assert on_turn_calls == []
 
@@ -446,8 +348,6 @@ class TestSmoke:
         proc = _make_dmn(metadata={'mode': 'recent'})
         proc._uid = 99
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()):
             proc.postTurn()  # must not raise

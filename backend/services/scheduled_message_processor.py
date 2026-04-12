@@ -51,7 +51,7 @@ class ScheduledMessageProcessor(MessageProcessor):
         return '\n'.join(parts)
 
     def postTurn(self) -> None:
-        """Scheduled post-turn: interaction log + metrics + mark item executed.
+        """Scheduled post-turn: metrics + mark item executed.
 
         item_id comes from metadata['item_id']. The mark_executed step is a
         named hook for the future ScheduledItemService and is best-effort —
@@ -61,23 +61,6 @@ class ScheduledMessageProcessor(MessageProcessor):
         is currently a placeholder; the scheduler_service caller updates
         scheduled_items.status in its own transaction.
         """
-        try:
-            from services.interaction_log_service import InteractionLogService
-            from services.database_service import get_shared_db_service
-            log = InteractionLogService(get_shared_db_service())
-            log.log_event(
-                event_type='scheduled_prompt_turn',
-                payload={
-                    'item_id': self._metadata.get('item_id', 'unknown'),
-                },
-                channel=self.CHANNEL,
-                source='scheduled',
-                metadata=self._metadata,
-            )
-        except Exception as e:
-            # WARNING (not DEBUG): audit-trail loss must be visible in production.
-            logger.warning("[Scheduled.postTurn] Interaction log failed: %s", e, exc_info=True)
-
         try:
             from services.metrics_service import MetricsService
             m = MetricsService()

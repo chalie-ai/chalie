@@ -249,11 +249,11 @@ class TestGetSystemPrompt:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# F. postTurn() — interaction log + metrics + mark-executed gate
+# F. postTurn() — metrics + mark-executed gate + fault isolation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPostTurn:
-    """postTurn() fires interaction_log, metrics, and conditionally mark-executed."""
+    """postTurn() fires metrics, conditionally mark-executed, fault-isolated."""
 
     def _make_proc_for_postturn(self, metadata=None):
         proc = _make_smp(
@@ -263,170 +263,70 @@ class TestPostTurn:
         proc._uid = 1
         return proc
 
-    # ── F1: interaction log ───────────────────────────────────────────────────
+    # ── F1: metrics counters ─────────────────────────────────────────────────
 
-    def test_f1_interaction_log_called_once_with_scheduled_prompt_turn(self):
-        proc = self._make_proc_for_postturn(metadata={'item_id': 'item-42'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        assert mock_log.log_event.call_count == 1
-        kwargs = mock_log.log_event.call_args.kwargs
-        assert kwargs['event_type'] == 'scheduled_prompt_turn'
-        assert kwargs['channel'] == 'scheduled'
-        assert kwargs['source'] == 'scheduled'
-
-    def test_f2_payload_contains_item_id(self):
-        proc = self._make_proc_for_postturn(metadata={'item_id': 'item-99'})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['item_id'] == 'item-99'
-
-    def test_f3_payload_item_id_defaults_to_unknown_when_missing(self):
-        """Missing item_id in metadata → payload uses 'unknown' fallback."""
-        proc = self._make_proc_for_postturn(metadata={})
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=MagicMock()):
-            proc.postTurn()
-
-        payload = mock_log.log_event.call_args.kwargs['payload']
-        assert payload['item_id'] == 'unknown'
-
-    # ── F2: metrics counters ──────────────────────────────────────────────────
-
-    def test_f4_metrics_records_requests_total(self):
+    def test_f1_metrics_records_requests_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'requests_total' in counter_names
 
-    def test_f5_metrics_records_scheduled_turns_total(self):
+    def test_f2_metrics_records_scheduled_turns_total(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         counter_names = [c.args[0] for c in mock_metrics.record_counter.call_args_list]
         assert 'scheduled_turns_total' in counter_names
 
-    def test_f6_exactly_two_metric_counters_incremented(self):
+    def test_f3_exactly_two_metric_counters_incremented(self):
         proc = self._make_proc_for_postturn()
-
         mock_metrics = MagicMock()
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=mock_metrics):
             proc.postTurn()
 
         assert mock_metrics.record_counter.call_count == 2
 
-    # ── F3: _mark_scheduled_item_executed gate ────────────────────────────────
+    # ── F2: _mark_scheduled_item_executed gate ───────────────────────────────
 
-    def test_f7_mark_executed_called_when_item_id_present(self):
+    def test_f4_mark_executed_called_when_item_id_present(self):
         proc = self._make_proc_for_postturn(metadata={'item_id': 'item-55'})
-
         executed_ids = []
+        proc._mark_scheduled_item_executed = lambda iid: executed_ids.append(iid)
 
-        def _fake_mark(item_id):
-            executed_ids.append(item_id)
-
-        proc._mark_scheduled_item_executed = _fake_mark
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()):
             proc.postTurn()
 
         assert executed_ids == ['item-55']
 
-    def test_f8_mark_executed_not_called_when_item_id_missing(self):
-        """When metadata has no item_id, _mark_scheduled_item_executed must not be called."""
+    def test_f5_mark_executed_not_called_when_item_id_missing(self):
         proc = self._make_proc_for_postturn(metadata={})
-
         executed_ids = []
+        proc._mark_scheduled_item_executed = lambda iid: executed_ids.append(iid)
 
-        def _fake_mark(item_id):
-            executed_ids.append(item_id)
-
-        proc._mark_scheduled_item_executed = _fake_mark
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()):
             proc.postTurn()
 
         assert executed_ids == []
 
-    # ── F4: fault isolation ───────────────────────────────────────────────────
+    # ── F3: fault isolation ──────────────────────────────────────────────────
 
-    def test_f9_interaction_log_crash_does_not_prevent_metrics(self):
+    def test_f6_metrics_crash_postturn_still_returns(self):
         proc = self._make_proc_for_postturn()
 
-        mock_metrics = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('db down')), \
-             patch('services.metrics_service.MetricsService',
-                   return_value=mock_metrics):
-            proc.postTurn()  # must not raise
-
-        assert mock_metrics.record_counter.call_count == 2
-
-    def test_f10_metrics_crash_does_not_prevent_interaction_log(self):
-        proc = self._make_proc_for_postturn()
-
-        mock_log = MagicMock()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=mock_log), \
-             patch('services.metrics_service.MetricsService',
-                   side_effect=RuntimeError('store down')):
-            proc.postTurn()  # must not raise
-
-        assert mock_log.log_event.call_count == 1
-
-    def test_f11_both_services_crash_postturn_still_returns(self):
-        proc = self._make_proc_for_postturn()
-
-        with patch('services.interaction_log_service.InteractionLogService',
-                   side_effect=RuntimeError('log crash')), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    side_effect=RuntimeError('metrics crash')):
             proc.postTurn()  # must not raise
 
@@ -490,8 +390,6 @@ class TestSmoke:
         proc = _make_smp(metadata={'item_id': 'smoke-item'})
         proc._uid = 99
 
-        with patch('services.interaction_log_service.InteractionLogService',
-                   return_value=MagicMock()), \
-             patch('services.metrics_service.MetricsService',
+        with patch('services.metrics_service.MetricsService',
                    return_value=MagicMock()):
             proc.postTurn()  # must not raise
