@@ -483,7 +483,7 @@ class EpisodicService:
         query_text: str,
         radius: float = 0.3,
         *,
-        query_embedding: List[float] | None = None,
+        query_embedding: Optional[List[float]] = None,
         return_telemetry: bool = False,
     ):
         """Retrieve episodes via hybrid vector + FTS search.
@@ -712,7 +712,7 @@ class EpisodicService:
             raise
 
     def _hybrid_retrieve(self, query_embedding: List[float], query_text: str,
-                        effective_radius: float, telemetry: dict | None = None) -> List[dict]:
+                        effective_radius: float, telemetry: Optional[dict] = None) -> List[dict]:
         try:
             with self.db_service.connection() as conn:
                 cursor = DictCursor(conn.cursor())

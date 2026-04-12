@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -309,7 +309,7 @@ def _fetch_transcript_entries(db_service, transcript_ids: List) -> List[Dict]:
 
 def _format_reflect(
     query: str,
-    top_episode: Dict | None,
+    top_episode: Optional[Dict],
     supporting: List[Dict],
     dg_hits: List[Dict],
 ) -> str:
@@ -528,7 +528,7 @@ def recall_episodes(
     query: str,
     *,
     caller: str = "llm_recall",
-    baseline_radius: float | None = None,
+    baseline_radius: Optional[float] = None,
     limit: int = 10,
     return_raw: bool = False,
 ):

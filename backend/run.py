@@ -115,9 +115,28 @@ def main():
     except Exception as _seed_err:
         logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
 
-    # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
+    # Drop zombie `invoked_by` column from tool_calls (NOT NULL, never populated by new code)
     try:
         import os as _os
+        _drop_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-calls-drop-invoked-by-v1.done',
+        )
+        if not _os.path.exists(_drop_sentinel):
+            with database_service.connection() as _conn:
+                # Check if column still exists before attempting drop
+                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
+                if 'invoked_by' in _cols:
+                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN invoked_by")
+                    _conn.commit()
+                    logger.info("[Startup] Dropped zombie invoked_by column from tool_calls")
+            with open(_drop_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _drop_err:
+        logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
+
+    # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
+    try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
         if not _os.path.exists(_sentinel):
             with database_service.connection() as _conn:
