@@ -622,6 +622,7 @@ class DataGraphService:
                                 SET last_accessed_at=?, retrieval_weight=?
                                 WHERE rowid=?
                             """, (now_iso, new_rw, rid))
+                            d['retrieval_weight'] = new_rw
 
                 cursor.close()
 
@@ -869,7 +870,10 @@ class DataGraphService:
     def decay_cycle(self) -> int:
         total_updated = 0
         try:
+            from datetime import timedelta
             now = utc_now()
+            one_hour_ago = (now - timedelta(hours=1)).isoformat()
+            two_days_ago = (now - timedelta(days=2)).isoformat()
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -887,8 +891,8 @@ class DataGraphService:
                         WHERE kind=?
                           AND deleted_at IS NULL
                           AND active=1
-                          AND last_confirmed_at < datetime('now', '-1 hour')
-                    """, (kind,))
+                          AND last_confirmed_at < ?
+                    """, (kind, one_hour_ago))
                     rows = cursor.fetchall()
 
                     for rowid, rw, confirmed_at_str in rows:
@@ -921,8 +925,8 @@ class DataGraphService:
                     SELECT rowid FROM data_graph
                     WHERE kind='misc'
                       AND deleted_at IS NULL
-                      AND last_confirmed_at < datetime('now', '-2 days')
-                """)
+                      AND last_confirmed_at < ?
+                """, (two_days_ago,))
                 expired_misc = [r[0] for r in cursor.fetchall()]
                 cursor.close()
 
