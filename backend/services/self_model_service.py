@@ -600,8 +600,7 @@ class SelfModelService:
         """
         Determine what is worth surfacing. Returns empty list when healthy.
 
-        Each item is {"signal": str, "severity": float} where severity
-        is used by the mode router for weighted self_constraint scoring.
+        Each item is {"signal": str, "severity": float}.
         """
         notes = []
         op = snapshot.get("operational", {})

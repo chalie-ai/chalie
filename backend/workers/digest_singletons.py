@@ -18,15 +18,13 @@ their original semantics: create-on-first-access, reuse for process lifetime.
     ``/Volumes/llm/chalie-plans/message-processing.md``) does not use
     cross-channel singletons: ``load_configs()`` logic moves into the
     relevant ``SystemMessagePrompt`` subclass, and the orchestrator /
-    mode-router / context-relevance singletons die with their owning
-    services. Do not add new callers.
+    context-relevance singletons die with their owning services.
+    Do not add new callers.
 """
 
-import json
 import logging
 
 from services import ConfigService, OrchestratorService
-from services.mode_router_service import ModeRouterService
 from services.context_relevance_service import ContextRelevanceService
 
 logger = logging.getLogger(__name__)
@@ -35,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 _context_relevance_service = None
 _orchestrator = None
-_mode_router = None
 
 
 # ── Lazy getters ──────────────────────────────────────────────────────────────
@@ -54,30 +51,6 @@ def get_orchestrator():
     if _orchestrator is None:
         _orchestrator = OrchestratorService()
     return _orchestrator
-
-
-def get_mode_router():
-    """Get or create global mode router instance."""
-    global _mode_router
-    if _mode_router is None:
-        import os
-        # Prefer generated config (from stability regulator) over base config
-        generated_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "configs", "generated", "mode_router_config.json"
-        )
-        if os.path.exists(generated_path):
-            try:
-                with open(generated_path, 'r') as f:
-                    router_config = json.load(f)
-                logging.info("[DIGEST] Loaded generated mode router config")
-            except Exception as e:
-                logger.debug(f"[DIGEST] Failed to load generated mode router config, using default: {e}")
-                router_config = ConfigService.get_agent_config("mode-router")
-        else:
-            router_config = ConfigService.get_agent_config("mode-router")
-        _mode_router = ModeRouterService(router_config)
-    return _mode_router
 
 
 def load_configs():

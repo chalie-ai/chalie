@@ -40,7 +40,6 @@ from services.world_state_service import WorldStateService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
-from services.mode_router_service import compute_nlp_signals
 from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # Singleton getters — canonical implementations live in digest_singletons.py;
@@ -696,7 +695,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
     try:
-        _nlp = compute_nlp_signals(text)
         _signals = {
             'context_warmth': context_warmth,
             'working_memory_turns': 0,
@@ -708,9 +706,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'is_new_topic': classification_result.get('is_new_topic', False),
             'session_exchange_count': 0,
             'memory_confidence': memory_confidence,
+            '_prompt_text': text,
         }
-        _signals.update(_nlp)
-        _signals['_prompt_text'] = text
 
         _store_adaptive_signals(thread_id, text, signals=_signals)
 

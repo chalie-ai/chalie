@@ -231,7 +231,7 @@ def _handle_resume(ws, msg):
 
 
 def _handle_action(ws, store, msg):
-    """Handle a deterministic action button click — bypasses mode router entirely."""
+    """Handle a deterministic action button click."""
     payload = msg.get('payload', {})
     skill = payload.get('skill', '')
     if not skill:

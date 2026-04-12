@@ -184,28 +184,6 @@ def mock_store(store):
 def mock_config():
     """Test config — no file I/O."""
     agent_configs = {
-        'mode-router': {
-            'base_scores': {
-                'UNIFIED': 0.40,
-                'ACT': 0.20,
-                'IGNORE': -0.50,
-            },
-            'weights': {
-                'respond.warmth_boost': 0.20,
-                'respond.fact_density': 0.15,
-                'respond.gist_density': 0.10,
-                'respond.question_warm': 0.15,
-                'respond.cold_penalty': 0.15,
-                'act.question_moderate_context': 0.20,
-                'act.interrogative_gap': 0.15,
-                'act.implicit_reference': 0.15,
-                'act.very_cold_penalty': 0.10,
-                'act.warm_facts_penalty': 0.10,
-                'ignore.empty_input': 1.00,
-            },
-            'tiebreaker_base_margin': 0.20,
-            'tiebreaker_min_margin': 0.08,
-        },
         'frontal-cortex': {
             'model': 'test-model',
             'cost_base': 1.0,

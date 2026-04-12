@@ -1,4 +1,4 @@
-"""Tests for digest_worker — calculate_context_warmth, NLP signal patterns, ignore branch triage."""
+"""Tests for digest_worker — calculate_context_warmth, image context resolution."""
 
 import json
 import pytest
@@ -8,15 +8,6 @@ from workers.digest_worker import (
     calculate_context_warmth,
     _resolve_image_contexts,
 )
-from services.mode_router_service import (
-    GREETING_PATTERNS,
-    INTERROGATIVE_WORDS,
-    IMPLICIT_REFERENCE,
-    POSITIVE_FEEDBACK,
-    NEGATIVE_FEEDBACK,
-)
-
-
 pytestmark = pytest.mark.unit
 
 
@@ -58,53 +49,6 @@ class TestCalculateContextWarmth:
         result = calculate_context_warmth(2, True)
         expected = (0.5 + 1.0) / 2
         assert result == pytest.approx(expected, abs=0.001)
-
-
-# ── NLP signal patterns ──────────────────────────────────────────────
-
-class TestNlpSignalPatterns:
-
-    def test_greeting_match_on_hey(self):
-        assert GREETING_PATTERNS.match("hey there") is not None
-
-    def test_greeting_match_on_good_morning(self):
-        assert GREETING_PATTERNS.match("good morning") is not None
-
-    def test_greeting_no_match_on_normal_text(self):
-        assert GREETING_PATTERNS.match("the weather is nice") is None
-
-    def test_interrogative_match_on_what(self):
-        assert INTERROGATIVE_WORDS.search("what is this") is not None
-
-    def test_interrogative_no_match_on_plain_sentence(self):
-        assert INTERROGATIVE_WORDS.search("the cat sat") is None
-
-    def test_implicit_reference_match(self):
-        assert IMPLICIT_REFERENCE.search("you remember that?") is not None
-
-    def test_implicit_reference_no_match(self):
-        assert IMPLICIT_REFERENCE.search("the sky is blue") is None
-
-    def test_question_mark_detection(self):
-        assert '?' in "What time is it?"
-        assert '?' not in "Tell me the time"
-
-    def test_token_count_via_split(self):
-        tokens = "hello world foo".split()
-        assert len(tokens) == 3
-
-    def test_positive_feedback_match(self):
-        assert POSITIVE_FEEDBACK.search("thanks a lot") is not None
-
-    def test_negative_feedback_match(self):
-        assert NEGATIVE_FEEDBACK.search("that's not what I meant") is not None
-
-    def test_information_density_calculation(self):
-        tokens = "the the the cat".split()
-        unique = len(set(t.lower() for t in tokens))
-        density = unique / max(len(tokens), 1)
-        # 2 unique / 4 total = 0.5
-        assert density == pytest.approx(0.5)
 
 
 # ── _resolve_image_contexts (WS4) ────────────────────────────────────
