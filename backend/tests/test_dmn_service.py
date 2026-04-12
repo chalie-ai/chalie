@@ -282,12 +282,12 @@ class TestGatherSalienceContext:
         assert result == ''
 
     def test_concept_key_and_value_appear(self, db, store):
-        """A knowledge concept's key and value appear in the output."""
+        """A data_graph concept's key and value appear in the output."""
         from services.time_utils import utc_now
         ts = utc_now().isoformat()
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "created_at, updated_at) VALUES ('concept', 'user', ?, ?, 0.9, ?, ?)",
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "first_seen_at, last_confirmed_at) VALUES ('user_specific', ?, ?, 0.9, ?, ?)",
             ('preferred_language', 'Python', ts, ts),
         )
         db.commit()
@@ -299,12 +299,12 @@ class TestGatherSalienceContext:
         assert 'Python' in result
 
     def test_concept_section_header_present(self, db, store):
-        """'High-priority memories:' section header appears when concepts exist."""
+        """'High-priority memories:' section header appears when data_graph rows exist."""
         from services.time_utils import utc_now
         ts = utc_now().isoformat()
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "created_at, updated_at) VALUES ('concept', 'user', 'hobby', 'hiking', 0.8, ?, ?)",
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "first_seen_at, last_confirmed_at) VALUES ('user_specific', 'hobby', 'hiking', 0.8, ?, ?)",
             (ts, ts),
         )
         db.commit()
@@ -409,9 +409,10 @@ class TestGatherSalienceContext:
         from services.time_utils import utc_now
         ts = utc_now().isoformat()
 
+        # Seed data_graph (not knowledge — endpoint reads data_graph now)
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "created_at, updated_at) VALUES ('concept', 'user', 'skill', 'Python', 0.9, ?, ?)",
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "first_seen_at, last_confirmed_at) VALUES ('user_specific', 'skill', 'Python', 0.9, ?, ?)",
             (ts, ts),
         )
         db.execute(

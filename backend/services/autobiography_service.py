@@ -186,75 +186,46 @@ class AutobiographyService:
                         "created_at": created_at
                     })
 
-                # Gather traits (confidence > 0.3)
-                result = session.execute(
-                    text("""
-                    SELECT key, value, json_extract(data, '$.category') AS category,
-                           confidence, evidence_count
-                    FROM knowledge
-                    WHERE kind IN ('trait', 'preference')
-                      AND entity = 'user'
-                      AND deleted_at IS NULL
-                      AND confidence > 0.3
-                    ORDER BY confidence DESC
-                    """),
-                    {}
-                )
-                for row in result.fetchall():
+                # Gather traits (retrieval_weight > 0.3) from data_graph
+                from services.data_graph_service import get_data_graph_service
+                dgs = get_data_graph_service()
+                trait_rows = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC')
+                for r in trait_rows:
+                    if (r.get('retrieval_weight') or 0) <= 0.3:
+                        continue
                     inputs["traits"].append({
-                        "key": row[0],
-                        "value": row[1],
-                        "category": row[2],
-                        "confidence": row[3],
-                        "reinforcement_count": row[4]
+                        "key": r.get('key'),
+                        "value": r.get('value'),
+                        "category": "general",
+                        "confidence": r.get('retrieval_weight', 0),
+                        "reinforcement_count": r.get('evidence_count', 1)
                     })
 
-                # Gather concepts (top 30 by confidence)
-                result = session.execute(
-                    text("""
-                    SELECT key,
-                           json_extract(data, '$.concept_type') AS concept_type,
-                           value,
-                           COALESCE(json_extract(data, '$.domain'), 'general') AS domain,
-                           COALESCE(confidence, CAST(json_extract(data, '$.strength') AS REAL), 0.0) AS strength
-                    FROM knowledge
-                    WHERE kind = 'concept'
-                      AND deleted_at IS NULL
-                    ORDER BY strength DESC
-                    LIMIT 30
-                    """),
-                    {}
+                # Gather concepts from data_graph (user_specific top 30)
+                concept_rows = dgs.fetch(
+                    kinds=['user_specific'], order_by='retrieval_weight DESC', limit=30
                 )
-                for row in result.fetchall():
+                for r in concept_rows:
                     inputs["concepts"].append({
-                        "name": row[0],
-                        "type": row[1],
-                        "definition": row[2],
-                        "domain": row[3],
-                        "strength": row[4] or 0.0
+                        "name": r.get('key'),
+                        "type": "user_specific",
+                        "definition": r.get('value'),
+                        "domain": "general",
+                        "strength": r.get('retrieval_weight', 0.0)
                     })
 
-                # Gather relationships (resolve source/target from data JSON)
-                result = session.execute(
-                    text("""
-                    SELECT COALESCE(json_extract(r.data, '$.source_name'), json_extract(r.data, '$.source_key')) AS source_name,
-                           COALESCE(json_extract(r.data, '$.target_name'), json_extract(r.data, '$.target_key')) AS target_name,
-                           COALESCE(json_extract(r.data, '$.relationship_type'), r.value) AS relationship_type,
-                           COALESCE(r.confidence, CAST(json_extract(r.data, '$.strength') AS REAL), 0.0) AS strength
-                    FROM knowledge r
-                    WHERE r.kind = 'relationship'
-                      AND r.deleted_at IS NULL
-                    ORDER BY strength DESC
-                    LIMIT 50
-                    """),
-                    {}
-                )
-                for row in result.fetchall():
+                # Gather contact relationships from data_graph (contact: prefix keys)
+                from capabilities.contact_resolver import _CONTACT_KEY_PREFIX
+                contact_rows = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC', limit=50)
+                for r in contact_rows:
+                    key = r.get('key') or ''
+                    if not key.startswith(_CONTACT_KEY_PREFIX):
+                        continue
                     inputs["relationships"].append({
-                        "source": row[0],
-                        "target": row[1],
-                        "type": row[2],
-                        "strength": row[3] or 0.0
+                        "source": "user",
+                        "target": r.get('value'),
+                        "type": "contact",
+                        "strength": r.get('retrieval_weight', 0.0)
                     })
 
                 # Gather constraint learning episodes (from idle consolidation)

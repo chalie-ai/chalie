@@ -73,16 +73,15 @@ def _get_db():
 def update_belief():
     """Set or correct a user trait (belief update).
 
-    Delegates directly to :meth:`KnowledgeService.store`.  The ``key``
-    and ``value`` fields are required; ``category`` and ``confidence`` are
-    optional with sensible defaults.
+    Stores the trait in DataGraphService as kind='user_specific'. The ``key``
+    and ``value`` fields are required.
 
     Body (JSON):
-        category (str): One of ``core``, ``preference``, or ``behavioral``.
-            Defaults to ``preference``.
         key (str, required): Trait identifier, e.g. ``"risk_tolerance"``.
         value (str, required): Trait value, e.g. ``"conservative"``.
-        confidence (float): 0.0–1.0.  Defaults to ``0.8``.
+        category (str): Ignored (kept for API compat). Defaults to ``preference``.
+        confidence (float): Ignored (DataGraphService manages retrieval_weight).
+            Defaults to ``0.8``.
 
     Returns:
         200 with ``{ok: true}`` on success.
@@ -113,18 +112,12 @@ def update_belief():
     confidence = max(0.0, min(1.0, confidence))
 
     try:
-        from services.knowledge_service import KnowledgeService
-        _DECAY_MAP = {'core': 'permanent', 'behavioral': 'slow'}
-        ks = KnowledgeService(_get_db())
-        stored = ks.store(
-            kind='trait', entity='user', key=key, value=str(value),
-            data={'category': category},
-            decay_class=_DECAY_MAP.get(category, 'standard'),
-            confidence=confidence, source='updates_api',
-        )
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        stored = dgs.store(kind='user_specific', key=key, value=str(value), source='updates_api')
         if not stored:
             logger.info(
-                "[Updates API] belief update rejected by trait validation: key=%r value=%r",
+                "[Updates API] belief update rejected: key=%r value=%r",
                 key, value,
             )
             return jsonify({"error": "Trait rejected by validation rules"}), 422
@@ -178,20 +171,13 @@ def update_memory():
 
     try:
         from services.innate_skills.memory_skill import handle_memory
-        confidence = 0.5 + (salience / 20.0)  # 0.55 – 1.0 range
         result = handle_memory(
-            topic=topic,
-            params={
+            topic,
+            {
                 "action": "store",
-                "entries": [
-                    {
-                        "key": f"memory_{uuid.uuid4().hex[:8]}",
-                        "value": content,
-                        "kind": "fact",
-                        "decay_class": "standard",
-                        "data": {"confidence": confidence, "category": "behavioral"},
-                    }
-                ]
+                "key": f"memory_{uuid.uuid4().hex[:8]}",
+                "value": content,
+                "kind": "misc",
             },
         )
         if "Error" in result:

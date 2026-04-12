@@ -20,12 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _get_knowledge_service():
-    """Lazy-import KnowledgeService to avoid circular imports at module load."""
-    from services.database_service import get_shared_db_service
-    from services.knowledge_service import KnowledgeService
-
-    return KnowledgeService(get_shared_db_service())
+def _dgs():
+    from services.data_graph_service import get_data_graph_service
+    return get_data_graph_service()
 
 
 class CarddavHandler:
@@ -139,42 +136,22 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def index_contacts(self, contacts: list[dict]) -> None:
-        """Store *contacts* in the knowledge graph via KnowledgeService.
+        """Store *contacts* in the data graph.
 
-        Uses ``confidence=0.9`` — CardDAV contacts are intentionally saved,
-        making them higher-quality signals than IMAP-mined senders (0.6).
+        CardDAV contacts are authoritative signals — stored as user_specific
+        with key='contact:<email>' via contact_resolver.index_person.
         """
-        ks = _get_knowledge_service()
+        from capabilities.contact_resolver import index_person  # noqa: PLC0415
         for contact in contacts:
             fn = contact.get("fn", "")
+            display = fn.strip()
+            if not display:
+                continue
             for email in contact.get("emails", []):
                 if not email or "@" not in email:
                     continue
-                display = fn.strip()
-                if not display:
-                    continue
                 try:
-                    data: dict = {"source": "carddav"}
-                    if contact.get("org"):
-                        data["org"] = contact["org"]
-                    if contact.get("title"):
-                        data["title"] = contact["title"]
-                    if contact.get("given_name"):
-                        data["given_name"] = contact["given_name"]
-                    if contact.get("family_name"):
-                        data["family_name"] = contact["family_name"]
-                    if contact.get("phones"):
-                        data["phones"] = contact["phones"]
-                    ks.store(
-                        kind="relationship",
-                        entity="person",
-                        key=email.strip().lower(),
-                        value=display,
-                        data=data,
-                        decay_class="slow",
-                        confidence=0.9,
-                        source="carddav",
-                    )
+                    index_person(email, display, source="carddav")
                 except Exception as exc:
                     logger.debug("[carddav] index_contacts failed for %s: %s", email, exc)
 
@@ -210,19 +187,14 @@ class CarddavHandler:
             matches = resolve(query, limit=limit)
             return {"contacts": matches, "count": len(matches)}
 
-        # No query — list all contacts sorted by name.
+        # No query — list all contact rows by name.
+        from capabilities.contact_resolver import _CONTACT_KEY_PREFIX  # noqa: PLC0415
         try:
-            ks = _get_knowledge_service()
-            rows = ks.recall(
-                query="",
-                kinds=["relationship"],
-                entity="person",
-                limit=limit,
-            )
+            rows = _dgs().fetch(kinds=["user_specific"], order_by="key ASC", limit=limit)
             contacts = [
-                {"email": r["key"], "name": r.get("value", "")}
+                {"email": r["key"][len(_CONTACT_KEY_PREFIX):], "name": r.get("value", "")}
                 for r in rows
-                if r.get("key")
+                if (r.get("key") or "").startswith(_CONTACT_KEY_PREFIX)
             ]
         except Exception as exc:
             logger.debug("[carddav] list_contacts fallback failed: %s", exc)

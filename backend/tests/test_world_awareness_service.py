@@ -11,6 +11,12 @@ from services.news_service import NewsArticle
 from services.world_awareness_service import WorldAwarenessService
 
 
+def _reset_dgs_singleton():
+    """Clear the DataGraphService singleton so the next call creates a fresh one."""
+    import services.data_graph_service as _dgs_mod
+    _dgs_mod._instance = None
+
+
 def _make_article(title="AI Breakthrough", **kwargs):
     defaults = {
         "title": title,
@@ -26,12 +32,12 @@ def _make_article(title="AI Breakthrough", **kwargs):
 
 
 def _seed_trait(db, key, value, confidence, evidence_count, category='preference'):
-    """Insert a knowledge row for a high-confidence user trait."""
+    """Insert a data_graph row for a high-confidence user trait."""
     db.execute(
-        """INSERT INTO knowledge (kind, entity, key, value, confidence, evidence_count,
-                                  data, deleted_at)
-           VALUES ('trait', 'user', ?, ?, ?, ?, ?, NULL)""",
-        (key, value, confidence, evidence_count, json.dumps({"category": category})),
+        """INSERT INTO data_graph (kind, key, value, retrieval_weight, evidence_count,
+                                   source, deleted_at, active)
+           VALUES ('user_specific', ?, ?, ?, ?, 'test', NULL, 1)""",
+        (key, value, confidence, evidence_count),
     )
     db.commit()
 
@@ -61,6 +67,12 @@ def _make_service(db):
 @pytest.mark.unit
 class TestTraitExtraction:
 
+    def setup_method(self):
+        _reset_dgs_singleton()
+
+    def teardown_method(self):
+        _reset_dgs_singleton()
+
     def test_extracts_high_confidence_traits(self, db):
         _seed_trait(db, "interest_ai", "artificial intelligence", 0.9, 5)
         _seed_trait(db, "profession", "software engineering", 0.85, 4)
@@ -88,11 +100,12 @@ class TestTraitExtraction:
         assert len(result) == 0
 
     def test_db_error_returns_empty(self, db):
-        # Use a broken DB service to simulate failure
-        broken_db = MagicMock()
-        broken_db.get_connection.side_effect = Exception("DB down")
-        svc = WorldAwarenessService(broken_db)
-        result = svc._extract_trait_interests()
+        from unittest.mock import patch, MagicMock
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.side_effect = Exception("DB down")
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            svc = _make_service(db)
+            result = svc._extract_trait_interests()
         assert result == []
 
 
@@ -200,6 +213,12 @@ class TestEmbeddingDedup:
 @pytest.mark.unit
 class TestExtractInterests:
 
+    def setup_method(self):
+        _reset_dgs_singleton()
+
+    def teardown_method(self):
+        _reset_dgs_singleton()
+
     def test_combines_traits_and_topics(self, db):
         _seed_trait(db, "interest", "artificial intelligence", 0.9, 5)
         _seed_topic_transcript(db, "cooking", 10)
@@ -252,6 +271,12 @@ class TestExtractInterests:
 
 @pytest.mark.unit
 class TestScan:
+
+    def setup_method(self):
+        _reset_dgs_singleton()
+
+    def teardown_method(self):
+        _reset_dgs_singleton()
 
     def test_scan_writes_signals(self, db):
         _seed_trait(db, "interest", "AI", 0.9, 5)

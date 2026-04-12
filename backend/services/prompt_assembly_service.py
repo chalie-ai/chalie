@@ -373,10 +373,9 @@ class PromptAssemblyService:
                 or empty string when unavailable.
         """
         try:
-            from services.database_service import get_shared_db_service
-            from services.knowledge_service import KnowledgeService
-            ks = KnowledgeService(get_shared_db_service())
-            entry = ks.get('system', 'user_summary')
+            from services.data_graph_service import get_data_graph_service
+            rows = get_data_graph_service().fetch(kinds=['system'], order_by='retrieval_weight DESC')
+            entry = next((r for r in rows if r.get('key') == 'user_summary'), None)
             if not entry or not entry.get('value'):
                 return ""
             return "## About the User\n" + entry['value']
@@ -515,8 +514,7 @@ class PromptAssemblyService:
 
             from services.identity_state_service import IdentityStateService
             from services.memory_client import MemoryClientService
-            from services.database_service import get_shared_db_service
-            from services.knowledge_service import KnowledgeService
+            from services.data_graph_service import get_data_graph_service
 
             # Read current exchange count from thread hash
             r = MemoryClientService.create_connection()
@@ -527,11 +525,11 @@ class PromptAssemblyService:
             onboarding_state = identity_state.get('_onboarding', {})
 
             # Build set of trait keys already known in permanent storage
-            # (knowledge table survives MemoryStore TTL expiry)
+            # (data_graph survives MemoryStore TTL expiry)
             try:
-                db = get_shared_db_service()
-                ks = KnowledgeService(db)
-                known_traits = ks.get_by_kind('trait', entity='user', min_confidence=0.5)
+                known_traits = get_data_graph_service().fetch(
+                    kinds=['user_specific'], order_by='retrieval_weight DESC'
+                )
                 known_trait_keys = {t['key'] for t in known_traits if t.get('key')}
             except Exception:
                 known_trait_keys = set()

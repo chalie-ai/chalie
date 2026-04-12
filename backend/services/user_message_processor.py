@@ -91,17 +91,17 @@ class UserMessageProcessor(MessageProcessor):
     def getUserDefinition(self) -> str:
         """One-sentence synthesis of the real human user for the system prompt.
 
-        Reads the user_summary record (kind='fact', entity='system', key='user_summary')
-        from KnowledgeService and returns its value. This is a human-readable sentence
+        Reads the user_summary record (kind='system', key='user_summary') from data_graph.
+        from DataGraphService and returns its value. This is a human-readable sentence
         that describes the user (e.g. "Dylan is a software engineer based in Malta").
 
         Falls back to a static peer-to-peer framing on empty or missing record, or on
         any exception.
 
         Writer path: populated at boot by ``run.py`` which synthesises a one-sentence
-        summary from existing ``kind='trait'`` rows in the knowledge store. Traits
+        summary from existing ``kind='user_specific'`` rows in data_graph. Traits
         themselves are written continuously by the LLM-native memory skill
-        (``memory_skill._handle_store`` → ``KnowledgeService.store(kind='trait', …)``)
+        (``memory_skill._handle_store`` → ``DataGraphService.store(kind='user_specific', …)``)
         whenever the user discloses a personal fact. The background trait-extraction
         pipeline that used to produce user_summary mid-session was removed on
         2026-04-11 (trait-extraction RIP) — continuous re-synthesis now happens at
@@ -114,11 +114,10 @@ class UserMessageProcessor(MessageProcessor):
         if self._user_definition_cached is not None:
             return self._user_definition_cached
         try:
-            from services.knowledge_service import KnowledgeService
-            from services.database_service import get_shared_db_service
+            from services.data_graph_service import get_data_graph_service
 
-            ks = KnowledgeService(get_shared_db_service())
-            entry = ks.get('system', 'user_summary')
+            rows = get_data_graph_service().fetch(kinds=['system'], order_by='retrieval_weight DESC')
+            entry = next((r for r in rows if r.get('key') == 'user_summary'), None)
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
             else:

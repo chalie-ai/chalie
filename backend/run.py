@@ -238,33 +238,28 @@ def main():
     try:
         def _bootstrap_trait_sentence():
             try:
-                from services.database_service import get_shared_db_service
-                from services.knowledge_service import KnowledgeService
-                db = get_shared_db_service()
-                ks = KnowledgeService(db)
+                from services.data_graph_service import get_data_graph_service
+
+                dgs = get_data_graph_service()
 
                 # Already exists — nothing to do
-                existing = ks.get('system', 'user_summary')
-                if existing and existing.get('value'):
+                existing = dgs.fetch(kinds=['system'], limit=1)
+                summary_row = next((r for r in existing if r.get('key') == 'user_summary'), None)
+                if summary_row and summary_row.get('value'):
                     logger.info("[Startup] User trait sentence exists")
                     return
 
-                # No sentence yet — check if traits exist and synthesize
-                traits = db.fetch_all(
-                    "SELECT key, value, confidence, decay_class FROM knowledge "
-                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
-                    "ORDER BY decay_class DESC, confidence DESC"
-                )
+                # No sentence yet — synthesize from user_specific rows
+                traits = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC', limit=50)
                 if not traits:
                     return
 
-                trait_lines = []
-                for row in traits:
-                    key = row['key'] if isinstance(row, dict) else row[0]
-                    value = row['value'] if isinstance(row, dict) else row[1]
-                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
-                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
-                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+                trait_lines = [
+                    f"{r['key']}: {r['value']} (weight: {r.get('retrieval_weight', 1.0):.2f})"
+                    for r in traits if r.get('key') and r.get('value')
+                ]
+                if not trait_lines:
+                    return
 
                 import os
                 prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'trait-synthesis.md')
@@ -284,12 +279,8 @@ def main():
                 if not sentence:
                     return
 
-                ks.store(
-                    kind='fact', entity='system', key='user_summary',
-                    value=sentence, decay_class='permanent',
-                    confidence=1.0, source='trait_synthesis',
-                )
-                logger.info("[Startup] User trait sentence synthesized from %d traits", len(traits))
+                dgs.store(kind='system', key='user_summary', value=sentence, source='trait_synthesis')
+                logger.info("[Startup] User trait sentence synthesized from %d traits", len(trait_lines))
             except Exception as e:
                 logger.warning(f"[Startup] Trait sentence bootstrap failed: {e}")
         threading.Thread(target=_bootstrap_trait_sentence, daemon=True, name="trait-sentence-bootstrap").start()

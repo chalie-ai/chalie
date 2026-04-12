@@ -271,45 +271,22 @@ class AutobiographyDeltaService:
             # Reinforce traits whose key/value appears in stable text
             reinforced = 0
             try:
-                with self.db.get_session() as session:
-                    result = session.execute(
-                        text("""
-                        SELECT id, key, value, confidence
-                        FROM knowledge
-                        WHERE kind IN ('trait', 'preference')
-                          AND entity = 'user'
-                          AND deleted_at IS NULL
-                        """),
-                        {}
-                    )
-                    traits = result.fetchall()
+                from services.data_graph_service import get_data_graph_service
+                dgs = get_data_graph_service()
+                traits = dgs.fetch(kinds=['user_specific'])
 
-                    for trait in traits:
-                        trait_id = trait[0]
-                        trait_key = trait[1]
-                        trait_value = trait[2]
-                        confidence = trait[3]
+                for trait in traits:
+                    trait_id = trait.get('id')
+                    trait_key = trait.get('key') or ''
+                    trait_value = trait.get('value') or ''
 
-                        # Check if this trait is mentioned in stable sections
-                        key_mentioned = trait_key.replace('_', ' ') in stable_text.lower()
-                        val_mentioned = str(trait_value).lower() in stable_text.lower()
+                    # Check if this trait is mentioned in stable sections
+                    key_mentioned = trait_key.replace('_', ' ') in stable_text.lower()
+                    val_mentioned = str(trait_value).lower() in stable_text.lower()
 
-                        if key_mentioned or val_mentioned:
-                            # Asymptotic stabilization — confidence approaches 1.0 but never overshoots
-                            new_confidence = confidence + (1.0 - confidence) * 0.05
-                            new_confidence = min(1.0, new_confidence)
-
-                            session.execute(
-                                text("""
-                                UPDATE knowledge
-                                SET confidence = :confidence,
-                                    updated_at = datetime('now')
-                                WHERE id = :id
-                                  AND kind IN ('trait', 'preference')
-                                """),
-                                {"confidence": new_confidence, "id": trait_id}
-                            )
-                            reinforced += 1
+                    if key_mentioned or val_mentioned:
+                        dgs.reinforce(trait_id)
+                        reinforced += 1
 
             except Exception as e:
                 logger.warning(f"[AUTOBIOGRAPHY DELTA] Trait reinforcement failed: {e}")

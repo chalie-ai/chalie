@@ -96,38 +96,38 @@ class TestSubclassShape:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# B. getUserDefinition() — user synthesis from KnowledgeService
+# B. getUserDefinition() — user synthesis from DataGraphService
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FALLBACK_USER_DEF = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
 
 
 class TestGetUserDefinition:
-    """getUserDefinition() returns user synthesis from knowledge store, not voice modulation."""
+    """getUserDefinition() returns user synthesis from data_graph, not voice modulation."""
 
     def test_b1_returns_user_synthesis_when_record_exists(self):
-        """Returns the value field of the user_summary knowledge record."""
+        """Returns the value of the user_summary row from data_graph kind='system'."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = {'value': 'Dylan is a software engineer based in Malta.'}
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'user_summary', 'value': 'Dylan is a software engineer based in Malta.'}
+        ]
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = proc.getUserDefinition()
 
         assert result == 'Dylan is a software engineer based in Malta.'
-        mock_ks.get.assert_called_once_with('system', 'user_summary')
+        mock_dgs.fetch.assert_called_once_with(kinds=['system'], order_by='retrieval_weight DESC')
 
     def test_b2_returns_fallback_when_no_record(self):
-        """Returns fallback string when knowledge store returns None."""
+        """Returns fallback string when data_graph has no user_summary row."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = None
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = []
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = proc.getUserDefinition()
 
         assert result == _FALLBACK_USER_DEF
@@ -136,11 +136,12 @@ class TestGetUserDefinition:
         """getUserDefinition() must NOT call VoiceMapperService — that belongs in _get_voice_modulation()."""
         proc = _make_ump()
 
-        mock_ks = MagicMock()
-        mock_ks.get.return_value = {'value': 'some user summary'}
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'user_summary', 'value': 'some user summary'}
+        ]
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service'), \
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
              patch('services.voice_mapper_service.VoiceMapperService') as MockVms:
             proc.getUserDefinition()
 
@@ -457,9 +458,8 @@ class TestRunMemorySeed:
             proc._run_memory_seed()
 
         assert proc._memory_seed == 'memories text'
-        # SEED_RADIUS_BASELINE tuned 0.2 → 0.3 by upstream 2c3682f; assertion
-        # must track the constant.
-        assert proc._memory_seed_radius == 0.3
+        from services.innate_skills.memory_skill import SEED_RADIUS_BASELINE
+        assert proc._memory_seed_radius == SEED_RADIUS_BASELINE
         assert len(proc._pending_tool_calls) == 1
 
         dto = proc._pending_tool_calls[0]

@@ -203,120 +203,87 @@ class TestMemoryHealthScope:
 
 # ── Tests: Skill & Tool Usage scope ──────────────────────────────────────────
 
+def _seed_tool_pref(db, tool_name, usage_count=5, success_count=4,
+                    last_used_at='2026-03-18 08:00:00'):
+    """Insert a user_tool_preferences row for testing."""
+    import uuid
+    db.execute(
+        "INSERT INTO user_tool_preferences "
+        "(id, tool_name, usage_count, success_count, last_used_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), tool_name, usage_count, success_count, last_used_at),
+    )
+    db.commit()
+
+
 @pytest.mark.unit
 class TestSkillUsageScope:
 
-    def _knowledge_entry(self, skill_name='memory', attempts=5, successes=4, updated_at='2026-03-18 08:00:00'):
-        """Build a knowledge entry dict mimicking KnowledgeService.get() return."""
-        return {
-            'kind': 'procedure',
-            'entity': 'chalie',
-            'key': skill_name,
-            'value': skill_name,
-            'data': {
-                'total_attempts': attempts,
-                'total_successes': successes,
-                'updated_at': updated_at,
-            },
-        }
-
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_table_has_name_header(self, mock_ks_cls, db):
-        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
+    def test_skill_usage_table_has_name_header(self, db):
+        _seed_tool_pref(db, 'web_search')
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert '| Name' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_table_has_uses_header(self, mock_ks_cls, db):
-        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
+    def test_skill_usage_table_has_uses_header(self, db):
+        _seed_tool_pref(db, 'web_search')
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert '| Uses' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_table_has_last_used_header(self, mock_ks_cls, db):
-        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
+    def test_skill_usage_table_has_last_used_header(self, db):
+        _seed_tool_pref(db, 'web_search')
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert '| Last Used' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_table_has_last_result_header(self, mock_ks_cls, db):
-        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
+    def test_skill_usage_table_has_last_result_header(self, db):
+        _seed_tool_pref(db, 'web_search')
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert '| Last Result' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_table_includes_skill_row(self, mock_ks_cls, db):
-        # Only 'memory' returns stats; all others return None
-        def _get(entity, name):
-            if name == 'memory':
-                return self._knowledge_entry(skill_name='memory')
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    def test_skill_usage_table_includes_tool_row(self, db):
+        _seed_tool_pref(db, 'memory_recall')
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
-        assert 'memory' in result
+        assert 'memory_recall' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_shows_attempt_count(self, mock_ks_cls, db):
-        def _get(entity, name):
-            if name == 'memory':
-                return self._knowledge_entry(skill_name='memory', attempts=7)
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    def test_skill_usage_shows_attempt_count(self, db):
+        _seed_tool_pref(db, 'web_search', usage_count=7, success_count=5)
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert '7' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_empty_when_no_data(self, mock_ks_cls, db):
-        # All skills return no stats
-        mock_ks_cls.return_value.get.return_value = None
-
+    def test_skill_usage_empty_when_no_data(self, db):
+        # No rows in user_tool_preferences
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert 'No usage data' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_success_label(self, mock_ks_cls, db):
-        def _get(entity, name):
-            if name == 'memory':
-                return self._knowledge_entry(skill_name='memory', attempts=4, successes=4)
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    def test_skill_usage_success_label(self, db):
+        _seed_tool_pref(db, 'web_search', usage_count=4, success_count=4)
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
         assert 'success' in result
 
-    @patch(_KNOWLEDGE)
-    def test_skill_usage_failed_label_when_mostly_failed(self, mock_ks_cls, db):
-        def _get(entity, name):
-            if name == 'memory':
-                return self._knowledge_entry(skill_name='memory', attempts=4, successes=1)
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    def test_skill_usage_failed_label_when_mostly_failed(self, db):
+        _seed_tool_pref(db, 'web_search', usage_count=4, success_count=1)
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -423,54 +390,45 @@ class TestIdentityScope:
 
         assert '342' in result
 
-    @patch(_KNOWLEDGE)
-    def test_identity_communication_style_verbosity(self, mock_ks_cls, db):
-        def _get(entity, key):
-            if key == 'communication_style_verbosity':
-                return {'value': '9'}
-            if key == 'communication_style_directness':
-                return {'value': '5'}
-            if key == 'communication_style_formality':
-                return {'value': '5'}
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    @patch('services.data_graph_service.get_data_graph_service')
+    def test_identity_communication_style_verbosity(self, mock_dgs_fn, db):
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'communication_style_verbosity', 'value': '9'},
+            {'key': 'communication_style_directness', 'value': '5'},
+            {'key': 'communication_style_formality', 'value': '5'},
+        ]
+        mock_dgs_fn.return_value = mock_dgs
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
 
         assert 'very verbose' in result
 
-    @patch(_KNOWLEDGE)
-    def test_identity_communication_style_directness(self, mock_ks_cls, db):
-        def _get(entity, key):
-            if key == 'communication_style_verbosity':
-                return {'value': '5'}
-            if key == 'communication_style_directness':
-                return {'value': '9'}
-            if key == 'communication_style_formality':
-                return {'value': '5'}
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    @patch('services.data_graph_service.get_data_graph_service')
+    def test_identity_communication_style_directness(self, mock_dgs_fn, db):
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'communication_style_verbosity', 'value': '5'},
+            {'key': 'communication_style_directness', 'value': '9'},
+            {'key': 'communication_style_formality', 'value': '5'},
+        ]
+        mock_dgs_fn.return_value = mock_dgs
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
 
         assert 'very direct' in result
 
-    @patch(_KNOWLEDGE)
-    def test_identity_communication_style_formality(self, mock_ks_cls, db):
-        def _get(entity, key):
-            if key == 'communication_style_verbosity':
-                return {'value': '5'}
-            if key == 'communication_style_directness':
-                return {'value': '5'}
-            if key == 'communication_style_formality':
-                return {'value': '9'}
-            return None
-
-        mock_ks_cls.return_value.get.side_effect = _get
+    @patch('services.data_graph_service.get_data_graph_service')
+    def test_identity_communication_style_formality(self, mock_dgs_fn, db):
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'communication_style_verbosity', 'value': '5'},
+            {'key': 'communication_style_directness', 'value': '5'},
+            {'key': 'communication_style_formality', 'value': '9'},
+        ]
+        mock_dgs_fn.return_value = mock_dgs
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
