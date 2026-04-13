@@ -193,7 +193,7 @@ def main():
     # Import worker functions
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
-    from services.experience_assimilation_service import experience_assimilation_worker
+    from services.tool_synthesis_processor import tool_synthesis_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
@@ -204,7 +204,7 @@ def main():
     # Register service workers
     manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
-    manager.register_service("experience-assimilation-service", experience_assimilation_worker)
+    manager.register_service("tool-synthesis-service", tool_synthesis_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)

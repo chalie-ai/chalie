@@ -263,47 +263,6 @@ class TestWorldStateExternalSignalsTTL:
 
 
 # ---------------------------------------------------------------------------
-# 9. experience_assimilation_service — hset STATE_KEY + zadd cooldown zset
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestExperienceAssimilationServiceTTL:
-    """Both STATE_KEY (hset) and COOLDOWN_ZSET_KEY (zadd) must get TTL=86400."""
-
-    @pytest.fixture
-    def svc_and_store(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch("services.config_service.ConfigService.resolve_agent_config",
-                   return_value={}):
-            from services.experience_assimilation_service import ExperienceAssimilationService
-            svc = ExperienceAssimilationService()
-            yield svc, store
-
-    def test_daily_sessions_reset_sets_ttl_on_state_key(self, svc_and_store):
-        """_daily_sessions_exceeded() resets the hash and sets expire=86400."""
-        service, store = svc_and_store
-        from services.experience_assimilation_service import STATE_KEY
-
-        # Force a day-key mismatch so the reset branch fires
-        store.hset(STATE_KEY, mapping={"sessions_today": 0, "session_day": "1970-01-01"})
-        service._daily_sessions_exceeded()
-
-        assert _has_ttl(store, STATE_KEY), f"{STATE_KEY} must have TTL=86400 after day reset"
-
-    def test_mark_topic_processed_sets_ttl_on_cooldown_zset(self, svc_and_store):
-        """_mark_topic_processed() adds to the sorted set and sets expire=86400."""
-        service, store = svc_and_store
-        from services.experience_assimilation_service import COOLDOWN_ZSET_KEY
-
-        service._mark_topic_processed("web:default:1")
-
-        assert _has_ttl(store, COOLDOWN_ZSET_KEY), \
-            f"{COOLDOWN_ZSET_KEY} must have TTL=86400 after zadd"
-
-
-# ---------------------------------------------------------------------------
 # 10. dmn_service — zadd to dmn:deliveries
 # ---------------------------------------------------------------------------
 

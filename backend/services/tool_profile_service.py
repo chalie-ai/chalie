@@ -392,49 +392,6 @@ class ToolProfileService:
             if not self._db:
                 db.close_pool()
 
-    def check_episode_relevance(self, episode_embedding, episode_id: str) -> None:
-        """Check if an episode is relevant to any tool profile; enrich if so."""
-        db = self._get_db()
-        try:
-            blob = _pack_embedding(episode_embedding)
-            if blob is None:
-                return
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Use vec0 MATCH to find the closest tool profile
-                cursor.execute(
-                    """
-                    SELECT tcp.tool_name, v.distance
-                    FROM tool_capability_profiles_vec v
-                    JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
-                    WHERE v.embedding MATCH ? AND k = 1
-                    ORDER BY v.distance
-                    """,
-                    (blob,)
-                )
-                row = cursor.fetchone()
-                cursor.close()
-
-            if row:
-                # vec0 returns L2 distance; convert to similarity (approximate)
-                # For normalized vectors, similarity ~ 1 - distance/2
-                distance = row['distance'] if isinstance(row, dict) else row[1]
-                tool_name = row['tool_name'] if isinstance(row, dict) else row[0]
-                similarity = max(0.0, 1.0 - distance / 2.0)
-
-                if similarity > 0.7:
-                    logger.info(
-                        f"{LOG_PREFIX} Episode {episode_id} relevant to {tool_name} "
-                        f"(similarity={similarity:.3f}), triggering enrichment"
-                    )
-                    self.enrich_from_episodes(tool_name, [episode_id])
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Episode relevance check failed: {e}")
-        finally:
-            if not self._db:
-                db.close_pool()
-
     # -- Query -----------------------------------------------------------------
 
     def get_triage_summaries(self) -> str:
