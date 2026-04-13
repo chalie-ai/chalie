@@ -13,9 +13,9 @@
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "experience-assimilation",
-      "name": "Experience Assimilation",
-      "desc": "Evaluates tool outputs for novel knowledge worth storing.",
+      "id": "tool-synthesis",
+      "name": "Tool Synthesis",
+      "desc": "Evaluates recent tool call results for novel knowledge worth storing in memory. Runs every 60 minutes.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
