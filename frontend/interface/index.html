@@ -353,25 +353,6 @@
     </div>
   </aside>
 
-  <!--
-    Activity log slide-out panel.
-    Placed after #appsPanel in DOM order. Z-index stacking is explicit:
-      .apps-panel   → z-index: 250  (higher — stays on top if both open)
-      .activity-panel → z-index: 240  (lower — slides behind apps panel)
-  -->
-  <aside id="activityPanel" class="activity-panel hidden" aria-label="Activity log">
-    <div class="activity-panel__header">
-      <span class="activity-panel__title">Activity</span>
-      <button class="btn-icon" id="closeActivityPanel" aria-label="Close activity panel">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-    </div>
-    <div class="activity-panel__list" id="activityPanelList"></div>
-  </aside>
-
   <!-- App full-screen overlay -->
   <div id="appOverlay" class="app-overlay hidden">
     <div class="app-overlay__bar">

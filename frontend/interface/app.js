@@ -21,7 +21,6 @@ import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
 import { AppsPanel } from './apps_panel.js';
-import { ActivityPanel } from './activity_panel.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 class ChalieApp {
@@ -104,10 +103,6 @@ class ChalieApp {
     // Document upload module
     this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
     this._docUpload.init();
-
-    // Activity log panel module
-    this._activityPanel = new ActivityPanel();
-    this._activityPanel.init();
 
     // Apps panel module
     this._appsPanel = new AppsPanel({ getHost: () => this._backendHost });

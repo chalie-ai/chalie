@@ -14,7 +14,6 @@ import uuid
 from services.time_utils import utc_now, get_user_tz
 from services.database_service import get_shared_db_service
 from services.memory_client import MemoryClientService
-from services.interaction_log_service import InteractionLogService
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,6 @@ class DMNService:
         self._last_salience_ts = None
         self._store = MemoryClientService.create_connection()
         self._db = get_shared_db_service()
-        self._log = InteractionLogService(self._db)
 
     def on_turn(self):
         """Reset the idle timer. Call on every user or assistant message."""
@@ -78,11 +76,9 @@ class DMNService:
         context = self._gather_context(mode)
         if not context:
             logger.info("[DMN] No context for %s, skipping", mode)
-            self._log_cycle(mode, produced_output=False)
             return
 
         produced_output = self._proactive_generate(mode, context)
-        self._log_cycle(mode, produced_output=produced_output)
 
         if produced_output:
             self._record_delivery()
@@ -304,15 +300,6 @@ class DMNService:
         except Exception as exc:
             logger.error("[DMN] %s proactive generate failed: %s", mode, exc, exc_info=True)
             return False
-
-    def _log_cycle(self, mode: str, produced_output: bool):
-        """Write a dmn_fired event to interaction_log."""
-        self._log.log_event(
-            event_type='dmn_fired',
-            payload={'mode': mode, 'produced_output': produced_output},
-            source='dmn',
-        )
-
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
 

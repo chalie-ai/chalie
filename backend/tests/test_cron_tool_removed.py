@@ -68,19 +68,6 @@ class TestToolRegistryServiceCronRemoval:
         )
 
 
-# ── Part A: InteractionLogService ────────────────────────────────────────────
-
-class TestInteractionLogServiceCronRemoval:
-
-    def test_activity_event_types_excludes_cron_tool_executed(self):
-        """_ACTIVITY_EVENT_TYPES must not contain 'cron_tool_executed'."""
-        from services.interaction_log_service import _ACTIVITY_EVENT_TYPES
-        assert "cron_tool_executed" not in _ACTIVITY_EVENT_TYPES, (
-            "'cron_tool_executed' found in _ACTIVITY_EVENT_TYPES — "
-            "this event type was deleted with cron-tool support"
-        )
-
-
 # ── Part A: introspect_skill source scan ─────────────────────────────────────
 
 class TestIntrospectSkillCronRemoval:

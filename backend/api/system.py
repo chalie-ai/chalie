@@ -471,33 +471,6 @@ def observability_pipeline_health():
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
 
 
-@system_bp.route('/system/activity', methods=['GET'])
-@require_session
-def activity_feed():
-    """Unified activity feed — what Chalie did autonomously."""
-    try:
-        from services.interaction_log_service import InteractionLogService
-
-        since_hours = request.args.get('since_hours', 24, type=int)
-        limit = min(max(1, request.args.get('limit', 50, type=int)), 200)
-        offset = max(0, request.args.get('offset', 0, type=int))
-
-        # Clamp since_hours to reasonable range (1h to 7 days)
-        since_hours = max(1, min(since_hours, 168))
-
-        log_service = InteractionLogService()
-        feed = log_service.get_activity_feed(
-            since_hours=since_hours, limit=limit, offset=offset
-        )
-        feed['generated_at'] = datetime.now(timezone.utc).isoformat()
-        return jsonify(feed), 200
-
-    except Exception as e:
-        logger.error(f"[REST API] activity feed error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to retrieve activity feed"}), 500
-
-
-
 
 @system_bp.route('/system/observability/situation', methods=['GET'])
 @require_session
