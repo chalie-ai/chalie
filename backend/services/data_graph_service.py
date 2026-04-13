@@ -217,6 +217,12 @@ class DataGraphService:
 
     def _sync_fts(self, conn, rowid: int, key: str = None, value: str = None,
                   kind: str = None, search_queries: str = None):
+        """Insert a row into the FTS index. Reads from data_graph if values not provided.
+
+        For external content FTS5 tables, callers must remove old FTS entries
+        via _delete_fts BEFORE updating the content table — regular DELETE
+        reads from the content table and corrupts the index on mismatch.
+        """
         try:
             cursor = conn.cursor()
             if key is None:
@@ -230,7 +236,6 @@ class DataGraphService:
                     return
                 key, value, kind, search_queries = row[0], row[1], row[2], row[3]
 
-            cursor.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
             cursor.execute(
                 "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -240,9 +245,35 @@ class DataGraphService:
         except Exception as e:
             logger.warning("[DATA GRAPH] FTS sync failed for rowid=%s: %s", rowid, e)
 
-    def _remove_fts(self, conn, rowid: int):
+    def _delete_fts(self, conn, rowid: int, key: str, value: str, kind: str,
+                    search_queries: str = ''):
+        """Remove a row from the FTS index.
+
+        Tries the FTS5 'delete' command first (required for external content
+        tables in production). Falls back to regular DELETE for standalone FTS
+        tables (used in tests).
+        """
         try:
-            conn.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
+            conn.execute(
+                "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
+                "VALUES('delete', ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, search_queries or '')
+            )
+        except Exception:
+            try:
+                conn.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning("[DATA GRAPH] FTS delete failed for rowid=%s: %s", rowid, e)
+
+    def _remove_fts(self, conn, rowid: int):
+        """Remove a row from the FTS index. Must be called BEFORE deleting from data_graph."""
+        try:
+            row = conn.execute(
+                "SELECT key, value, kind, search_queries FROM data_graph WHERE rowid = ?",
+                (rowid,)
+            ).fetchone()
+            if row:
+                self._delete_fts(conn, rowid, row[0], row[1], row[2], row[3] or '')
         except Exception as e:
             logger.warning("[DATA GRAPH] FTS removal failed for rowid=%s: %s", rowid, e)
 
@@ -271,6 +302,14 @@ class DataGraphService:
                 if not queries:
                     return
                 with self.db.connection() as conn:
+                    # Read old values BEFORE update for correct FTS delete
+                    old = conn.execute(
+                        "SELECT key, value, kind, search_queries FROM data_graph WHERE rowid = ?",
+                        (rowid,)
+                    ).fetchone()
+                    if not old:
+                        return
+                    self._delete_fts(conn, rowid, old[0], old[1], old[2], old[3] or '')
                     conn.execute(
                         "UPDATE data_graph SET search_queries = ? WHERE rowid = ?",
                         (json.dumps(queries), rowid)
@@ -855,10 +894,10 @@ class DataGraphService:
     def hard_delete_by_id(self, row_id: int) -> bool:
         try:
             with self.db.connection() as conn:
+                self._remove_fts(conn, row_id)
                 conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
                 conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
                 conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
-                self._remove_fts(conn, row_id)
             return True
         except Exception as e:
             logger.warning("[DATA GRAPH] hard_delete_by_id failed for rowid=%s: %s", row_id, e)
@@ -940,10 +979,10 @@ class DataGraphService:
                 cursor.close()
 
                 for rowid in expired_misc:
+                    self._remove_fts(conn, rowid)
                     conn.execute("DELETE FROM data_graph WHERE rowid=?", (rowid,))
                     conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rowid,))
                     conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rowid,))
-                    conn.execute("DELETE FROM data_graph_fts WHERE rowid=?", (rowid,))
                     total_updated += 1
 
             if total_updated > 0:

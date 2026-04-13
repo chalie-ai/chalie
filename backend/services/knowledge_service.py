@@ -203,17 +203,15 @@ class KnowledgeService:
 
     def _sync_fts(self, conn, rowid: int, key: str = None, value: str = None,
                   kind: str = None, entity: str = None, search_queries: str = None):
-        """Sync the FTS index for a knowledge row.
+        """Insert a row into the FTS index. Reads from knowledge if values not provided.
 
-        When called with only rowid (e.g. from doc2query background thread),
-        reads the current row values from the DB before syncing.
-        When key/value/kind/entity are provided, search_queries can also be
-        passed directly to avoid an extra DB roundtrip.
+        For external content FTS5 tables, callers must remove old FTS entries
+        via _delete_fts BEFORE updating the content table — regular DELETE
+        reads from the content table and corrupts the index on mismatch.
         """
         try:
             cursor = conn.cursor()
 
-            # If key/value/kind/entity not provided, read from DB
             if key is None:
                 cursor.execute(
                     "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
@@ -226,12 +224,6 @@ class KnowledgeService:
                 key, value, kind, entity = row[0], row[1], row[2], row[3]
                 search_queries = row[4]
 
-            # Delete old entry (if exists)
-            cursor.execute(
-                "DELETE FROM knowledge_fts WHERE rowid = ?",
-                (rowid,)
-            )
-            # Insert new entry including search_queries column
             cursor.execute(
                 "INSERT INTO knowledge_fts(rowid, key, value, kind, entity, search_queries) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -241,12 +233,35 @@ class KnowledgeService:
         except Exception as e:
             logger.warning(f"[KNOWLEDGE] FTS sync failed for rowid={rowid}: {e}")
 
-    def _remove_fts(self, conn, rowid: int):
-        """Remove a row from the FTS index."""
+    def _delete_fts(self, conn, rowid: int, key: str, value: str, kind: str,
+                    entity: str, search_queries: str = ''):
+        """Remove a row from the FTS index.
+
+        Tries the FTS5 'delete' command first (required for external content
+        tables in production). Falls back to regular DELETE for standalone FTS
+        tables (used in tests).
+        """
         try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
-            cursor.close()
+            conn.execute(
+                "INSERT INTO knowledge_fts(knowledge_fts, rowid, key, value, kind, entity, search_queries) "
+                "VALUES('delete', ?, ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, entity, search_queries or '')
+            )
+        except Exception:
+            try:
+                conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning(f"[KNOWLEDGE] FTS delete failed for rowid={rowid}: {e}")
+
+    def _remove_fts(self, conn, rowid: int):
+        """Remove a row from the FTS index. Must be called BEFORE deleting from knowledge."""
+        try:
+            row = conn.execute(
+                "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                (rowid,)
+            ).fetchone()
+            if row:
+                self._delete_fts(conn, rowid, row[0], row[1], row[2], row[3], row[4] or '')
         except Exception as e:
             logger.warning(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
 
@@ -265,6 +280,14 @@ class KnowledgeService:
                     return
                 import json as _json
                 with self.db.connection() as conn:
+                    # Read old values BEFORE update for correct FTS delete
+                    old = conn.execute(
+                        "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                        (rowid,)
+                    ).fetchone()
+                    if not old:
+                        return
+                    self._delete_fts(conn, rowid, old[0], old[1], old[2], old[3], old[4] or '')
                     conn.execute(
                         "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
                         (_json.dumps(queries), rowid)
@@ -362,6 +385,10 @@ class KnowledgeService:
                     update_value = value if value_changed else old_value
                     update_data = data_json if (data_json is not None and value_changed) else existing[4]
 
+                    # Remove old FTS entry BEFORE updating content table
+                    if value_changed:
+                        self._remove_fts(conn, row_id)
+
                     cursor.execute("""
                         UPDATE knowledge
                         SET value = ?,
@@ -380,7 +407,7 @@ class KnowledgeService:
                     if value_changed or embedding:
                         self._store_vec(conn, row_id, embedding)
 
-                    # Sync FTS if value changed
+                    # Insert new FTS entry with updated values
                     if value_changed:
                         self._sync_fts(conn, row_id, key, update_value, kind, entity)
                         # Re-generate search queries for the new value
@@ -692,10 +719,14 @@ class KnowledgeService:
                 set_clause = ", ".join(set_parts)
                 params = list(updates.values()) + [row_id]
 
+                # Remove old FTS entry BEFORE updating content table
+                new_value = updates.get('value')
+                if new_value and new_value != old_value:
+                    self._remove_fts(conn, row_id)
+
                 cursor.execute(f"UPDATE knowledge SET {set_clause} WHERE rowid = ?", params)
 
-                # Sync FTS and embedding if value changed
-                new_value = updates.get('value')
+                # Insert new FTS entry with updated values
                 if new_value and new_value != old_value:
                     self._sync_fts(conn, row_id, key, new_value, kind, entity)
                     emb = self._generate_embedding(f"{key}: {new_value}")

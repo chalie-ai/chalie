@@ -798,18 +798,19 @@ class TestDoc2QueryWiring:
             value='original value',
         )
 
-        # Manually set search_queries on the row
+        # Manually set search_queries on the row (mirrors doc2query flow)
         with db_service.connection() as conn:
-            conn.execute(
-                "UPDATE knowledge SET search_queries = ? WHERE key = ? AND entity = ?",
-                (json.dumps(['query about this fact', 'what is fts sq test']), 'fts_sq_test', 'user'),
-            )
-            # Now sync FTS
             cursor = conn.cursor()
             cursor.execute("SELECT rowid FROM knowledge WHERE key = ? AND entity = ?", ('fts_sq_test', 'user'))
             row = cursor.fetchone()
             cursor.close()
             rowid = row[0]
+            # Remove old FTS entry BEFORE updating content table
+            svc._remove_fts(conn, rowid)
+            conn.execute(
+                "UPDATE knowledge SET search_queries = ? WHERE key = ? AND entity = ?",
+                (json.dumps(['query about this fact', 'what is fts sq test']), 'fts_sq_test', 'user'),
+            )
             svc._sync_fts(conn, rowid)
 
         # Verify the generated query text is findable via FTS
