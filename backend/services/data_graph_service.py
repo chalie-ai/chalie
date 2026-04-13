@@ -15,13 +15,15 @@ KIND_USER_SPECIFIC = 'user_specific'
 KIND_SYSTEM = 'system'
 KIND_MISC = 'misc'
 KIND_MOMENT = 'moment'
-VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT})
+KIND_DOCUMENT = 'document'
+VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
 
 _KIND_POLICY = {
     KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'classify',     'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
     KIND_SYSTEM:        {'ttl_days': None,  'reinforce': True,  'contradiction': 'newest_wins',  'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
     KIND_MISC:          {'ttl_days': 2,     'reinforce': False, 'contradiction': None,           'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
     KIND_MOMENT:        {'ttl_days': None,  'reinforce': False, 'contradiction': None,           'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
+    KIND_DOCUMENT:      {'ttl_days': None,  'reinforce': False, 'contradiction': None,           'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
 }
 
 _EDGE_TYPE_MULTIPLIER = {
@@ -902,6 +904,33 @@ class DataGraphService:
         except Exception as e:
             logger.warning("[DATA GRAPH] hard_delete_by_id failed for rowid=%s: %s", row_id, e)
             return False
+
+    def hard_delete_by_source_prefix(self, source_prefix: str) -> int:
+        """Hard-delete all rows whose source starts with the given prefix.
+
+        Used by document delete cascade to remove all artifacts for a document.
+        Returns count of deleted rows.
+        """
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT rowid FROM data_graph WHERE source LIKE ?",
+                    (source_prefix + '%',)
+                )
+                rowids = [r[0] for r in cursor.fetchall()]
+                cursor.close()
+
+                for rid in rowids:
+                    self._remove_fts(conn, rid)
+                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (rid,))
+                    conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rid,))
+                    conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rid,))
+
+                return len(rowids)
+        except Exception as e:
+            logger.warning("[DATA GRAPH] hard_delete_by_source_prefix failed for '%s': %s", source_prefix, e)
+            return 0
 
     def set_active(self, row_id: int, active: int) -> None:
         try:

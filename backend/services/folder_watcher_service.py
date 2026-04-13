@@ -381,7 +381,6 @@ class FolderWatcherService:
             ``deleted``, ``renamed``, ``skipped``, and an ``errors`` list.
         """
         from services.document_service import DocumentService
-        from services.document_queue import enqueue_document_processing
 
         folder_path = folder['folder_path']
         folder_id = folder['id']
@@ -471,7 +470,7 @@ class FolderWatcherService:
                             doc_svc, folder, abs_path, file_hash, mtime)
                         doc_svc.set_supersedes(new_doc_id, existing['id'])
                         doc_svc.soft_delete(existing['id'])
-                        enqueue_document_processing(new_doc_id)
+                        self._process_watched_document(new_doc_id, abs_path)
                         scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
                         result['updated'] += 1
                         enqueued += 1
@@ -497,7 +496,7 @@ class FolderWatcherService:
                     if enqueued < MAX_ENQUEUE_PER_SCAN:
                         new_doc_id = self._create_watched_document(
                             doc_svc, folder, abs_path, file_hash, mtime)
-                        enqueue_document_processing(new_doc_id)
+                        self._process_watched_document(new_doc_id, abs_path)
                         scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
                         result['new'] += 1
                         enqueued += 1
@@ -643,6 +642,46 @@ class FolderWatcherService:
             doc_svc.update_tags(doc_id, tags)
 
         return doc_id
+
+    def _process_watched_document(self, doc_id: str, abs_path: str):
+        """Extract text from a watched file and create data_graph artifacts."""
+        import threading
+
+        def _run():
+            try:
+                from services.text_extractor import extract_text
+                from services.innate_skills.document_skill import create_document_artifacts
+                from services.document_service import DocumentService
+                from services.database_service import get_shared_db_service
+
+                text = extract_text(abs_path)
+                if not text:
+                    DocumentService(get_shared_db_service()).update_status(
+                        doc_id, 'failed', 'Text extraction empty'
+                    )
+                    return
+
+                artifact_count = create_document_artifacts(doc_id, text)
+                svc = DocumentService(get_shared_db_service())
+
+                summary = text[:500]
+                dot_pos = summary.rfind('. ')
+                if dot_pos > 200:
+                    summary = summary[:dot_pos + 1]
+                svc.update_summary(doc_id, summary)
+                svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
+            except Exception as e:
+                logger.error(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")
+                try:
+                    from services.document_service import DocumentService
+                    from services.database_service import get_shared_db_service
+                    DocumentService(get_shared_db_service()).update_status(
+                        doc_id, 'failed', str(e)[:500]
+                    )
+                except Exception:
+                    pass
+
+        threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()
 
     def _derive_environment_tags(self, folder: Dict, abs_path: str) -> list:
         """Derive semantic environment tags from the folder label and subfolder path.

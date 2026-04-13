@@ -809,9 +809,9 @@ CREATE TABLE IF NOT EXISTS browser_credentials (
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind              TEXT NOT NULL CHECK (kind IN (
-                          'user_specific', 'system', 'misc', 'moment'
-                      )),
+    -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
+    -- To be restored when SchemaConvergence handles constraint changes (v0.5.0 TODO).
+    kind              TEXT NOT NULL,
     key               TEXT NOT NULL,
     value             TEXT,
     storage_strength  REAL NOT NULL DEFAULT 0.5,

@@ -327,6 +327,18 @@ class DocumentService:
             logger.error(f"[DOCS] update_status failed for {doc_id}: {e}")
             raise
 
+    def update_summary(self, doc_id: str, summary: str) -> None:
+        try:
+            def _update(did=doc_id, s=summary, db=self.db):
+                with db.connection() as conn:
+                    conn.execute(
+                        "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
+                        (s, did),
+                    )
+            self._write_queue.submit_sync(_update)
+        except Exception as e:
+            logger.error(f"[DOCS] update_summary failed: {e}")
+
     def update_extracted_metadata(
         self,
         doc_id: str,

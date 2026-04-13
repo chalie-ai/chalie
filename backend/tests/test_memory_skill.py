@@ -512,9 +512,12 @@ class TestHandleMemoryReflect:
              patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {'action': 'reflect', 'query': 'test'})
 
-        # _search_data_graph called with limit=2, so mock returns all 5
-        # but the function passes limit=2 to dgs.recall
-        mock_dgs.recall.assert_called_once_with(query='test', limit=2)
+        # _search_data_graph called with limit=2 and non-document kinds
+        mock_dgs.recall.assert_called_once_with(
+            query='test',
+            kinds=['user_specific', 'system', 'misc', 'moment'],
+            limit=2,
+        )
 
     def test_reflect_no_episodes_falls_back_to_dg_only(self):
         mock_dgs = MagicMock()

@@ -16,6 +16,7 @@ Key operations:
 """
 
 import logging
+import re
 from typing import Optional, Dict, List
 
 from services.llm_service import estimate_tokens
@@ -37,24 +38,124 @@ _MIN_ENTRIES_TO_COMPACT = 4
 # When context_budget is known, the fraction-based threshold is used directly.
 _FALLBACK_MAX_TOKENS = 36_000
 
-_COMPACTION_PROMPT = """Summarize the following conversation context into a compact, actionable summary.
+_COMPACTION_PROMPT = """Compress conversation into dense summary. No articles, no filler, no conversation flow.
 
-Preserve:
-- Decisions made and their reasoning
-- Facts established (names, dates, numbers, specifics)
-- User preferences expressed
-- Key information gathered from tools or research
-- Action items and their current status
-- Any unresolved questions or pending items
+Format:
+- Decisions: [decision] — [reasoning if non-obvious]
+- Facts: [name/date/number/specific]
+- Preferences: [preference expressed]
+- Tool findings: [key result] — [source tool if relevant]
+- Action items: [item] — [status]
+- Unresolved: [question/blocker]
 
-Do NOT preserve:
-- Conversation flow ("then we discussed...", "the user asked...")
-- Social pleasantries or greetings
-- Redundant confirmations ("yes", "ok", "got it")
-- Raw tool output — summarize the findings instead
-- Reasoning that led to discarded options
+Rules:
+- Bullet points only. No prose paragraphs.
+- Drop: greetings, confirmations, discarded options, raw tool output
+- Keep: every fact, decision, preference, number, URL, code snippet, file path
+- Fragments over sentences. Dense over readable."""
 
-Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."""
+
+def _strip_entry(content: str, role: str) -> str:
+    """Strip linguistic fluff from a transcript entry before compaction.
+
+    Pure function — no side effects. Protects code blocks, inline code, URLs,
+    and file paths from any stripping.
+    """
+    if role == 'internal':
+        return content
+
+    if role == 'tool':
+        # Collapse runs of 3+ newlines to 2, strip HTML tags
+        content = re.sub(r'<[^>]+>', '', content)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        return content
+
+    # Unknown roles — return content unmodified
+    if role not in ('user', 'assistant'):
+        return content
+
+    # --- user / assistant stripping ---
+
+    # Sanitise null bytes that would collide with placeholder sentinels
+    content = content.replace('\x00', '')
+
+    # Step 1: extract protected regions (code blocks, inline code, URLs, paths)
+    # Replace them with placeholders so subsequent regexes don't touch them.
+    placeholders = []
+
+    def protect(m):
+        idx = len(placeholders)
+        placeholders.append(m.group(0))
+        return f'\x00PROTECT{idx}\x00'
+
+    # Fenced code blocks (``` ... ```)
+    content = re.sub(r'```[\s\S]*?```', protect, content)
+    # Inline code (`...`)
+    content = re.sub(r'`[^`]+`', protect, content)
+    # URLs
+    content = re.sub(r'https?://\S+', protect, content)
+    # File paths: starts with /, ./, ../, or contains a / with no surrounding spaces
+    # Match sequences that look like paths: optional leading ./ ../ or / then word chars/slashes/dots
+    content = re.sub(r'(?<!\w)(?:\.\./|\.\/|/)[\w./\-]+', protect, content)
+
+    # Step 2: strip filler phrases at start of sentence (after . or start of string)
+    # Covers: "Sure thing, ", "Sure, ", "I'd be happy to ", "Let me ", "I'll ",
+    # "Certainly, ", "Of course, ", "Great, ", "Alright, ", "Ok, ", "Got it, ",
+    # "Thanks, ", "Thank you, ", "Absolutely, "
+    filler_starts = (
+        r"Sure thing,?\s+"
+        r"|Sure,?\s+"
+        r"|I'd be happy to\s+"
+        r"|Let me\s+"
+        r"|I'll\s+"
+        r"|Certainly,?\s+"
+        r"|Of course,?\s+"
+        r"|Great,?\s+"
+        r"|Alright,?\s+"
+        r"|Ok,?\s+"
+        r"|Got it,?\s+"
+        r"|Thanks,?\s+"
+        r"|Thank you,?\s+"
+        r"|Absolutely,?\s+"
+    )
+    content = re.sub(
+        r'(?:(?<=\.)\s+|(?:^))(?:' + filler_starts + r')',
+        lambda m: re.match(r'^(\s*)', m.group(0)).group(1),
+        content,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+
+    # Step 3: strip hedge phrases mid-sentence (case-insensitive)
+    hedge_patterns = [
+        r'\bI think[^\S\n]+',
+        r'\bIt seems like[^\S\n]+',
+        r'\bIt looks like[^\S\n]+',
+        r'\bbasically[^\S\n]+',
+        r'\bessentially[^\S\n]+',
+        r'\bjust[^\S\n]+',
+        r'\breally[^\S\n]+',
+        r'\bactually[^\S\n]+',
+        r'\bprobably[^\S\n]+',
+    ]
+    for pattern in hedge_patterns:
+        content = re.sub(pattern, ' ', content, flags=re.IGNORECASE)
+
+    # Step 4: strip articles (a/an/the) — natural language only, not in protected regions
+    # Only strip when surrounded by word boundaries and not adjacent to a placeholder marker
+    content = re.sub(r'(?<!\x00)\b(a|an|the)\s+(?!\x00)', ' ', content, flags=re.IGNORECASE)
+
+    # Step 5: restore protected regions
+    def restore(m):
+        return placeholders[int(m.group(1))]
+
+    content = re.sub(r'\x00PROTECT(\d+)\x00', restore, content)
+
+    # Step 6: collapse multiple spaces and strip trailing whitespace per line
+    content = re.sub(r'[^\S\n]+', ' ', content)
+    content = '\n'.join(line.strip() for line in content.split('\n'))
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content.strip()
 
 
 def check_and_compact(channel: str, context_budget: int, _context=None) -> bool:
@@ -174,7 +275,11 @@ def _run_compaction(channel: str, previous_text: str, entries: List[Dict], _cont
     parts.append("## New Conversation Turns")
     for entry in entries:
         role = entry.get('role', 'unknown')
-        content = entry.get('content', '')
+        try:
+            content = _strip_entry(entry.get('content', ''), role)
+        except Exception:
+            logger.warning(f"{LOG_PREFIX} Strip failed for entry {entry.get('id')}, using raw content")
+            content = entry.get('content', '')
         tool_name = entry.get('tool_name')
         if tool_name:
             parts.append(f"[{role} — {tool_name}]: {content}")

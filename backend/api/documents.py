@@ -126,10 +126,55 @@ def _validate_file_path(full_path: str) -> bool:
     return real_path.startswith(real_root)
 
 
-def _enqueue_processing(doc_id: str):
-    """Enqueue document for background processing."""
-    from services.document_queue import enqueue_document_processing
-    enqueue_document_processing(doc_id)
+def _process_upload(doc_id: str):
+    """Extract text from uploaded document and create data_graph artifacts."""
+    import threading
+
+    def _run():
+        try:
+            from services.document_service import DocumentService
+            from services.database_service import get_shared_db_service
+            from services.text_extractor import extract_text
+
+            db = get_shared_db_service()
+            svc = DocumentService(db)
+            doc = svc.get_document(doc_id)
+            if not doc:
+                return
+
+            file_path = doc.get('file_path', '')
+            if not file_path:
+                svc.update_status(doc_id, 'failed', 'No file path')
+                return
+
+            full_path = os.path.join(DOCUMENTS_ROOT, file_path)
+
+            text = extract_text(full_path)
+            if not text:
+                svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
+                return
+
+            from services.innate_skills.document_skill import create_document_artifacts
+            artifact_count = create_document_artifacts(doc_id, text)
+
+            summary = text[:500]
+            dot_pos = summary.rfind('. ')
+            if dot_pos > 200:
+                summary = summary[:dot_pos + 1]
+            svc.update_summary(doc_id, summary)
+            svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
+
+            logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
+        except Exception as e:
+            logger.error(f"[DOCS API] Failed to process upload {doc_id}: {e}")
+            try:
+                from services.document_service import DocumentService
+                from services.database_service import get_shared_db_service
+                DocumentService(get_shared_db_service()).update_status(doc_id, 'failed', str(e)[:500])
+            except Exception:
+                pass
+
+    threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +246,8 @@ def upload_document():
         # Check for exact hash duplicates before processing
         duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=doc_id)
 
-        # Enqueue for processing
-        _enqueue_processing(doc_id)
+        # Process upload in background
+        _process_upload(doc_id)
 
         response = {
             "id": doc_id,
@@ -440,7 +485,7 @@ def purge_document(doc_id):
 @documents_bp.route("/documents/search", methods=["GET"])
 @require_session
 def search_documents():
-    """Semantic search across document chunks."""
+    """Search across document artifacts in data_graph."""
     q_raw = request.args.get('q', None)
     if q_raw is None:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
@@ -451,21 +496,21 @@ def search_documents():
     limit = min(int(request.args.get('limit', 5)), 20)
 
     try:
-        from services.embedding_service import get_embedding_service
+        from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
 
-        embedding_service = get_embedding_service()
-        query_embedding = embedding_service.generate_embedding(query)
+        dgs = get_data_graph_service()
+        results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=limit)
 
-        svc = _get_document_service()
-        results = svc.search_chunks(query_embedding, query, limit=limit)
-
-        # Serialize results
         serialized = []
-        for r in results:
-            item = dict(r)
-            if 'document_created_at' in item:
-                item['document_created_at'] = _serialize_dt(item['document_created_at'])
-            serialized.append(item)
+        for row in results:
+            source = row.get('source', '') or ''
+            doc_id = source.split(':', 1)[1] if source.startswith('document:') else ''
+            serialized.append({
+                'document_id': doc_id,
+                'key': row.get('key', ''),
+                'content': row.get('value', ''),
+                'source': source,
+            })
 
         return jsonify({"results": serialized, "query": query})
     except Exception as e:

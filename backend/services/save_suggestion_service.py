@@ -340,12 +340,13 @@ class SaveSuggestionService:
             doc_svc = DocumentService(get_shared_db_service())
             doc_id = doc_svc.create_document_from_text(doc_name, doc_text, 'conversation')
 
-            # 5. Enqueue processing
+            # 5. Create data_graph artifacts
             try:
-                from services.document_queue import enqueue_document_processing
-                enqueue_document_processing(doc_id)
+                from services.innate_skills.document_skill import create_document_artifacts
+                artifact_count = create_document_artifacts(doc_id, doc_text)
+                doc_svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Failed to enqueue processing: {e}")
+                logger.warning(f"{LOG_PREFIX} Failed to create artifacts: {e}")
 
             # 6. Clear flag + set cooldown
             self.clear_flag()

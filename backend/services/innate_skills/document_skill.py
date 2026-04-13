@@ -138,59 +138,45 @@ def _resolve_document(service, params: dict) -> Optional[dict]:
 
 
 def _handle_search(service, params: dict, channel: str) -> str:
-    """
-    Phase 1: Identify which documents are relevant.
-
-    Returns lightweight metadata (names, types, IDs) — NOT content.
-    Use action "view" with a document id to load the full text for analysis.
-    """
     query = params.get('query', '').strip()
     if not query:
         return "[DOCUMENT] 'query' is required for search."
 
     try:
-        from services.embedding_service import get_embedding_service
+        from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
 
-        embedding_service = get_embedding_service()
-        query_embedding = embedding_service.generate_embedding(query)
-
-        results = service.search_chunks(query_embedding, query, limit=5)
+        dgs = get_data_graph_service()
+        results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
 
         if not results:
             return f"[DOCUMENT] No documents match '{query}'."
 
-        # Deduplicate by document_id, skip unconfirmed documents
-        seen_docs = {}
-        for r in results:
-            doc_id = r['document_id']
-            if doc_id not in seen_docs:
-                doc = service.get_document(doc_id)
-                if doc and doc.get('status') == 'ready':
-                    seen_docs[doc_id] = doc
+        doc_artifacts = {}
+        for row in results:
+            source = row.get('source', '') or ''
+            if source.startswith('document:'):
+                doc_id = source.split(':', 1)[1]
+            else:
+                parts = (row.get('key', '') or '').split(':')
+                doc_id = parts[1] if len(parts) >= 3 else 'unknown'
 
-        lines = [f"[DOCUMENT] Found {len(seen_docs)} document(s) matching '{query}':"]
-        for doc_id, doc in seen_docs.items():
-            meta = _parse_extracted_metadata(doc.get('extracted_metadata'))
-            doc_type = meta.get('document_type', {})
-            if isinstance(doc_type, dict):
-                doc_type = doc_type.get('value', '')
-            elif not isinstance(doc_type, str):
-                doc_type = ''
-            type_str = f" [{doc_type}]" if doc_type and doc_type != 'document' else ''
-            pages = doc.get('page_count')
-            page_str = f", {pages}p" if pages else ''
-            created = doc.get('created_at')
-            date_str = ''
-            if created:
-                try:
-                    date_str = f", uploaded {created.strftime('%b %d')}"
-                except Exception:
-                    pass
+            if doc_id not in doc_artifacts:
+                doc_artifacts[doc_id] = []
+            doc_artifacts[doc_id].append(row)
 
+        lines = [f"[DOCUMENT] Found {len(doc_artifacts)} document(s) matching '{query}':"]
+        for doc_id, artifacts in doc_artifacts.items():
+            doc = service.get_document(doc_id)
+            if not doc or doc.get('deleted_at'):
+                continue
+            doc_name = doc.get('original_name', doc_id)
+            chunk_count = doc.get('chunk_count', 0)
             lines.append(
-                f"  · id={doc_id}: \"{doc['original_name']}\"{type_str}"
-                f" ({doc.get('chunk_count', 0)} chunks{page_str}{date_str})"
+                f"  · id={doc_id}: \"{doc_name}\" ({chunk_count} chunks, {len(artifacts)} match(es))"
             )
+
+        if len(lines) == 1:
+            return f"[DOCUMENT] No documents match '{query}'."
 
         lines.append("\nUse action \"view\" with the document id to read its full content.")
         return '\n'.join(lines)
@@ -303,14 +289,20 @@ def _handle_view(service, params: dict, channel: str) -> str:
 
 
 def _handle_delete(service, params: dict, channel: str) -> str:
-    """Soft-delete a document."""
+    """Soft-delete a document and cascade-delete its data_graph artifacts."""
     doc = _resolve_document(service, params)
     if not doc:
         return "[DOCUMENT] Document not found. Specify 'name' or 'id'."
 
-    success = service.soft_delete(doc['id'])
+    doc_id = doc['id']
+
+    from services.data_graph_service import get_data_graph_service
+    dgs = get_data_graph_service()
+    deleted_count = dgs.hard_delete_by_source_prefix(f'document:{doc_id}')
+
+    success = service.soft_delete(doc_id)
     if success:
-        return f"[DOCUMENT] Deleted '{doc['original_name']}'. Can be restored within 30 days."
+        return f"[DOCUMENT] Deleted '{doc['original_name']}'. {deleted_count} artifact(s) removed."
     return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
 
 
@@ -341,6 +333,94 @@ def _handle_restore(service, params: dict, channel: str) -> str:
     return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
 
 
+def _split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024, overlap: int = 48) -> list:
+    """Split document text into overlapping artifacts for data_graph storage.
+
+    Strategy:
+    1. Split on paragraph boundaries (\n\n)
+    2. Accumulate paragraphs until >= min_chars
+    3. If a single paragraph > max_chars, split at sentence boundary (. ! ?)
+    4. If a sentence > max_chars, hard cut at max_chars
+    5. Overlap: last `overlap` chars of previous artifact prepended to next
+    6. First artifact has no prefix overlap; last has no suffix overlap
+
+    Returns list of artifact text strings.
+    """
+    if not text:
+        return []
+
+    if len(text) <= min_chars:
+        return [text]
+
+    def _split_paragraph(para: str) -> list:
+        sentences = []
+        remaining = para
+        while remaining:
+            for sep in ('. ', '! ', '? '):
+                idx = remaining.find(sep)
+                if idx != -1 and idx + len(sep) <= max_chars:
+                    sentences.append(remaining[: idx + 1])
+                    remaining = remaining[idx + len(sep):]
+                    break
+            else:
+                sentences.append(remaining[:max_chars])
+                remaining = remaining[max_chars:]
+        return [s for s in sentences if s]
+
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+
+    chunks = []
+    buffer = ''
+
+    for para in paragraphs:
+        if len(para) > max_chars:
+            if buffer:
+                chunks.append(buffer)
+                buffer = ''
+            for sentence in _split_paragraph(para):
+                if len(buffer) + len(sentence) >= min_chars:
+                    chunks.append(buffer + sentence)
+                    buffer = ''
+                else:
+                    buffer += sentence + ' '
+        else:
+            buffer = (buffer + '\n\n' + para).strip() if buffer else para
+            if len(buffer) >= min_chars:
+                chunks.append(buffer)
+                buffer = ''
+
+    if buffer:
+        chunks.append(buffer)
+
+    if not chunks:
+        return [text]
+
+    result = [chunks[0]]
+    for chunk in chunks[1:]:
+        prefix = result[-1][-overlap:]
+        result.append(prefix + chunk)
+
+    return result
+
+
+def create_document_artifacts(doc_id: str, text_content: str) -> int:
+    """Split text into artifacts and store in data_graph. Returns artifact count."""
+    artifacts = _split_into_artifacts(text_content)
+
+    from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
+    dgs = get_data_graph_service()
+
+    for i, artifact_text in enumerate(artifacts):
+        dgs.store(
+            kind=KIND_DOCUMENT,
+            key=f'doc:{doc_id}:{i:03d}',
+            value=artifact_text,
+            source=f'document:{doc_id}',
+        )
+
+    return len(artifacts)
+
+
 def _handle_create(service, params: dict, channel: str) -> str:
     """Create a new document from text content.
 
@@ -367,13 +447,18 @@ def _handle_create(service, params: dict, channel: str) -> str:
             source_type=params.get('source_type', 'conversation'),
         )
 
-        # Enqueue for processing (chunking, embedding, etc.)
-        from services.document_queue import enqueue_document_processing
-        enqueue_document_processing(doc_id)
+        artifact_count = create_document_artifacts(doc_id, content)
+        service.update_status(doc_id, 'ready', chunk_count=artifact_count)
+
+        summary = content[:500]
+        dot_pos = summary.rfind('. ')
+        if dot_pos > 200:
+            summary = summary[:dot_pos + 1]
+        service.update_summary(doc_id, summary)
 
         return (
             f"[DOCUMENT] Created '{name}' (id={doc_id}). "
-            f"Processing in background — will be searchable shortly."
+            f"{artifact_count} artifact(s) indexed."
         )
 
     except Exception as e:

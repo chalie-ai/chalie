@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(
     embedding float[4]
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
+    gist, action
+);
 """
 
 
@@ -124,6 +128,10 @@ def mem_db():
                 embedding BLOB
             )
         """)
+
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(gist, action)"
+    )
 
     conn.commit()
 

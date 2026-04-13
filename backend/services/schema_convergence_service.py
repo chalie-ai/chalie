@@ -93,6 +93,7 @@ class SchemaConvergenceService:
             virtual_tables_created += self._converge_virtual_tables(desired_virtual, live_virtual, conn, schema_sql)
 
             self._run_drop_statements(schema_sql, conn)
+            self._strip_data_graph_check_constraint(conn)
 
             if is_fresh:
                 self._run_seed_data(schema_sql, conn)
@@ -385,6 +386,49 @@ class SchemaConvergenceService:
                 logger.debug(f"[convergence] Executed drop: {table_name}")
             except Exception as exc:
                 logger.warning(f"[convergence] DROP TABLE {table_name} failed: {exc}")
+
+    def _strip_data_graph_check_constraint(self, live_conn: sqlite3.Connection) -> None:
+        """Strip CHECK constraint from data_graph.kind on existing databases.
+
+        Python validates kind via VALID_KINDS in data_graph_service.py.
+        To be removed when SchemaConvergence handles constraint changes fully.
+        """
+        row = live_conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
+        ).fetchone()
+        if not row or not row[0] or 'CHECK' not in row[0].upper():
+            return
+
+        live_conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            live_conn.execute("""
+                CREATE TABLE data_graph_new (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind              TEXT NOT NULL,
+                    key               TEXT NOT NULL,
+                    value             TEXT,
+                    storage_strength  REAL NOT NULL DEFAULT 0.5,
+                    retrieval_weight  REAL NOT NULL DEFAULT 1.0,
+                    salience_score    REAL NOT NULL DEFAULT 0.0,
+                    evidence_count    INTEGER NOT NULL DEFAULT 1,
+                    first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_accessed_at  TEXT,
+                    source            TEXT,
+                    deleted_at        TEXT,
+                    active            INTEGER NOT NULL DEFAULT 1,
+                    search_queries    TEXT DEFAULT NULL
+                )
+            """)
+            live_conn.execute("INSERT INTO data_graph_new SELECT * FROM data_graph")
+            live_conn.execute("DROP TABLE data_graph")
+            live_conn.execute("ALTER TABLE data_graph_new RENAME TO data_graph")
+            live_conn.execute("INSERT INTO data_graph_fts(data_graph_fts) VALUES('rebuild')")
+            logger.info("[convergence] Stripped CHECK constraint from data_graph.kind")
+        except Exception as exc:
+            logger.warning(f"[convergence] Failed to strip data_graph CHECK constraint: {exc}")
+        finally:
+            live_conn.execute("PRAGMA foreign_keys=ON")
 
     def _run_seed_data(self, schema_sql: str, live_conn: sqlite3.Connection) -> None:
         """Execute INSERT OR IGNORE seed statements on a fresh database."""

@@ -29,8 +29,14 @@ def _auto_execute_gate():
 
 
 @pytest.fixture
-def service():
-    """Create an ActDispatcherService with real innate-skill registration."""
+def service(db):
+    """Create an ActDispatcherService with real innate-skill registration.
+
+    Uses the ``db`` fixture so that ToolRegistryService._load_tools() queries
+    the local test DB instead of the real chalie.db on the network mount.
+    SQLite on SMB is unreliable for file locking; without this the fixture hangs
+    indefinitely on the first SELECT to tool_configs.
+    """
     svc = ActDispatcherService(timeout=2.0)
     yield svc
 

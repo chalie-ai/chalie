@@ -136,23 +136,19 @@ class TestSearchAction:
 
     def test_search_returns_formatted_results(self):
         mock_svc = MagicMock()
-        results = [
-            _make_search_result(),
-            _make_search_result(doc_id="doc00002", document_name="invoice.pdf", page_number=2),
-        ]
-        mock_svc.search_chunks.return_value = results
         mock_svc.get_document.return_value = _make_doc()
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = [
+            {"key": "doc:doc00001:000", "value": "Coverage valid for 24 months.", "source": "document:doc00001", "retrieval_weight": 0.9},
+            {"key": "doc:doc00002:000", "value": "Invoice total: $199.", "source": "document:doc00002", "retrieval_weight": 0.8},
+        ]
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_EMB) as mock_emb:
-            mock_emb_svc = MagicMock()
-            mock_emb_svc.generate_embedding.return_value = [0.1] * 768
-            mock_emb.return_value = mock_emb_svc
+             patch(_P_DGS, return_value=mock_dgs):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "search", "query": "warranty coverage"})
 
-        # Search returns lightweight identification, not content
         assert "warranty.pdf" in result
         assert "id=doc00001" in result
         assert 'action "view"' in result
@@ -165,14 +161,12 @@ class TestSearchAction:
 
     def test_search_no_results(self):
         mock_svc = MagicMock()
-        mock_svc.search_chunks.return_value = []
+        mock_dgs = MagicMock()
+        mock_dgs.recall.return_value = []
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_EMB) as mock_emb:
-            mock_emb_svc = MagicMock()
-            mock_emb_svc.generate_embedding.return_value = [0.1] * 768
-            mock_emb.return_value = mock_emb_svc
+             patch(_P_DGS, return_value=mock_dgs):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "search", "query": "unicorn"})
 
@@ -275,7 +269,7 @@ class TestDeleteAction:
 
         assert "Deleted" in result
         assert "warranty.pdf" in result
-        assert "30 days" in result
+        assert "artifact(s) removed" in result
 
     def test_delete_not_found(self):
         mock_svc = MagicMock()
@@ -350,7 +344,7 @@ class TestRestoreAction:
         mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
 
 
-_P_DOC_QUEUE = "services.document_queue.enqueue_document_processing"
+_P_DGS = "services.data_graph_service.get_data_graph_service"
 
 
 @pytest.mark.unit
@@ -360,10 +354,11 @@ class TestCreateAction:
     def test_create_success(self):
         mock_svc = MagicMock()
         mock_svc.create_document_from_text.return_value = "abc12345"
+        mock_dgs = MagicMock()
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DOC_QUEUE) as mock_queue:
+             patch(_P_DGS, return_value=mock_dgs):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {
                 "action": "create",
@@ -379,7 +374,8 @@ class TestCreateAction:
             text_content="# Research Notes\n\nSome findings here.",
             source_type="conversation",
         )
-        mock_queue.assert_called_once_with("abc12345")
+        mock_svc.update_status.assert_called_once_with("abc12345", "ready", chunk_count=1)
+        mock_dgs.store.assert_called_once()
 
     def test_create_missing_name(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
@@ -402,10 +398,11 @@ class TestCreateAction:
     def test_create_adds_md_extension(self):
         mock_svc = MagicMock()
         mock_svc.create_document_from_text.return_value = "def67890"
+        mock_dgs = MagicMock()
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DOC_QUEUE):
+             patch(_P_DGS, return_value=mock_dgs):
             from services.innate_skills.document_skill import handle_document
             handle_document("topic", {
                 "action": "create",

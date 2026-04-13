@@ -66,7 +66,7 @@ def _make_chunk_dict(chunk_index=0, content="Chunk content here."):
 
 # Patch targets — module-level helpers use direct paths, local imports use source module
 _P_SVC = "api.documents._get_document_service"
-_P_ENQ = "api.documents._enqueue_processing"
+_P_ENQ = "api.documents._process_upload"
 _P_EMB = "services.embedding_service.get_embedding_service"
 
 
@@ -385,33 +385,26 @@ class TestDocumentsAPI:
     # ------------------------------------------------------------------
 
     def test_search_returns_results(self, client):
-        results = [{
-            "document_id": "d1",
-            "document_name": "warranty.pdf",
-            "content": "Coverage for 24 months.",
-            "page_number": 1,
-            "section_title": "Coverage",
-            "score": 0.9,
-            "document_created_at": datetime(2026, 2, 26, tzinfo=timezone.utc),
+        # search_documents now calls DataGraphService.recall(), not the document service
+        dg_results = [{
+            "kind": "document",
+            "key": "doc:d1:000",
+            "value": "Coverage for 24 months.",
+            "source": "document:d1",
         }]
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.search_chunks.return_value = results
+        with patch("services.data_graph_service.get_data_graph_service") as mock_get_dgs:
+            mock_dgs = MagicMock()
+            mock_get_dgs.return_value = mock_dgs
+            mock_dgs.recall.return_value = dg_results
 
-            with patch(_P_EMB) as mock_emb:
-                mock_emb_svc = MagicMock()
-                mock_emb_svc.generate_embedding.return_value = [0.1] * 768
-                mock_emb.return_value = mock_emb_svc
-
-                resp = client.get("/documents/search?q=warranty+coverage")
+            resp = client.get("/documents/search?q=warranty+coverage")
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["query"] == "warranty coverage"
         assert len(data["results"]) == 1
-        # Datetime serialized
-        assert isinstance(data["results"][0]["document_created_at"], str)
+        assert data["results"][0]["document_id"] == "d1"
+        assert data["results"][0]["content"] == "Coverage for 24 months."
 
     def test_search_missing_query(self, client):
         resp = client.get("/documents/search")

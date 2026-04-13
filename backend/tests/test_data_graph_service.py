@@ -17,6 +17,7 @@ from services.data_graph_service import (
     KIND_SYSTEM,
     KIND_MISC,
     KIND_MOMENT,
+    KIND_DOCUMENT,
     _KIND_POLICY,
 )
 from services.database_service import DatabaseService
@@ -36,9 +37,7 @@ DATA_GRAPH_DDL = [
     """
     CREATE TABLE IF NOT EXISTS data_graph (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,
-        kind              TEXT NOT NULL CHECK (kind IN (
-                              'user_specific', 'system', 'misc', 'moment'
-                          )),
+        kind              TEXT NOT NULL,
         key               TEXT NOT NULL,
         value             TEXT,
         storage_strength  REAL NOT NULL DEFAULT 0.5,
@@ -1093,3 +1092,109 @@ class TestKindPolicy:
         p = _KIND_POLICY[KIND_MOMENT]
         assert p['ttl_days'] is None
         assert p['reinforce'] is False
+
+
+# ══════════════════════════════════════════════════════════════════
+# TestDocumentKind
+# ══════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestDocumentKind:
+
+    def test_store_document_kind(self, svc, db_service):
+        """Store a document artifact and verify kind, key, value, source are persisted."""
+        result = svc.store(KIND_DOCUMENT, 'doc:test123:000', 'chunk zero content', source='doc:test123')
+
+        assert result is not None
+        assert result['kind'] == KIND_DOCUMENT
+        assert result['key'] == 'doc:test123:000'
+        assert result['value'] == 'chunk zero content'
+        assert result['source'] == 'doc:test123'
+
+        row = _raw_row(db_service, _rid(result))
+        assert row is not None
+        assert row['kind'] == KIND_DOCUMENT
+        assert row['active'] == 1
+        assert row['deleted_at'] is None
+
+    def test_document_no_reinforce(self, svc, db_service):
+        """document kind has reinforce=False — storing same key+value twice keeps evidence_count=1."""
+        assert _KIND_POLICY[KIND_DOCUMENT]['reinforce'] is False
+
+        r1 = svc.store(KIND_DOCUMENT, 'doc:abc:001', 'some content', source='doc:abc')
+        assert r1 is not None
+        assert r1['evidence_count'] == 1
+
+        r2 = svc.store(KIND_DOCUMENT, 'doc:abc:001', 'some content', source='doc:abc')
+        assert r2 is not None
+
+        assert _rid(r2) == _rid(r1)
+        assert r2['evidence_count'] == 1
+
+    def test_document_hard_delete(self, svc, db_service):
+        """document kind uses hard deletion — hard_delete_by_id removes the row completely."""
+        assert _KIND_POLICY[KIND_DOCUMENT]['deletion'] == 'hard'
+
+        result = svc.store(KIND_DOCUMENT, 'doc:xyz:000', 'deletable chunk', source='doc:xyz')
+        assert result is not None
+        row_id = _rid(result)
+
+        deleted = svc.hard_delete_by_id(row_id)
+        assert deleted is True
+
+        raw = _raw_row(db_service, row_id)
+        assert raw is None
+
+    def test_document_no_decay(self, svc, db_service):
+        """document kind has d_base=0.0 — decay_cycle does not modify retrieval_weight."""
+        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == 0.0
+
+        result = svc.store(KIND_DOCUMENT, 'doc:nodecay:000', 'persistent chunk', source='doc:nodecay')
+        assert result is not None
+        row_id = _rid(result)
+
+        with db_service.connection() as conn:
+            conn.execute(
+                "UPDATE data_graph SET retrieval_weight=0.7, last_confirmed_at='2020-01-01T00:00:00+00:00' WHERE rowid=?",
+                (row_id,)
+            )
+
+        svc.decay_cycle()
+
+        raw = _raw_row(db_service, row_id)
+        assert raw is not None
+        assert raw['retrieval_weight'] == pytest.approx(0.7, abs=0.001)
+
+    def test_document_recall_with_kinds_filter(self, svc, db_service):
+        """kinds=['document'] returns only document rows; kinds=['user_specific'] excludes them."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:solar:000',
+                    value='solar panels efficiency rating')
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='user_pref',
+                    value='solar panels efficiency rating')
+
+        doc_results = svc.recall('solar panels efficiency', kinds=[KIND_DOCUMENT])
+        doc_kinds = {r['kind'] for r in doc_results}
+        assert doc_kinds == {KIND_DOCUMENT}
+
+        user_results = svc.recall('solar panels efficiency', kinds=[KIND_USER_SPECIFIC])
+        user_kinds = {r['kind'] for r in user_results}
+        assert user_kinds == {KIND_USER_SPECIFIC}
+
+    def test_document_fts_indexed(self, svc, db_service):
+        """FTS index includes document artifact — direct FTS query finds the stored row."""
+        result = svc.store(KIND_DOCUMENT, 'doc:energy:000', 'solar panels efficiency', source='doc:energy')
+        assert result is not None
+        row_id = _rid(result)
+
+        fts_hits = _raw_fts(db_service, 'solar')
+        assert row_id in fts_hits
+
+    def test_document_policy_values(self):
+        """_KIND_POLICY['document'] has the exact values the document artifact system depends on."""
+        p = _KIND_POLICY[KIND_DOCUMENT]
+        assert p['ttl_days'] is None
+        assert p['reinforce'] is False
+        assert p['contradiction'] is None
+        assert p['deletion'] == 'hard'
+        assert p['d_base'] == 0.0
+        assert p['salience_floor'] == 0.0
