@@ -39,7 +39,7 @@ def _resolve_country_code(country) -> str:
     return _COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
 
 
-def execute(topic: str, params: dict, config=None, telemetry=None) -> dict:
+def execute(_topic, params: dict, config=None, telemetry=None) -> dict:
     query = (params.get("query") or "").strip()
     if not query:
         return {"text": "", "error": "A 'query' parameter is required."}

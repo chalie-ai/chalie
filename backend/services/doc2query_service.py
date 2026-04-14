@@ -195,7 +195,7 @@ class Doc2QueryService:
         filtered_probs = sorted_probs * mask
         filtered_probs /= filtered_probs.sum()
 
-        chosen_idx = np.random.default_rng().choice(len(filtered_probs), p=filtered_probs)
+        chosen_idx = np.random.default_rng().choice(len(filtered_probs), p=filtered_probs)  # NOSONAR
         return int(sorted_indices[chosen_idx])
 
 

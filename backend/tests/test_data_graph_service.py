@@ -1196,8 +1196,8 @@ class TestDocumentKind:
         assert p['reinforce'] is False
         assert p['contradiction'] is None
         assert p['deletion'] == 'hard'
-        assert p['d_base'] == 0.0
-        assert p['salience_floor'] == 0.0
+        assert p['d_base'] == pytest.approx(0.0)
+        assert p['salience_floor'] == pytest.approx(0.0)
 
 
 # ══════════════════════════════════════════════════════════════════

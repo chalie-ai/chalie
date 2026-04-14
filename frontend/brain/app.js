@@ -378,7 +378,7 @@ function renderProviders() {
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}</div>
                 <div class="provider-meta">
-                    <span class="provider-platform-badge badge-${p.platform}">${p.platform}</span>
+                    <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
                     ${modelsDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
@@ -823,10 +823,10 @@ function renderCognition() {
         }).join('');
 
         return `
-            <div class="group-card" data-group="${groupName}">
+            <div class="group-card" data-group="${escapeHtml(groupName)}">
                 <div class="group-card__header">
                     <div class="group-card__title">
-                        <span class="group-card__icon">${meta.icon}</span>
+                        <span class="group-card__icon">${escapeHtml(meta.icon)}</span>
                         <span class="group-card__name">${escapeHtml(meta.name)}</span>
                         <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
                     </div>
@@ -834,11 +834,11 @@ function renderCognition() {
                 </div>
                 <div class="group-card__assign">
                     <div class="group-card__selects">
-                        <select class="provider-select group-provider-select" data-group="${groupName}">
+                        <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
                             <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
                             ${providerOptions}
                         </select>
-                        <select class="provider-select group-model-select" data-group="${groupName}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
+                        <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
                             <option value="">-- Select model --</option>
                             ${modelOptions}
                         </select>
@@ -846,8 +846,8 @@ function renderCognition() {
                     ${statusText}
                 </div>
                 <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
-                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
+                    <button class="group-advanced-toggle" data-group="${escapeHtml(groupName)}">Advanced \u25B8</button>
+                    <div class="group-advanced-body" data-group="${escapeHtml(groupName)}" style="display:none">
                         ${jobRowsHtml}
                     </div>
                 </div>

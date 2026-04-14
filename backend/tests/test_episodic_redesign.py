@@ -160,7 +160,7 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("SELECT emotional_valence FROM episodes WHERE id = ?",
                              (episode_id,)).fetchone()
-        assert pytest.approx(row['emotional_valence']) == 0.75
+        assert row['emotional_valence'] == pytest.approx(0.75)
 
     def test_emotional_arousal_stored(self, mem_db, episodic_svc):
         """emotional_arousal float is stored and retrievable."""
@@ -170,7 +170,7 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("SELECT emotional_arousal FROM episodes WHERE id = ?",
                              (episode_id,)).fetchone()
-        assert pytest.approx(row['emotional_arousal']) == 0.4
+        assert row['emotional_arousal'] == pytest.approx(0.4)
 
     def test_consolidated_from_stored_as_json(self, mem_db, episodic_svc):
         """consolidated_from list is persisted as a JSON array."""
@@ -191,7 +191,7 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("SELECT storage_strength FROM episodes WHERE id = ?",
                              (episode_id,)).fetchone()
-        assert pytest.approx(row['storage_strength']) == 1.5
+        assert row['storage_strength'] == pytest.approx(1.5)
 
     def test_retrieval_weight_stored(self, mem_db, episodic_svc):
         """retrieval_weight is stored and retrievable."""
@@ -201,7 +201,7 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("SELECT retrieval_weight FROM episodes WHERE id = ?",
                              (episode_id,)).fetchone()
-        assert pytest.approx(row['retrieval_weight']) == 0.8
+        assert row['retrieval_weight'] == pytest.approx(0.8)
 
     def test_new_columns_default_when_absent(self, mem_db, episodic_svc):
         """When new optional columns are omitted, defaults are applied."""
@@ -222,8 +222,8 @@ class TestStoreEpisodeNewColumns:
         assert row['emotional_valence'] is None
         assert row['emotional_arousal'] is None
         assert json.loads(row['consolidated_from']) == []
-        assert pytest.approx(row['storage_strength']) == 1.0
-        assert pytest.approx(row['retrieval_weight']) == 1.0
+        assert row['storage_strength'] == pytest.approx(1.0)
+        assert row['retrieval_weight'] == pytest.approx(1.0)
         assert row['transcript_id_start'] is None
         assert row['transcript_id_end'] is None
 
@@ -257,11 +257,11 @@ class TestStoreEpisodeNewColumns:
         assert row['transcript_id_end'] == 3
         assert json.loads(row['entities']) == ['Alice', 'Bob']
         assert json.loads(row['goal_tags']) == ['goal-a']
-        assert pytest.approx(row['emotional_valence']) == -0.3
-        assert pytest.approx(row['emotional_arousal']) == 0.6
+        assert row['emotional_valence'] == pytest.approx(-0.3)
+        assert row['emotional_arousal'] == pytest.approx(0.6)
         assert json.loads(row['consolidated_from']) == src_ids
-        assert pytest.approx(row['storage_strength']) == 1.2
-        assert pytest.approx(row['retrieval_weight']) == 0.9
+        assert row['storage_strength'] == pytest.approx(1.2)
+        assert row['retrieval_weight'] == pytest.approx(0.9)
 
 
 # ── store_episode: deduplication on overlapping transcript ranges ─────────────

@@ -612,11 +612,6 @@ class TestPostTurn:
         # postTurn() internally catches MetricsService failures — must never raise
         p.postTurn()  # no assertion needed — just must not raise
 
-    def test_post_turn_returns_none(self, db, store):
-        from services.tool_synthesis_processor import ToolSynthesisProcessor
-        p = ToolSynthesisProcessor(raw_input='test', metadata={})
-        p.postTurn()  # void method — must not raise
-
 
 # ── TestRunCycleSkipLogic ──────────────────────────────────────────────────────
 
@@ -723,7 +718,7 @@ class TestDigestFormat:
         result = _gather_recent_tool_calls()
 
         assert result is not None
-        assert 'https://example.com' in result  # NOSONAR: content assertion, not URL validation
+        assert 'https://example.com' in result  # NOSONAR
 
     def test_default_empty_params_omitted(self, db, store):
         """The default '{}' params value does not appear in the digest."""

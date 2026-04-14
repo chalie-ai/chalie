@@ -95,14 +95,14 @@ def handle_document(channel: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = DocumentService(db)
-        return _dispatch(service, action, params, channel)
+        return _dispatch(service, action, params)
 
     except Exception as e:
         logger.error(f"[DOCUMENT SKILL] Error: {e}", exc_info=True)
         return f"[DOCUMENT] Error: {e}"
 
 
-def _dispatch(service, action: str, params: dict, channel: str) -> str:
+def _dispatch(service, action: str, params: dict) -> str:
     if action == 'search':
         return _handle_search(service, params)
     elif action == 'list':

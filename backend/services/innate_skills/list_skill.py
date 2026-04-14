@@ -97,14 +97,14 @@ def handle_list(channel: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = ListService(db)
-        return _dispatch(service, action, params, channel)
+        return _dispatch(service, action, params)
 
     except Exception as e:
         logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
         return _fail(str(e))
 
 
-def _dispatch(service, action: str, params: dict, channel: str) -> str:
+def _dispatch(service, action: str, params: dict) -> str:
     if action == 'add':
         return _handle_add(service, params)
     elif action == 'remove':
