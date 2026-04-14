@@ -539,7 +539,6 @@ class SelfModelService:
         """
         notes = []
         op = snapshot.get("operational", {})
-        ep = snapshot.get("epistemic", {})
 
         # Dead worker threads (severity: 0.6)
         dead = op.get("thread_health", {}).get("dead_threads", [])

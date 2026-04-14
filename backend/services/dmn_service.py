@@ -260,7 +260,7 @@ class DMNService:
             try:
                 loop_list = json.loads(open_loops) if open_loops else []
                 if loop_list:
-                    lines.append(f"   Open loops: {', '.join(str(l) for l in loop_list)}")
+                    lines.append(f"   Open loops: {', '.join(str(item) for item in loop_list)}")
             except (ValueError, TypeError):
                 pass
 

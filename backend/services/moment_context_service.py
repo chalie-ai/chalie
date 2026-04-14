@@ -7,8 +7,6 @@ each as a moment row via DataGraphService. Idempotent: key = moment_{transcript_
 
 import logging
 import time
-import uuid
-
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)

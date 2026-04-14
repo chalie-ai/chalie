@@ -18,7 +18,6 @@ Permission model:
   - Cookie-authenticated requests (chat UI) are always permitted.
 """
 
-import json
 import logging
 
 from flask import Blueprint, g, jsonify, request

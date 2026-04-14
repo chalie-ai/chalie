@@ -10,9 +10,8 @@ so every lazy import inside base.py gets the isolated test instance.
 """
 
 import json
-import queue
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from capabilities.base import AbstractCapability
 

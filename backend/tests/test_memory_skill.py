@@ -610,7 +610,7 @@ class TestHandleMemoryReflect:
         with patch('services.innate_skills.memory_skill.recall_episodes',
                    return_value=([fake_ep], '1 matches')), \
              patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
-            result = handle_memory('topic', {'action': 'reflect', 'query': 'test'})
+            handle_memory('topic', {'action': 'reflect', 'query': 'test'})
 
         # _search_data_graph called with limit=2 and non-document kinds
         mock_dgs.recall.assert_called_once_with(

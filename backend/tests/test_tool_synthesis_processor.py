@@ -339,7 +339,7 @@ class TestChunking:
 class TestProcessorClass:
     """ToolSynthesisProcessor class attributes and method contracts."""
 
-    def _make(self, raw_input: str = 'test digest') -> 'ToolSynthesisProcessor':
+    def _make(self, raw_input: str = 'test digest'):
         from services.tool_synthesis_processor import ToolSynthesisProcessor
         return ToolSynthesisProcessor(raw_input=raw_input, metadata={})
 

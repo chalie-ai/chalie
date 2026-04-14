@@ -562,12 +562,11 @@ class TestSplitIntoArtifacts:
 # create_document_artifacts — uses real DataGraphService (in-memory SQLite)
 # ---------------------------------------------------------------------------
 
-import contextlib
-import sqlite3
+import contextlib  # noqa: E402
+import sqlite3  # noqa: E402
 
-from services.data_graph_service import DataGraphService, KIND_DOCUMENT
-from services.database_service import DatabaseService
-from services.time_utils import utc_now
+from services.data_graph_service import DataGraphService, KIND_DOCUMENT  # noqa: E402
+from services.database_service import DatabaseService  # noqa: E402
 
 # Reuse the same DDL structure as test_data_graph_service.py for consistency
 _DGA_DDL = [

@@ -1,6 +1,5 @@
 """Tests for world_awareness_service — interest extraction and news scanning."""
 
-import json
 from unittest.mock import MagicMock
 
 import numpy as np

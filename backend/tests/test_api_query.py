@@ -15,7 +15,6 @@ Fixtures:
   bearer_app  — Flask test app where auth succeeds with g.wrapper_id = "wrp_test"
 """
 
-import json
 import pytest
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch

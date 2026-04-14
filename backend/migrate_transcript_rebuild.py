@@ -342,8 +342,8 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
             # transcript_vec is a virtual table; deletion may fail on some sqlite-vec
             # versions — non-fatal, just log
             print(f"\n  WARNING: Could not clean transcript_vec: {e}")
-            print(f"           Orphaned vec entries will not affect build_messages() "
-                  f"but may appear in semantic search until overwritten.")
+            print("           Orphaned vec entries will not affect build_messages() "
+                  "but may appear in semantic search until overwritten.")
 
         # ── 6. Re-insert clean pairs ─────────────────────────────────────
 
@@ -368,7 +368,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
           f"({len(clean_pairs) * 2} transcript rows)")
     print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
     print(f"  Deleted {stats['vec_entries_deleted']} transcript_vec embedding entries")
-    print(f"  Compaction cleared (will rebuild naturally)")
+    print("  Compaction cleared (will rebuild naturally)")
     print()
     print("  NOTE: Re-inserted rows have no vector embeddings. Semantic search")
     print("        on this history won't work until new activity is logged.")

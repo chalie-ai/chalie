@@ -287,7 +287,7 @@ class TestGetMoments:
         t2 = _insert_transcript(db_service, role='assistant', content='Deleted')
 
         dgs.store(kind='moment', key=f'moment_{t1}', value='Kept', source='pin')
-        row2 = dgs.store(kind='moment', key=f'moment_{t2}', value='Deleted', source='pin')
+        dgs.store(kind='moment', key=f'moment_{t2}', value='Deleted', source='pin')
 
         # Soft-delete the second one directly
         with db_service.connection() as conn:

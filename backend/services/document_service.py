@@ -260,10 +260,12 @@ class DocumentService:
         """
         doc_id = secrets.token_hex(4)
 
-        # Write markdown to disk
+        # Write markdown to disk — strip any path components from the filename
+        # to prevent directory traversal via a crafted original_name.
+        safe_name = os.path.basename(original_name) or "document.md"
         doc_dir = os.path.join(DOCUMENTS_ROOT, doc_id)
         os.makedirs(doc_dir, exist_ok=True)
-        file_path = os.path.join(doc_dir, original_name)
+        file_path = os.path.join(doc_dir, safe_name)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(text_content)
 
@@ -271,10 +273,10 @@ class DocumentService:
         file_size = len(text_content.encode('utf-8'))
 
         self.create_document(
-            original_name=original_name,
+            original_name=safe_name,
             mime_type='text/markdown',
             file_size=file_size,
-            file_path=f"{doc_id}/{original_name}",
+            file_path=f"{doc_id}/{safe_name}",
             file_hash=file_hash,
             source_type=source_type,
             doc_id=doc_id,
@@ -669,9 +671,12 @@ class DocumentService:
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
-                file_dir = os.path.join(DOCUMENTS_ROOT, doc_id)
-                if os.path.exists(file_dir):
-                    shutil.rmtree(file_dir, ignore_errors=True)
+                # Validate doc_id is a safe hex token before using in path construction.
+                safe_doc_id = os.path.basename(doc_id)
+                file_dir = os.path.join(DOCUMENTS_ROOT, safe_doc_id)
+                resolved = os.path.realpath(file_dir)
+                if resolved.startswith(os.path.realpath(DOCUMENTS_ROOT)) and os.path.exists(resolved):
+                    shutil.rmtree(resolved, ignore_errors=True)
             if deleted:
                 logger.info(f"[DOCS] Hard-deleted document {doc_id}")
 

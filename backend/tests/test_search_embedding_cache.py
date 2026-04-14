@@ -266,7 +266,7 @@ class TestSearchExecute:
 
 # ── generate_search_cache.py ─────────────────────────────────────────────────
 
-import importlib.util as _importlib_util
+import importlib.util as _importlib_util  # noqa: E402
 
 _GENERATOR = Path(__file__).resolve().parent.parent.parent / 'utils' / 'generate_search_cache.py'
 

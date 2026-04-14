@@ -7,6 +7,7 @@ Tests cover:
 - _run_compaction() LLM call and storage
 """
 
+import pytest
 from unittest.mock import patch, MagicMock
 
 
@@ -241,9 +242,6 @@ class TestCompactionTopicContext:
         from services.compaction_service import get_compaction
         result = get_compaction('nonexistent')
         assert result is None
-
-
-import pytest
 
 
 @pytest.mark.unit
