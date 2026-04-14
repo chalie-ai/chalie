@@ -194,9 +194,13 @@ class TestCheckConceptConflict:
 @pytest.mark.unit
 class TestSampleMemoriesForReconcile:
     def test_returns_empty_without_data(self):
+        from unittest.mock import patch, MagicMock
         db = FakeDB()
         svc = ContradictionClassifierService(db_service=db)
-        result = svc.sample_memories_for_reconcile(n_traits=5)
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = []
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = svc.sample_memories_for_reconcile(n_traits=5)
         # May return empty list — no error
         assert isinstance(result, list)
 

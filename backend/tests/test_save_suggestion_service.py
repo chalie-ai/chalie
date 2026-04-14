@@ -346,7 +346,8 @@ class TestDocumentCreation:
              patch.object(service, '_synthesize_document', return_value="# Workout Plan\n\nGenerated content..."):
 
             with patch('services.database_service.get_shared_db_service'), \
-                 patch('services.document_service.DocumentService', return_value=mock_doc_svc):
+                 patch('services.document_service.DocumentService', return_value=mock_doc_svc), \
+                 patch('services.innate_skills.document_skill.create_document_artifacts', return_value=3):
                 doc_id = service.create_document_from_conversation('fitness', 'plan')
 
         assert doc_id == 'abc12345'

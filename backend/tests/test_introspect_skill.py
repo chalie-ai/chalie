@@ -70,18 +70,18 @@ def _seed_interaction(db, event_type='message_received', n=1):
 @pytest.mark.unit
 class TestOutputStructure:
 
-    def test_starts_with_introspect_prefix(self):
+    def test_starts_with_introspect_prefix(self, db, store):
         result = _invoke()
         assert result.startswith('[INTROSPECT]')
 
-    def test_returns_all_four_scope_headers(self):
+    def test_returns_all_four_scope_headers(self, db, store):
         result = _invoke()
         assert '## Memory Health'      in result
         assert '## Skill & Tool Usage' in result
         assert '## Reasoning State'    in result
         assert '## Identity'           in result
 
-    def test_sections_appear_in_order(self):
+    def test_sections_appear_in_order(self, db, store):
         result = _invoke()
         positions = [
             result.index('## Memory Health'),
@@ -91,7 +91,7 @@ class TestOutputStructure:
         ]
         assert positions == sorted(positions)
 
-    def test_result_is_string(self):
+    def test_result_is_string(self, db, store):
         result = _invoke()
         assert isinstance(result, str)
 
@@ -187,10 +187,11 @@ class TestMemoryHealthScope:
 
         assert result == 'Memory: unavailable.'
 
-    def test_memory_health_graceful_degradation_via_full_output(self):
+    def test_memory_health_graceful_degradation_via_full_output(self, store):
         """Degraded memory scope must not crash the overall introspect output."""
         with patch(_SELF_MODEL, side_effect=Exception('import fail')), \
-             patch(_DB, side_effect=Exception('db fail')):
+             patch(_DB, side_effect=Exception('db fail')), \
+             patch('services.data_graph_service.get_data_graph_service', side_effect=Exception('dgs fail')):
             result = _invoke()
 
         assert '[INTROSPECT]'      in result
@@ -432,10 +433,11 @@ class TestIdentityScope:
 
         assert 'formal' in result
 
+    @patch('services.data_graph_service.get_data_graph_service', side_effect=RuntimeError('dgs fail'))
     @patch(_KNOWLEDGE)
     @patch(_DB)
     def test_identity_graceful_degradation(
-        self, mock_db_fn, mock_ks_cls
+        self, mock_db_fn, mock_ks_cls, mock_dgs_fn
     ):
         """When every identity sub-service fails the scope returns the fallback string."""
         mock_db_fn.return_value = MagicMock(

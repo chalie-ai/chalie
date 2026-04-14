@@ -74,7 +74,8 @@ def test_run_analysis_publishes_image_ready_on_success():
     }
 
     with patch('api.chat_image._get_store', return_value=store), \
-         patch('services.image_context_service.analyze', return_value=mock_result):
+         patch('services.image_context_service.analyze', return_value=mock_result), \
+         patch('api.chat_image._persist_analysis_result'):
         _run_analysis('testid001testid0', b'fake-png-bytes', 'image/png')
 
     assert published, "store.publish() should be called at least once on success"
@@ -111,7 +112,8 @@ def test_run_analysis_publishes_image_ready_on_failure():
 
     with patch('api.chat_image._get_store', return_value=store), \
          patch('services.image_context_service.analyze',
-               side_effect=RuntimeError('No vision provider configured')):
+               side_effect=RuntimeError('No vision provider configured')), \
+         patch('api.chat_image._persist_analysis_result'):
         _run_analysis('failid002failid0', b'fake-png-bytes', 'image/png')
 
     assert published, "store.publish() should be called even when analysis fails"
@@ -154,7 +156,8 @@ def test_run_analysis_stores_result_before_publishing():
     }
 
     with patch('api.chat_image._get_store', return_value=store), \
-         patch('services.image_context_service.analyze', return_value=mock_result):
+         patch('services.image_context_service.analyze', return_value=mock_result), \
+         patch('api.chat_image._persist_analysis_result'):
         _run_analysis(image_id, b'bytes', 'image/jpeg')
 
     result_key = f'chat_image_result:{image_id}'

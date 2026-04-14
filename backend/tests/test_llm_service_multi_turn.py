@@ -269,7 +269,8 @@ class TestRefreshableMultiTurn:
         expected = LLMResponse(text="ok", model="test", provider="anthropic")
         inner.send_messages.return_value = expected
 
-        with patch.object(svc, '_ensure_fresh'):
+        with patch.object(svc, '_ensure_fresh'), \
+             patch('services.llm_service._log_llm_call'):
             result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
 
         inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)

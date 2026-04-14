@@ -197,7 +197,6 @@ class TestMailCapabilityConfigure:
             cap.configure({"email": "user@outlook.com", "password": "app-pw"})
 
         # Outlook only has IMAP
-        raw_protocols = cap.load_credential("mail:protocols")
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             raw_protocols = cap.load_credential("mail:protocols")
         protocols = json.loads(raw_protocols)

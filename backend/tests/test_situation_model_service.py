@@ -554,7 +554,6 @@ class TestMetaVersion:
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -575,7 +574,6 @@ class TestMetaVersion:
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -622,7 +620,6 @@ class TestStalenessTracking:
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
@@ -650,7 +647,6 @@ class TestGracefulDegradation:
         patches = [
             patch.object(svc, "_collect_ambient", side_effect=_raise),
             patch.object(svc, "_collect_topic", side_effect=_raise),
-            patch.object(svc, "_collect_identity", side_effect=_raise),
             patch.object(svc, "_collect_client", side_effect=_raise),
             patch.object(svc, "_collect_engagement", side_effect=_raise),
             patch.object(svc, "_collect_spark", side_effect=_raise),
@@ -803,7 +799,6 @@ class TestCacheRead:
 
         with patch.object(svc, "_collect_ambient", return_value={"place": None, "energy": "moderate", "attention": "casual", "mobility": None, "tempo": None, "device_context": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_topic", return_value={"name": None, "confidence": 0.5, "is_new": False, "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_identity", return_value={"assertiveness": 0.5, "warmth": 0.5, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \

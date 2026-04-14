@@ -59,14 +59,18 @@ class TestCalculateNextDue:
         assert next_due == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
 
     def test_hourly_within_window(self):
+        from zoneinfo import ZoneInfo
         due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
-        next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
+        with patch('services.time_utils.get_user_tz', return_value=ZoneInfo("UTC")):
+            next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
         assert next_due == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
 
     def test_hourly_past_window_end(self):
         """Past window end should advance to next day's window start."""
+        from zoneinfo import ZoneInfo
         due_at = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
-        next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
+        with patch('services.time_utils.get_user_tz', return_value=ZoneInfo("UTC")):
+            next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
         assert next_due.day == 16
         assert next_due.hour == 9
 

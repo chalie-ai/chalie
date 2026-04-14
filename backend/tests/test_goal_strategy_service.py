@@ -181,6 +181,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value="- [explicit] Learn Rust"), \
              patch('services.goal_strategy_service._get_user_context', return_value="Values: engineering growth"), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value="Search for beginner Rust tutorials and bookmark the top three."), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 
@@ -198,6 +199,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value=""), \
              patch('services.goal_strategy_service._get_user_context', return_value=""), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value=None), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 
@@ -224,6 +226,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value="evidence"), \
              patch('services.goal_strategy_service._get_user_context', return_value="context"), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value=""), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 

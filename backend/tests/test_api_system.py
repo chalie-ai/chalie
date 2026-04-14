@@ -314,10 +314,10 @@ class TestSystemAPI:
 
     def test_delete_trait_returns_200(self, client, db):
         """DELETE /system/observability/traits/<key> returns 200 when row is deleted."""
-        # Seed a trait to be deleted
+        # Seed a trait to be deleted — data_graph replaces knowledge for user_specific traits
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence) "
-            "VALUES ('trait', 'user', 'favorite_drink', 'coffee', 0.9)"
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight) "
+            "VALUES ('user_specific', 'favorite_drink', 'coffee', 0.9)"
         )
         db.commit()
 

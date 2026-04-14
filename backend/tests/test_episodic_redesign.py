@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     consolidated_from TEXT DEFAULT '[]',
     storage_strength REAL DEFAULT 1.0,
     retrieval_weight REAL DEFAULT 1.0
-)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(gist, action);
 """
 
 

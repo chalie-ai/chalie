@@ -161,18 +161,19 @@ class TestSearchExecute:
     def test_empty_query(self):
         from tools.search.search import execute
         r = execute("topic", {})
-        assert r == {'results': [], 'count': 0, 'providers_used': [], '_meta': {}}
+        assert r == {'text': 'No results found'}
 
     def test_whitespace_query(self):
         from tools.search.search import execute
         r = execute("topic", {"query": "   "})
-        assert r['count'] == 0
+        assert r == {'text': 'No results found'}
 
     def test_forced_ddg(self):
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r"}]) as m:
+        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m:
             from tools.search.search import execute
             r = execute("t", {"query": "test", "provider": "ddg"})
-        assert 'ddg' in r['providers_used']
+        assert 'text' in r
+        assert r['text'] != 'No results found'
         m.assert_called_once()
 
     def test_forced_known_provider(self, tmp_path):
@@ -180,10 +181,11 @@ class TestSearchExecute:
         db = _make_providers_db(tmp_path, providers=[(1, "brave", 1)])
         import tools.search.search as s
         with patch.object(s, '_DB', str(db)), \
-             patch('tools.search.search.fetch_providers', return_value=[{"title": "r"}]) as m, \
+             patch('tools.search.search.fetch_providers', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m, \
              patch('tools.search.search.fetch_ddg_fallback'):
             r = s.execute("t", {"query": "test", "provider": "brave"})
-        assert 'brave' in r['providers_used']
+        assert 'text' in r
+        assert r['text'] != 'No results found'
         m.assert_called_once()
 
     def test_forced_unknown_provider(self):
@@ -192,16 +194,17 @@ class TestSearchExecute:
         s._providers = {'brave': {'name': 'brave'}}
         with patch('tools.search.search.fetch_ddg_fallback', return_value=[]):
             r = s.execute("t", {"query": "test", "provider": "nonexistent"})
-        assert r['_meta'].get('error')
+        assert r == {'text': 'No results found'}
 
     def test_router_failure_falls_back_to_ddg(self):
         self._reset()
         import tools.search.search as s
         s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r"}]), \
+        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]), \
              patch('tools.search.router.route_query', side_effect=Exception("boom")):
             r = s.execute("t", {"query": "test"})
-        assert 'ddg' in r['providers_used']
+        assert 'text' in r
+        assert r['text'] != 'No results found'
 
     def test_limit_clamped_high(self):
         self._reset()
@@ -234,12 +237,14 @@ class TestSearchExecute:
         self._reset()
         import tools.search.search as s
         s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[]), \
+        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": "desc"}]), \
              patch('tools.search.router.route_query', return_value=[]):
             r = s.execute("t", {"query": "test"})
-        for key in ('results', 'count', 'providers_used', '_meta'):
-            assert key in r
-        assert r['count'] == len(r['results'])
+        assert 'text' in r
+        import json
+        parsed = json.loads(r['text'])
+        assert 'results' in parsed
+        assert isinstance(parsed['results'], list)
 
     def test_load_providers_filters_disabled(self, tmp_path):
         self._reset()

@@ -245,9 +245,12 @@ class TestDeleteAction:
         mock_svc = MagicMock()
         mock_svc.get_document.return_value = _make_doc()
         mock_svc.soft_delete.return_value = True
+        mock_dgs = MagicMock()
+        mock_dgs.hard_delete_by_source_prefix.return_value = 3
 
         with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc):
+             patch(_P_DOC_SVC, return_value=mock_svc), \
+             patch(_P_DGS, return_value=mock_dgs):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "delete", "id": "doc00001"})
 

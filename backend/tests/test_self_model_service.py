@@ -12,9 +12,20 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+# Patch get_shared_db_service for every test in this module so that any service
+# instantiated inside SelfModelService (e.g. ToolRegistryService, ToolConfigService)
+# uses the in-memory test DB rather than the real chalie.db on the SMB mount.
+pytestmark = pytest.mark.usefixtures('db')
+
 
 def _make_service(db=None):
-    """Create SelfModelService with optional DB override."""
+    """Create SelfModelService with optional DB override.
+
+    With ``pytestmark`` applying the ``db`` fixture to every test, passing
+    ``db=None`` is safe: ``_get_db()`` will fall through to the patched
+    ``get_shared_db_service()`` singleton rather than opening chalie.db.
+    Pass ``db`` explicitly only when you need to verify DB-backed behaviour.
+    """
     from services.self_model_service import SelfModelService
     return SelfModelService(db_service=db)
 
@@ -136,7 +147,10 @@ class TestGetSnapshot:
 
         db.commit()
 
-        svc = _make_service()
+        # db fixture yields raw sqlite3.Connection for seeding; get_shared_db_service()
+        # returns the DatabaseService singleton patched by the fixture.
+        from services.database_service import get_shared_db_service
+        svc = _make_service(get_shared_db_service())
         pressure = svc._get_memory_pressure()
 
         assert pressure["episode_count"] == 42
