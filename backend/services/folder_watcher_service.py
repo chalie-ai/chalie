@@ -469,6 +469,13 @@ class FolderWatcherService:
                         new_doc_id = self._create_watched_document(
                             doc_svc, folder, abs_path, file_hash, mtime)
                         doc_svc.set_supersedes(new_doc_id, existing['id'])
+                        # Cascade-delete old artifacts — stale content must not
+                        # surface alongside the new version.
+                        try:
+                            from services.data_graph_service import get_data_graph_service
+                            get_data_graph_service().hard_delete_by_source_prefix(f'document:{existing["id"]}')
+                        except Exception as exc:
+                            logger.warning("[WATCHER] Failed to cascade-delete old artifacts for %s: %s", existing['id'], exc)
                         doc_svc.soft_delete(existing['id'])
                         self._process_watched_document(new_doc_id, abs_path)
                         scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}

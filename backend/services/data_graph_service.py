@@ -682,6 +682,7 @@ class DataGraphService:
                         'kind': d.get('kind'),
                         'key': d.get('key'),
                         'value': d.get('value'),
+                        'source': d.get('source'),
                         'retrieval_weight': d.get('retrieval_weight'),
                         'evidence_count': d.get('evidence_count'),
                         'composite_score': d.get('composite_score'),

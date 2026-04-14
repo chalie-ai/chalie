@@ -424,9 +424,19 @@ class SchemaConvergenceService:
             live_conn.execute("DROP TABLE data_graph")
             live_conn.execute("ALTER TABLE data_graph_new RENAME TO data_graph")
             live_conn.execute("INSERT INTO data_graph_fts(data_graph_fts) VALUES('rebuild')")
+            # Recreate indexes destroyed when the old table was dropped.
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_kind      ON data_graph(kind)",
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_key       ON data_graph(key)",
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval ON data_graph(retrieval_weight DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_active    ON data_graph(kind, active) WHERE deleted_at IS NULL",
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed ON data_graph(last_confirmed_at)",
+            ]:
+                live_conn.execute(idx_sql)
             logger.info("[convergence] Stripped CHECK constraint from data_graph.kind")
         except Exception as exc:
-            logger.warning(f"[convergence] Failed to strip data_graph CHECK constraint: {exc}")
+            logger.error(f"[convergence] Failed to strip data_graph CHECK constraint: {exc}")
+            raise
         finally:
             live_conn.execute("PRAGMA foreign_keys=ON")
 

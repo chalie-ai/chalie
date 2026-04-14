@@ -1072,3 +1072,201 @@ class TestConvergeJobAssignments:
         assert "orphan" in summary, (
             f"Orphan prune count not mentioned in convergence summary. Got: {summary!r}"
         )
+
+
+# ── TestStripDataGraphCheckConstraint ─────────────────────────────────────────
+
+@pytest.mark.unit
+class TestStripDataGraphCheckConstraint:
+    """_strip_data_graph_check_constraint removes CHECK(kind IN (...)) from
+    data_graph and preserves all rows and the FTS virtual table."""
+
+    # DDL that mimics an old data_graph with a CHECK constraint on kind.
+    _OLD_DDL_WITH_CHECK = """
+    CREATE TABLE data_graph (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind              TEXT NOT NULL CHECK(kind IN ('user_specific','system','misc','moment')),
+        key               TEXT NOT NULL,
+        value             TEXT,
+        storage_strength  REAL NOT NULL DEFAULT 0.5,
+        retrieval_weight  REAL NOT NULL DEFAULT 1.0,
+        salience_score    REAL NOT NULL DEFAULT 0.0,
+        evidence_count    INTEGER NOT NULL DEFAULT 1,
+        first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        last_confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_accessed_at  TEXT,
+        source            TEXT,
+        deleted_at        TEXT,
+        active            INTEGER NOT NULL DEFAULT 1,
+        search_queries    TEXT DEFAULT NULL
+    )
+    """
+
+    _NEW_DDL_NO_CHECK = """
+    CREATE TABLE data_graph (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind              TEXT NOT NULL,
+        key               TEXT NOT NULL,
+        value             TEXT,
+        storage_strength  REAL NOT NULL DEFAULT 0.5,
+        retrieval_weight  REAL NOT NULL DEFAULT 1.0,
+        salience_score    REAL NOT NULL DEFAULT 0.0,
+        evidence_count    INTEGER NOT NULL DEFAULT 1,
+        first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        last_confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_accessed_at  TEXT,
+        source            TEXT,
+        deleted_at        TEXT,
+        active            INTEGER NOT NULL DEFAULT 1,
+        search_queries    TEXT DEFAULT NULL
+    )
+    """
+
+    _FTS_DDL = """
+    CREATE VIRTUAL TABLE data_graph_fts USING fts5(
+        key, value, kind, search_queries,
+        tokenize='porter unicode61'
+    )
+    """
+
+    def _build_conn_with_check(self, tmp_path, rows=None) -> sqlite3.Connection:
+        """Return an open connection to a DB with CHECK constraint and optionally pre-inserted rows."""
+        conn = sqlite3.connect(str(tmp_path / "check_test.db"))
+        conn.execute(self._OLD_DDL_WITH_CHECK)
+        conn.execute(self._FTS_DDL)
+        if rows:
+            for kind, key, value in rows:
+                conn.execute(
+                    "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
+                    (kind, key, value)
+                )
+                rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) VALUES (?, ?, ?, ?, ?)",
+                    (rowid, key, value or '', kind, '')
+                )
+        conn.commit()
+        return conn
+
+    def _has_check_constraint(self, conn: sqlite3.Connection) -> bool:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
+        ).fetchone()
+        return row is not None and row[0] is not None and 'CHECK' in row[0].upper()
+
+    def _build_svc(self, db: DatabaseService) -> SchemaConvergenceService:
+        return SchemaConvergenceService(db, embedding_dimensions=256)
+
+    def test_removes_check_constraint_from_existing_table(self, tmp_path):
+        """CHECK constraint is stripped — the resulting table DDL contains no CHECK."""
+        conn = self._build_conn_with_check(tmp_path)
+        assert self._has_check_constraint(conn), "Pre-condition: table must have CHECK constraint"
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        svc._strip_data_graph_check_constraint(conn)
+        conn.commit()
+
+        assert not self._has_check_constraint(conn), "CHECK constraint was not removed"
+        conn.close()
+
+    def test_preserves_all_rows_after_table_recreation(self, tmp_path):
+        """All existing rows survive the table-recreate that strips the CHECK constraint."""
+        rows = [
+            ('user_specific', 'user_name', 'Dylan'),
+            ('system', 'tone', 'terse'),
+            ('misc', 'scratch', 'temp'),
+        ]
+        conn = self._build_conn_with_check(tmp_path, rows=rows)
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        svc._strip_data_graph_check_constraint(conn)
+        conn.commit()
+
+        stored = conn.execute("SELECT kind, key, value FROM data_graph ORDER BY key").fetchall()
+        assert len(stored) == 3
+        stored_set = {(r[0], r[1], r[2]) for r in stored}
+        assert stored_set == set(rows)
+        conn.close()
+
+    def test_no_op_when_check_constraint_absent(self, tmp_path):
+        """When the table has no CHECK, the method returns without touching any rows."""
+        conn = sqlite3.connect(str(tmp_path / "nocheck.db"))
+        conn.execute(self._NEW_DDL_NO_CHECK)
+        conn.execute(self._FTS_DDL)
+        conn.execute(
+            "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
+            ('user_specific', 'existing_key', 'existing_value')
+        )
+        conn.commit()
+
+        assert not self._has_check_constraint(conn), "Pre-condition: table must NOT have CHECK"
+        before_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
+        ).fetchone()[0]
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        svc._strip_data_graph_check_constraint(conn)
+        conn.commit()
+
+        # Table DDL must be unchanged and data preserved
+        after_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
+        ).fetchone()[0]
+        assert before_sql == after_sql
+
+        count = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
+        assert count == 1
+        conn.close()
+
+    def test_allows_document_kind_after_constraint_removal(self, tmp_path):
+        """After stripping, inserting kind='document' succeeds without constraint violation."""
+        conn = self._build_conn_with_check(tmp_path)
+
+        # Verify that inserting 'document' kind fails BEFORE stripping
+        try:
+            conn.execute(
+                "INSERT INTO data_graph (kind, key, value) VALUES ('document', 'doc:test:000', 'v')"
+            )
+            conn.rollback()
+            # Some SQLite builds may not enforce CHECK at insert; skip this assertion
+        except Exception:
+            conn.rollback()
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        svc._strip_data_graph_check_constraint(conn)
+        conn.commit()
+
+        # After stripping, 'document' kind must be insertable
+        conn.execute(
+            "INSERT INTO data_graph (kind, key, value) VALUES ('document', 'doc:solar:000', 'solar content')"
+        )
+        conn.commit()
+        row = conn.execute("SELECT kind FROM data_graph WHERE key='doc:solar:000'").fetchone()
+        assert row is not None
+        assert row[0] == 'document'
+        conn.close()
+
+    def test_fts_rebuilt_after_constraint_removal(self, tmp_path):
+        """FTS virtual table is rebuilt — content of pre-existing rows is searchable."""
+        rows = [('user_specific', 'energy_fact', 'solar power efficiency')]
+        conn = self._build_conn_with_check(tmp_path, rows=rows)
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        svc._strip_data_graph_check_constraint(conn)
+        conn.commit()
+
+        # FTS search must find the pre-existing row
+        fts_rows = conn.execute(
+            "SELECT rowid FROM data_graph_fts WHERE data_graph_fts MATCH 'solar'"
+        ).fetchall()
+        assert len(fts_rows) >= 1
+        conn.close()
+
+    def test_no_op_when_table_does_not_exist(self, tmp_path):
+        """If data_graph table doesn't exist at all, method returns silently."""
+        conn = sqlite3.connect(str(tmp_path / "empty.db"))
+
+        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
+        # Must not raise
+        svc._strip_data_graph_check_constraint(conn)
+        conn.close()

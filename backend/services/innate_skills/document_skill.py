@@ -164,7 +164,7 @@ def _handle_search(service, params: dict, channel: str) -> str:
                 doc_artifacts[doc_id] = []
             doc_artifacts[doc_id].append(row)
 
-        lines = [f"[DOCUMENT] Found {len(doc_artifacts)} document(s) matching '{query}':"]
+        lines = []
         for doc_id, artifacts in doc_artifacts.items():
             doc = service.get_document(doc_id)
             if not doc or doc.get('deleted_at'):
@@ -175,9 +175,10 @@ def _handle_search(service, params: dict, channel: str) -> str:
                 f"  · id={doc_id}: \"{doc_name}\" ({chunk_count} chunks, {len(artifacts)} match(es))"
             )
 
-        if len(lines) == 1:
+        if not lines:
             return f"[DOCUMENT] No documents match '{query}'."
 
+        lines.insert(0, f"[DOCUMENT] Found {len(lines)} document(s) matching '{query}':")
         lines.append("\nUse action \"view\" with the document id to read its full content.")
         return '\n'.join(lines)
 
@@ -277,10 +278,21 @@ def _handle_view(service, params: dict, channel: str) -> str:
     if clean_text:
         lines.append(f"\n--- Full Document Text ---\n{clean_text}")
     else:
-        # Fallback to concatenated chunks if clean_text not available
-        chunks = service.get_chunks_for_document(doc['id'])
-        if chunks:
-            full_text = '\n\n'.join(c['content'] for c in chunks)
+        # Fallback: reconstruct from data_graph artifacts
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        try:
+            with dgs.db.connection() as conn:
+                cursor = conn.execute(
+                    "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
+                    (f'document:{doc["id"]}',),
+                )
+                fragments = [row[0] for row in cursor.fetchall() if row[0]]
+        except Exception:
+            fragments = []
+
+        if fragments:
+            full_text = '\n\n'.join(fragments)
             lines.append(f"\n--- Full Document Text ---\n{full_text}")
         else:
             lines.append("\n  (No text content available)")
@@ -295,15 +307,16 @@ def _handle_delete(service, params: dict, channel: str) -> str:
         return "[DOCUMENT] Document not found. Specify 'name' or 'id'."
 
     doc_id = doc['id']
+    success = service.soft_delete(doc_id)
+    if not success:
+        return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
 
+    # Cascade-delete artifacts only after soft-delete succeeds.
     from services.data_graph_service import get_data_graph_service
     dgs = get_data_graph_service()
     deleted_count = dgs.hard_delete_by_source_prefix(f'document:{doc_id}')
 
-    success = service.soft_delete(doc_id)
-    if success:
-        return f"[DOCUMENT] Deleted '{doc['original_name']}'. {deleted_count} artifact(s) removed."
-    return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
+    return f"[DOCUMENT] Deleted '{doc['original_name']}'. {deleted_count} artifact(s) removed."
 
 
 def _handle_restore(service, params: dict, channel: str) -> str:

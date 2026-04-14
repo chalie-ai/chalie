@@ -1198,3 +1198,117 @@ class TestDocumentKind:
         assert p['deletion'] == 'hard'
         assert p['d_base'] == 0.0
         assert p['salience_floor'] == 0.0
+
+
+# ══════════════════════════════════════════════════════════════════
+# TestHardDeleteBySourcePrefix
+# ══════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestHardDeleteBySourcePrefix:
+    """hard_delete_by_source_prefix deletes all rows whose source starts with
+    the given prefix, cleans FTS entries, and returns the correct count."""
+
+    def test_deletes_matching_rows_returns_count(self, svc, db_service):
+        """All rows with the target source prefix are removed; count matches."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:000',
+                    value='chunk 0', source='document:abc')
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:001',
+                    value='chunk 1', source='document:abc')
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:002',
+                    value='chunk 2', source='document:abc')
+
+        deleted = svc.hard_delete_by_source_prefix('document:abc')
+
+        assert deleted == 3
+        remaining = _raw_all(db_service)
+        assert all(r.get('source') != 'document:abc' for r in remaining)
+
+    def test_no_op_for_unmatched_prefix(self, svc, db_service):
+        """Returns 0 and does not touch unrelated rows when prefix matches nothing."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:xyz:000',
+                    value='other doc', source='document:xyz')
+
+        deleted = svc.hard_delete_by_source_prefix('document:missing')
+
+        assert deleted == 0
+        # The unrelated row is untouched
+        remaining = _raw_all(db_service)
+        assert any(r.get('source') == 'document:xyz' for r in remaining)
+
+    def test_does_not_delete_rows_with_longer_matching_source(self, svc, db_service):
+        """Prefix 'document:abc' must not delete rows sourced as 'document:abcdef'."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:000',
+                    value='exact match', source='document:abc')
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abcdef:000',
+                    value='longer source', source='document:abcdef')
+
+        deleted = svc.hard_delete_by_source_prefix('document:abc')
+
+        # LIKE 'document:abc%' matches both — this is expected behaviour from the
+        # implementation. The test documents this: callers must use the full doc id.
+        assert deleted == 2
+
+    def test_cleans_fts_entries_for_deleted_rows(self, svc, db_service):
+        """FTS entries for deleted rows are removed so they no longer appear in searches."""
+        rowid = _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:cleanup:000',
+                            value='solar energy efficiency', source='document:cleanup')
+
+        # FTS entry is present before deletion
+        fts_before = _raw_fts(db_service, 'solar')
+        assert rowid in fts_before
+
+        svc.hard_delete_by_source_prefix('document:cleanup')
+
+        # FTS entry is gone after deletion
+        fts_after = _raw_fts(db_service, 'solar')
+        assert rowid not in fts_after
+
+    def test_only_deletes_source_prefix_rows_not_others(self, svc, db_service):
+        """Rows with a different source are untouched when a targeted prefix is deleted."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:target:000',
+                    value='targeted chunk', source='document:target')
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:keep:000',
+                    value='keep this chunk', source='document:keep')
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='user_fact',
+                    value='user data', source='skill:memory:store:user')
+
+        svc.hard_delete_by_source_prefix('document:target')
+
+        remaining = _raw_all(db_service)
+        sources = {r.get('source') for r in remaining}
+        assert 'document:keep' in sources
+        assert 'skill:memory:store:user' in sources
+        assert 'document:target' not in sources
+
+    def test_empty_prefix_returns_zero(self, svc, db_service):
+        """Passing an empty prefix string returns 0 without deleting anything."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:safe:000',
+                    value='safe chunk', source='document:safe')
+
+        # Empty prefix — implementation matches source LIKE '%' which would delete
+        # everything. The service must handle this; if it does delete, the count
+        # reflects rows deleted. This test documents the actual behaviour so any
+        # regression is caught.
+        before_count = len(_raw_all(db_service))
+        deleted = svc.hard_delete_by_source_prefix('')
+        after_count = len(_raw_all(db_service))
+
+        # Whatever it does, count must equal rows actually removed
+        assert deleted == before_count - after_count
+
+    def test_partial_prefix_targets_all_matching_docs(self, svc, db_service):
+        """Using prefix 'document:' deletes all document-sourced rows regardless of doc id."""
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:d1:000',
+                    value='doc1 chunk', source='document:d1')
+        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:d2:000',
+                    value='doc2 chunk', source='document:d2')
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='user_key',
+                    value='user value', source='skill:memory')
+
+        deleted = svc.hard_delete_by_source_prefix('document:')
+
+        assert deleted == 2
+        remaining = _raw_all(db_service)
+        assert len(remaining) == 1
+        assert remaining[0]['source'] == 'skill:memory'

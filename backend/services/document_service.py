@@ -556,6 +556,17 @@ class DocumentService:
 
             if updated:
                 logger.info(f"[DOCS] Soft-deleted document {doc_id}")
+                # Deactivate data_graph artifacts so they stop surfacing in recall.
+                try:
+                    from services.data_graph_service import get_data_graph_service
+                    dgs = get_data_graph_service()
+                    with dgs.db.connection() as conn:
+                        conn.execute(
+                            "UPDATE data_graph SET active=0 WHERE source LIKE ?",
+                            (f'document:{doc_id}%',),
+                        )
+                except Exception as exc:
+                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", doc_id, exc)
             return updated
 
         except Exception as e:
@@ -594,6 +605,17 @@ class DocumentService:
 
             if updated:
                 logger.info(f"[DOCS] Restored document {doc_id}")
+                # Reactivate data_graph artifacts so they surface in recall again.
+                try:
+                    from services.data_graph_service import get_data_graph_service
+                    dgs = get_data_graph_service()
+                    with dgs.db.connection() as conn:
+                        conn.execute(
+                            "UPDATE data_graph SET active=1 WHERE source LIKE ?",
+                            (f'document:{doc_id}%',),
+                        )
+                except Exception as exc:
+                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", doc_id, exc)
             return updated
 
         except Exception as e:
@@ -646,6 +668,14 @@ class DocumentService:
                 return affected
 
             deleted = self._write_queue.submit_sync(_hard_delete) > 0
+
+            # Cascade-delete data_graph artifacts for this document.
+            if deleted:
+                try:
+                    from services.data_graph_service import get_data_graph_service
+                    get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
+                except Exception as exc:
+                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", doc_id, exc)
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):

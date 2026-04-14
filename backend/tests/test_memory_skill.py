@@ -1,5 +1,8 @@
 """Tests for memory_skill — DataGraphService-backed store/recall entry point."""
 
+import contextlib
+import sqlite3
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -8,7 +11,104 @@ from services.innate_skills.memory_skill import (
     TOOL_SCHEMA,
     _relevance_label,
     _search_data_graph,
+    _search_document_artifacts,
 )
+from services.data_graph_service import DataGraphService, KIND_DOCUMENT
+from services.database_service import DatabaseService
+
+
+# ── Shared fixture for real DataGraphService (document artifact tests) ──────
+
+_DOC_ARTIFACT_DDL = [
+    """
+    CREATE TABLE IF NOT EXISTS data_graph (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind              TEXT NOT NULL,
+        key               TEXT NOT NULL,
+        value             TEXT,
+        storage_strength  REAL NOT NULL DEFAULT 0.5,
+        retrieval_weight  REAL NOT NULL DEFAULT 1.0,
+        salience_score    REAL NOT NULL DEFAULT 0.0,
+        evidence_count    INTEGER NOT NULL DEFAULT 1,
+        first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        last_confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_accessed_at  TEXT,
+        source            TEXT,
+        deleted_at        TEXT,
+        active            INTEGER NOT NULL DEFAULT 1,
+        search_queries    TEXT DEFAULT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ms_dg_kind ON data_graph(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_ms_dg_key ON data_graph(key)",
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
+        key, value, kind, search_queries,
+        tokenize='porter unicode61'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS data_graph_edges (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_id          INTEGER NOT NULL REFERENCES data_graph(id) ON DELETE CASCADE,
+        to_id            INTEGER NOT NULL REFERENCES data_graph(id) ON DELETE CASCADE,
+        edge_type        TEXT NOT NULL DEFAULT 'related',
+        strength         REAL NOT NULL DEFAULT 1.0,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        last_accessed_at TEXT,
+        UNIQUE (from_id, to_id, edge_type)
+    )
+    """,
+    "CREATE TABLE IF NOT EXISTS data_graph_key_vec (rowid INTEGER PRIMARY KEY, embedding BLOB)",
+    "CREATE TABLE IF NOT EXISTS data_graph_value_vec (rowid INTEGER PRIMARY KEY, embedding BLOB)",
+]
+
+
+@pytest.fixture
+def _doc_db(tmp_path):
+    """Real SQLite DB with data_graph schema for document artifact recall tests."""
+    db_path = str(tmp_path / "ms_doc_artifacts.db")
+    shared_conn = sqlite3.connect(db_path)
+    shared_conn.row_factory = sqlite3.Row
+    shared_conn.execute("PRAGMA foreign_keys = ON")
+    for ddl in _DOC_ARTIFACT_DDL:
+        shared_conn.execute(ddl)
+    shared_conn.commit()
+
+    db = DatabaseService.__new__(DatabaseService)
+    db._db_path = db_path
+    db._init_complete = True
+    db.db_path = db_path
+
+    _depth = [0]
+
+    @contextlib.contextmanager
+    def _connection():
+        _depth[0] += 1
+        try:
+            yield shared_conn
+            if _depth[0] == 1:
+                shared_conn.commit()
+        except Exception:
+            if _depth[0] == 1:
+                shared_conn.rollback()
+            raise
+        finally:
+            _depth[0] -= 1
+
+    db.connection = _connection
+    yield db
+    shared_conn.close()
+
+
+@pytest.fixture
+def _doc_svc(_doc_db):
+    """DataGraphService with real SQLite, embeddings disabled."""
+    svc = DataGraphService(_doc_db)
+    svc._generate_embedding = MagicMock(return_value=None)
+    svc._schedule_embeddings = MagicMock()
+    svc._schedule_doc2query = MagicMock()
+    return svc
 
 
 pytestmark = pytest.mark.unit
@@ -537,3 +637,161 @@ class TestHandleMemoryReflect:
     def test_reflect_action_accepted_by_schema(self):
         action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
         assert 'reflect' in action_enum
+
+
+# ── _search_document_artifacts — real DataGraphService ───────────────────────
+
+class TestSearchDocumentArtifacts:
+    """_search_document_artifacts returns hits with correct format using real DB."""
+
+    def test_empty_db_returns_empty_list(self, _doc_svc):
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("solar panels")
+        assert hits == []
+
+    def test_hit_text_has_document_fragment_prefix(self, _doc_svc):
+        """Each hit text is prefixed with [document(id:{doc_id},type:fragment)]."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:solar:000',
+                       'Solar panels convert sunlight to electricity.',
+                       source='document:solar')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("solar")
+
+        assert len(hits) >= 1
+        assert hits[0]['text'].startswith('[document(id:solar,type:fragment)]')
+
+    def test_hit_text_contains_artifact_value(self, _doc_svc):
+        """The stored artifact value appears in the hit text."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:energy:000',
+                       'Photovoltaic efficiency reached 22 percent.',
+                       source='document:energy')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("photovoltaic efficiency")
+
+        assert len(hits) >= 1
+        assert 'Photovoltaic efficiency reached 22 percent.' in hits[0]['text']
+
+    def test_doc_id_extracted_from_source_field(self, _doc_svc):
+        """doc_id in the formatted prefix comes from the source='document:{doc_id}' field."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:warranty2026:000',
+                       'This warranty covers hardware defects.',
+                       source='document:warranty2026')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("warranty hardware")
+
+        assert len(hits) >= 1
+        assert '[document(id:warranty2026,type:fragment)]' in hits[0]['text']
+
+    def test_doc_id_falls_back_to_key_when_source_missing(self, _doc_svc, _doc_db):
+        """When source is NULL/empty, doc_id is extracted from the key 'doc:{id}:{idx}'."""
+        # Insert a row with no source via raw SQL
+        with _doc_db.connection() as conn:
+            conn.execute("""
+                INSERT INTO data_graph
+                    (kind, key, value, active, storage_strength, retrieval_weight,
+                     salience_score, evidence_count, first_seen_at, last_confirmed_at, source)
+                VALUES (?, ?, ?, 1, 0.5, 1.0, 0.0, 1, datetime('now'), datetime('now'), NULL)
+            """, (KIND_DOCUMENT, 'doc:fallbackdoc:000', 'Fallback content from key field.'))
+            rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) VALUES (?, ?, ?, ?, ?)",
+                (rowid, 'doc:fallbackdoc:000', 'Fallback content from key field.', KIND_DOCUMENT, '')
+            )
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("fallback content")
+
+        assert len(hits) >= 1
+        assert '[document(id:fallbackdoc,type:fragment)]' in hits[0]['text']
+
+    def test_hit_has_id_key_confidence_fields(self, _doc_svc):
+        """Each hit dict has 'id', 'text', 'relevance', 'confidence' fields."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:fields:000',
+                       'Testing the hit object shape.',
+                       source='document:fields')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("hit object shape")
+
+        assert len(hits) >= 1
+        hit = hits[0]
+        assert 'id' in hit
+        assert 'text' in hit
+        assert 'relevance' in hit
+        assert 'confidence' in hit
+
+    def test_relevance_is_always_high(self, _doc_svc):
+        """Document artifact hits always carry relevance='high'."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:highrel:000',
+                       'Document artifacts are always high relevance.',
+                       source='document:highrel')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("document artifacts relevance")
+
+        assert len(hits) >= 1
+        for hit in hits:
+            assert hit['relevance'] == 'high'
+
+    def test_limit_caps_results(self, _doc_svc):
+        """limit parameter caps the number of results returned."""
+        for i in range(5):
+            _doc_svc.store(KIND_DOCUMENT, f'doc:limitdoc:{i:03d}',
+                           f'Solar panel efficiency measurement {i}.',
+                           source='document:limitdoc')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("solar panel efficiency", limit=2)
+
+        assert len(hits) <= 2
+
+    def test_exception_returns_empty_list(self, _doc_svc):
+        """If the data graph service raises, returns [] gracefully."""
+        broken = MagicMock()
+        broken.recall.side_effect = RuntimeError("connection lost")
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=broken):
+            hits = _search_document_artifacts("anything")
+
+        assert hits == []
+
+    def test_non_document_rows_are_excluded(self, _doc_svc):
+        """Rows with kind != KIND_DOCUMENT do not appear in document artifact hits."""
+        from services.data_graph_service import KIND_USER_SPECIFIC
+        _doc_svc.store(KIND_USER_SPECIFIC, 'user_fact',
+                       'Solar panels are efficient.', source='skill:memory')
+        _doc_svc.store(KIND_DOCUMENT, 'doc:only:000',
+                       'Document artifact about solar efficiency.', source='document:only')
+
+        with patch('services.data_graph_service.get_data_graph_service',
+                   return_value=_doc_svc):
+            hits = _search_document_artifacts("solar efficiency")
+
+        # All returned hits come from document kind — no user_specific rows
+        for hit in hits:
+            assert 'document(id:' in hit['text']
+
+    def test_recall_integrates_document_artifacts_in_output(self, _doc_svc):
+        """End-to-end: handle_memory recall surfaces stored document artifacts."""
+        _doc_svc.store(KIND_DOCUMENT, 'doc:integration:000',
+                       'Battery storage complements solar installations.',
+                       source='document:integration')
+
+        with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
+             patch('services.innate_skills.memory_skill._search_episodes', return_value=([], '0 matches')), \
+             patch('services.innate_skills.memory_skill._store_fok_signal'):
+            result = handle_memory('topic', {'action': 'recall', 'query': 'battery storage solar'})
+
+        assert 'Battery storage complements solar installations.' in result
