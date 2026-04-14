@@ -365,22 +365,21 @@ class UserMessageProcessor(MessageProcessor):
             save_svc = SaveSuggestionService()
 
             # 3a: User-side completion/deferral trigger — clears existing flag
-            save_flag = save_svc.get_saveable_flag(channel)
+            save_flag = save_svc.get_saveable_flag()
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
                 if trigger:
                     save_svc.emit_save_card(
-                        channel,
                         save_flag.get('topic', channel),
                         save_flag['content_type'],
                     )
-                    save_svc.clear_flag(channel)
+                    save_svc.clear_flag()
 
             # 3b: Response-side saveable content detection — sets new flag.
             # NOTE: flag_saveable expects exchange_id (UUID string) for window
             # correlation, not the integer transcript row id (self._uid). Prefer
             # the UUID from metadata; fall back to a stringified row id if absent.
-            saveable = save_svc.detect_saveable_content(response, channel, channel)
+            saveable = save_svc.detect_saveable_content(response, channel)
             if saveable:
                 exchange_id_for_flag = (
                     metadata.get('exchange_id')
@@ -388,7 +387,7 @@ class UserMessageProcessor(MessageProcessor):
                     or str(self._uid)
                 )
                 save_svc.flag_saveable(
-                    channel, channel, saveable['content_type'], exchange_id_for_flag
+                    channel, saveable['content_type'], exchange_id_for_flag
                 )
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)

@@ -658,7 +658,7 @@ def recall_episodes(
         if not episodes:
             candidates = _count_episode_candidates(db, channel)
             status = f"0 matches ({candidates} candidates evaluated)"
-            return ([], status) if return_raw else ([], status)
+            return [], status
 
         if return_raw:
             return episodes[:limit], f"{len(episodes[:limit])} matches"
