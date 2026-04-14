@@ -1,95 +1,36 @@
-"""
-Tests for backend/api/conversation.py — conversation blueprint.
-
-Covers /conversation/recent endpoint.
-
-Note: The /chat endpoint was replaced by the WebSocket handler in
-api/websocket.py (Phase 4). WebSocket tests live separately.
-"""
+"""Test chat history retrieval — calls the same function the API uses."""
 
 import pytest
-from unittest.mock import patch, MagicMock
-from flask import Flask
 
-from api.conversation import conversation_bp
+from api.conversation import get_recent_history
 
 
 @pytest.mark.unit
-class TestConversationAPI:
-    """Test conversation API endpoints."""
+class TestChatHistory:
 
-    @pytest.fixture
-    def client(self):
-        """Create Flask test client with conversation blueprint."""
-        app = Flask(__name__)
-        app.register_blueprint(conversation_bp)
-        app.config['TESTING'] = True
-        return app.test_client()
+    def test_boot_and_scroll(self, db):
+        """Seed 30 messages, verify boot=12 and scroll-up=next 12."""
+        for i in range(30):
+            role = 'user' if i % 2 == 0 else 'assistant'
+            db.execute(
+                "INSERT INTO transcript (channel, role, content, created_at) "
+                "VALUES ('user', ?, ?, ?)",
+                (role, f'Message {i}', f'2026-01-01T00:{i:02d}:00+00:00'),
+            )
+        db.commit()
 
-    @pytest.fixture(autouse=True)
-    def bypass_auth(self):
-        """Bypass session auth for all tests."""
-        with patch('services.auth_session_service.validate_session', return_value=True):
-            yield
+        # Boot — last 12 messages
+        messages, has_more = get_recent_history(limit=12, offset=0)
+        assert len(messages) == 12
+        assert has_more is True
+        assert messages[0]["content"] == "Message 18"
+        assert messages[-1]["content"] == "Message 29"
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
 
-    # ------------------------------------------------------------------
-    # GET /conversation/recent
-    # ------------------------------------------------------------------
-
-    def test_recent_returns_exchanges(self, client):
-        """GET /conversation/recent returns exchanges array."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
-             patch('services.thread_conversation_service.ThreadConversationService') as mock_tcs_cls:
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = "thread-123"
-            mock_get_ts.return_value = mock_ts
-
-            mock_tcs = MagicMock()
-            mock_tcs.get_paginated_history_durable.return_value = {
-                "exchanges": [
-                    {
-                        "id": "ex-1",
-                        "prompt": {"message": "hello"},
-                        "response": {"message": "hi there"},
-                        "topic": "greetings",
-                        "timestamp": "2026-01-01T00:00:00",
-                    },
-                ],
-                "total": 1,
-                "has_more": False,
-            }
-            mock_tcs_cls.return_value = mock_tcs
-
-            response = client.get('/conversation/recent')
-
-            assert response.status_code == 200
-            data = response.get_json()
-            assert "exchanges" in data
-            assert data["thread_id"] == "thread-123"
-            assert len(data["exchanges"]) == 1
-            assert data["exchanges"][0]["prompt"] == "hello"
-            assert "blocks" in data["exchanges"][0]
-            assert isinstance(data["exchanges"][0]["blocks"], list)
-            assert len(data["exchanges"][0]["blocks"]) > 0
-            assert data["exchanges"][0]["blocks"][0]["type"] == "text"
-            assert "hi there" in data["exchanges"][0]["blocks"][0]["content"]
-
-    def test_recent_no_thread_returns_empty(self, client):
-        """GET /conversation/recent with no active thread returns empty exchanges."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
-             patch('services.thread_conversation_service.ThreadConversationService') as mock_tcs_cls:
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = None
-            mock_get_ts.return_value = mock_ts
-
-            mock_tcs = MagicMock()
-            mock_tcs.get_most_recent_thread_id.return_value = (None, False)
-            mock_tcs_cls.return_value = mock_tcs
-
-            response = client.get('/conversation/recent')
-
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data["thread_id"] is None
-            assert data["exchanges"] == []
-
+        # Scroll up — next 12 older messages
+        messages, has_more = get_recent_history(limit=12, offset=12)
+        assert len(messages) == 12
+        assert has_more is True
+        assert messages[0]["content"] == "Message 6"
+        assert messages[-1]["content"] == "Message 17"

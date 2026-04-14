@@ -1,14 +1,16 @@
 """
 Scheduler Service — Background poller for scheduled items in SQLite.
 
-Polls scheduled_items table every 60 seconds. Fires due items through
-the prompt queue — frontal cortex handles tone and framing naturally.
+Polls scheduled_items table every 60 seconds. Fires due items either as
+direct notifications (OutputService) or through ScheduledMessageProcessor
+for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
 Entry point: scheduler_worker(shared_state=None) registered in run.py.
 """
 
 import logging
+import threading
 import time
 
 from services.embedding_utils import pack_embedding
@@ -19,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
+
+# Cap concurrent scheduled prompt executions to prevent resource exhaustion
+_PROMPT_SEMAPHORE = threading.Semaphore(3)
 
 # System handler registry — capabilities register callbacks for item_type='system'
 _SYSTEM_HANDLERS: dict[str, callable] = {}
@@ -97,7 +102,7 @@ def scheduler_worker(shared_state=None):
 
 
 def _poll_and_fire():
-    """Poll for due items and fire them through the prompt queue."""
+    """Poll for due items and fire them — direct delivery or ScheduledMessageProcessor."""
     try:
         from services.database_service import get_shared_db_service
 
@@ -125,7 +130,7 @@ def _poll_and_fire():
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, item_type, message, due_at, recurrence,
-                       window_start, window_end, topic, created_by_session, group_id,
+                       window_start, window_end, channel, created_by_session, group_id,
                        is_prompt
                 FROM scheduled_items
                 WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
@@ -136,7 +141,7 @@ def _poll_and_fire():
 
             cols = [
                 "id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "topic", "created_by_session", "group_id",
+                "window_start", "window_end", "channel", "created_by_session", "group_id",
                 "is_prompt"
             ]
 
@@ -154,17 +159,6 @@ def _poll_and_fire():
                         continue
 
                     _fire_item(item)
-                    try:
-                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                        emit_reasoning_signal(ReasoningSignal(
-                            signal_type='schedule_fired',
-                            source='scheduler_service',
-                            topic=item.get('topic', 'schedule'),
-                            content=f"Fired {item.get('item_type', 'reminder')}: {(item.get('message', '') or '')[:100]}",
-                            activation_energy=0.5,
-                        ))
-                    except Exception:
-                        pass
                     cursor.execute(
                         "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
                         (now_iso, item["id"])
@@ -176,7 +170,7 @@ def _poll_and_fire():
                             cursor.execute("""
                                 INSERT INTO scheduled_items
                                   (id, item_type, message, due_at, recurrence,
-                                   window_start, window_end, status, topic,
+                                   window_start, window_end, status, channel,
                                    created_by_session, created_at, group_id, is_prompt)
                                 VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
                             """, (
@@ -187,7 +181,7 @@ def _poll_and_fire():
                                 next_item["recurrence"],
                                 next_item.get("window_start"),
                                 next_item.get("window_end"),
-                                next_item["topic"],
+                                next_item["channel"],
                                 next_item["created_by_session"],
                                 now_iso,
                                 next_item.get("group_id"),
@@ -216,7 +210,7 @@ def _fire_item(item: dict):
 
     if source == "system":
         # System handler dispatch — capabilities register callbacks
-        handler_key = item.get("topic", "")
+        handler_key = item.get("channel", item.get("topic", ""))
         handler = _SYSTEM_HANDLERS.get(handler_key)
         if handler:
             try:
@@ -229,39 +223,57 @@ def _fire_item(item: dict):
         return
 
     if is_prompt:
-        # Route through digest_worker -> cognitive triage -> LLM (original behaviour)
-        from services.prompt_queue import PromptQueue
-        from services.client_context_service import ClientContextService
-        from workers.digest_worker import digest_worker
+        # Guard: empty/whitespace prompts are not actionable
+        if not message or not message.strip():
+            logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
+            return
 
-        client_context_text = ClientContextService().format_for_prompt()
-        # Frame as an execution instruction — without this, the LLM reads the
-        # raw message (e.g. "At 09:30 every morning, check …") and interprets
-        # it as a new scheduling request instead of executing the task.
-        execution_prompt = (
-            f"[SCHEDULED TASK — EXECUTE NOW]\n"
-            f"This is a previously scheduled prompt that is now due. "
-            f"Execute the task described below immediately. "
-            f"Do NOT create a new schedule or reminder — it is already scheduled "
-            f"and will fire again automatically.\n\n"
-            f"{message}"
-        )
-        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-        queue.enqueue(execution_prompt, {
-            "source": source,
-            "destination": "web",
-            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat() if isinstance(item.get("due_at"), datetime) else str(item.get("due_at", "")),
-            "scheduled_message": message,
-            "topic": item.get("topic", "general"),
-            "client_context": client_context_text,
-        })
-        logger.info(f"{LOG_PREFIX} Fired {source} (via LLM) '{item.get('id')}': {message[:80]}")
+        # Dispatch via ScheduledMessageProcessor in a daemon thread
+        item_id = item.get('id', 'unknown')
+
+        def _run():
+            _PROMPT_SEMAPHORE.acquire()
+            try:
+                from services.scheduled_message_processor import ScheduledMessageProcessor
+                from services.output_service import OutputService
+
+                response_text = ScheduledMessageProcessor(
+                    raw_input=message,
+                    metadata={'item_id': item_id},
+                ).send()
+                response_text = (response_text or '').strip()
+                if not response_text:
+                    response_text = "Scheduled task completed but produced no output."
+
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=response_text,
+                    source='scheduled_prompt',
+                )
+                logger.info(f"{LOG_PREFIX} Scheduled prompt {item_id} complete")
+            except Exception as exc:
+                logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}", exc_info=True)
+                try:
+                    from services.output_service import OutputService
+                    OutputService().enqueue_proactive(
+                        topic='user',
+                        response="A scheduled task could not be completed.",
+                        source='scheduled_prompt',
+                    )
+                except Exception:
+                    pass
+            finally:
+                _PROMPT_SEMAPHORE.release()
+
+        t = threading.Thread(target=_run, daemon=True, name=f"scheduled-prompt-{item_id}")
+        t.start()
+        logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
     else:
         # Direct delivery — bypass LLM, publish straight to output events
         from services.output_service import OutputService
 
         OutputService().enqueue_text(
-            topic=item.get("topic", "general"),
+            topic=item.get("channel", item.get("topic", "general")),
             response=message,
             mode=source.upper(),
             confidence=1.0,
@@ -306,7 +318,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
         "recurrence": recurrence,
         "window_start": item.get("window_start"),
         "window_end": item.get("window_end"),
-        "topic": item.get("topic"),
+        "channel": item.get("channel", item.get("topic")),
         "created_by_session": item.get("created_by_session"),
         "group_id": item.get("group_id") or item.get("id"),  # inherit group, fall back to own id
         "is_prompt": item.get("item_type", "notification") == "prompt",

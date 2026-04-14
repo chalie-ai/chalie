@@ -45,7 +45,7 @@ def _make_service(store: MemoryStore):
     return svc
 
 
-def _push_messages(svc, thread_id: str, messages: list, store: MemoryStore = None):
+def _push_messages(svc, messages: list, store: MemoryStore = None):
     """
     Push a list of (text, is_user, topic) tuples through the service.
 
@@ -58,7 +58,7 @@ def _push_messages(svc, thread_id: str, messages: list, store: MemoryStore = Non
         text, is_user, topic = item
         msg_time = base_time + timedelta(seconds=i * 30)
         with patch("services.conversation_phase_service.utc_now", return_value=msg_time):
-            result = svc.update(thread_id, text, is_user, topic=topic)
+            result = svc.update(text, is_user, topic=topic)
     return result
 
 
@@ -68,7 +68,7 @@ class TestEmptyThread:
     def test_get_phase_returns_opening_defaults_when_no_state(self):
         store = _make_store()
         svc = _make_service(store)
-        phase = svc.get_phase("thread-new")
+        phase = svc.get_phase()
         assert phase["current"] == "opening"
         assert phase["momentum"] == 0.5
         assert phase["direction"] == "sustaining"
@@ -77,14 +77,14 @@ class TestEmptyThread:
     def test_update_first_message_is_opening(self):
         store = _make_store()
         svc = _make_service(store)
-        result = svc.update("t1", "Hello!", is_user=True, topic="greetings")
+        result = svc.update("Hello!", is_user=True, topic="greetings")
         assert result["current"] == "opening"
 
     def test_update_second_message_still_opening(self):
         store = _make_store()
         svc = _make_service(store)
-        svc.update("t1", "Hello!", is_user=True, topic="greetings")
-        result = svc.update("t1", "Hi there, how are you?", is_user=True, topic="greetings")
+        svc.update("Hello!", is_user=True, topic="greetings")
+        result = svc.update("Hi there, how are you?", is_user=True, topic="greetings")
         assert result["current"] == "opening"
 
 
@@ -92,25 +92,23 @@ class TestStateRoundtrip:
     def test_state_persisted_and_reloaded(self):
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-persist"
 
-        svc.update(thread_id, "First message", is_user=True, topic="a")
+        svc.update("First message", is_user=True, topic="a")
         # Get a second service instance hitting the same store
         svc2 = _make_service(store)
-        phase = svc2.get_phase(thread_id)
+        phase = svc2.get_phase()
         # State should be present and consistent
         assert phase["current"] in ("opening", "exploring", "deepening", "resolving", "closing")
 
     def test_reset_clears_state(self):
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-reset"
 
-        svc.update(thread_id, "Hello", is_user=True, topic="a")
-        svc.reset(thread_id)
+        svc.update("Hello", is_user=True, topic="a")
+        svc.reset()
 
         # After reset, state should be default
-        phase = svc.get_phase(thread_id)
+        phase = svc.get_phase()
         assert phase["current"] == "opening"
         assert phase["momentum"] == 0.5
 
@@ -119,19 +117,17 @@ class TestOpeningDetection:
     def test_first_two_exchanges_are_opening(self):
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-open"
         base = utc_now()
 
         for i in range(2):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, "Hello", is_user=True, topic="a")
+                result = svc.update("Hello", is_user=True, topic="a")
         assert result["current"] == "opening"
 
     def test_long_gap_resets_to_opening(self):
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-gap"
         base = utc_now()
 
         # Prime with several messages to leave opening
@@ -146,12 +142,12 @@ class TestOpeningDetection:
         for i, (text, is_user, topic) in enumerate(messages):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                svc.update(thread_id, text, is_user=is_user, topic=topic)
+                svc.update(text, is_user=is_user, topic=topic)
 
         # Now simulate a 35-minute gap
         gap_time = base + timedelta(minutes=35)
         with patch("services.conversation_phase_service.utc_now", return_value=gap_time):
-            result = svc.update(thread_id, "I'm back!", is_user=True, topic="weather")
+            result = svc.update("I'm back!", is_user=True, topic="weather")
 
         assert result["current"] == "opening"
 
@@ -161,7 +157,6 @@ class TestExploringDetection:
         """Two topic changes in 5 exchanges should push toward exploring."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-explore-topic"
 
         # Need > 2 exchanges first to leave opening, then rapid topic shifts
         messages = [
@@ -174,7 +169,7 @@ class TestExploringDetection:
             ("Actually, back to weather?", True, "weather"),  # topic change 2
             ("Of course", False, "weather"),
         ]
-        result = _push_messages(svc, thread_id, messages)
+        result = _push_messages(svc, messages)
         assert result["current"] == "exploring"
 
     def test_high_question_density_triggers_exploring(self):
@@ -185,7 +180,6 @@ class TestExploringDetection:
         """
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-explore-q"
 
         # Opening + a couple of neutral exchanges
         messages = [
@@ -201,7 +195,7 @@ class TestExploringDetection:
             ("Can you explain further?", True, "topic-c"),
             ("Here is how", False, "topic-c"),
         ]
-        result = _push_messages(svc, thread_id, messages)
+        result = _push_messages(svc, messages)
         assert result["current"] == "exploring"
 
 
@@ -210,7 +204,6 @@ class TestDeepeningDetection:
         """5+ exchanges on same topic with growing message lengths → deepening."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-deepen"
 
         # Start with enough messages to leave opening, then same topic + growing length
         messages = [
@@ -227,17 +220,16 @@ class TestDeepeningDetection:
             ("Yes and I am considering quartz for the countertop because it is low maintenance", True, "kitchen"),
             ("Quartz is excellent for durability and comes in many designs", False, "kitchen"),
         ]
-        result = _push_messages(svc, thread_id, messages)
+        result = _push_messages(svc, messages)
         assert result["current"] == "deepening"
 
     def test_same_topic_long_run_without_length_increase_reaches_deepening(self):
         """Very long same-topic run (7+) reaches deepening even without length trend."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-deepen-run"
 
         messages = [("Message about cooking", True, "cooking")] * 12
-        result = _push_messages(svc, thread_id, messages)
+        result = _push_messages(svc, messages)
         assert result["current"] == "deepening"
 
 
@@ -246,7 +238,6 @@ class TestResolvingDetection:
         """Low question density and affirmatives should lead to resolving."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-resolve"
 
         # Build up to deepening first
         setup = [
@@ -259,7 +250,7 @@ class TestResolvingDetection:
             ("I see how the at-syntax applies it automatically", True, "python"),
             ("Exactly, it is syntactic sugar for wrapping", False, "python"),
         ]
-        _push_messages(svc, thread_id, setup)
+        _push_messages(svc, setup)
 
         # Now resolving: no questions, affirmative signals, still reasonable message length
         resolving = [
@@ -268,7 +259,7 @@ class TestResolvingDetection:
             ("Makes sense now, I understand the decorator pattern", True, "python"),
             ("Perfect, feel free to ask if you need more detail", False, "python"),
         ]
-        result = _push_messages(svc, thread_id, resolving)
+        result = _push_messages(svc, resolving)
         assert result["current"] == "resolving"
 
     def test_affirmatives_recognised(self):
@@ -286,7 +277,6 @@ class TestClosingDetection:
         """A 'bye' in a user message should immediately flip to closing."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-close-word"
         base = utc_now()
 
         messages = [
@@ -299,19 +289,19 @@ class TestClosingDetection:
         for i, (text, is_user, topic) in enumerate(messages):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=is_user, topic=topic)
+                result = svc.update(text, is_user=is_user, topic=topic)
         assert result["current"] == "closing"
 
     def test_goodbye_is_immediate(self):
         store = _make_store()
         svc = _make_service(store)
-        result = svc.update("t-close-gbye", "Goodbye for now", is_user=True)
+        result = svc.update("Goodbye for now", is_user=True)
         assert result["current"] == "closing"
 
     def test_closing_words_are_case_insensitive(self):
         store = _make_store()
         svc = _make_service(store)
-        result = svc.update("t-close-case", "BYE BYE!", is_user=True)
+        result = svc.update("BYE BYE!", is_user=True)
         assert result["current"] == "closing"
 
     def test_has_closing_helper(self):
@@ -330,7 +320,6 @@ class TestClosingDetection:
         """
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-close-len"
         base = utc_now()
 
         # First 3 messages: long (non-affirmative, non-closing)
@@ -347,7 +336,7 @@ class TestClosingDetection:
         for i, (text, is_user, topic) in enumerate(all_msgs):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=is_user, topic=topic)
+                result = svc.update(text, is_user=is_user, topic=topic)
         assert result["current"] == "closing"
 
 
@@ -355,22 +344,20 @@ class TestAntiFalseClose:
     def test_substantive_message_after_closing_returns_to_exploring(self):
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-anti-close"
         base = utc_now()
 
         # Force closing
         t0 = base
         with patch("services.conversation_phase_service.utc_now", return_value=t0):
-            svc.update(thread_id, "Goodbye!", is_user=True, topic="misc")
+            svc.update("Goodbye!", is_user=True, topic="misc")
 
         # Verify we are in closing
-        assert svc.get_phase(thread_id)["current"] == "closing"
+        assert svc.get_phase()["current"] == "closing"
 
         # Send a substantive message (not a closing word, > 20 chars)
         t1 = base + timedelta(seconds=30)
         with patch("services.conversation_phase_service.utc_now", return_value=t1):
             result = svc.update(
-                thread_id,
                 "Actually, I have one more question about the project timeline",
                 is_user=True,
                 topic="project",
@@ -381,15 +368,14 @@ class TestAntiFalseClose:
         """A short non-substantive message after closing should not flip back."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-close-short"
         base = utc_now()
 
         with patch("services.conversation_phase_service.utc_now", return_value=base):
-            svc.update(thread_id, "Bye!", is_user=True, topic="misc")
+            svc.update("Bye!", is_user=True, topic="misc")
 
         t1 = base + timedelta(seconds=30)
         with patch("services.conversation_phase_service.utc_now", return_value=t1):
-            result = svc.update(thread_id, "Ok", is_user=True, topic="misc")
+            result = svc.update("Ok", is_user=True, topic="misc")
         assert result["current"] == "closing"
 
 
@@ -398,7 +384,6 @@ class TestMomentum:
         """Messages every 5 seconds (well above baseline) should yield high momentum."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-mom-fast"
         base = utc_now()
 
         messages = [
@@ -411,7 +396,7 @@ class TestMomentum:
         for i, (text, is_user, topic) in enumerate(messages):
             t = base + timedelta(seconds=i * 5)   # 5-second gaps → fast
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=is_user, topic=topic)
+                result = svc.update(text, is_user=is_user, topic=topic)
 
         assert result["momentum"] > 0.6
 
@@ -419,7 +404,6 @@ class TestMomentum:
         """Messages every 10 minutes should yield low momentum."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-mom-slow"
         base = utc_now()
 
         messages = [
@@ -432,7 +416,7 @@ class TestMomentum:
         for i, (text, is_user, topic) in enumerate(messages):
             t = base + timedelta(minutes=i * 10)   # 10-minute gaps → slow
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=is_user, topic=topic)
+                result = svc.update(text, is_user=is_user, topic=topic)
 
         assert result["momentum"] < 0.5
 
@@ -440,13 +424,12 @@ class TestMomentum:
         """Even extremely fast exchanges must not exceed momentum of 1.0."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-mom-cap"
         base = utc_now()
 
         for i in range(10):
             t = base + timedelta(milliseconds=i * 100)  # 100ms gaps → near-instant
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, "ping", is_user=True, topic="a")
+                result = svc.update("ping", is_user=True, topic="a")
 
         assert result["momentum"] <= 1.0
 
@@ -454,22 +437,21 @@ class TestMomentum:
         """EMA with alpha=0.3 smooths changes; verify new value is between old and instant."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-mom-ema"
         base = utc_now()
 
         # Build up a high momentum
         for i in range(5):
             t = base + timedelta(seconds=i * 5)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                svc.update(thread_id, "quick", is_user=True, topic="a")
+                svc.update("quick", is_user=True, topic="a")
 
-        phase_before = svc.get_phase(thread_id)
+        phase_before = svc.get_phase()
         mom_before = phase_before["momentum"]
 
         # Now a slow message (large gap) should pull momentum down but not to zero
         t_slow = base + timedelta(seconds=5 + 600)  # 10-minute gap
         with patch("services.conversation_phase_service.utc_now", return_value=t_slow):
-            result = svc.update(thread_id, "slow message", is_user=True, topic="a")
+            result = svc.update("slow message", is_user=True, topic="a")
 
         # Momentum should have dropped but not hit zero
         assert result["momentum"] < mom_before
@@ -481,7 +463,6 @@ class TestDirection:
         """Growing message lengths with stable timing → direction=deepening."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-dir-deep"
         base = utc_now()
 
         texts = [
@@ -497,7 +478,7 @@ class TestDirection:
         for i, text in enumerate(texts):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=True, topic="a")
+                result = svc.update(text, is_user=True, topic="a")
 
         assert result["direction"] == "deepening"
 
@@ -505,7 +486,6 @@ class TestDirection:
         """Shrinking message lengths → direction=winding_down."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-dir-wind"
         base = utc_now()
 
         texts = [
@@ -521,7 +501,7 @@ class TestDirection:
         for i, text in enumerate(texts):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=True, topic="a")
+                result = svc.update(text, is_user=True, topic="a")
 
         assert result["direction"] == "winding_down"
 
@@ -529,7 +509,6 @@ class TestDirection:
         """Stable length and timing → direction=sustaining."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-dir-sustain"
         base = utc_now()
 
         # Uniform length messages
@@ -537,7 +516,7 @@ class TestDirection:
         for i in range(8):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(thread_id, text, is_user=True, topic="a")
+                result = svc.update(text, is_user=True, topic="a")
 
         assert result["direction"] == "sustaining"
 
@@ -547,7 +526,6 @@ class TestStickiness:
         """A single topic change should not immediately flip from deepening."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-sticky"
 
         # Build deepening state
         setup = [
@@ -562,15 +540,15 @@ class TestStickiness:
             ("I will also add docstrings and comments where logic is non-obvious here", True, "code"),
             ("That helps future readers understand intent without guessing around", False, "code"),
         ]
-        _push_messages(svc, thread_id, setup)
+        _push_messages(svc, setup)
 
         # Verify deepening
-        assert svc.get_phase(thread_id)["current"] == "deepening"
+        assert svc.get_phase()["current"] == "deepening"
 
         # Single off-topic question — should NOT flip phase yet
         base = utc_now()
         with patch("services.conversation_phase_service.utc_now", return_value=base):
-            result = svc.update(thread_id, "What is the weather?", is_user=True, topic="weather")
+            result = svc.update("What is the weather?", is_user=True, topic="weather")
 
         # May be pending but should not have flipped to exploring with just one signal
         # (The state could already be deepening or the pending signal count is 1)
@@ -580,7 +558,6 @@ class TestStickiness:
         """Closing keywords bypass stickiness and flip immediately."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-sticky-close"
 
         # Build up some state
         messages = [
@@ -589,9 +566,9 @@ class TestStickiness:
             ("Talking about things", True, "a"),
             ("Sure", False, "a"),
         ]
-        _push_messages(svc, thread_id, messages)
+        _push_messages(svc, messages)
 
-        result = svc.update(thread_id, "Bye!", is_user=True, topic="a")
+        result = svc.update("Bye!", is_user=True, topic="a")
         assert result["current"] == "closing"
 
 
@@ -600,7 +577,6 @@ class TestFullLifecycle:
         """Walk through opening → exploring → deepening → resolving → closing."""
         store = _make_store()
         svc = _make_service(store)
-        thread_id = "t-lifecycle"
         base = utc_now()
         idx = 0
 
@@ -609,7 +585,7 @@ class TestFullLifecycle:
             t = base + timedelta(seconds=idx * 30)
             idx += 1
             with patch("services.conversation_phase_service.utc_now", return_value=t):
-                return svc.update(thread_id, text, is_user=is_user, topic=topic)
+                return svc.update(text, is_user=is_user, topic=topic)
 
         # Opening: first 2 exchanges
         r = send("Hello!", True, "greetings")

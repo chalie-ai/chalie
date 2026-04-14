@@ -13,7 +13,6 @@ from workers.background_llm_worker import (
     LLM_CALL_TIMEOUT,
     MAX_RETRIES,
     LAST_INTERACTION_KEY,
-    PROMPT_QUEUE_KEY,
 )
 
 
@@ -43,12 +42,6 @@ class TestConstants:
 
 class TestGetSleepInterval:
 
-    def test_busy_when_prompt_queue_has_items(self, mock_store):
-        mock_store.rpush(PROMPT_QUEUE_KEY, "job1")
-        result = _get_sleep_interval(mock_store)
-        # BUSY_SLEEP=10, ±10% jitter → [9.0, 11.0]
-        assert 9.0 <= result <= 11.0
-
     def test_busy_when_recent_interaction(self, mock_store):
         mock_store.set(LAST_INTERACTION_KEY, str(time.time() - 30))  # 30s ago
         result = _get_sleep_interval(mock_store)
@@ -73,7 +66,7 @@ class TestGetSleepInterval:
 
     def test_normal_on_store_error(self):
         broken_store = MagicMock()
-        broken_store.llen.side_effect = ConnectionError("dead")
+        broken_store.get.side_effect = ConnectionError("dead")
         result = _get_sleep_interval(broken_store)
         # Fallback: NORMAL_SLEEP=5, ±10% → [4.5, 5.5]
         assert 4.5 <= result <= 5.5

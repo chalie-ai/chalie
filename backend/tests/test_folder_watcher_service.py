@@ -361,7 +361,7 @@ class TestScanScheduling:
 
 _P_MEMSTORE = 'services.memory_store.MemoryStore'
 _P_DOCSVC = 'services.document_service.DocumentService'
-_P_ENQUEUE = 'services.document_queue.enqueue_document_processing'
+_P_ENQUEUE = 'services.folder_watcher_service.FolderWatcherService._process_watched_document'
 
 
 @pytest.mark.unit
@@ -428,7 +428,7 @@ class TestScanNewFiles:
 
         assert result['new'] == 1
         mock_doc_svc.create_document.assert_called_once()
-        mock_enqueue.assert_called_once_with('new_doc_1')
+        mock_enqueue.assert_called_once_with('new_doc_1', '/test/watched/doc.pdf')
 
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
@@ -507,7 +507,7 @@ class TestScanModifiedFiles:
         assert result['updated'] == 1
         mock_doc_svc.soft_delete.assert_called_once_with('old_doc')
         mock_doc_svc.set_supersedes.assert_called_once_with('new_doc', 'old_doc')
-        mock_enqueue.assert_called_once_with('new_doc')
+        mock_enqueue.assert_called_once_with('new_doc', '/test/watched/doc.pdf')
 
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     def test_skips_when_mtime_unchanged(self, mock_isdir, db):

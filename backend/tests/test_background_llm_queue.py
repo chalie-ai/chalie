@@ -139,11 +139,6 @@ class TestBackgroundLLMProxy:
 @pytest.mark.unit
 class TestGetSleepInterval:
 
-    def test_busy_when_prompt_queue_has_items(self, fake_store):
-        fake_store.rpush("prompt-queue", "item")
-        sleep = _get_sleep_interval(fake_store)
-        assert BUSY_SLEEP * 0.89 <= sleep <= BUSY_SLEEP * 1.11
-
     def test_busy_when_recent_interaction(self, fake_store):
         fake_store.set("proactive:default:last_interaction_ts", str(time.time() - 60))
         sleep = _get_sleep_interval(fake_store)

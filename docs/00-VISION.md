@@ -132,7 +132,7 @@ Decides what deserves attention, chooses depth of reasoning based on value, esca
 ### 4. Maintains Continuity
 Remembers context and priorities, understands recurring patterns, avoids requiring users to repeat themselves.
 
-*Codebase: memory hierarchy (working → episode → concept), decay engine, autobiography service, user traits.*
+*Codebase: memory hierarchy (working → episode → concept), decay engine, data graph (traits, facts, preferences).*
 
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
@@ -188,12 +188,12 @@ Users express direction; Chalie handles operations. The gap between "I want X" a
 ### 5. Calm Intelligence
 Brevity, timing, and restraint build trust. Verbosity erodes it.
 
-*Codebase anchor: Radiant design system's "restraint as luxury" principle, soul.md behavioral prompts, frontal cortex adaptive directives for tone calibration.*
+*Codebase anchor: Radiant design system's "restraint as luxury" principle, identity/principles/voice inlined in `UnifiedSystemMessagePrompt` (`backend/services/system_message_prompt.py`), frontal cortex adaptive directives for tone calibration.*
 
 ### 6. Continuity Over Transactions
 Each interaction builds long-term understanding. Memory, identity, and history are first-class concerns, not afterthoughts.
 
-*Codebase anchor: memory hierarchy with decay engine, autobiography service (6h synthesis cycle), user traits with category-specific persistence, episodic retrieval with activation weighting.*
+*Codebase anchor: memory hierarchy with decay engine, data graph (traits, facts, preferences, procedures) with category-specific persistence, episodic retrieval with activation weighting.*
 
 ---
 

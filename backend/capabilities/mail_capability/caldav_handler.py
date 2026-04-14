@@ -346,7 +346,7 @@ class CaldavHandler:
 
                     c.execute(
                         """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, topic,
+                           (id, item_type, message, due_at, status, channel,
                             source, external_uid, metadata, hidden, created_at)
                          VALUES (?, 'event', ?, ?, 'pending', 'calendar',
                                  'mail', ?, ?, 1, ?)
@@ -379,7 +379,7 @@ class CaldavHandler:
                         alert_msg += f" @ {ev['location']}"
                     c.execute(
                         """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, topic,
+                           (id, item_type, message, due_at, status, channel,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
                                  'mail', ?, 1, ?)""",
@@ -396,7 +396,7 @@ class CaldavHandler:
                     )
                     c.execute(
                         """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, topic,
+                           (id, item_type, message, due_at, status, channel,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
                                  'mail', ?, 1, ?)""",
@@ -412,7 +412,7 @@ class CaldavHandler:
                     )
                     c.execute(
                         """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, topic,
+                           (id, item_type, message, due_at, status, channel,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
                                  'mail', ?, 1, ?)""",
@@ -427,7 +427,7 @@ class CaldavHandler:
                 ).fetchone():
                     c.execute(
                         """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status, topic,
+                           (id, item_type, message, due_at, recurrence, status, channel,
                             source, external_uid, hidden, created_at, is_prompt)
                          VALUES (?, 'prompt',
                                  'Summarize today''s calendar: highlight key meetings, conflicts, and free blocks. Keep it brief — 3-4 sentences.',
@@ -447,7 +447,7 @@ class CaldavHandler:
                     )
                     c.execute(
                         """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, topic,
+                           (id, item_type, message, due_at, status, channel,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
                                  'mail', 'caldav:greeting', 1, ?)""",

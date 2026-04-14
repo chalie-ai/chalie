@@ -74,12 +74,12 @@ Write fenced code blocks with the block type as the language tag. Content is JSO
 """
 
 
-def handle_rich_render(topic: str, params: dict) -> str:
+def handle_rich_render(channel: str, params: dict) -> str:
     """
     Return the block protocol reference for the LLM to use.
 
     Args:
-        topic: Current conversation topic (unused)
+        channel: Current conversation channel (unused)
         params: Empty dict (no parameters)
 
     Returns:

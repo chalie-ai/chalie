@@ -15,7 +15,7 @@ The tools system provides:
 - **Interface tools**: External applications can pair with Chalie and expose tool capabilities via the interface protocol
 - **Configuration Management**: Per-tool secrets and credentials stored in SQLite (encrypted)
 - **Semantic Matching**: Tool relevance determined via embedding-based similarity, not regex patterns
-- **Audit Trail**: All tool invocations logged to procedural memory with success/failure and execution time
+- **Audit Trail**: All tool invocations logged to `tool_calls` table with success/failure and execution time
 
 ## Architecture
 
@@ -119,7 +119,7 @@ When the LLM decides to use a tool during the unified generation path:
 4. **Configuration Injection** — ToolConfigService fetches stored API keys/endpoints
 5. **Direct Invocation** — Handler called in-process via `ToolLibraryService.get_handler()`
 6. **Output Sanitization** — Result stripped of action-like patterns, truncated to 3000 chars
-7. **Memory Logging** — Outcome (success/failure, execution time) logged to procedural memory
+7. **Memory Logging** — Outcome (success/failure, execution time) logged to `tool_calls` table
 8. **Integration** — Tool output wrapped in `[TOOL:name]...[/TOOL]` markers and included in LLM context
 
 ### Tool Status
@@ -136,7 +136,7 @@ Tools have three status values (from API `/tools` endpoint):
 
 - **Default timeout**: 9 seconds
 - **Configurable** per tool in `constraints.timeout_seconds`
-- Exceeded timeouts logged as failures in procedural memory
+- Exceeded timeouts logged as failures in `tool_calls` table
 
 ### Cost Budgets
 
@@ -180,7 +180,7 @@ Tool name in `TOOL_HANDLERS` must match the name used in `TOOL_METADATA` exactly
 
 - **Kill Switch**: Set `tools_enabled: false` in config to disable all tools
 - **Declared Library**: Tools are declared in `ToolLibraryService`, not discovered by scanning
-- **Single Authority**: Procedural memory (reward signal) is single authority for tool retraining
+- **Single Authority**: `tool_performance_metrics` table is the single authority for tool usage analytics
 - **Data Scope**: All tool invocations scoped to topic (no cross-topic leakage)
 - **Audit Trail**: Every invocation logged with topic, success/failure, execution time
 

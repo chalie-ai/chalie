@@ -36,11 +36,33 @@ TRIAGE_SUMMARIES_TTL = 300  # 5 minutes
 MAX_SCENARIOS = 50
 MIN_SCENARIO_DISTANCE = 0.12  # cosine distance for deduplication
 
+# Bump to force all profile embeddings to regenerate.
+# v2: embed short_summary + keywords only (not full_profile).
+# v3: force re-seed to write keywords column.
+_EMBEDDING_VERSION = 3
+
 
 def _compute_manifest_hash(manifest: dict) -> str:
-    """MD5 hash of manifest for staleness detection."""
-    content = json.dumps(manifest, sort_keys=True)
+    """MD5 hash of manifest + embedding version for staleness detection."""
+    content = json.dumps(manifest, sort_keys=True) + f":emb_v{_EMBEDDING_VERSION}"
     return hashlib.md5(content.encode()).hexdigest()
+
+
+def _truncate_keywords(keywords: str, max_len: int = 256) -> str:
+    """Truncate keywords to max_len, cleanly at last complete keyword."""
+    if len(keywords) <= max_len:
+        return keywords
+    parts = keywords.split(',')
+    result = []
+    length = 0
+    for part in parts:
+        part = part.strip()
+        added_len = len(part) + (1 if result else 0)
+        if length + added_len > max_len:
+            break
+        result.append(part)
+        length += added_len
+    return ','.join(result)
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
@@ -167,13 +189,13 @@ class ToolProfileService:
         usage_scenarios = profile_data.get('usage_scenarios', [])[:MAX_SCENARIOS]
         anti_scenarios = profile_data.get('anti_scenarios', [])[:20]
 
-        # Generate embedding from short_summary + full_profile for robust semantic search
+        # Generate embedding from short_summary + keywords
         embedding = None
+        keywords = _truncate_keywords(profile_data.get('keywords', ''))
         try:
             emb_service = self._get_embedding_service()
             short_summary = profile_data.get('short_summary', '')
-            full_profile = profile_data.get('full_profile', description)
-            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
+            embedding_text = f"{short_summary} {keywords}" if keywords else short_summary
             embedding = emb_service.generate_embedding(embedding_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding generation failed for {tool_name}: {e}")
@@ -195,8 +217,8 @@ class ToolProfileService:
                     INSERT INTO tool_capability_profiles
                         (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, effort, descriptor, updated_at)
-                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                         triage_triggers, effort, descriptor, keywords, updated_at)
+                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'tool',
                         short_summary = EXCLUDED.short_summary,
@@ -209,6 +231,7 @@ class ToolProfileService:
                         triage_triggers = EXCLUDED.triage_triggers,
                         effort = EXCLUDED.effort,
                         descriptor = EXCLUDED.descriptor,
+                        keywords = EXCLUDED.keywords,
                         updated_at = datetime('now')
                     """,
                     (
@@ -223,6 +246,7 @@ class ToolProfileService:
                         json.dumps(triage_triggers),
                         effort_tier,
                         descriptor,
+                        keywords,
                     )
                 )
 
@@ -304,16 +328,8 @@ class ToolProfileService:
         if len(merged) > MAX_SCENARIOS:
             merged = merged[:MAX_SCENARIOS]
 
-        # Refresh embedding from short_summary + full_profile (consistent with build_profile)
-        embedding = None
-        try:
-            emb_service = self._get_embedding_service()
-            short_summary = profile.get('short_summary', '')
-            full_profile = profile.get('full_profile', '')
-            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
-            embedding = emb_service.generate_embedding(embedding_text)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Embedding refresh failed for {tool_name}: {e}")
+        # Embedding is derived from short_summary + keywords, neither of which
+        # changes during scenario enrichment.  Skip regeneration.
 
         db = self._get_db()
         try:
@@ -334,23 +350,6 @@ class ToolProfileService:
                     """,
                     (json.dumps(merged), json.dumps(new_ids), tool_name)
                 )
-
-                # Update embedding in vec table
-                if embedding is not None:
-                    row = cursor.execute(
-                        "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
-                        (tool_name,)
-                    ).fetchone()
-                    if row:
-                        blob = _pack_embedding(embedding)
-                        cursor.execute(
-                            "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
-                            (row[0],)
-                        )
-                        cursor.execute(
-                            "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
-                            (row[0], blob)
-                        )
 
                 cursor.close()
 
@@ -389,49 +388,6 @@ class ToolProfileService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} add_usage_scenarios failed for {tool_name}: {e}")
             return 0
-        finally:
-            if not self._db:
-                db.close_pool()
-
-    def check_episode_relevance(self, episode_embedding, episode_id: str) -> None:
-        """Check if an episode is relevant to any tool profile; enrich if so."""
-        db = self._get_db()
-        try:
-            blob = _pack_embedding(episode_embedding)
-            if blob is None:
-                return
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Use vec0 MATCH to find the closest tool profile
-                cursor.execute(
-                    """
-                    SELECT tcp.tool_name, v.distance
-                    FROM tool_capability_profiles_vec v
-                    JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
-                    WHERE v.embedding MATCH ? AND k = 1
-                    ORDER BY v.distance
-                    """,
-                    (blob,)
-                )
-                row = cursor.fetchone()
-                cursor.close()
-
-            if row:
-                # vec0 returns L2 distance; convert to similarity (approximate)
-                # For normalized vectors, similarity ~ 1 - distance/2
-                distance = row['distance'] if isinstance(row, dict) else row[1]
-                tool_name = row['tool_name'] if isinstance(row, dict) else row[0]
-                similarity = max(0.0, 1.0 - distance / 2.0)
-
-                if similarity > 0.7:
-                    logger.info(
-                        f"{LOG_PREFIX} Episode {episode_id} relevant to {tool_name} "
-                        f"(similarity={similarity:.3f}), triggering enrichment"
-                    )
-                    self.enrich_from_episodes(tool_name, [episode_id])
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Episode relevance check failed: {e}")
         finally:
             if not self._db:
                 db.close_pool()
@@ -607,12 +563,134 @@ class ToolProfileService:
             logger.warning(f"{LOG_PREFIX} rebuild_if_stale failed for {tool_name}: {e}")
             return False
 
+    def seed_builtin_profiles(self) -> None:
+        """
+        Seed hardcoded profiles for first-party built-in tools.
+
+        Reads BUILTIN_TOOL_PROFILES from tool_library_service and upserts each
+        entry into tool_capability_profiles + tool_capability_profiles_vec using
+        the same manifest_hash as build_profile() computes. The existing staleness
+        gate in bootstrap_all() will therefore naturally skip these tools — their
+        hash matches so check_staleness() returns False.
+        """
+        from services.tool_library_service import BUILTIN_TOOL_PROFILES, TOOL_METADATA
+
+        seeded = 0
+        for tool_name, profile in BUILTIN_TOOL_PROFILES.items():
+            try:
+                manifest = TOOL_METADATA.get(tool_name)
+                if not manifest:
+                    logger.debug(f"{LOG_PREFIX} seed_builtin_profiles: no TOOL_METADATA for {tool_name}, skipping")
+                    continue
+
+                manifest_hash = _compute_manifest_hash(manifest)
+
+                # Skip if already seeded with current hash
+                if not self.check_staleness(tool_name, manifest_hash):
+                    logger.debug(f"{LOG_PREFIX} seed_builtin_profiles: {tool_name} is current, skipping")
+                    continue
+
+                short_summary = profile["short_summary"]
+                full_profile = profile["full_profile"]
+                effort = profile.get("effort", "moderate")
+                domain = profile.get("domain", "Other")
+                descriptor = profile.get("descriptor", tool_name)
+                usage_scenarios = profile.get("usage_scenarios", ["see full_profile"])
+                triage_triggers = profile.get("triage_triggers", ["see full_profile"])
+                keywords = _truncate_keywords(profile.get("keywords", ""))
+
+                # Build embedding from short_summary + keywords
+                embedding = None
+                try:
+                    emb_service = self._get_embedding_service()
+                    embedding_text = f"{short_summary} {keywords}" if keywords else short_summary
+                    embedding = emb_service.generate_embedding(embedding_text)
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} seed_builtin_profiles: embedding failed for {tool_name}: {e}")
+
+                # Upsert profile
+                db = None
+                db = self._get_db()
+                try:
+                    with db.connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            INSERT INTO tool_capability_profiles
+                                (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                                 anti_scenarios, complementary_skills, manifest_hash, domain,
+                                 triage_triggers, effort, descriptor, keywords, updated_at)
+                            VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                            ON CONFLICT (tool_name) DO UPDATE SET
+                                tool_type = 'tool',
+                                short_summary = EXCLUDED.short_summary,
+                                full_profile = EXCLUDED.full_profile,
+                                usage_scenarios = EXCLUDED.usage_scenarios,
+                                anti_scenarios = EXCLUDED.anti_scenarios,
+                                complementary_skills = EXCLUDED.complementary_skills,
+                                manifest_hash = EXCLUDED.manifest_hash,
+                                domain = EXCLUDED.domain,
+                                triage_triggers = EXCLUDED.triage_triggers,
+                                effort = EXCLUDED.effort,
+                                descriptor = EXCLUDED.descriptor,
+                                keywords = EXCLUDED.keywords,
+                                updated_at = datetime('now')
+                            """,
+                            (
+                                tool_name,
+                                short_summary[:200],
+                                full_profile,
+                                json.dumps(usage_scenarios),
+                                json.dumps([]),
+                                json.dumps([]),
+                                manifest_hash,
+                                domain,
+                                json.dumps(triage_triggers),
+                                effort,
+                                descriptor,
+                                keywords,
+                            )
+                        )
+
+                        if embedding is not None:
+                            row = cursor.execute(
+                                "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                                (tool_name,)
+                            ).fetchone()
+                            if row:
+                                blob = _pack_embedding(embedding)
+                                cursor.execute(
+                                    "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                                    (row[0],)
+                                )
+                                cursor.execute(
+                                    "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                                    (row[0], blob)
+                                )
+
+                        cursor.close()
+                    seeded += 1
+                    logger.info(f"{LOG_PREFIX} seed_builtin_profiles: seeded {tool_name}")
+                except Exception as e:
+                    logger.error(f"{LOG_PREFIX} seed_builtin_profiles: DB upsert failed for {tool_name}: {e}")
+                finally:
+                    if db and not self._db:
+                        db.close_pool()
+
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} seed_builtin_profiles: failed for {tool_name}: {e}")
+
+        if seeded:
+            self._invalidate_cache()
+            logger.info(f"{LOG_PREFIX} seed_builtin_profiles: seeded {seeded} profile(s)")
+
     def bootstrap_all(self) -> None:
         """
         Called on startup. Build profiles for any tool/skill that lacks one.
         Uses documentation field (or description fallback) + LLM profile builder.
         """
         logger.info(f"{LOG_PREFIX} Bootstrap: checking all tool/skill profiles...")
+        self.seed_builtin_profiles()
 
         # Innate skills no longer profiled — documentation lives in TOOL_SCHEMA
         # dicts on each handler module. Procedural memory (strategy hints) is
@@ -666,6 +744,36 @@ class ToolProfileService:
                 logger.info(f"{LOG_PREFIX} Purged {len(stale)} stale profile(s): {stale}")
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to purge stale profiles: {e}")
+
+        # Inject dynamic TOC into find_tools query description
+        try:
+            db = self._get_db()
+            try:
+                rows = db.fetch_all(
+                    "SELECT keywords FROM tool_capability_profiles "
+                    "WHERE tool_type = 'tool' AND keywords != '' ORDER BY tool_name"
+                )
+            finally:
+                if not self._db:
+                    db.close_pool()
+
+            toc_parts = []
+            for r in (rows or []):
+                kw = r['keywords'] if isinstance(r, dict) else r[0]
+                if kw:
+                    first = kw.split(',')[0].strip()
+                    if first and first not in toc_parts:
+                        toc_parts.append(first)
+
+            if toc_parts:
+                toc_str = ",".join(sorted(toc_parts))
+                from services.innate_skills.find_tools_skill import TOOL_SCHEMA as find_tools_schema
+                find_tools_schema["input_schema"]["properties"]["query"]["description"] = (
+                    f"Describe what you need or pick from: {toc_str}"
+                )
+                logger.info(f"{LOG_PREFIX} Injected TOC into find_tools: {toc_str}")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} TOC injection failed (non-fatal): {e}")
 
         logger.info(f"{LOG_PREFIX} Bootstrap complete")
 
@@ -868,6 +976,8 @@ class ToolProfileService:
         if not scenarios or scenarios == []:
             return True
         if not profile.get('descriptor'):
+            return True
+        if not profile.get('keywords'):
             return True
         return False
 

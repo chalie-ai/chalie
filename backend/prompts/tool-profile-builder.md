@@ -31,7 +31,8 @@ Generate JSON with exactly these fields:
   "complementary_skills": ["skill names that work well alongside this tool"],
   "triage_triggers": ["5-10 short action verbs or phrases that should activate this tool in triage routing"],
   "effort_tier": "trivial | light | moderate | deep",
-  "descriptor": "tool_name (synonym1, synonym2, ...)"
+  "descriptor": "tool_name (synonym1, synonym2, ...)",
+  "keywords": "comma-separated search keywords for this tool (max 256 chars, most discriminating terms first, no spaces after commas)"
 }
 
 Think exhaustively about usage_scenarios. Include:

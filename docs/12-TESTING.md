@@ -9,10 +9,10 @@ cd backend
 pytest -m unit
 
 # Run a specific test file
-pytest tests/test_mode_router.py
+pytest tests/test_message_processor.py
 
 # Run a single test
-pytest tests/test_mode_router.py::TestModeRouter::test_high_warmth_selects_unified
+pytest tests/test_message_processor.py::TestMessageProcessorBase::test_get_system_prompt
 
 # Verbose output
 pytest -m unit -v
@@ -74,7 +74,7 @@ All fixtures live in `tests/conftest.py`.
 In-memory MemoryStore instance. Patches `MemoryStore` connections. Flushes on teardown.
 
 ### `mock_config`
-Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for mode-router and frontal-cortex.
+Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for frontal-cortex.
 
 ### `mock_ollama`
 Returns `LLMResponse(text='{"gists": [], "scope": "test"}', model='test-model', provider='ollama')`. Also mocks `generate_embedding` → `[0.0] * 256`.
@@ -126,7 +126,7 @@ row = make_trait_row(trait_key='timezone', trait_value='CET')
 episode = make_episode_row(gist='Discussed morning routine')
 
 # 9-element tuple matching providers SELECT
-provider = make_provider_row(platform='ollama', model='qwen3:4b')
+provider = make_provider_row(platform='ollama', model='gemma4:31b')
 ```
 
 ## Mock Strategies

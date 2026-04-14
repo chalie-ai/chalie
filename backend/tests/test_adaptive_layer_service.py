@@ -90,6 +90,7 @@ class TestColdStartGate:
         svc = _service()
         style = _make_style(_observation_count=0)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
+             patch.object(svc, '_get_observation_count', return_value=0), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -99,6 +100,7 @@ class TestColdStartGate:
         svc = _service()
         style = _make_style(_observation_count=1)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
+             patch.object(svc, '_get_observation_count', return_value=1), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -315,12 +317,6 @@ class TestEnergyMirror:
 
 class TestForkDirective:
 
-    def test_no_thread_id_returns_empty(self):
-        svc = _service()
-        style = _make_style(verbosity=5)
-        result = svc._get_fork_directive(style, None)
-        assert result == ""
-
     def test_extreme_dimensions_do_not_fork(self):
         """When ALL fork-trigger dimensions are outside 4-7, no fork fires."""
         svc = _service()
@@ -331,7 +327,7 @@ class TestForkDirective:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result == ""
 
@@ -344,11 +340,11 @@ class TestForkDirective:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result != ""
         # Assert on store state instead of mock call: pending key should be written
-        assert store.get("adaptive_fork_pending:thread-123") is not None
+        assert store.get("adaptive_fork_pending") is not None
 
     def test_cooldown_blocks_fork(self):
         svc = _service()
@@ -356,10 +352,10 @@ class TestForkDirective:
 
         # Pre-populate cooldown key so exists() returns True — fork must be suppressed
         store = MemoryStore()
-        store.set("adaptive_fork_cooldown:thread-123", "1")
+        store.set("adaptive_fork_cooldown", "1")
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            result = svc._get_fork_directive(style, 'thread-123')
+            result = svc._get_fork_directive(style)
 
         assert result == ""
 
@@ -377,21 +373,18 @@ class TestMicroPreferences:
     def test_get_micro_preferences_maps_correctly(self, db):
         svc = _service()
 
-        # Seed knowledge table with micro-preference rows
+        # Seed data_graph with user_specific micro-preference rows
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'prefers_bullet_format', 'true', 'preference', 0.85, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'prefers_bullet_format', 'true', 0.85)",
         )
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'prefers_concise', 'true', 'preference', 0.70, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'prefers_concise', 'true', 0.70)",
         )
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'unknown_pref_key', 'true', 'preference', 0.90, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'unknown_pref_key', 'true', 0.90)",
         )
         db.commit()
 

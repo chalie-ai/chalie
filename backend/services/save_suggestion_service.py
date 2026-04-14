@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SAVE SUGGEST]"
 
-# MemoryStore key patterns
-FLAG_KEY = "saveable:{thread_id}"
-COOLDOWN_KEY = "save_suggest:cooldown:{thread_id}"
-REJECT_KEY = "save_suggest:reject:{thread_id}:{topic}"
+# MemoryStore keys
+FLAG_KEY = "saveable"
+COOLDOWN_KEY = "save_suggest:cooldown"
+REJECT_KEY = "save_suggest:reject:{topic}"
 
 # TTLs
 FLAG_TTL = 1800           # 30 minutes
@@ -44,17 +44,23 @@ MIN_RESPONSE_LENGTH = 300
 
 
 class SaveSuggestionService:
-    """Detects saveable conversation content and orchestrates save suggestions."""
+    """Detects saveable conversation content and orchestrates save suggestions.
+
+    .. deprecated::
+        This service is scheduled for removal. Its conversation-window
+        functionality depended on WorkingMemoryService (now deleted) and
+        its card emission (emit_save_card) targets a removed card system.
+        Do not add new callers.
+    """
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Detection (called from digest_worker Phase D)
+    # Detection
     # ──────────────────────────────────────────────────────────────────────────
 
     def detect_saveable_content(
         self,
         response_text: str,
         topic: str,
-        thread_id: str,
     ) -> Optional[Dict[str, str]]:
         """
         Deterministic heuristic: check if the response contains a finalized artifact.
@@ -83,8 +89,7 @@ class SaveSuggestionService:
         # Guard: cooldown check
         try:
             ms = self._get_store()
-            cooldown_key = COOLDOWN_KEY.format(thread_id=thread_id)
-            if ms.exists(cooldown_key):
+            if ms.exists(COOLDOWN_KEY):
                 return None
         except Exception:
             pass
@@ -92,7 +97,7 @@ class SaveSuggestionService:
         # Guard: topic rejection check
         try:
             ms = self._get_store()
-            reject_key = REJECT_KEY.format(thread_id=thread_id, topic=topic or 'unknown')
+            reject_key = REJECT_KEY.format(topic=topic or 'unknown')
             if ms.exists(reject_key):
                 return None
         except Exception:
@@ -202,49 +207,45 @@ class SaveSuggestionService:
 
     def flag_saveable(
         self,
-        thread_id: str,
         topic: str,
         content_type: str,
         exchange_id: str,
     ) -> None:
-        """Set MemoryStore flag: saveable:{thread_id}. TTL 30min."""
+        """Set MemoryStore flag: saveable. TTL 30min."""
         try:
             ms = self._get_store()
-            key = FLAG_KEY.format(thread_id=thread_id)
             data = json.dumps({
                 'content_type': content_type,
                 'topic': topic or 'unknown',
                 'exchange_id': exchange_id,
                 'ts': time.time(),
             })
-            ms.setex(key, FLAG_TTL, data)
-            logger.info(f"{LOG_PREFIX} Flagged saveable {content_type} in thread {thread_id}")
+            ms.setex(FLAG_KEY, FLAG_TTL, data)
+            logger.info(f"{LOG_PREFIX} Flagged saveable {content_type}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} flag_saveable failed: {e}")
 
-    def get_saveable_flag(self, thread_id: str) -> Optional[Dict]:
+    def get_saveable_flag(self) -> Optional[Dict]:
         """Read and return the saveable flag if it exists."""
         try:
             ms = self._get_store()
-            key = FLAG_KEY.format(thread_id=thread_id)
-            raw = ms.get(key)
+            raw = ms.get(FLAG_KEY)
             if raw:
                 return json.loads(raw)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} get_saveable_flag failed: {e}")
         return None
 
-    def clear_flag(self, thread_id: str) -> None:
+    def clear_flag(self) -> None:
         """Remove the saveable flag."""
         try:
             ms = self._get_store()
-            key = FLAG_KEY.format(thread_id=thread_id)
-            ms.delete(key)
+            ms.delete(FLAG_KEY)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} clear_flag failed: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Trigger detection (called from digest_worker Phase A on next message)
+    # Trigger detection
     # ──────────────────────────────────────────────────────────────────────────
 
     def detect_save_trigger(self, user_text: str) -> Optional[str]:
@@ -285,9 +286,9 @@ class SaveSuggestionService:
     # Suggestion emission
     # ──────────────────────────────────────────────────────────────────────────
 
-    def emit_save_card(self, thread_id: str, topic: str, content_type: str) -> None:
+    def emit_save_card(self, content_type: str) -> None:
         """Save suggestion (card system removed -- detection still works, UI pending)."""
-        logger.info(f"{LOG_PREFIX} Save suggestion detected: {content_type} (thread={thread_id})")
+        logger.info(f"{LOG_PREFIX} Save suggestion detected: {content_type}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Document creation (called when user accepts)
@@ -295,7 +296,6 @@ class SaveSuggestionService:
 
     def create_document_from_conversation(
         self,
-        thread_id: str,
         topic: str,
         content_type: str,
     ) -> Optional[str]:
@@ -311,16 +311,16 @@ class SaveSuggestionService:
         """
         try:
             # 1. Get conversation window
-            conversation = self._get_conversation_window(thread_id)
+            conversation = self._get_conversation_window()
             if not conversation:
-                logger.warning(f"{LOG_PREFIX} No conversation content for thread {thread_id}")
+                logger.warning(f"{LOG_PREFIX} No conversation content")
                 return None
 
             # 2. Duplicate check
             conv_hash = hashlib.sha256(conversation.encode()).hexdigest()
             if self._is_duplicate(conv_hash):
                 logger.info(f"{LOG_PREFIX} Duplicate detected, skipping")
-                self.clear_flag(thread_id)
+                self.clear_flag()
                 return None
 
             # 3. Synthesize document via LLM
@@ -340,16 +340,17 @@ class SaveSuggestionService:
             doc_svc = DocumentService(get_shared_db_service())
             doc_id = doc_svc.create_document_from_text(doc_name, doc_text, 'conversation')
 
-            # 5. Enqueue processing
+            # 5. Create data_graph artifacts
             try:
-                from services.document_queue import enqueue_document_processing
-                enqueue_document_processing(doc_id)
+                from services.innate_skills.document_skill import create_document_artifacts
+                artifact_count = create_document_artifacts(doc_id, doc_text)
+                doc_svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Failed to enqueue processing: {e}")
+                logger.warning(f"{LOG_PREFIX} Failed to create artifacts: {e}")
 
             # 6. Clear flag + set cooldown
-            self.clear_flag(thread_id)
-            self._set_cooldown(thread_id)
+            self.clear_flag()
+            self._set_cooldown()
 
             logger.info(f"{LOG_PREFIX} Created document {doc_id} from conversation")
             return doc_id
@@ -359,21 +360,17 @@ class SaveSuggestionService:
                          exc_info=True)
             return None
 
-    def record_rejection(self, thread_id: str, topic: str) -> None:
+    def record_rejection(self, topic: str) -> None:
         """Record a save suggestion rejection for rate limiting."""
         try:
             ms = self._get_store()
             # Set cooldown (prevent re-suggesting for 1 hour)
-            cooldown_key = COOLDOWN_KEY.format(thread_id=thread_id)
-            ms.setex(cooldown_key, COOLDOWN_TTL, '1')
+            ms.setex(COOLDOWN_KEY, COOLDOWN_TTL, '1')
             # Set topic-level rejection (prevent for 7 days on same topic)
             if topic:
-                reject_key = REJECT_KEY.format(
-                    thread_id=thread_id,
-                    topic=topic,
-                )
+                reject_key = REJECT_KEY.format(topic=topic)
                 ms.setex(reject_key, REJECT_TTL, '1')
-            logger.info(f"{LOG_PREFIX} Recorded rejection for thread {thread_id}, topic {topic}")
+            logger.info(f"{LOG_PREFIX} Recorded rejection for topic {topic}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} record_rejection failed: {e}")
 
@@ -385,29 +382,9 @@ class SaveSuggestionService:
         from services.memory_client import MemoryClientService
         return MemoryClientService.create_connection()
 
-    def _get_conversation_window(self, thread_id: str) -> Optional[str]:
-        """Get recent conversation turns formatted for LLM synthesis."""
-        try:
-            from services.working_memory_service import WorkingMemoryService
-
-            wm = WorkingMemoryService()
-            turns = wm.get_recent_turns(thread_id, n=10)
-            if not turns:
-                return None
-
-            lines = []
-            for turn in turns:
-                role = turn.get('role', 'unknown')
-                content = turn.get('content', '')
-                if role == 'user':
-                    lines.append(f"User: {content}")
-                elif role == 'assistant':
-                    lines.append(f"Assistant: {content}")
-
-            return '\n\n'.join(lines)
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _get_conversation_window failed: {e}")
-            return None
+    def _get_conversation_window(self) -> Optional[str]:
+        """Get recent conversation turns. Always returns None — WorkingMemoryService deleted."""
+        return None
 
     def _synthesize_document(self, conversation: str, content_type: str) -> Optional[str]:
         """Use LLM to synthesize clean markdown from conversation."""
@@ -464,11 +441,10 @@ class SaveSuggestionService:
         except Exception:
             return False
 
-    def _set_cooldown(self, thread_id: str) -> None:
+    def _set_cooldown(self) -> None:
         """Set cooldown to prevent re-suggesting."""
         try:
             ms = self._get_store()
-            key = COOLDOWN_KEY.format(thread_id=thread_id)
-            ms.setex(key, COOLDOWN_TTL, '1')
+            ms.setex(COOLDOWN_KEY, COOLDOWN_TTL, '1')
         except Exception:
             pass

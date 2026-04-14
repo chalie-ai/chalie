@@ -12,7 +12,6 @@ Tool output is sanitized and wrapped in [TOOL:name]...[/TOOL] markers.
 Cost metadata is appended to every result.
 """
 
-import json
 import logging
 import threading
 import time
@@ -22,307 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Singleton instance
 _instance = None
-
-
-class _CronToolWorker:
-    """Picklable callable for cron-triggered tool service processes.
-
-    Defined at module level so Python's spawn start method can pickle it.
-    ToolRegistryService.create_cron_worker() returns an instance of this class
-    instead of a local closure.
-    """
-
-    MAX_OUTPUT_CHARS = 3000
-
-    def __init__(self, tool_config: dict):
-        """Initialise a cron worker from a resolved tool configuration dict.
-
-        Unpacks all fields required for scheduled execution: scheduling interval,
-        prompt template, runner path, OAuth auth config, and per-invocation
-        timeout.
-
-        Args:
-            tool_config: Resolved tool config dict produced by
-                ``ToolRegistryService.get_cron_tools()``.  Required keys are
-                ``name``, ``schedule``, ``prompt``, and ``dir``.
-                Optional keys include ``runner_path`` and ``manifest``.
-        """
-        self.tool_name = tool_config["name"]
-        self.schedule = tool_config["schedule"]
-        self.prompt_template = tool_config["prompt"]
-        self.runner_path = tool_config.get("runner_path")
-        manifest = tool_config.get("manifest", {})
-        self._auth = manifest.get("auth", {})
-        self.tool_dir = tool_config["dir"]
-        self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
-
-    def __call__(self, shared_state=None):
-        """Run the cron loop for this tool in a long-lived worker process.
-
-        Sleeps for the interval parsed from ``self.schedule``, then:
-
-        1. Backs off if the prompt-queue depth exceeds 5.
-        2. Loads per-tool settings from the DB via ``ToolConfigService``.
-        3. Refreshes OAuth tokens when required.
-        4. Collects client telemetry and persisted tool state from MemoryStore.
-        5. Dispatches the tool via subprocess.
-        6. Persists any returned ``_state`` back to MemoryStore with a 7-day TTL.
-        7. Routes output according to the formalized output-type contract
-           (``prompt`` or ``tool``); falls back to legacy routing when no
-           ``output`` field is present.
-
-        The loop runs until a ``KeyboardInterrupt`` is received.  Any other
-        exception is logged and the loop retries after a 60-second cooldown.
-
-        Args:
-            shared_state: Unused placeholder kept for multiprocessing API
-                compatibility.  Defaults to ``None``.
-        """
-        _log = logging.getLogger(__name__)
-        _log.info(f"[TOOL CRON] {self.tool_name} worker started (schedule: {self.schedule})")
-        interval = self._parse_cron_interval(self.schedule)
-
-        while True:
-            try:
-                time.sleep(interval)
-
-                try:
-                    from services.memory_client import MemoryClientService
-                    store = MemoryClientService.create_connection()
-                    queue_depth = store.llen("prompt-queue")
-                    if queue_depth > 5:
-                        _log.info(
-                            f"[TOOL CRON] {self.tool_name} deferred: "
-                            f"prompt-queue depth={queue_depth}"
-                        )
-                        continue
-                except Exception as e:
-                    _log.debug(f"[TOOL CRON] {self.tool_name}: queue depth check failed: {e}", exc_info=True)
-
-                try:
-                    from services.tool_config_service import ToolConfigService
-                    from services.database_service import get_shared_db_service
-                    settings = ToolConfigService(get_shared_db_service()).get_tool_config(self.tool_name)
-                except Exception as e:
-                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to load tool config: {e}", exc_info=True)
-                    settings = {}
-
-                # OAuth token refresh for cron tools
-                auth = self._auth
-                if auth.get("type") == "oauth2" and settings.get("_oauth_access_token"):
-                    try:
-                        from services.oauth_service import OAuthService
-                        fresh = OAuthService().refresh_if_needed(self.tool_name, auth)
-                        if fresh:
-                            settings["_oauth_access_token"] = fresh
-                    except Exception as e:
-                        _log.warning(f"[TOOL CRON] OAuth refresh failed for '{self.tool_name}': {e}")
-
-                raw_telemetry = {}
-                try:
-                    from services.client_context_service import ClientContextService
-                    raw_telemetry = ClientContextService().get()
-                except Exception as e:
-                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to get client telemetry: {e}", exc_info=True)
-
-                # Flatten telemetry using same logic as ToolRegistryService
-                loc = raw_telemetry.get("location") or {}
-                loc_name = raw_telemetry.get("location_name", "")
-                city, country = "", ""
-                if "," in loc_name:
-                    city, country = [p.strip() for p in loc_name.split(",", 1)]
-                flattened_telemetry = {
-                    "lat": loc.get("lat"),
-                    "lon": loc.get("lon"),
-                    "city": city,
-                    "country": country,
-                    "time": raw_telemetry.get("local_time", ""),
-                    "locale": raw_telemetry.get("locale", ""),
-                    "language": raw_telemetry.get("language", ""),
-                }
-
-                # Load persisted tool state from MemoryStore (survives process restarts)
-                tool_state = {}
-                state_key = f"tool_state:{self.tool_name}"
-                old_state_key = f"tool_cron_state:{self.tool_name}"
-                try:
-                    from services.memory_client import MemoryClientService as _MCS
-                    _store = _MCS.create_connection()
-                    # Migration: copy old key to new key on first access
-                    if not _store.exists(state_key) and _store.exists(old_state_key):
-                        old_val = _store.get(old_state_key)
-                        if old_val:
-                            _store.setex(state_key, 7 * 24 * 3600, old_val)
-                    state_json = _store.get(state_key)
-                    if state_json:
-                        tool_state = json.loads(state_json)
-                except Exception as e:
-                    _log.debug(f"[TOOL CRON] {self.tool_name}: failed to load persisted tool state: {e}", exc_info=True)
-
-                payload = {"params": {"_state": tool_state}, "settings": settings, "telemetry": flattened_telemetry}
-
-                # Track interactive turns for final-turn memory storage
-                dialog_turns = []
-
-                def _on_tool_output(dialog_result):
-                    from workers.digest_worker import process_tool_dialog
-                    request_text = dialog_result.get("text", "")
-                    response = process_tool_dialog(
-                        text=request_text,
-                        tool_name=self.tool_name,
-                        trigger_prompt=self.prompt_template,
-                    )
-                    dialog_turns.append({"request": request_text, "response": response})
-                    return response
-
-                # All tools run as trusted subprocesses
-                if not self.runner_path:
-                    _log.warning(f"[TOOL CRON] {self.tool_name}: no runner_path, skipping")
-                    continue
-                from services.tool_subprocess_service import ToolSubprocessService
-                result = ToolSubprocessService().run_interactive(
-                    self.runner_path, payload,
-                    timeout=self.timeout, on_tool_output=_on_tool_output,
-                )
-
-                # Persist returned state back to MemoryStore (7-day TTL)
-                if isinstance(result, dict) and "_state" in result:
-                    try:
-                        from services.memory_client import MemoryClientService as _MCS
-                        _store = _MCS.create_connection()
-                        _store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
-                    except Exception as e:
-                        _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")
-
-                # Store final-turn dialog memory if interactive turns occurred
-                if dialog_turns:
-                    try:
-                        from workers.digest_worker import store_tool_dialog_memory
-                        store_tool_dialog_memory(self.tool_name, dialog_turns)
-                    except Exception as e:
-                        _log.warning(f"[TOOL CRON] {self.tool_name}: failed to store dialog memory: {e}")
-
-                # --- Formalized output routing ---
-                output_type = result.get("output") if isinstance(result, dict) else None
-
-                if output_type is not None:
-                    # New contract: route by output field
-                    if output_type == "prompt":
-                        from services.text_extractor import extract_html as _extract_html
-                        result_text = result.get("text", "")
-                        result_html_cron = result.get("html")
-                        if not result_text and result_html_cron:
-                            result_text = _extract_html(result_html_cron)
-                        elif result_text and "<" in result_text:
-                            result_text = _extract_html(result_text)
-                        if len(result_text) > self.MAX_OUTPUT_CHARS:
-                            result_text = result_text[:self.MAX_OUTPUT_CHARS]
-                        if result_text:
-                            full_prompt = f"{self.prompt_template}\n\n--- Tool Data ---\n{result_text}"
-                            from services.prompt_queue import PromptQueue
-                            from workers.digest_worker import digest_worker
-                            queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-                            queue.enqueue(full_prompt, {
-                                "source": f"cron_tool:{self.tool_name}",
-                                "tool_name": self.tool_name,
-                                "destination": "web",
-                                "priority": result.get("priority", "normal"),
-                            })
-                    # output_type == "tool": already resolved via run_interactive callback
-                    # output_type is null or anything else: silent
-                    _log.info(f"[TOOL CRON] {self.tool_name} executed (output={output_type!r})")
-                    continue
-
-                # --- Legacy output routing (backward compat: no "output" field) ---
-                result_text = ""
-                if isinstance(result, dict):
-                    result_text = result.get("text", "")
-                    if not result.get("notify", True):
-                        _log.debug(f"[TOOL CRON] {self.tool_name}: notify=false, skipping enqueue")
-                        continue
-                else:
-                    result_text = str(result) if result else ""
-
-                from services.text_extractor import extract_html as _extract_html
-                if result_text and "<" in result_text:
-                    result_text = _extract_html(result_text)
-                if len(result_text) > self.MAX_OUTPUT_CHARS:
-                    result_text = result_text[:self.MAX_OUTPUT_CHARS]
-
-                full_prompt = f"{self.prompt_template}\n\n--- Tool Data ---\n{result_text}"
-
-                from services.prompt_queue import PromptQueue
-                from workers.digest_worker import digest_worker
-                queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-                queue.enqueue(full_prompt, {
-                    "source": f"cron_tool:{self.tool_name}",
-                    "tool_name": self.tool_name,
-                    "destination": "web",
-                    "priority": result.get("priority", "normal"),
-                })
-
-                _log.info(f"[TOOL CRON] {self.tool_name} executed and enqueued (priority={result.get('priority', 'normal')})")
-
-            except KeyboardInterrupt:
-                _log.info(f"[TOOL CRON] {self.tool_name} shutting down")
-                break
-            except Exception as e:
-                _log.error(f"[TOOL CRON] {self.tool_name} error: {e}")
-                time.sleep(60)
-
-    def _parse_cron_interval(self, schedule: str) -> int:
-        parts = schedule.strip().split()
-        if len(parts) >= 1 and parts[0].startswith("*/"):
-            try:
-                return int(parts[0][2:]) * 60
-            except ValueError as e:
-                logger.debug(f"[TOOL CRON] Failed to parse cron interval from '{schedule}': {e}", exc_info=True)
-        return 1800
-
-    def _format_result(self, result) -> str:
-        if isinstance(result, str):
-            return result
-        if not isinstance(result, dict):
-            return str(result)
-        lines = []
-        if "results" in result and isinstance(result["results"], list):
-            results = result["results"]
-            if not results:
-                lines.append(result.get("message", "No results found."))
-            else:
-                for i, r in enumerate(results, 1):
-                    if isinstance(r, dict):
-                        title = r.get("title", "")
-                        snippet = r.get("snippet", "")
-                        url = r.get("url", "")
-                        lines.append(f"{i}. {title}")
-                        if snippet:
-                            lines.append(f"   {snippet}")
-                        if url:
-                            lines.append(f"   {url}")
-                    else:
-                        lines.append(f"{i}. {r}")
-            if result.get("count") is not None and result["count"] > 0:
-                lines.append(f"\n{result['count']} results returned.")
-            return "\n".join(lines)
-        if "content" in result and isinstance(result["content"], str):
-            content = result["content"]
-            if result.get("error"):
-                return f"Error: {result['error']}"
-            if not content:
-                return "No content extracted from page."
-            parts = [content]
-            if result.get("truncated"):
-                parts.append(f"(truncated to {result.get('char_count', '?')} chars)")
-            return "\n".join(parts)
-        for key, value in result.items():
-            if key in ("budget_remaining",):
-                continue
-            if isinstance(value, (list, dict)):
-                lines.append(f"{key}: {json.dumps(value, default=str)[:500]}")
-            else:
-                lines.append(f"{key}: {value}")
-        return "\n".join(lines)
 
 
 class ToolRegistryService:
@@ -424,8 +122,11 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
-        # Kick off profile enrichment in background
+        # Kick off profile enrichment in background (skip built-in tools — they are seeded at startup)
+        from services.tool_library_service import BUILTIN_TOOL_PROFILES
         for name in list(self.tools.keys()):
+            if name in BUILTIN_TOOL_PROFILES:
+                continue
             _name = name
             _metadata = dict(self.tools[name]["manifest"])
 
@@ -463,17 +164,17 @@ class ToolRegistryService:
         from services.tool_output_utils import build_tool_telemetry
         return build_tool_telemetry(raw_telemetry)
 
-    def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
-        """Invoke a tool on an external interface via HTTP.
+    def _execute_interface_tool(self, tool_name: str, tool: dict, params: dict) -> dict:
+        """Execute an interface tool via HTTP and return structured result.
 
-        Uses InterfaceRegistryService.execute_capability() which does:
-        POST interface_host:port/execute {capability, params}
+        Returns:
+            Dict with 'text' key (plain result text).
         """
         from services.invocation_tracker import track
 
         interface_id = tool.get("interface_id")
         if not interface_id:
-            return f"[TOOL:{tool_name}] No interface_id for interface tool [/TOOL]"
+            return {'text': 'No interface_id for interface tool'}
 
         start_time = time.time()
         try:
@@ -482,19 +183,18 @@ class ToolRegistryService:
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] Interface execution error: {e} [/TOOL]"
+            return {'text': f'Interface execution error: {e}'}
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         if not isinstance(result, dict):
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] {result} [/TOOL]"
+            return {'text': str(result) if result else '(no output)'}
 
         if result.get("error"):
             track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
-            return f"[TOOL:{tool_name}] Error: {result['error']} [/TOOL]"
+            return {'text': f"Error: {result['error']}"}
 
-        # Format result like any other tool
         text = result.get("text", "")
         html = result.get("html")
 
@@ -506,38 +206,50 @@ class ToolRegistryService:
 
         output = "\n".join(output_parts) if output_parts else "(no output)"
 
-        # Apply standard sanitization and length limits
         if len(output) > self.MAX_OUTPUT_CHARS:
             output = output[:self.MAX_OUTPUT_CHARS] + "\n...(truncated)"
 
         track(name=tool_name, success=True, latency_ms=elapsed_ms)
-        return f"[TOOL:{tool_name}] {output} [/TOOL]"
+        return {'text': output}
 
-    def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
+    def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
+        """Invoke an interface tool and return [TOOL:]-wrapped string.
+
+        Legacy wrapper around _execute_interface_tool for callers that
+        expect the wrapped format (e.g. output_service notifications).
         """
-        Invoke a tool by name.
+        result = self._execute_interface_tool(tool_name, tool, params)
+        text = result.get('text', '')
+        return f"[TOOL:{tool_name}] {text} [/TOOL]"
 
-        First-party tools are called directly in-process via their handler.
-        Interface tools are routed via HTTP to the paired interface.
+    def execute(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> dict:
+        """Execute a tool and return structured result without [TOOL:] wrapping.
+
+        Same execution pipeline as invoke() (validation, config, telemetry,
+        HTML cleanup, truncation) but returns a plain dict for callers that
+        handle their own rendering (e.g. ActDispatcherService handlers).
 
         Returns:
-            Formatted result string: [TOOL:name] ... [/TOOL]
+            Dict with 'text' key containing plain result text.
         """
         if not self._enabled:
-            return f"[TOOL:{tool_name}] Tools are disabled. [/TOOL]"
+            return {'text': 'Tools are disabled.'}
 
         tool = self.tools.get(tool_name)
         if not tool:
-            return f"[TOOL:{tool_name}] Unknown tool: {tool_name} [/TOOL]"
+            return {'text': f'Unknown tool: {tool_name}'}
 
-        # Interface tool — route via HTTP to the interface
         if tool.get("source_type") == "interface":
-            return self._invoke_interface_tool(tool_name, tool, params)
+            return self._execute_interface_tool(tool_name, tool, params)
 
         manifest = tool["manifest"]
-        validated_params = self._validate_params(params, manifest.get("parameters", {}))
+        if "input_schema" in manifest:
+            schema_props = manifest["input_schema"].get("properties", {})
+            schema_required = manifest["input_schema"].get("required", [])
+            validated_params = self._validate_params_from_schema(params, schema_props, schema_required)
+        else:
+            validated_params = self._validate_params(params, manifest.get("parameters", {}))
 
-        # Fetch DB-stored config
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
@@ -546,10 +258,8 @@ class ToolRegistryService:
             logger.debug(f"[TOOL REGISTRY] Failed to load tool config for '{tool_name}': {e}", exc_info=True)
             settings = {}
 
-        # OAuth token refresh
         settings = self._refresh_oauth_token(tool_name, manifest, settings)
 
-        # Build telemetry
         raw_telemetry = {}
         try:
             from services.client_context_service import ClientContextService
@@ -558,17 +268,16 @@ class ToolRegistryService:
             logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for '{tool_name}': {e}", exc_info=True)
         flattened_telemetry = self._build_telemetry(raw_telemetry)
 
-        # Resolve handler from library
         from services.tool_library_service import get_handler
         handler = get_handler(tool_name)
         if not handler:
-            return f"[TOOL:{tool_name}] No handler registered for '{tool_name}' [/TOOL]"
+            return {'text': f"No handler registered for '{tool_name}'"}
 
         start_time = time.time()
         success = False
         try:
             result = handler(
-                topic=topic,
+                topic=channel,
                 params=validated_params,
                 config=settings,
                 telemetry=flattened_telemetry,
@@ -577,15 +286,11 @@ class ToolRegistryService:
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
-            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class="internal")
-            return (
-                f"[TOOL:{tool_name}] Error: {str(e)[:200]} "
-                f"(cost: {elapsed_ms}ms) [/TOOL]"
-            )
+            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class="internal")
+            return {'text': f"Error: {str(e)[:200]}"}
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text and html from formalized contract output
         result_text = ""
         result_html = None
         result_error = None
@@ -594,25 +299,16 @@ class ToolRegistryService:
             result_text = result.get("text", "")
             result_html = result.get("html")
             result_error = result.get("error")
-            # Fallback: if runner didn't set "text", convert dict to readable text
             if not result_text:
                 result_text = self._format_result(result)
         else:
-            # Fallback for non-dict responses
             result_text = str(result) if result else ""
 
-        # Handle error path — tool self-declares failure_class ('internal'/'external')
         if result_error:
-            output = f"[TOOL:{tool_name}] Error: {result_error} (cost: {elapsed_ms}ms) [/TOOL]"
             tool_failure_class = result.get("failure_class", "internal") if isinstance(result, dict) else "internal"
-            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class=tool_failure_class)
-            return output
+            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class=tool_failure_class)
+            return {'text': f"Error: {result_error}"}
 
-        # Clean tool output via the shared text extraction pipeline (same service used by doc processor).
-        # If result_text is empty but HTML was returned, derive clean text from the HTML.
-        # If result_text contains actual HTML tags, extract plain text from it.
-        # Plain text passes through unchanged. The regex check avoids false positives
-        # on comparison operators (e.g., "Rust < C++") in user-generated content.
         import re
         from services.text_extractor import extract_html as _extract_html
         if not result_text and result_html:
@@ -622,16 +318,27 @@ class ToolRegistryService:
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
-        # Return text response (possibly synthesized by frontal cortex)
-        token_estimate = len(result_text) // 4
-        output = (
-            f"[TOOL:{tool_name}] {result_text}\n"
-            f"(cost: {elapsed_ms}ms, ~{token_estimate} tokens)"
+        self._log_outcome(tool_name, success, channel, elapsed_ms)
+        return {'text': result_text}
+
+    def invoke(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> str:
+        """Invoke a tool by name and return [TOOL:]-wrapped result string.
+
+        Calls execute() for the actual work, then wraps the result in the
+        legacy [TOOL:name] ... [/TOOL] format used by output_service
+        notifications.
+        """
+        result = self.execute(tool_name, channel, params, exchange_id)
+        text = result.get('text', '')
+        is_error = text.startswith('Error:') or 'Unknown tool' in text
+        if is_error:
+            return f"[TOOL:{tool_name}] {text} [/TOOL]"
+        token_estimate = len(text) // 4
+        return (
+            f"[TOOL:{tool_name}] {text}\n"
+            f"(~{token_estimate} tokens)"
             f" [/TOOL]"
         )
-
-        self._log_outcome(tool_name, success, topic, elapsed_ms)
-        return output
 
     def _validate_params(self, params: dict, schema: dict) -> dict:
         """Validate and coerce parameters against manifest schema."""
@@ -665,19 +372,55 @@ class ToolRegistryService:
 
         return validated
 
+    def _validate_params_from_schema(self, params: dict, properties: dict, required: list) -> dict:
+        """Validate and coerce parameters against an input_schema properties dict."""
+        validated = {}
+        for param_name, param_def in properties.items():
+            is_required = param_name in required
+            default = param_def.get("default")
+            param_type = param_def.get("type", "string")
+
+            if param_name in params:
+                value = params[param_name]
+                try:
+                    if param_type == "integer":
+                        value = int(value)
+                    elif param_type == "float":
+                        value = float(value)
+                    elif param_type == "boolean":
+                        if isinstance(value, str):
+                            value = value.lower() in ("true", "1", "yes")
+                        else:
+                            value = bool(value)
+                    elif param_type == "string":
+                        value = str(value)
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[TOOL REGISTRY] Param coercion failed for '{param_name}': {e}", exc_info=True)
+                # Enforce enum constraints
+                allowed = param_def.get("enum")
+                if allowed is not None and value not in allowed:
+                    raise ValueError(f"Parameter '{param_name}': value {value!r} not in allowed values {allowed}")
+                validated[param_name] = value
+            elif is_required:
+                raise ValueError(f"Missing required parameter: {param_name}")
+            elif default is not None:
+                validated[param_name] = default
+
+        return validated
+
     def _format_result(self, result: Any) -> str:
         """Convert result dict to plain text (not JSON)."""
         from services.tool_output_utils import format_tool_result
         return format_tool_result(result)
 
-    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
+    def _log_outcome(self, tool_name: str, success: bool, channel: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
         """Log tool invocation outcome via unified tracker."""
         from services.invocation_tracker import track
         track(
             name=tool_name,
             success=success,
             latency_ms=elapsed_ms,
-            topic=topic,
+            channel=channel,
             exchange_id=exchange_id,
             failure_class=failure_class,
         )
@@ -835,7 +578,8 @@ class ToolRegistryService:
         """Return names of registered tools whose trigger type is ``on_demand``.
 
         On-demand tools are invoked explicitly by the LLM during a conversation
-        turn, as opposed to cron tools (scheduled) or webhook tools (HTTP-push).
+        turn. Scheduled work uses the
+        ``schedule`` innate skill via ``ScheduledMessageProcessor``.
 
         Returns:
             List of tool name strings filtered to ``trigger.type == "on_demand"``.
@@ -874,34 +618,6 @@ class ToolRegistryService:
                 "manifest": tool["manifest"],
             })
         return result
-
-    def get_cron_tools(self) -> List[dict]:
-        """
-        Return cron tools with schedule, prompt, runner path, and tool directory.
-
-        Returns:
-            List of {
-                "name": str,
-                "schedule": str,
-                "prompt": str,
-                "dir": str | None,
-                "manifest": dict,
-                "runner_path": str | None,
-            }
-        """
-        cron_tools = []
-        for name, tool in self.tools.items():
-            trigger = tool["manifest"].get("trigger", {})
-            if trigger.get("type") == "cron":
-                cron_tools.append({
-                    "name": name,
-                    "schedule": trigger["schedule"],
-                    "prompt": trigger["prompt"],
-                    "dir": tool.get("dir"),
-                    "manifest": tool["manifest"],
-                    "runner_path": tool.get("runner_path"),
-                })
-        return cron_tools
 
     def get_notification_tools(self) -> List[dict]:
         """
@@ -965,12 +681,18 @@ class ToolRegistryService:
                 continue
 
             desc = manifest.get("description", "")
-            params = manifest.get("parameters", {})
 
             param_parts = []
-            for pname, pdef in params.items():
-                required = pdef.get("required", False)
-                param_parts.append(pname if required else f"{pname}?")
+            if "input_schema" in manifest:
+                schema_props = manifest["input_schema"].get("properties", {})
+                schema_required = manifest["input_schema"].get("required", [])
+                for pname in schema_props:
+                    param_parts.append(pname if pname in schema_required else f"{pname}?")
+            else:
+                params = manifest.get("parameters", {})
+                for pname, pdef in params.items():
+                    required = pdef.get("required", False)
+                    param_parts.append(pname if required else f"{pname}?")
             param_str = ", ".join(param_parts)
 
             lines.append(f"- `{name}({param_str})` — {desc}")
@@ -982,106 +704,4 @@ class ToolRegistryService:
         tool = self.tools.get(tool_name)
         return tool["manifest"] if tool else None
 
-    def create_cron_worker(self, tool_config: dict):
-        """
-        Create a worker callable for run.py service registration.
 
-        Returns a _CronToolWorker instance (picklable with spawn start method).
-        """
-        return _CronToolWorker(tool_config)
-
-    def invoke_webhook(self, tool_name: str, webhook_body: dict, dialog_callback=None) -> dict:
-        """
-        Invoke a webhook-triggered tool.
-
-        Loads state from MemoryStore, builds payload with _webhook key, runs subprocess
-        interactively (so "tool" output dialogs work), persists returned state.
-
-        Args:
-            tool_name: Registered tool name (must have trigger.type == "webhook").
-            webhook_body: Parsed JSON body from the webhook POST.
-            dialog_callback: Optional callable(result_dict) -> str for "tool" output.
-                If None, "tool" output is treated as silent.
-
-        Returns:
-            Final result dict from subprocess.
-
-        Raises:
-            ValueError: If tool not found or not a webhook trigger.
-        """
-        tool = self.tools.get(tool_name)
-        if not tool:
-            raise ValueError(f"Unknown tool: {tool_name}")
-
-        manifest = tool["manifest"]
-        trigger = manifest.get("trigger", {})
-        if trigger.get("type") != "webhook":
-            raise ValueError(
-                f"Tool '{tool_name}' is not a webhook tool (type={trigger.get('type')})"
-            )
-
-        try:
-            from services.tool_config_service import ToolConfigService
-            from services.database_service import get_shared_db_service
-            settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to load webhook tool config for '{tool_name}': {e}", exc_info=True)
-            settings = {}
-
-        # OAuth token refresh
-        settings = self._refresh_oauth_token(tool_name, manifest, settings)
-
-        raw_telemetry = {}
-        try:
-            from services.client_context_service import ClientContextService
-            raw_telemetry = ClientContextService().get()
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to get client telemetry for webhook '{tool_name}': {e}", exc_info=True)
-        flattened_telemetry = self._build_telemetry(raw_telemetry)
-
-        # Load persisted state (shared key with cron)
-        tool_state = {}
-        state_key = f"tool_state:{tool_name}"
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            state_json = store.get(state_key)
-            if state_json:
-                tool_state = json.loads(state_json)
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to load persisted webhook tool state for '{tool_name}': {e}", exc_info=True)
-
-        payload = {
-            "params": {"_webhook": webhook_body, "_state": tool_state},
-            "settings": settings,
-            "telemetry": flattened_telemetry,
-        }
-
-        timeout = manifest.get("constraints", {}).get("timeout_seconds", 120)
-        from services.tool_subprocess_service import ToolSubprocessService
-        result = ToolSubprocessService().run_interactive(
-            tool["runner_path"], payload,
-            timeout=timeout,
-            on_tool_output=dialog_callback,
-        )
-
-        # Persist returned state
-        if isinstance(result, dict) and "_state" in result:
-            try:
-                from services.memory_client import MemoryClientService
-                store = MemoryClientService.create_connection()
-                store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] {tool_name}: failed to persist webhook state: {e}")
-
-        return result
-
-    def _parse_cron_interval(self, schedule: str) -> int:
-        """Parse simple cron expression to sleep interval in seconds. Defaults 30min."""
-        parts = schedule.strip().split()
-        if len(parts) >= 1 and parts[0].startswith("*/"):
-            try:
-                return int(parts[0][2:]) * 60
-            except ValueError as e:
-                logger.debug(f"[TOOL REGISTRY] Failed to parse cron interval from '{schedule}': {e}", exc_info=True)
-        return 1800

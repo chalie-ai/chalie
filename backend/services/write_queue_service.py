@@ -27,8 +27,7 @@ Typical usage::
 Design notes
 ------------
 - Internal implementation uses :class:`queue.Queue` (unbounded) and a single
-  daemon thread, inspired by the per-name lock pattern in
-  :mod:`services.prompt_queue` but simplified to one shared thread.
+  daemon thread with a per-name lock pattern, simplified to one shared thread.
 - The background thread obtains its own thread-local SQLite connection from
   :class:`~services.database_service.DatabaseService`, keeping it separate
   from callers' connections.

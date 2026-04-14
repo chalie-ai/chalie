@@ -23,7 +23,7 @@ def memory_search():
     try:
         from services.database_service import get_shared_db_service
         from services.episodic_service import EpisodicService
-        from services.knowledge_service import KnowledgeService
+        from services.data_graph_service import get_data_graph_service
         from services.config_service import ConfigService
 
         db = get_shared_db_service()
@@ -33,7 +33,7 @@ def memory_search():
         try:
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
             retrieval = EpisodicService(db, episodic_config)
-            episodes = retrieval.retrieve_episodes(query_text=query, limit=5)
+            episodes = retrieval.retrieve_episodes(query_text=query, radius=0.5)
             for ep in episodes:
                 results.append({
                     "type": "episode",
@@ -44,19 +44,19 @@ def memory_search():
         except Exception as e:
             logger.warning(f"[Memory] Episode search failed: {e}")
 
-        # Knowledge concept search
+        # Data graph concept search
         try:
-            ks = KnowledgeService(db)
-            concepts = ks.recall(query, kinds=['concept'], limit=5)
-            for c in concepts:
+            dgs = get_data_graph_service()
+            items = dgs.recall(query, kinds=['user_specific', 'system'], limit=5)
+            for c in items:
                 results.append({
                     "type": "concept",
                     "content": c.get("key", "") + ": " + c.get("value", ""),
-                    "score": c.get("rrf_score", c.get("confidence", 0)),
-                    "confidence": c.get("confidence", 0),
+                    "score": c.get("composite_score", c.get("retrieval_weight", 0)),
+                    "confidence": c.get("retrieval_weight", 0),
                 })
         except Exception as e:
-            logger.warning(f"[Memory] Concept search failed: {e}")
+            logger.warning(f"[Memory] Data graph search failed: {e}")
 
         # Sort by score descending
         results.sort(key=lambda r: r.get("score", 0), reverse=True)

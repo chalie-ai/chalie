@@ -35,7 +35,7 @@ def _make_db(schema_sql: str) -> tuple:
 SCHEMA = """
 CREATE TABLE cortex_iterations (
     id TEXT PRIMARY KEY,
-    topic TEXT NOT NULL,
+    channel TEXT NOT NULL,
     exchange_id TEXT,
     session_id TEXT,
     loop_id TEXT NOT NULL,
@@ -96,7 +96,7 @@ class TestCortexIterationServiceInsert:
 
         svc.log_iterations_batch(
             loop_id='loop-abc',
-            topic='test-topic',
+            channel='test-topic',
             exchange_id='ex-001',
             session_id='sess-001',
             iterations=[_make_iteration(1), _make_iteration(2)],
@@ -120,7 +120,7 @@ class TestCortexIterationServiceInsert:
 
         svc.log_iterations_batch(
             loop_id='loop-xyz',
-            topic='topic',
+            channel='channel',
             exchange_id='ex-002',
             session_id='sess-002',
             iterations=[],

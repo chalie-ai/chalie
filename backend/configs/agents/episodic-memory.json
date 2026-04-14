@@ -23,10 +23,11 @@
   "freshness_decay_rate": 0.05,
   "reconsolidation_boost": 0.2,
   "decay_interval_seconds": 1800,
-  "episodic_decay_rate": 0.05,
+  "retrieval_decay_exponent": 0.5,
   "semantic_decay_rate": 0.03,
   "comments": {
     "freshness_decay_rate": "Base decay rate (\u03bb) for exponential freshness decay in hours. High salience episodes decay slower: effective_decay = \u03bb \u00d7 (1 - salience). Lower \u03bb = slower decay overall.",
-    "reconsolidation_boost": "Salience boost applied when episode is retrieved. New salience = min(1.0, old_salience + boost). Simulates memory reconsolidation."
+    "reconsolidation_boost": "Salience boost applied when episode is retrieved. New salience = min(1.0, old_salience + boost). Simulates memory reconsolidation.",
+    "retrieval_decay_exponent": "Power-law decay exponent for retrieval_weight. rw = rw * (1 + hours)^(-exponent). 0.5 = square-root decay (Ebbinghaus power-law forgetting)."
   }
 }

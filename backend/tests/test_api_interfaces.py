@@ -8,7 +8,8 @@ from unittest.mock import patch
 def app():
     """Flask test app with interfaces blueprint."""
     from unittest.mock import patch
-    with patch('api._init_dashboard_gateway'):
+    with patch('api._init_dashboard_gateway'), \
+         patch('api._get_or_generate_session_secret', return_value='test-secret'):
         from api import create_app
         app = create_app()
     app.config['TESTING'] = True

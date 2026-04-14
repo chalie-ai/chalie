@@ -33,6 +33,12 @@
     <span>Retrying...</span>
   </div>
 
+  <!-- Capability alert banner -->
+  <div id="capabilityAlertBanner" class="capability-alert-banner hidden">
+    <span id="capabilityAlertText"></span>
+    <button id="capabilityAlertDismiss" class="banner-dismiss" aria-label="Dismiss">&times;</button>
+  </div>
+
   <!-- Update available banner -->
   <div id="updateBanner" class="update-banner hidden">
     <span class="update-banner__icon">
@@ -345,25 +351,6 @@
     <div class="apps-panel__list" id="appsPanelList">
       <p class="apps-panel__empty">No apps installed</p>
     </div>
-  </aside>
-
-  <!--
-    Activity log slide-out panel.
-    Placed after #appsPanel in DOM order. Z-index stacking is explicit:
-      .apps-panel   → z-index: 250  (higher — stays on top if both open)
-      .activity-panel → z-index: 240  (lower — slides behind apps panel)
-  -->
-  <aside id="activityPanel" class="activity-panel hidden" aria-label="Activity log">
-    <div class="activity-panel__header">
-      <span class="activity-panel__title">Activity</span>
-      <button class="btn-icon" id="closeActivityPanel" aria-label="Close activity panel">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-    </div>
-    <div class="activity-panel__list" id="activityPanelList"></div>
   </aside>
 
   <!-- App full-screen overlay -->

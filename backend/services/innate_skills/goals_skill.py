@@ -64,12 +64,12 @@ TOOL_SCHEMA = {
 }
 
 
-def handle_goals(topic: str, params: dict) -> str:
+def handle_goals(channel: str, params: dict) -> str:
     """
     Manage user goals.
 
     Args:
-        topic: Current conversation topic
+        channel: Current conversation channel
         params: Action parameters dict with 'action' key
 
     Returns:

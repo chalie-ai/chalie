@@ -542,6 +542,10 @@ class AnthropicService:
             'messages': api_messages,
         }
         if tools:
+            # Anthropic: input_schema must be valid JSON Schema. Standard types only
+            # (string, number, integer, boolean, array, object, null). Custom types rejected.
+            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf at top level.
+            # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
             create_kwargs['tools'] = tools  # Anthropic format matches our schema directly
 
         def _call():
@@ -792,6 +796,10 @@ class OpenAIService:
             'messages': [{"role": "system", "content": system_prompt}] + api_messages,
         }
         if tools:
+            # OpenAI: parameters must be valid JSON Schema. Standard types only.
+            # strict=true enforces exact compliance; best-effort without it.
+            # Enums: {"type": "string", "enum": [...]}. Custom types rejected.
+            # Ref: https://platform.openai.com/docs/guides/function-calling
             # Convert to OpenAI function calling format
             create_kwargs['tools'] = [
                 {
@@ -1054,6 +1062,10 @@ class GeminiService:
         if self.format == 'json' and not tools:
             gen_config_kwargs['response_mime_type'] = 'application/json'
         if tools:
+            # Gemini: parameters follow OpenAPI schema subset (stricter than JSON Schema).
+            # Standard types only. No default values in schema. Custom types rejected.
+            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf/anyOf.
+            # Ref: https://ai.google.dev/gemini-api/docs/function-calling
             gen_config_kwargs['tools'] = [
                 genai.types.Tool(function_declarations=[
                     genai.types.FunctionDeclaration(

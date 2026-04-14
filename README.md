@@ -39,7 +39,7 @@ chalie
 
 **Fully local and private** (no data leaves your network):
 ```bash
-ollama pull qwen3:8b
+ollama pull gemma4:31b
 curl -fsSL https://chalie.ai/install | bash
 chalie
 # Select Ollama during onboarding → http://localhost:11434

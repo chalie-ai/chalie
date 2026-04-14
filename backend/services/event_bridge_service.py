@@ -373,12 +373,7 @@ class EventBridgeService:
             return []
 
     def _route_bundle(self, events: List[BridgeEvent]):
-        """
-        Route a bundle of events through the autonomous action system.
-
-        Builds a ThoughtContext with event metadata and passes it to the
-        action decision router.
-        """
+        """Log the incoming event bundle."""
         if not events:
             return
 
@@ -387,52 +382,6 @@ class EventBridgeService:
             f"{LOG_PREFIX} Routing bundle: {[e.event_type for e in events]} "
             f"(primary={primary.event_type}, confidence={primary.confidence:.2f})"
         )
-
-        try:
-            from services.autonomous_actions.base import ThoughtContext
-
-            composed_message = self._compose_message(events)
-            thought = ThoughtContext(
-                thought_type='event',
-                thought_content=composed_message,
-                activation_energy=primary.confidence,
-                seed_concept=primary.event_type,
-                seed_topic=primary.to_state or primary.event_type,
-                extra={
-                    'event_type': primary.event_type,
-                    'event_payload': {
-                        'primary': {
-                            'event_type': primary.event_type,
-                            'from_state': primary.from_state,
-                            'to_state': primary.to_state,
-                            'confidence': primary.confidence,
-                        },
-                        'bundle_size': len(events),
-                        'all_events': [e.event_type for e in events],
-                    },
-                    'confidence': primary.confidence,
-                },
-            )
-
-            # Route through existing action decision router
-            from services.autonomous_actions.action_decision_router import ActionDecisionRouter
-            router = ActionDecisionRouter()
-            router.evaluate_and_execute(thought)
-
-            try:
-                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                emit_reasoning_signal(ReasoningSignal(
-                    signal_type='ambient_context',
-                    source='event_bridge',
-                    topic=primary.to_state or primary.event_type,
-                    content=composed_message,
-                    activation_energy=primary.confidence,
-                ))
-            except Exception:
-                pass
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Event routing failed: {e}")
 
     def _compose_message(self, events: List[BridgeEvent]) -> str:
         """

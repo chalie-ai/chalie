@@ -4,7 +4,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from services.event_bus_service import EventBusService, ENCODE_EVENT, INTERACTION_LOGGED
+from services.event_bus_service import EventBusService, ENCODE_EVENT, UPDATE_POLICY
 
 
 pytestmark = pytest.mark.unit
@@ -37,9 +37,9 @@ class TestSubscribe:
     def test_registers_handlers_for_different_events(self, event_bus):
         h1, h2 = MagicMock(), MagicMock()
         event_bus.subscribe(ENCODE_EVENT, h1)
-        event_bus.subscribe(INTERACTION_LOGGED, h2)
+        event_bus.subscribe(UPDATE_POLICY, h2)
         assert ENCODE_EVENT in event_bus._handlers
-        assert INTERACTION_LOGGED in event_bus._handlers
+        assert UPDATE_POLICY in event_bus._handlers
 
 
 # ── emit ─────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ class TestEmitAndHandle:
 
     def test_falls_back_to_store_without_handlers(self, event_bus, mock_store):
         """No handlers registered → falls back to emit() into MemoryStore."""
-        event_bus.emit_and_handle(INTERACTION_LOGGED, {'fallback': True})
+        event_bus.emit_and_handle(UPDATE_POLICY, {'fallback': True})
 
-        queue_key = f"event_bus:{INTERACTION_LOGGED}"
+        queue_key = f"event_bus:{UPDATE_POLICY}"
         assert mock_store.llen(queue_key) == 1

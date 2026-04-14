@@ -27,19 +27,21 @@ class OutputService:
 
     def enqueue_text(
         self,
-        topic: str,
-        response: str,
-        mode: str,
-        confidence: float,
-        generation_time: float,
+        topic: str = None,
+        response: str = '',
+        mode: str = 'UNIFIED',
+        confidence: float = 0.0,
+        generation_time: float = 0.0,
         original_metadata: dict = None,
         reply_actions: list = None,
+        channel: str = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
 
         Args:
-            topic: Conversation topic identifier
+            topic: Deprecated alias for channel. Use channel instead.
+            channel: Conversation channel identifier
             response: The response text to deliver
             mode: Output mode (UNIFIED, ACT)
             confidence: Confidence score of the response
@@ -50,6 +52,9 @@ class OutputService:
         Returns:
             str: UUID of the enqueued output
         """
+        # Accept topic as backward-compat alias for channel
+        _channel = channel or topic
+
         output_id = str(uuid.uuid4())
         metadata_dict = {
             "response": response,
@@ -70,7 +75,7 @@ class OutputService:
         output = {
             "id": output_id,
             "type": "TEXT",
-            "topic": topic,
+            "topic": _channel,
             "created_at": utc_now().isoformat(),
             "metadata": metadata_dict
         }
@@ -84,11 +89,11 @@ class OutputService:
 
         # Map source to event type
         source_type_map = {
-            'proactive_drift': 'drift',
             'tool_result': 'response',
             'reminder': 'reminder',
             'task': 'task',
-            'persistent_task': 'task',
+            'goal_pursuit': 'task',
+            'scheduled_prompt': 'task',
             'critic_escalation': 'escalation',
             'notification': 'notification',
             'plan_action': 'task',
@@ -98,7 +103,7 @@ class OutputService:
         event_payload_dict = {
             'output_id': output_id,
             'type': event_type,
-            'topic': topic,
+            'topic': _channel,
             'blocks': blocks,
             'mode': mode,
             'confidence': confidence,
@@ -140,11 +145,11 @@ class OutputService:
                 logger.warning(f"Notification buffer push failed: {e}")
 
         # Notification tools (Telegram etc.) for drift and all background events
-        if source == 'proactive_drift' or source in ('reminder', 'task') or source.startswith('cron_tool:'):
+        if source in ('reminder', 'task', 'goal_pursuit', 'scheduled_prompt'):
             self._send_to_notification_tools(response)
 
         logger.info(
-            f"Enqueued TEXT output {output_id} for topic '{topic}' "
+            f"Enqueued TEXT output {output_id} for topic '{_channel}' "
             f"(mode={mode}, confidence={confidence:.2f})"
         )
 
@@ -157,7 +162,7 @@ class OutputService:
         source: str = 'task',
     ) -> str:
         """
-        Enqueue a proactive/background output (persistent tasks, reminders, etc.).
+        Enqueue a proactive/background output (goal pursuits, reminders, etc.).
 
         Convenience wrapper around enqueue_text() with sensible defaults for
         messages that originate from background workers rather than user requests.
@@ -203,12 +208,13 @@ class OutputService:
 
     def enqueue_act(
         self,
-        topic: str,
-        actions: List[str],
-        downstream_mode: str,
-        act_history: List[Dict[str, Any]],
-        loop_id: str,
-        generation_time: float
+        topic: str = None,
+        actions: List[str] = None,
+        downstream_mode: str = 'ACT',
+        act_history: List[Dict[str, Any]] = None,
+        loop_id: str = '',
+        generation_time: float = 0.0,
+        channel: str = None,
     ) -> str:
         """
         Enqueue an ACT output for action processing.
@@ -224,11 +230,14 @@ class OutputService:
         Returns:
             str: UUID of the enqueued output
         """
+        _channel = channel or topic
+        actions = actions or []
+        act_history = act_history or []
         output_id = str(uuid.uuid4())
         output = {
             "id": output_id,
             "type": "ACT",
-            "topic": topic,
+            "topic": _channel,
             "created_at": utc_now().isoformat(),
             "metadata": {
                 "actions": actions,
@@ -244,9 +253,10 @@ class OutputService:
 
         # Add to queue
         self.store.lpush(self.queue_name, output_id)
+        self.store.expire(self.queue_name, 3600)
 
         logger.info(
-            f"Enqueued ACT output {output_id} for topic '{topic}' "
+            f"Enqueued ACT output {output_id} for topic '{_channel}' "
             f"(loop_id={loop_id}, actions={len(actions)})"
         )
 
@@ -287,6 +297,7 @@ class OutputService:
             if output_type and output.get('type') != output_type:
                 logger.debug(f"Re-queuing output {output_id} (type={output.get('type')}, want={output_type})")
                 self.store.lpush(self.queue_name, output_id)
+                self.store.expire(self.queue_name, 3600)
                 continue
 
             logger.info(f"Dequeued {output.get('type')} output {output_id}")

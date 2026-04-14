@@ -10,7 +10,6 @@
 Consumer — Master supervisor for Chalie's single-process architecture.
 
 All workers run as daemon threads in one Python process.
-PromptQueue handles job dispatch via threads (no RQ dependency).
 SQLite replaces PostgreSQL, MemoryStore replaces Redis.
 """
 
@@ -195,17 +194,11 @@ if __name__ == "__main__":
     Logger.start()
 
     # Deferred imports
-    from services import SchemaService
     from workers import rest_api_worker
-    from services.config_service import ConfigService
-    from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.cognitive_drift_engine import cognitive_drift_worker
-    from services.experience_assimilation_service import experience_assimilation_worker
-    from services.thread_expiry_service import thread_expiry_worker
+    from services.dmn_service import dmn_worker
+    from services.tool_synthesis_processor import tool_synthesis_worker
     from services.scheduler_service import scheduler_worker
-    from services.autobiography_service import autobiography_synthesis_worker
-    from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
 
     # Preload embedding model singleton
@@ -217,31 +210,13 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[System] Embedding model preload failed: {e}")
 
-    # Initialize SQLite database
+    # Initialize SQLite database — declarative convergence
     from services.database_service import get_shared_db_service
-
-    episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-    embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
+    from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
-    schema_service = SchemaService(database_service, embedding_dimensions)
-
-    if not schema_service.database_exists():
-        logging.info("Initializing database...")
-        schema_service.create_database()
-        logging.info("Database initialized")
-    else:
-        current_version = schema_service.schema_version()
-        if current_version == 0:
-            logging.info("Initializing schema...")
-            schema_service.initialize_schema()
-            logging.info("Schema initialized")
-        else:
-            logging.info(f"Schema up to date (version {current_version})")
-
-    # Run pending migrations
-    logging.info("Checking for pending database migrations...")
-    database_service.run_pending_migrations()
+    convergence = SchemaConvergenceService(database_service)
+    convergence.converge()
 
     # Initialize API key
     try:
@@ -256,20 +231,16 @@ if __name__ == "__main__":
     manager = WorkerManager()
 
     # Register service workers (all run as daemon threads)
-    manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("cognitive-drift-engine", cognitive_drift_worker)
+    manager.register_service("dmn-service", dmn_worker)
     manager.register_service("rest-api-worker-1", rest_api_worker)
-    manager.register_service("experience-assimilation-service", experience_assimilation_worker)
-    manager.register_service("thread-expiry-service", thread_expiry_worker)
+    manager.register_service("tool-synthesis-service", tool_synthesis_worker)
     manager.register_service("scheduler-service", scheduler_worker)
-    manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
-    # Moment enrichment service
-    from services.moment_enrichment_service import moment_enrichment_worker
-    manager.register_service("moment-enrichment-service", moment_enrichment_worker)
+    # Moment context enrichment service (6h worker)
+    from services.moment_context_service import moment_context_worker
+    manager.register_service("moment-context-service", moment_context_worker)
 
     # Background LLM worker
     from workers.background_llm_worker import background_llm_worker
@@ -282,18 +253,14 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
 
-    # Register cron-triggered tools
+    # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        for tool in registry.get_cron_tools():
-            worker_func = registry.create_cron_worker(tool)
-            manager.register_service(f"tool-{tool['name']}-service", worker_func)
-        tool_count = len(registry.get_tool_names())
+        tool_count = len(ToolRegistryService().get_tool_names())
         if tool_count > 0:
             logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
     except Exception as e:
-        logging.warning(f"[Consumer] Tool cron registration failed: {e}")
+        logging.warning(f"[Consumer] Tool registry load failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:

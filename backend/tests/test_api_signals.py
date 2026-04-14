@@ -614,29 +614,3 @@ class TestValidateSignal:
         assert result["metadata"] is None
 
 
-# ---------------------------------------------------------------------------
-# ReasoningSignal wrapper_id field (internal signals, unaffected by this change)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestReasoningSignalWrapperId:
-    def test_wrapper_id_field_defaults_to_none(self):
-        from services.reasoning_loop_service import ReasoningSignal
-        sig = ReasoningSignal(signal_type="ctx", source="test")
-        assert sig.wrapper_id is None
-
-    def test_wrapper_id_survives_json_roundtrip(self):
-        from services.reasoning_loop_service import ReasoningSignal
-        sig = ReasoningSignal(
-            signal_type="ctx",
-            source="ci",
-            wrapper_id="wrp_abc123",
-        )
-        recovered = ReasoningSignal.from_json(sig.to_json())
-        assert recovered.wrapper_id == "wrp_abc123"
-
-    def test_wrapper_id_none_survives_json_roundtrip(self):
-        from services.reasoning_loop_service import ReasoningSignal
-        sig = ReasoningSignal(signal_type="ctx", source="internal")
-        recovered = ReasoningSignal.from_json(sig.to_json())
-        assert recovered.wrapper_id is None

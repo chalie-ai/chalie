@@ -23,35 +23,42 @@ import json
 import logging
 import math
 import re
-import time
-from typing import List, Optional, TYPE_CHECKING
+import threading
+from typing import List, Optional
 
-if TYPE_CHECKING:
-    from services.topic_context import TopicContext
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 
+# ── Stop words (NLTK-backed, lazy-loaded) ─────────────────────────────
+
+_nltk_stop_words = None
+_stop_words_lock = threading.Lock()
+
+
+def _get_stop_words() -> frozenset:
+    """Return the NLTK English stop word set, downloading the corpus on first use."""
+    global _nltk_stop_words
+    if _nltk_stop_words is not None:
+        return _nltk_stop_words
+    with _stop_words_lock:
+        if _nltk_stop_words is not None:
+            return _nltk_stop_words
+        import nltk
+        try:
+            from nltk.corpus import stopwords
+            _nltk_stop_words = frozenset(stopwords.words('english'))
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+            from nltk.corpus import stopwords
+            _nltk_stop_words = frozenset(stopwords.words('english'))
+    return _nltk_stop_words
+
+
 # ── Trait validation (deterministic, zero LLM) ────────────────────────
 # Ported from UserTraitService — catches garbage traits from weak models.
-
-_STOP_WORDS = frozenset({
-    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-    'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for',
-    'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'like',
-    'through', 'after', 'over', 'between', 'out', 'up', 'down', 'off',
-    'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either',
-    'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most',
-    'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than',
-    'too', 'very', 'just', 'because', 'if', 'when', 'while', 'this',
-    'that', 'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we',
-    'our', 'you', 'your', 'he', 'she', 'they', 'them', 'their',
-    'what', 'which', 'who', 'whom', 'how', 'where', 'there', 'here',
-    'often', 'discusses', 'yes', 'no', 'ok', 'okay', 'true', 'false',
-})
 
 _PLACEHOLDER_RE = re.compile(
     r'^(?:unknown|n/?a|none|null|undefined|not specified|unspecified|empty|default)$',
@@ -61,10 +68,12 @@ _PLACEHOLDER_RE = re.compile(
 _MAX_TOPIC_SLUG_SEGMENTS = 3
 
 
-def _extract_content_words(text: str) -> list:
+def _extract_content_words(text: str, stop_words: frozenset = None) -> list:
     """Extract meaningful content words (not stop words, len > 1)."""
     words = re.findall(r'[a-zA-Z]{2,}', text.lower())
-    return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+    if stop_words is None:
+        stop_words = _get_stop_words()
+    return [w for w in words if w not in stop_words and len(w) > 1]
 
 
 def _validate_trait(key: str, value: str) -> Optional[str]:
@@ -72,8 +81,9 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
     if not key or len(key) < 2:
         return 'key_too_short'
 
+    stop_words = _get_stop_words()
     key_segments = [w for w in re.split(r'[_\-\s]+', key.lower()) if w]
-    content_key = [w for w in key_segments if w not in _STOP_WORDS and len(w) > 1]
+    content_key = [w for w in key_segments if w not in stop_words and len(w) > 1]
     if not content_key:
         return 'key_is_stop_words'
 
@@ -85,7 +95,7 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
     if _PLACEHOLDER_RE.match(value.strip()):
         return 'placeholder_value'
 
-    content_words_value = _extract_content_words(value)
+    content_words_value = _extract_content_words(value, stop_words)
     if len(content_words_value) < 1:
         return 'no_content_words'
 
@@ -98,7 +108,7 @@ def _validate_trait(key: str, value: str) -> Optional[str]:
         slug_segments = [s for s in topic_slug.split('_') if s]
         if len(slug_segments) > _MAX_TOPIC_SLUG_SEGMENTS:
             return 'topic_slug_too_long'
-        topic_content = [s for s in slug_segments if s not in _STOP_WORDS and len(s) > 1]
+        topic_content = [s for s in slug_segments if s not in stop_words and len(s) > 1]
         if not topic_content:
             return 'topic_slug_no_content'
 
@@ -141,13 +151,8 @@ class KnowledgeService:
         'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
-    VALID_KINDS = {'trait', 'concept', 'fact', 'procedure', 'preference', 'relationship', 'rule', 'metric'}
+    VALID_KINDS = {'trait', 'fact', 'procedure', 'preference', 'rule', 'metric', 'moment'}
     VALID_DECAY_CLASSES = {'permanent', 'very_slow', 'slow', 'standard', 'fast', 'ephemeral'}
-
-    # Procedural learning constants (ported from ProceduralMemoryService)
-    _LEARNING_RATE = 0.1
-    _DEFAULT_ACTION_WEIGHT = 1.0
-    _REWARD_HISTORY_MAX = 100
 
     def __init__(self, db_service=None):
         self.db = db_service or get_shared_db_service()
@@ -196,46 +201,102 @@ class KnowledgeService:
         except Exception as e:
             logger.warning(f"[KNOWLEDGE] Failed to store vec embedding: {e}")
 
-    def _sync_fts(self, conn, rowid: int, key: str, value: str, kind: str, entity: str):
-        """Sync the FTS index for a knowledge row."""
+    def _sync_fts(self, conn, rowid: int, key: str = None, value: str = None,
+                  kind: str = None, entity: str = None, search_queries: str = None):
+        """Insert a row into the FTS index. Reads from knowledge if values not provided.
+
+        For external content FTS5 tables, callers must remove old FTS entries
+        via _delete_fts BEFORE updating the content table — regular DELETE
+        reads from the content table and corrupts the index on mismatch.
+        """
         try:
             cursor = conn.cursor()
-            # Delete old entry (if exists)
+
+            if key is None:
+                cursor.execute(
+                    "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                    (rowid,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    cursor.close()
+                    return
+                key, value, kind, entity = row[0], row[1], row[2], row[3]
+                search_queries = row[4]
+
             cursor.execute(
-                "DELETE FROM knowledge_fts WHERE rowid = ?",
-                (rowid,)
-            )
-            # Insert new entry
-            cursor.execute(
-                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity) VALUES (?, ?, ?, ?, ?)",
-                (rowid, key, value or '', kind, entity)
+                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity, search_queries) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, entity, search_queries or '')
             )
             cursor.close()
         except Exception as e:
-            logger.debug(f"[KNOWLEDGE] FTS sync failed for rowid={rowid}: {e}")
+            logger.warning(f"[KNOWLEDGE] FTS sync failed for rowid={rowid}: {e}")
+
+    def _delete_fts(self, conn, rowid: int, key: str, value: str, kind: str,
+                    entity: str, search_queries: str = ''):
+        """Remove a row from the FTS index.
+
+        Tries the FTS5 'delete' command first (required for external content
+        tables in production). Falls back to regular DELETE for standalone FTS
+        tables (used in tests).
+        """
+        try:
+            conn.execute(
+                "INSERT INTO knowledge_fts(knowledge_fts, rowid, key, value, kind, entity, search_queries) "
+                "VALUES('delete', ?, ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, entity, search_queries or '')
+            )
+        except Exception:
+            try:
+                conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning(f"[KNOWLEDGE] FTS delete failed for rowid={rowid}: {e}")
 
     def _remove_fts(self, conn, rowid: int):
-        """Remove a row from the FTS index."""
+        """Remove a row from the FTS index. Must be called BEFORE deleting from knowledge."""
         try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
-            cursor.close()
+            row = conn.execute(
+                "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                (rowid,)
+            ).fetchone()
+            if row:
+                self._delete_fts(conn, rowid, row[0], row[1], row[2], row[3], row[4] or '')
         except Exception as e:
-            logger.debug(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
+            logger.warning(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
 
-    def _emit_signal(self, signal_type: str, content: str, topic: str = 'general', energy: float = 0.5):
-        """Fire-and-forget reasoning signal emission."""
-        try:
-            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-            emit_reasoning_signal(ReasoningSignal(
-                signal_type=signal_type,
-                source='knowledge_service',
-                topic=topic,
-                content=content,
-                activation_energy=energy,
-            ))
-        except Exception:
-            pass
+    def _schedule_doc2query(self, rowid: int, key: str, value: str):
+        """Fire-and-forget: generate search queries for a knowledge entry and persist them."""
+        import threading
+
+        def _run():
+            try:
+                from services.doc2query_service import get_doc2query_service
+                d2q = get_doc2query_service()
+                if not d2q.is_available():
+                    return
+                queries = d2q.generate_queries(f"{key}: {value}")
+                if not queries:
+                    return
+                import json as _json
+                with self.db.connection() as conn:
+                    # Read old values BEFORE update for correct FTS delete
+                    old = conn.execute(
+                        "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+                        (rowid,)
+                    ).fetchone()
+                    if not old:
+                        return
+                    self._delete_fts(conn, rowid, old[0], old[1], old[2], old[3], old[4] or '')
+                    conn.execute(
+                        "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
+                        (_json.dumps(queries), rowid)
+                    )
+                    self._sync_fts(conn, rowid)
+            except Exception as e:
+                logger.warning(f"[KNOWLEDGE] doc2query failed for rowid={rowid}: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Core: store ────────────────────────────────────────────────────
 
@@ -280,6 +341,8 @@ class KnowledgeService:
         data_json = json.dumps(data) if data is not None else None
 
         try:
+            _schedule_d2q_args = None  # (rowid, key, value) — set when doc2query should run
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
@@ -305,7 +368,7 @@ class KnowledgeService:
                     # Value change: only overwrite if confidence dominance
                     value_changed = False
                     if value and old_value and value.lower().strip() != old_value.lower().strip():
-                        if confidence > old_confidence * 2:
+                        if confidence >= old_confidence * 0.8:
                             value_changed = True
                             new_confidence = confidence
                             logger.info(
@@ -321,6 +384,10 @@ class KnowledgeService:
 
                     update_value = value if value_changed else old_value
                     update_data = data_json if (data_json is not None and value_changed) else existing[4]
+
+                    # Remove old FTS entry BEFORE updating content table
+                    if value_changed:
+                        self._remove_fts(conn, row_id)
 
                     cursor.execute("""
                         UPDATE knowledge
@@ -340,27 +407,14 @@ class KnowledgeService:
                     if value_changed or embedding:
                         self._store_vec(conn, row_id, embedding)
 
-                    # Sync FTS if value changed
+                    # Insert new FTS entry with updated values
                     if value_changed:
                         self._sync_fts(conn, row_id, key, update_value, kind, entity)
+                        # Re-generate search queries for the new value
+                        if value:
+                            _schedule_d2q_args = (row_id, key, value)
 
                     cursor.close()
-
-                    # Emit signal
-                    if kind == 'trait':
-                        self._emit_signal(
-                            'trait_changed',
-                            f"Reinforced '{key}' = '{update_value}' (confidence={new_confidence:.2f})",
-                            energy=0.3 if not value_changed else 0.6,
-                        )
-                    elif kind == 'concept':
-                        self._emit_signal(
-                            'new_knowledge',
-                            f"Reinforced concept '{key}' (confidence={new_confidence:.2f})",
-                            energy=0.3,
-                        )
-
-                    return self.get(entity, key)
 
                 else:
                     # New entry
@@ -389,21 +443,15 @@ class KnowledgeService:
                         f"(confidence={confidence:.2f}, decay={decay_class}, entity={entity})"
                     )
 
-                    # Emit signal
-                    if kind == 'trait':
-                        self._emit_signal(
-                            'trait_changed',
-                            f"New trait '{key}' = '{value}' (confidence={confidence:.2f})",
-                            energy=0.5,
-                        )
-                    elif kind == 'concept':
-                        self._emit_signal(
-                            'new_knowledge',
-                            f"New concept '{key}': {(value or '')[:80]}",
-                            energy=0.5,
-                        )
+                    # Schedule doc2query after connection commits
+                    if value:
+                        _schedule_d2q_args = (row_id, key, value)
 
-                    return self.get(entity, key)
+            # Fire doc2query AFTER the connection context exits (row committed)
+            if _schedule_d2q_args:
+                self._schedule_doc2query(*_schedule_d2q_args)
+
+            return self.get(entity, key)
 
         except Exception as e:
             logger.error(f"[KNOWLEDGE] Failed to store '{key}': {e}")
@@ -418,7 +466,7 @@ class KnowledgeService:
         entity: str = None,
         limit: int = 10,
         min_confidence: float = 0.0,
-        _context: 'TopicContext' = None,
+        _context=None,
     ) -> List[dict]:
         """
         Hybrid retrieval with 3 signals fused via Reciprocal Rank Fusion (RRF, k=60).
@@ -482,8 +530,15 @@ class KnowledgeService:
                     # Sanitize query for FTS: remove special characters
                     fts_query = re.sub(r'[^\w\s]', '', query).strip()
                     if fts_query:
+                        # Filter stop words before building FTS terms so that
+                        # purely stop-word queries fall through to the vector-only
+                        # 2.5x boost path instead of returning low-quality matches.
+                        fts_words = [
+                            w for w in fts_query.split()
+                            if w and w.lower() not in _get_stop_words()
+                        ]
                         # Use prefix search for partial matches
-                        fts_terms = ' OR '.join(f'"{w}"*' for w in fts_query.split() if w)
+                        fts_terms = ' OR '.join(f'"{w}"*' for w in fts_words if w)
                         if fts_terms:
                             cursor.execute("""
                                 SELECT f.rowid, f.rank
@@ -576,8 +631,6 @@ class KnowledgeService:
 
         except Exception as e:
             logger.error(f"[KNOWLEDGE] recall failed: {e}")
-            if _context is not None:
-                _context.record_failure('knowledge_recall', e)
             return []
 
     def _touch_accessed(self, conn, rowids: list):
@@ -666,10 +719,14 @@ class KnowledgeService:
                 set_clause = ", ".join(set_parts)
                 params = list(updates.values()) + [row_id]
 
+                # Remove old FTS entry BEFORE updating content table
+                new_value = updates.get('value')
+                if new_value and new_value != old_value:
+                    self._remove_fts(conn, row_id)
+
                 cursor.execute(f"UPDATE knowledge SET {set_clause} WHERE rowid = ?", params)
 
-                # Sync FTS and embedding if value changed
-                new_value = updates.get('value')
+                # Insert new FTS entry with updated values
                 if new_value and new_value != old_value:
                     self._sync_fts(conn, row_id, key, new_value, kind, entity)
                     emb = self._generate_embedding(f"{key}: {new_value}")
@@ -713,15 +770,71 @@ class KnowledgeService:
             logger.error(f"[KNOWLEDGE] forget failed for ({entity}, {key}): {e}")
             return False
 
+    def forget_all_by_entity(self, entity: str, kind: Optional[str] = None) -> int:
+        """
+        Bulk soft-delete every active row for an entity (optionally filtered by
+        kind) and keep the FTS shadow table in sync.
+
+        Used by cascade-delete callers (e.g. moments) so they don't have to
+        reach into private helpers like ``_remove_fts``. Returns the number of
+        rows that were soft-deleted.
+        """
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+
+                if kind is not None:
+                    cursor.execute(
+                        "SELECT rowid FROM knowledge "
+                        "WHERE entity = ? AND kind = ? AND deleted_at IS NULL",
+                        (entity, kind),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT rowid FROM knowledge "
+                        "WHERE entity = ? AND deleted_at IS NULL",
+                        (entity,),
+                    )
+                rowids = [r[0] for r in cursor.fetchall()]
+
+                if not rowids:
+                    cursor.close()
+                    return 0
+
+                placeholders = ','.join('?' for _ in rowids)
+                cursor.execute(
+                    f"UPDATE knowledge SET deleted_at = datetime('now') "
+                    f"WHERE rowid IN ({placeholders})",
+                    rowids,
+                )
+                affected = cursor.rowcount
+
+                for rid in rowids:
+                    self._remove_fts(conn, rid)
+
+                cursor.close()
+
+            logger.info(
+                f"[KNOWLEDGE] forget_all_by_entity soft-deleted {affected} row(s) "
+                f"for entity={entity} kind={kind or '*'}"
+            )
+            return affected
+
+        except Exception as e:
+            logger.error(
+                f"[KNOWLEDGE] forget_all_by_entity failed for entity={entity} kind={kind}: {e}"
+            )
+            return 0
+
     # ── Core: strengthen ───────────────────────────────────────────────
 
-    def strengthen(self, entity: str, key: str, episode_id: str = None) -> bool:
+    def strengthen(self, entity: str, key: str) -> bool:
         """Increment evidence_count, boost confidence with diminishing returns."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT rowid, confidence, evidence_count, data, kind
+                    SELECT rowid, confidence, evidence_count
                     FROM knowledge
                     WHERE entity = ? AND key = ? AND deleted_at IS NULL
                 """, (entity, key))
@@ -730,40 +843,17 @@ class KnowledgeService:
                     cursor.close()
                     return False
 
-                row_id, old_conf, old_evidence, raw_data, kind = row
+                row_id, old_conf, old_evidence = row
                 new_evidence = old_evidence + 1
                 boost = 0.05 / math.log2(new_evidence + 1)
                 new_conf = min(1.0, old_conf + boost)
 
-                # If episode_id provided and kind=concept, append to source_episodes
-                data_update = None
-                if episode_id and kind == 'concept':
-                    data_obj = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-                    episodes = data_obj.get('source_episodes', [])
-                    if episode_id not in episodes:
-                        episodes.append(episode_id)
-                        data_obj['source_episodes'] = episodes
-                        data_update = json.dumps(data_obj)
-
-                if data_update:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?, data = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, data_update, row_id))
-                else:
-                    cursor.execute("""
-                        UPDATE knowledge
-                        SET confidence = ?, evidence_count = ?,
-                            last_accessed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE rowid = ?
-                    """, (new_conf, new_evidence, row_id))
+                cursor.execute("""
+                    UPDATE knowledge
+                    SET confidence = ?, evidence_count = ?,
+                        last_accessed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE rowid = ?
+                """, (new_conf, new_evidence, row_id))
 
                 cursor.close()
 
@@ -830,17 +920,9 @@ class KnowledgeService:
                       AND decay_class != 'permanent'
                     LIMIT 20
                 """)
-                pressure_rows = cursor.fetchall()
+                cursor.fetchall()  # drain cursor
 
                 cursor.close()
-
-            # Emit signals outside the connection context
-            for row in pressure_rows:
-                self._emit_signal(
-                    'memory_pressure',
-                    f"Knowledge '{row[0]}' ({row[1]}) approaching decay threshold (confidence={row[3]:.2f})",
-                    energy=0.2,
-                )
 
             if total_updated > 0 or deleted_count > 0:
                 logger.info(
@@ -852,215 +934,6 @@ class KnowledgeService:
         except Exception as e:
             logger.error(f"[KNOWLEDGE] decay_cycle failed: {e}")
             return 0
-
-    # ── Procedural: record outcome ─────────────────────────────────────
-
-    def record_procedure_outcome(
-        self,
-        action_name: str,
-        success: bool,
-        reward: float = 0.0,
-        topic: str = None,
-        failure_class: str = None,
-    ) -> Optional[dict]:
-        """
-        Record action outcome for procedural learning.
-
-        Gets or creates a kind=procedure entry for the action, then updates
-        stats (attempts, successes, success_rate, avg_reward, reward_history,
-        context_stats) and recalculates weight via learning rate.
-        """
-        entity = 'chalie'
-        key = action_name
-
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-
-                # Get or create procedure entry
-                cursor.execute("""
-                    SELECT rowid, data, confidence
-                    FROM knowledge
-                    WHERE entity = ? AND key = ? AND deleted_at IS NULL
-                """, (entity, key))
-                existing = cursor.fetchone()
-
-                if existing:
-                    row_id = existing[0]
-                    raw_data = existing[1]
-                    data_obj = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-                else:
-                    # Create new procedure entry (ON CONFLICT handles race conditions
-                    # where multiple threads try to create the same procedure)
-                    cursor.execute("""
-                        INSERT INTO knowledge (kind, entity, key, value, data, decay_class,
-                                               confidence, source, evidence_count)
-                        VALUES ('procedure', ?, ?, ?, '{}', 'slow', 0.5, 'act_loop', 1)
-                        ON CONFLICT(entity, key) DO UPDATE SET
-                            updated_at = datetime('now'),
-                            deleted_at = NULL
-                    """, (entity, key, action_name))
-                    # Re-fetch to get rowid and current data (may have been created by another thread)
-                    cursor.execute("""
-                        SELECT rowid, data FROM knowledge
-                        WHERE entity = ? AND key = ?
-                    """, (entity, key))
-                    row = cursor.fetchone()
-                    if not row:
-                        logger.warning(f"[KNOWLEDGE] Failed to fetch procedure '{action_name}' after upsert")
-                        return None
-                    row_id = row[0]
-                    raw_data = row[1]
-                    data_obj = {}
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-
-                    # Sync FTS
-                    self._sync_fts(conn, row_id, key, action_name, 'procedure', entity)
-
-                # Update stats
-                total_attempts = data_obj.get('total_attempts', 0) + 1
-                total_successes = data_obj.get('total_successes', 0) + (1 if success else 0)
-                success_rate = total_successes / total_attempts if total_attempts > 0 else 0.0
-
-                # EMA for avg_reward
-                old_avg_reward = data_obj.get('avg_reward', 0.0)
-                if total_attempts <= 1:
-                    avg_reward = reward
-                else:
-                    avg_reward = (old_avg_reward * (total_attempts - 1) + reward) / total_attempts
-
-                # Reward history
-                reward_history = data_obj.get('reward_history', [])
-                reward_history.append({
-                    'reward': reward,
-                    'success': success,
-                    'failure_class': failure_class,
-                    'timestamp': time.time(),
-                })
-                reward_history.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-                reward_history = reward_history[:self._REWARD_HISTORY_MAX]
-
-                # Context stats
-                context_stats = data_obj.get('context_stats', {})
-                if topic:
-                    topic_data = context_stats.get(topic, {'attempts': 0, 'successes': 0})
-                    topic_data['attempts'] = topic_data.get('attempts', 0) + 1
-                    if success:
-                        topic_data['successes'] = topic_data.get('successes', 0) + 1
-                    context_stats[topic] = topic_data
-
-                # Recalculate weight
-                old_weight = data_obj.get('weight', self._DEFAULT_ACTION_WEIGHT)
-                clamped_reward = max(-0.5, min(0.5, avg_reward))
-                target_weight = success_rate * (1.0 + clamped_reward)
-                new_weight = old_weight + self._LEARNING_RATE * (target_weight - old_weight)
-                new_weight = max(0.1, min(5.0, new_weight))
-
-                data_obj.update({
-                    'total_attempts': total_attempts,
-                    'total_successes': total_successes,
-                    'success_rate': success_rate,
-                    'avg_reward': avg_reward,
-                    'weight': new_weight,
-                    'reward_history': reward_history,
-                    'context_stats': context_stats,
-                })
-
-                summary = f"{success_rate * 100:.0f}% success over {total_attempts} attempts"
-                cursor.execute("""
-                    UPDATE knowledge
-                    SET data = ?, value = ?, evidence_count = evidence_count + 1,
-                        updated_at = datetime('now')
-                    WHERE rowid = ?
-                """, (json.dumps(data_obj), summary, row_id))
-
-                cursor.close()
-
-                fc_tag = f", failure_class={failure_class}" if failure_class else ""
-                logger.info(
-                    f"[KNOWLEDGE] Recorded procedure outcome for '{action_name}': "
-                    f"success={success}, reward={reward:.2f}{fc_tag}"
-                )
-
-                return self.get(entity, key)
-
-        except Exception as e:
-            logger.error(f"[KNOWLEDGE] record_procedure_outcome failed for '{action_name}': {e}")
-            return None
-
-    # ── Procedural: get ranked ─────────────────────────────────────────
-
-    def get_ranked_procedures(self, topic: str = None, limit: int = 10) -> List[dict]:
-        """
-        Return procedures ranked by expected value.
-
-        expected_value = success_rate * (1 + clamp(avg_reward)) * topic_affinity
-        """
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT key, value, data, confidence
-                    FROM knowledge
-                    WHERE kind = 'procedure' AND entity = 'chalie' AND deleted_at IS NULL
-                    ORDER BY confidence DESC
-                """)
-                rows = cursor.fetchall()
-                cursor.close()
-
-                ranked = []
-                for row in rows:
-                    data_obj = {}
-                    raw_data = row[2]
-                    if raw_data and isinstance(raw_data, str):
-                        try:
-                            data_obj = json.loads(raw_data)
-                        except (json.JSONDecodeError, TypeError):
-                            data_obj = {}
-
-                    success_rate = data_obj.get('success_rate', 0.0)
-                    avg_reward = data_obj.get('avg_reward', 0.0)
-                    weight = data_obj.get('weight', self._DEFAULT_ACTION_WEIGHT)
-                    total_attempts = data_obj.get('total_attempts', 0)
-                    context_stats = data_obj.get('context_stats', {})
-
-                    # Topic affinity
-                    topic_affinity = 1.0
-                    if topic and topic in context_stats:
-                        td = context_stats[topic]
-                        t_attempts = td.get('attempts', 0)
-                        t_successes = td.get('successes', 0)
-                        if t_attempts > 0:
-                            topic_affinity = t_successes / t_attempts
-
-                    clamped_reward = max(-0.5, min(0.5, avg_reward))
-                    expected_value = success_rate * (1.0 + clamped_reward) * topic_affinity
-
-                    ranked.append({
-                        'name': row[1] or row[0],
-                        'weight': weight,
-                        'success_rate': success_rate,
-                        'avg_reward': avg_reward,
-                        'attempts': total_attempts,
-                        'topic_affinity': topic_affinity,
-                        'expected_value': expected_value,
-                    })
-
-                ranked.sort(key=lambda x: x['expected_value'], reverse=True)
-                return ranked[:limit]
-
-        except Exception as e:
-            logger.error(f"[KNOWLEDGE] get_ranked_procedures failed: {e}")
-            return []
 
     # ── Traits: get_traits_for_prompt ──────────────────────────────────
 

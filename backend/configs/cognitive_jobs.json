@@ -1,18 +1,6 @@
 {
   "jobs": [
     {
-      "id": "autobiography",
-      "name": "Autobiography Synthesis",
-      "desc": "Synthesises personal narrative prose from all memory layers (6h cycle).",
-      "caps": { "reasoning": "high", "structured": "low", "creativity": "high", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "frontal-cortex",
-      "name": "Frontal Cortex",
-      "desc": "Core reasoning engine; orchestrates all response modes.",
-      "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "frontal-cortex-unified",
       "name": "Frontal Cortex (Unified)",
       "desc": "Unified generation path for user messages. Logs under this name; assign provider here.",
@@ -25,70 +13,16 @@
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "frontal-cortex-act",
-      "name": "Act Mode",
-      "desc": "Plans and executes multi-step tool actions. Up to 7 iterations per invocation.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "low", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "plan-decomposition",
-      "name": "Plan Decomposition",
-      "desc": "Decomposes task goals into executable step DAGs for long-horizon planning.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "cognitive-drift",
-      "name": "Cognitive Drift (DMN)",
-      "desc": "Generates spontaneous thoughts during idle windows (Default Mode Network).",
-      "caps": { "reasoning": "medium", "structured": "low", "creativity": "high", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "episodic-memory",
-      "name": "Episodic Memory",
-      "desc": "Synthesises sessions into episodic narratives for long-term recall.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "frontal-cortex-proactive",
-      "name": "Proactive Mode",
-      "desc": "Translates spontaneous thoughts into outreach messages.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "semantic-memory",
-      "name": "Semantic Memory",
-      "desc": "Extracts concepts and relationships to build the knowledge graph.",
-      "caps": { "reasoning": "high", "structured": "high", "creativity": "none", "classification": "medium", "vision": "none" }
-    },
-    {
-      "id": "experience-assimilation",
-      "name": "Experience Assimilation",
-      "desc": "Evaluates tool outputs for novel knowledge worth storing.",
+      "id": "tool-synthesis",
+      "name": "Tool Synthesis",
+      "desc": "Evaluates recent tool call results for novel knowledge worth storing in memory. Runs every 60 minutes.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "autonomous-ambient-tool",
-      "name": "Ambient Tool Query",
-      "desc": "Generates search queries for proactive tool use triggered by cognitive drift.",
-      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "frontal-cortex-scheduled-tool",
-      "name": "Scheduled Tool Mode",
-      "desc": "Generates responses after scheduled tool/reminder execution.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none", "vision": "none" }
     },
     {
       "id": "trait-extraction",
       "name": "Trait Extraction",
       "desc": "Extracts user traits from messages via lightweight LLM call. Async, non-blocking.",
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "moment-enrichment",
-      "name": "Moment Enrichment",
-      "desc": "Generates titles and summaries for pinned moments.",
-      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
     },
     {
       "id": "document-synthesis",
@@ -113,6 +47,12 @@
       "name": "Failure Analysis",
       "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
+    },
+    {
+      "id": "goal-emergence",
+      "name": "Goal Emergence",
+      "desc": "Detects new goals from episodic memory narratives. Fires per episode batch.",
+      "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "high", "vision": "none" }
     }
   ]
 }

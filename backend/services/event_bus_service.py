@@ -14,7 +14,6 @@ from services.memory_client import MemoryClientService
 # Event type constants
 ENCODE_EVENT = 'encode_event'
 UPDATE_POLICY = 'update_policy'
-INTERACTION_LOGGED = 'interaction_logged'
 
 
 class EventBusService:
@@ -57,6 +56,7 @@ class EventBusService:
 
         try:
             self.store.rpush(queue_key, json.dumps(event))
+            self.store.expire(queue_key, 3600)
             logging.debug(f"[EVENT BUS] Emitted {event_type}")
             return True
         except Exception as e:

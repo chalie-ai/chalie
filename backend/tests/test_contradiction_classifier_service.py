@@ -25,8 +25,16 @@ from services.contradiction_classifier_service import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _schema_sql():
-    from tests.test_helpers import load_schema_sql
-    return load_schema_sql()
+    import re
+    from pathlib import Path
+    raw = (Path(__file__).parent.parent / 'schema.sql').read_text()
+    # Strip vec0/FTS5 virtual tables — extension not available in unit-test env.
+    return re.sub(
+        r'CREATE\s+VIRTUAL\s+TABLE\s+.*?;',
+        '',
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def _pack_embedding(values: list) -> bytes:
@@ -186,9 +194,13 @@ class TestCheckConceptConflict:
 @pytest.mark.unit
 class TestSampleMemoriesForReconcile:
     def test_returns_empty_without_data(self):
+        from unittest.mock import patch, MagicMock
         db = FakeDB()
         svc = ContradictionClassifierService(db_service=db)
-        result = svc.sample_memories_for_reconcile(n_traits=5)
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = []
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
+            result = svc.sample_memories_for_reconcile(n_traits=5)
         # May return empty list — no error
         assert isinstance(result, list)
 

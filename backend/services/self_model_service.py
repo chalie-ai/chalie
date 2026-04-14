@@ -30,7 +30,7 @@ REFRESH_INTERVAL = 30  # background thread cycle
 
 # Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
 CRITICAL_JOBS = frozenset({
-    'frontal-cortex', 'cognitive-triage', 'cognitive-drift',
+    'frontal-cortex', 'cognitive-triage',
 })
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
@@ -49,7 +49,6 @@ SEVERITY_MISSING_PROVIDER = 0.8
 SEVERITY_DEAD_THREADS = 0.6
 SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
-SEVERITY_HIGH_RECALL_FAILURE = 0.3
 SEVERITY_LOW_ACTIVATION = 0.2
 
 
@@ -217,13 +216,13 @@ class SelfModelService:
         Returns:
             dict: Mapping of epistemic signal names to their current values.
         """
-        topic = "general"
+        channel = "general"
 
-        wm_depth = self._get_working_memory_depth(topic)
+        wm_depth = self._get_working_memory_depth(channel)
 
         # Context warmth: driven by working memory depth and FOK
         wm_score = min(1.0, wm_depth / 4.0)
-        fok_signal = self._get_fok_signal(topic)
+        fok_signal = self._get_fok_signal(channel)
         fok_score = min(1.0, fok_signal / 5.0)
         context_warmth = round(
             (wm_score * 0.6) + (fok_score * 0.4), 3
@@ -233,81 +232,24 @@ class SelfModelService:
             "context_warmth": context_warmth,
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
-            "recall_failure_rate": self._get_recall_failure_rate(topic),
             "focus_active": False,
-            "skill_reliability": self._get_skill_reliability(),
         }
 
-    def _get_working_memory_depth(self, topic: str) -> int:
+    def _get_working_memory_depth(self, channel: str) -> int:
         try:
-            return self._store.llen(f"working_memory:{topic}")
+            return self._store.llen(f"working_memory:{channel}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get working memory depth: {e}", exc_info=True)
             return 0
 
-    def _get_fok_signal(self, topic: str) -> int:
+    def _get_fok_signal(self, channel: str) -> int:
         """Feeling-of-Knowing: partial match count from last recall."""
         try:
-            value = self._store.get(f"fok:{topic}")
+            value = self._store.get(f"fok:{channel}")
             return int(value) if value else 0
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get FOK signal: {e}", exc_info=True)
             return 0
-
-    def _get_recall_failure_rate(self, topic: str) -> float:
-        """Per-topic recall failure rate from procedural memory."""
-        try:
-            from services.knowledge_service import KnowledgeService
-            db = self._get_db()
-            entry = KnowledgeService(db).get('chalie', 'recall')
-            import json as _json
-            data = entry.get('data', {}) if entry else {}
-            if isinstance(data, str):
-                try:
-                    data = _json.loads(data)
-                except Exception:
-                    data = {}
-            context_stats = data.get("context_stats") or {}
-            if topic in context_stats:
-                topic_stats = context_stats[topic]
-                total = topic_stats.get("total", 0)
-                failures = topic_stats.get("failures", 0)
-                if total > 0:
-                    return round(failures / total, 3)
-            return 0.0
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
-            return 0.0
-
-    def _get_skill_reliability(self) -> dict:
-        """Condensed skill reliability: only skills with >= 5 attempts."""
-        try:
-            from services.knowledge_service import KnowledgeService
-            import json as _json
-            db = self._get_db()
-            procedures = KnowledgeService(db).get_ranked_procedures(limit=50)
-
-            result = {}
-            for proc in procedures:
-                data = proc.get('data', {})
-                if isinstance(data, str):
-                    try:
-                        data = _json.loads(data)
-                    except Exception:
-                        data = {}
-                attempts = data.get("total_attempts", 0)
-                if attempts < 5:
-                    continue
-                successes = data.get("total_successes", 0)
-                reliability = (successes + 1) / (attempts + 2)  # Laplace smoothing
-                result[proc.get('key', '')] = {
-                    "reliability": round(reliability, 3),
-                    "attempts": attempts,
-                }
-            return result
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get skill reliability: {e}", exc_info=True)
-            return {}
 
     # ── Operational layer ───────────────────────────────────────
 
@@ -369,13 +311,7 @@ class SelfModelService:
             logger.debug(f"{LOG_PREFIX} Failed to get bg_llm queue depth: {e}", exc_info=True)
             bg_llm = 0
 
-        try:
-            prompt_queue = self._store.llen("prompt-queue")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get prompt queue depth: {e}", exc_info=True)
-            prompt_queue = 0
-
-        return {"bg_llm": bg_llm, "prompt_queue": prompt_queue}
+        return {"bg_llm": bg_llm}
 
     def _get_memory_pressure(self) -> dict:
         """Episode/concept/trait counts and average activation from SQLite."""
@@ -388,21 +324,20 @@ class SelfModelService:
                 episode_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM knowledge "
-                    "WHERE kind = 'concept' AND deleted_at IS NULL"
+                    "SELECT COUNT(*) FROM data_graph "
+                    "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
                 )
                 concept_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT COUNT(*) FROM knowledge "
-                    "WHERE kind IN ('trait', 'preference') "
-                    "AND entity = 'user' AND deleted_at IS NULL"
+                    "SELECT COUNT(*) FROM data_graph "
+                    "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
                 )
                 trait_count = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "SELECT AVG(activation_score) FROM episodes "
-                    "WHERE activation_score > 0"
+                    "SELECT AVG(retrieval_weight) FROM episodes "
+                    "WHERE retrieval_weight > 0"
                 )
                 row = cursor.fetchone()
                 avg_activation = round(row[0], 3) if row[0] else 1.0
@@ -524,13 +459,13 @@ class SelfModelService:
                 # warning fires iff compaction would actually trigger.
                 _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
-                    SELECT tt.topic,
+                    SELECT tt.channel,
                            COUNT(tt.id) as entries,
                            SUM(LENGTH(tt.content)) as total_chars
-                    FROM topic_transcript tt
-                    LEFT JOIN topic_compactions tc ON tc.topic = tt.topic
-                    WHERE tc.topic IS NULL
-                    GROUP BY tt.topic
+                    FROM transcript tt
+                    LEFT JOIN compactions tc ON tc.channel = tt.channel
+                    WHERE tc.channel IS NULL
+                    GROUP BY tt.channel
                     HAVING total_chars >= ?
                     ORDER BY total_chars DESC LIMIT 1
                 """, (_COMPACTION_WARN_CHARS,)).fetchone()
@@ -568,22 +503,7 @@ class SelfModelService:
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
 
-                # 4. Stuck tasks: in_progress with iterations >= max
-                try:
-                    stuck = conn.execute("""
-                        SELECT COUNT(*) FROM persistent_tasks
-                        WHERE status = 'in_progress'
-                          AND iterations_used >= max_iterations
-                    """).fetchone()[0]
-                    if stuck > 0:
-                        checks.append({
-                            'signal': f"{stuck} task(s) stuck: iterations exhausted but still in_progress",
-                            'severity': 0.7,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Stuck tasks check failed: {e}", exc_info=True)
-
-                # 5. Proactive rejection rate: >95% in last 24h
+                # 4. Proactive rejection rate: >95% in last 24h
                 try:
                     candidates = conn.execute("""
                         SELECT COUNT(*) FROM interaction_log
@@ -605,20 +525,7 @@ class SelfModelService:
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Proactive rejection rate check failed: {e}", exc_info=True)
 
-                # 6. Orphaned episodes: topic_id not in topics
-                try:
-                    orphans = conn.execute("""
-                        SELECT COUNT(*) FROM episodes
-                        WHERE topic_id IS NOT NULL
-                          AND topic_id NOT IN (SELECT id FROM topics)
-                    """).fetchone()[0]
-                    if orphans > 10:
-                        checks.append({
-                            'signal': f"{orphans} orphaned episodes (topic_id not in topics)",
-                            'severity': 0.3,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Orphaned episodes check failed: {e}", exc_info=True)
+                # Orphaned episodes check removed — topics table dropped in migration 035
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")
@@ -628,12 +535,10 @@ class SelfModelService:
         """
         Determine what is worth surfacing. Returns empty list when healthy.
 
-        Each item is {"signal": str, "severity": float} where severity
-        is used by the mode router for weighted self_constraint scoring.
+        Each item is {"signal": str, "severity": float}.
         """
         notes = []
         op = snapshot.get("operational", {})
-        ep = snapshot.get("epistemic", {})
 
         # Dead worker threads (severity: 0.6)
         dead = op.get("thread_health", {}).get("dead_threads", [])
@@ -666,14 +571,6 @@ class SelfModelService:
             notes.append({
                 "signal": f"LLM queue congested ({bg_depth}/25)",
                 "severity": SEVERITY_QUEUE_CONGESTION,
-            })
-
-        # High recall failure rate (severity: 0.3)
-        rfr = ep.get("recall_failure_rate", 0)
-        if rfr > 0.4:
-            notes.append({
-                "signal": f"Memory recall unreliable for current topic (failure rate: {rfr:.0%})",
-                "severity": SEVERITY_HIGH_RECALL_FAILURE,
             })
 
         # Low average memory activation (severity: 0.2)

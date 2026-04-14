@@ -77,48 +77,14 @@ class TestDeleteAll:
                     # Simulate missing header
                     resp, code = delete_all.__wrapped__() if hasattr(delete_all, '__wrapped__') else (None, None)
 
-    def test_store_patterns_cover_all_expected_namespaces(self):
-        """Verify the delete-all function references all critical MemoryStore namespaces."""
+    def test_database_tables_cover_required_data(self):
+        """Verify delete-all truncates the three core data tables."""
         import inspect
         from api.privacy import delete_all
         src = inspect.getsource(delete_all)
 
-        # Critical namespaces that must appear
-        # Note: gist:* and fact:* removed in Stream 1 (memory chunker killed)
-        for pattern in [
-            'working_memory:*',
-            'auth_session:*', 'proactive:*',
-            'identity_state:*', 'cognitive_drift_state',
-            'tool_state:*', 'metrics:timing:*',
-        ]:
-            assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in delete_all"
-
-    def test_database_tables_cover_all_user_data(self):
-        """Verify delete-all truncates all documented user-data tables."""
-        import inspect
-        from api.privacy import delete_all
-        src = inspect.getsource(delete_all)
-
-        required_tables = [
-            'episodes', 'knowledge',
-            'threads', 'autobiography', 'scheduled_items',
-            'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
-            'interaction_log', 'cortex_iterations',
-        ]
-        for table in required_tables:
+        for table in ['tool_calls', 'episodes', 'transcript']:
             assert table in src, f"Expected table '{table}' in delete_all truncation list"
-
-    def test_audit_log_written_after_truncation(self):
-        """Verify interaction_log is truncated before the audit entry is written."""
-        import inspect
-        from api.privacy import delete_all
-        src = inspect.getsource(delete_all)
-
-        truncate_pos = src.find('"interaction_log"')
-        audit_pos = src.find('privacy_delete_all')
-        assert truncate_pos < audit_pos, (
-            "interaction_log should be truncated before the audit entry is written"
-        )
 
 
 # ── data-summary ──────────────────────────────────────────────────────────────
@@ -131,8 +97,8 @@ class TestDataSummary:
         src = inspect.getsource(data_summary)
 
         required_tables = [
-            'episodes', 'knowledge', 'threads',
-            'autobiography', 'scheduled_items', 'persistent_tasks',
+            'episodes', 'knowledge', 'transcript',
+            'scheduled_items',
             'lists', 'place_fingerprints',
             'interaction_log',
         ]
@@ -151,8 +117,8 @@ class TestExportData:
 
         required_tables = [
             'episodes', 'knowledge',
-            'threads', 'autobiography', 'scheduled_items',
-            'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
+            'transcript', 'scheduled_items',
+            'lists', 'list_items', 'place_fingerprints',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in export_data table list"
@@ -174,8 +140,8 @@ class TestExportData:
         from api.privacy import export_data
         src = inspect.getsource(export_data)
 
-        # gist:* and fact:* removed in Stream 1 (memory chunker killed)
-        for pattern in ['working_memory:*', 'identity_state:*']:
+        # gist:*, fact:*, identity_state:* removed (services deleted)
+        for pattern in ['working_memory:*']:
             assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):

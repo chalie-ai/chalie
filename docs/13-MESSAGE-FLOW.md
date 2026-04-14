@@ -22,507 +22,389 @@ This document is the single authoritative visual map of how a user message trave
                             │  User Message via    │
                             │    /ws  (WebSocket)  │
                             └──────────┬───────────┘
-                                       │ daemon thread
+                                       │ spawns daemon thread
                             ┌──────────▼───────────┐
-                            │   digest_worker()    │◄──── background
+                            │  _handle_chat_       │
+                            │  background()        │
+                            └──────────┬───────────┘
+                                       │
+                            ┌──────────▼────────────────────────────────────────┐
+                            │  UserMessageProcessor(raw_input, metadata,        │
+                            │                       on_narration).send(req_id)  │
+                            │                                                   │
+                            │  One instance per turn. No singleton. No process()│
+                            │                                                   │
+                            │  _run_memory_seed()  — episodic auto-recall        │
+                            │                                                   │
+                            │  ACT loop (see §2):                               │
+                            │    getUserPrompt()   — builds literal-text body   │
+                            │    _wrap_with_checkpoint()  — envelopes body      │
+                            │    [compaction check at 80% — see §3]             │
+                            │    getSystemPrompt() — identity + unified template│
+                            │    getTools()        — innate skills + discovered  │
+                            │    Providers.send_messages()  🧠 LLM              │
+                            │    handleTool() per tool_call → ActDispatcher     │
+                            │    tool_synthesis DTO, user_steer drain           │
+                            │    repeat until text-only response or cap hit     │
+                            │                                                   │
+                            │  store()  — append_atomic_turn() ONE transaction  │
+                            │  postTurn() — 8-service fan-out (see §4)          │
+                            └──────────┬────────────────────────────────────────┘
+                                       │ final response text
+                            ┌──────────▼───────────┐
+                            │  OutputService.       │
+                            │  enqueue_text()       │
                             └──────────┬───────────┘
                                        │
                             ┌──────────▼───────────┐
-                            │   PHASE A            │
-                            │   Ingestion &        │
-                            │   Context Assembly   │
-                            │   (see §2)           │
-                            └──────────┬───────────┘
-                                       │
-                            ┌──────────▼───────────┐
-                            │   PHASE B            │
-                            │   Signal Collection  │
-                            │   & Unified Path     │
-                            │   (see §3)           │
-                            └──────────┬───────────┘
-                                       │
-                           ┌───────────┴──────────────┐
-                           │    Unified Generation    │
-                           │    (unified_generate)    │
-                           └──┬───────────────────────┘
-                              │
-               ┌──────────────▼──────────────────────────────┐
-               │  Single LLM call — LLM decides:             │
-               │  • Respond directly (Format B)               │
-               │  • Invoke skills/tools first (Format A)      │
-               │  • CANCEL / empty → fast exit                │
-               └──────────────────────┬──────────────────────┘
-                                      │
-                               ┌──────▼───────────┐
-                               │   PHASE D        │
-                               │   Post-Response  │
-                               │   Commit (see §5)│
-                               └──────┬───────────┘
-                                      │
-                               ┌──────▼───────────┐
-                               │  📤 M  pub/sub   │
-                               │  output:{id}     │
-                               │  WS → Client     │
-                               └──────────────────┘
+                            │  📤 M  pub/sub        │
+                            │  sse:{request_id}    │
+                            │  WS → Client         │
+                            └──────────────────────┘
+
+NOTE: The LLM receives a single literal-text user message containing a
+## Previous Messages block built by getPreviousMessages(). The provider
+multi-turn messages[] array is NOT used for history — one element only.
+
+Tool calls from the LLM are dispatched inline by handleTool() via
+ActDispatcherService. Nothing accumulates across turns in memory; the
+transcript is the persistence layer and is read fresh via getPreviousMessages()
+at the start of each ACT iteration.
 
 BACKGROUND (always running, independent of user messages):
-  PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §5)
-  PATH E  ──  Reasoning Loop          (600s, idle-only)   (see §7)
+  PATH B  ──  DMN Service            (60min idle / 6h cadence)  (see §5)
+  PATH C  ──  Goal Pursuit daemon    (spawned per goal)          (see §6)
+  PATH D  ──  Scheduled Prompts      (60s poll)                  (see §7)
 ```
 
 ---
 
-## 2. Phase A — Ingestion & Context Assembly
+## 2. Phase A — ACT Loop (MessageProcessor.send())
 
-Runs immediately for every message, before any routing decision.
+Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProcessor`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE A: Context Assembly                                          │
+│  MessageProcessor.send(request_id)                                  │
 │                                                                     │
-│  Step 1  IIP Hook (Identity Promotion)            ⚡ DET  <5ms     │
-│          Regex: "call me X", "my name is X", …                     │
-│          Match → 📤 M  📤 DB  (trait + identity)                   │
-│          No match → continue                                        │
-│                           │                                         │
-│  Step 2  Working Memory (transcript + compaction)  📥 DB             │
-│          topic_compactions + topic_transcript (budget-aware)        │
-│          ─────────────────────────────────────────────────          │
-│  Step 3  Gists                                    📥 M              │
-│          key: gist:{topic}  (sorted set, 30min TTL)                │
-│          ─────────────────────────────────────────────────          │
-│  Step 4  Facts                                    📥 M              │
-│          key: fact:{topic}:{key}  (24h TTL)                        │
-│          ─────────────────────────────────────────────────          │
-│  Step 5  World State                              📥 M              │
-│          key: world_state:{topic}                                   │
-│          ─────────────────────────────────────────────────          │
-│  Step 6  FOK (Feeling-of-Knowing) score           📥 M              │
-│          key: fok:{topic}  (float 0.0–5.0)                         │
-│          ─────────────────────────────────────────────────          │
-│  Step 7  Context Warmth                           ⚡ DET            │
-│          warmth = (wm_score + world_score) / 2                     │
-│          ─────────────────────────────────────────────────          │
-│  Step 8  Memory Confidence                        ⚡ DET            │
-│          conf = 0.4×fok + 0.4×warmth + 0.2×density                │
-│          is_new_topic → conf *= 0.7                                 │
-│          ─────────────────────────────────────────────────          │
-│  Step 9  Session / Focus Tracking                 📥📤 M            │
-│          topic_streak:{thread_id}  (2h TTL)                        │
-│          focus:{thread_id}  (auto-infer after N exchanges)         │
-│          Silence gap > 2700s → trigger episodic memory             │
+│  Pre-loop (once per turn):                                          │
+│    _run_memory_seed()                            📥 DB  <10ms       │
+│    memory_skill.recall_episodes(caller='seed')                      │
+│    → self._memory_seed (str), self._memory_seed_radius (float)      │
+│    → durable DTO appended: {name='memory', ephemeral=0}             │
+│                                                                     │
+│  Fetch context limit once:                                          │
+│    Providers.instance().get_context_limit(job=JOB)  ⚡ DET         │
+│    → context_limit (int, fallback=32000)                            │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  ACT iteration body (up to MAX_ITERATIONS, MAX_TIMEOUT):    │   │
+│  │                                                              │   │
+│  │  getUserPrompt()                         ⚡ DET  <5ms        │   │
+│  │    World State block (WorldStateService)    📥 M             │   │
+│  │    System Awareness block (SelfModelService)                 │   │
+│  │    ## Previous Messages (getPreviousMessages())  📥 DB       │   │
+│  │      ← compaction watermark + transcript rows               │   │
+│  │      ← durable (ephemeral=0) tool_calls interleaved         │   │
+│  │    [memory(radius=X)] seed line                              │   │
+│  │    user: <raw_input> [file_tags] [nudge_tag]                 │   │
+│  │    ACT loop trail (getActLoopTrail())                        │   │
+│  │                                                              │   │
+│  │  _wrap_with_checkpoint()                 ⚡ DET  <1ms        │   │
+│  │    If compaction exists: prepend Checkpoint/Current State    │   │
+│  │    envelope; else pass through verbatim                      │   │
+│  │                                                              │   │
+│  │  Compaction threshold check (see §3)                        │   │
+│  │                                                              │   │
+│  │  getSystemPrompt()                       ⚡ DET  <5ms        │   │
+│  │    getUserDefinition() + SYSTEM_PROMPT_CLASS().getPrompt()   │   │
+│  │                                                              │   │
+│  │  getTools()                              ⚡ DET  <1ms        │   │
+│  │    NATIVE_TOOLS resolved via tool_schema_service             │   │
+│  │    + getDynamicTools() (find_tools discoveries)              │   │
+│  │                                                              │   │
+│  │  Providers.send_messages(system, messages, tools)  🧠 LLM   │   │
+│  │    messages = [{'role':'user','content':user_body}]          │   │
+│  │                                                              │   │
+│  │  No tool_calls → loop_exited_cleanly = True → break         │   │
+│  │                                                              │   │
+│  │  If LLM returned narration text alongside tool_calls:       │   │
+│  │    tool_synthesis DTO appended (ephemeral=1)                 │   │
+│  │    _emit_narration() → on_narration callback → SSE           │   │
+│  │                                                              │   │
+│  │  For each tool_call: handleTool()        ⚡ DET + varies     │   │
+│  │    ActDispatcherService.dispatch_action()                    │   │
+│  │    DTO appended to _pending_tool_calls (ephemeral=1)         │   │
+│  │    Rendered line appended to _act_trail                      │   │
+│  │    find_tools side effect: _discovered_tools extended        │   │
+│  │    Exceptions → "ERROR: <tool> failed: <msg>" (never raise)  │   │
+│  │                                                              │   │
+│  │  Drain steering queue (steer:{request_id})      📥 M        │   │
+│  │    user_steer DTOs appended (ephemeral=1)                    │   │
+│  │                                                              │   │
+│  │  iteration += 1  → goto top of loop                         │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  store(final_text)                           📤 DB  <5ms           │
+│    transcript_service.append_atomic_turn(                           │
+│        channel, role, raw_input, llm_response, pending_tool_calls)  │
+│    ONE transaction:                                                 │
+│      INSERT transcript (role=ROLE, content=raw_input)  → self._uid │
+│      INSERT tool_calls sorted by DTO timestamp (all accumulated)    │
+│      INSERT transcript (role='assistant', content=llm_response)     │
+│    Post-commit daemon threads (outside transaction):                │
+│      _embed_entry(input_id)                                         │
+│      _embed_entry(assistant_id)                                     │
+│      _trigger_episode_extraction(channel, assistant_id)             │
+│                                                                     │
+│  postTurn() → 8-service fan-out (see §4)                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Phase B — Signal Collection & Unified Generation
+## 3. Mid-ACT Compaction (Two-Stage)
 
-User messages go through a single unified LLM call. No mode gate, no UNIFIED/ACT routing split.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 1: NLP Signal Collection                   ⚡ DET  <1ms     │
-│                                                                     │
-│  compute_nlp_signals()                                              │
-│  Input:  text                                                       │
-│  Output: { has_question_mark, interrogative_words, greeting_pattern, │
-│            explicit_feedback, information_density, implicit_reference}│
-│  No external calls — pure regex/heuristics                          │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│  LAYER 2: Unified Generation                      🧠 LLM           │
-│  unified_generate()                                                 │
-│                                                                     │
-│  Single LLM call with discoverable skills/tools.                   │
-│  The LLM decides whether to:                                        │
-│    • Respond directly (Format B — conversational response)          │
-│    • Invoke skills/tools first (Format A — action + synthesis)      │
-│                                                                     │
-│  Empty input and CANCEL patterns handled inline (fast exit).        │
-│  Context relevance pre-parser selects which context nodes to inject.│
-│                                                                     │
-│  Config: frontal-cortex-unified.json                                │
-│  Prompt: frontal-cortex-unified.md                                  │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                           Phase D  (§6)
-```
-
----
-
-## 4. Mode Router — Non-User Flows (Drift, Proactive, Fallback)
-
-### 4a. Mode Router (Deterministic)
-
-Used only for non-user flows (cognitive drift, proactive notifications, fallback). User messages bypass this entirely via unified_generate.
+Triggered when the rendered user-message body (including checkpoint envelope) exceeds 80% of the provider's context window. Measured via `estimate_tokens()` before the provider call on each iteration. No DB writes happen mid-loop — all DTOs accumulate in `self._pending_tool_calls` until `store()`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  ModeRouterService                           ⚡ DET  ~5ms           │
+│  _check_threshold(user_body, context_limit)      ⚡ DET             │
 │                                                                     │
-│  Signal inputs (all already in memory from Phase A/B):             │
-│    context_warmth       topic_confidence     has_question_mark     │
-│    working_memory_turns fok_score            interrogative_words   │
-│    gist_count           is_new_topic         greeting_pattern      │
-│    fact_count           world_state_present  explicit_feedback     │
-│    intent_type          intent_complexity    intent_confidence     │
-│    information_density  implicit_reference   prompt_token_count    │
+│  Over 80%?                                                          │
+│    ├─ YES → Stage 1: _run_stage1_tool_compaction()  🧠 LLM         │
+│    │    LLM call against accumulated _act_trail text                │
+│    │    Removes ephemeral=1 tool DTOs (except memory + user_steer)  │
+│    │    Appends single tool_compaction DTO (ephemeral=1)            │
+│    │    Rebuilt user_body re-measured:                              │
+│    │      Still over 80%?                                           │
+│    │        ├─ YES → Stage 2: _run_stage2_act_restart()  🧠 LLM   │
+│    │        │    _run_full_compaction() → LLM summarises channel    │
+│    │        │    Upserts compactions table (checkpoint + watermark) │
+│    │        │    Appends compaction DTO (ephemeral=0)               │
+│    │        │    Collapses pre-restart ephemeral=1 DTOs into        │
+│    │        │      single act_restart DTO (ephemeral=1)             │
+│    │        │    Resets _act_trail = [], _discovered_tools = []     │
+│    │        │    Sets iteration = 0 (loop restarts; MAX_TIMEOUT     │
+│    │        │      wall-clock guard keeps ticking)                  │
+│    │        └─ NO  → continue to provider call                     │
+│    └─ NO  → continue to provider call                              │
 │                                                                     │
-│  Scoring formula (per mode):                                       │
-│    score[mode] = base_score + Σ(weight[signal] × signal_value)    │
-│    Anti-oscillation: hysteresis dampening from prior mode          │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Tie-breaker?                           ⚡ ONNX  ~5ms        │   │
-│  │  Triggered when: top-2 scores within effective_margin       │   │
-│  │  Model:   mode-tiebreaker (ONNX classifier)                 │   │
-│  │  Output:  pick mode A or B                                  │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                            UNIFIED
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│  FrontalCortexService                        🧠 LLM  ~500ms–2s     │
-│                                                                     │
-│  Prompt = soul.md + identity-core.md + frontal-cortex-{mode}.md    │
-│                                                                     │
-│  Context injected:                                                  │
-│    • Working memory (thread_id)                                     │
-│    • Chat history                                                   │
-│    • Assembled context (semantic retrieval)                         │
-│    • Drift gists (if idle thoughts exist)                           │
-│    • Context relevance inclusion map (computed dynamically)         │
-│                                                                     │
-│  Config files:                                                      │
-│    UNIFIED      → frontal-cortex-unified.json                       │
-│                                                                     │
-│  Output: { response: str, confidence: float, mode: str }           │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                           Phase D  (§6)
-```
-
-### 4b. ACT Mode — The Action Loop
-
-Used by background workers (tool_worker, persistent_task_worker) and when the mode router (non-user flows) selects ACT.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ACTOrchestrator                                                    │
-│  Config: cumulative_timeout=60s  per_action=10s  max_iterations=30 │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  Iteration N                                                 │  │
-│  │                                                              │  │
-│  │  1. Generate action plan            🧠 LLM                  │  │
-│  │     Prompt: frontal-cortex-act.md                           │  │
-│  │     Input:  user text + act_history (prior results)         │  │
-│  │     Output: [{ type, params, … }, …]                        │  │
-│  │                                                              │  │
-│  │  2. Termination check               ⚡ DET                  │  │
-│  │     • Cumulative timeout reached?                            │  │
-│  │     • Max iterations reached?                                │  │
-│  │     • No actions in plan?                                    │  │
-│  │     • Semantic repetition detected? (embedding-based)        │  │
-│  │     • Same action type repeated 3× in a row?                │  │
-│  │     If any → exit loop                                       │  │
-│  │                                                              │  │
-│  │  3. Execute actions                  ⚡/🧠 varies           │  │
-│  │     ActDispatcherService                                     │  │
-│  │     Chains outputs: result[N] → input[N+1]                  │  │
-│  │     Action types:                                            │  │
-│  │       recall, memorize, associate, find_tools               │  │
-│  │       (cognitive primitives, always available)              │  │
-│  │       schedule, list, focus, persistent_task, etc.          │  │
-│  │       (all innate skills available directly)                │  │
-│  │       (+ external tools via tool_worker thread)             │  │
-│  │                                                              │  │
-│  │  4. Log iteration                    📤 DB                  │  │
-│  │     Table: cortex_iterations                                 │  │
-│  │     Fields: iteration_number, actions_executed,             │  │
-│  │             execution_time_ms, fatigue, mode                │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│           │                                                         │
-│           └──► repeat if can_continue()                             │
-│                                                                     │
-│  After loop terminates:                                             │
-│  1. Re-route → terminal mode (force previous_mode='ACT')           │
-│     Mode router (deterministic, skip_tiebreaker=True)              │
-│     Typically selects UNIFIED                                       │
-│  2. Generate terminal response (FrontalCortex)   🧠 LLM           │
-│     act_history passed as context                                   │
-│     All-card actions → skip text (mode='IGNORE')                   │
+│  Pseudo-tool DTOs produced (all use invoked_by='system'):          │
+│    tool_compaction  ephemeral=1  — Stage 1 summary (audit only)    │
+│    compaction       ephemeral=0  — Stage 2 checkpoint (durable)    │
+│    act_restart      ephemeral=1  — Stage 2 pre-restart collapse    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Phase D — Post-Response Commit
+## 4. Phase B — Post-Turn Service Fan-Out (UserMessageProcessor.postTurn())
 
-Runs after every response is generated (Paths A, B, C).
+Runs synchronously inside `send()` after `store()` commits, before `send()` returns. The final response is already in the caller's hands (streamed via narration callback); `postTurn()` latency does not delay the user.
+
+Personal facts are captured by the LLM-native memory skill path: the system prompt instructs the LLM to call `memory.store` for personal disclosures, and `memory_skill._handle_store()` delegates to `DataGraphService.store()` which handles contradiction detection internally (temporal_change, true_contradiction, ambiguous) per the kind's policy. The LLM chooses the kind (`user_specific`, `system`, `misc`) via the tool schema enum.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE D: Post-Response Commit                                      │
+│  UserMessageProcessor.postTurn()                                    │
 │                                                                     │
-│  Step 1  Append to transcript + compaction check  📤 DB              │
-│          topic_transcript (append assistant turn)                   │
-│          Fires compaction if context > 85% of budget               │
+│  1. ConversationPhaseService         📤 M  (sync)                  │
+│     update(user_text, is_user=True)                                 │
+│     update(response, is_user=False)  [if response != '']            │
 │                         │                                           │
-│  Step 2  Log interaction event                  📤 DB              │
-│          Table: interaction_log                                      │
-│          Fields: event_type='system_response', mode,               │
-│                  confidence, generation_time                        │
+│  2. SituationModelService            📤 M  (sync)                  │
+│     update_on_message()                                             │
 │                         │                                           │
-│  Step 3  Encode response event                  📤 M  (async)      │
-│          EventBusService → ENCODE_EVENT                             │
-│          Triggers downstream memory consolidation:                  │
-│                                                                     │
-│          ┌──────────────────────────────────────────────────────┐  │
-│          │  episodic-memory-queue (PromptQueue)                 │  │
-│          │    → episodic_memory_worker: episode build  🧠 LLM  │  │
-│          │    → 📤 DB  episodes  (with sqlite-vec embedding)    │  │
-│          │                                                      │  │
-│          │  semantic_consolidation_queue (PromptQueue)          │  │
-│          │    → semantic consolidation: concept extract 🧠 LLM │  │
-│          │    → 📤 DB  concepts, semantic_relationships         │  │
-│          └──────────────────────────────────────────────────────┘  │
+│  3. SaveSuggestionService  [DEPRECATED]  📥📤 M  (sync)            │
+│     3a. detect_save_trigger(user_text) → emit_save_card if flagged  │
+│     3b. detect_saveable_content(response) → flag_saveable if hit    │
 │                         │                                           │
-│  Step 5  Publish to WebSocket                   📤 M  (pub/sub)    │
-│          key: output:{request_id}                                   │
-│          /chat endpoint receives, streams to client                 │
+│  4. Adaptive layer       📤 M  (sync)                              │
+│     _detect_fork_response(text)                                     │
+│     _store_adaptive_signals(text)                                   │
+│                         │                                           │
+│  5. DMNService.on_turn() 📤 M  (sync) ← R10 CRITICAL              │
+│     Defers DMN idle timer — must fire on every user turn            │
+│                         │                                           │
+│  6. MetricsService       📤 M  (sync)                              │
+│     record_counter('requests_total')                                │
+│     record_counter('user_messages_total')                           │
+│                         │                                           │
+│  7. compaction_service.check_and_compact()   📥📤 DB  (sync)       │
+│     End-turn backstop — safety net if mid-loop compaction missed    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+Background subclasses (`DMNMessageProcessor`, `GoalPursuitProcessor`, `ScheduledMessageProcessor`) run a minimal `postTurn()` — only `MetricsService`. No phase updates, no DMN reset.
+
 ---
 
-## 6. Path D — Persistent Task Worker (Background, 30min Cycle)
+## 5. Path B — DMN Service (Background, 60min Idle / 6h Cadence)
 
 Operates completely independently of user messages.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  persistent_task_worker  (30min ± 30% jitter)                      │
+│  DMNService timer loop                                              │
 │                                                                     │
-│  1. Expire stale tasks                          📥📤 DB            │
-│     Table: persistent_tasks                                         │
-│     created_at > max_age → mark EXPIRED                            │
+│  Trigger 1: 60min without user activity (idle)      ⚡ DET         │
+│    Context: last 50 high-weight episodes                            │
 │                                                                     │
-│  2. Pick eligible task (FIFO within priority)   📥 DB              │
-│     State machine: PENDING → RUNNING → COMPLETED                    │
+│  Trigger 2: 6h cadence (salience)                   ⚡ DET         │
+│    Context: top episodes by retrieval_weight + active goals         │
 │                                                                     │
-│  3. Load task + progress                        📥 DB              │
-│     persistent_tasks.progress (JSON as TEXT)                               │
-│     Contains: plan DAG, coverage, step statuses                    │
+│  Quiet hours (23:00–08:00 local), rate limit (4/24h)               │
 │                                                                     │
-│  4. Execution branch:                                               │
-│     ┌──────────────────┐      ┌───────────────────────────────┐   │
-│     │  HAS PLAN DAG?   │─Yes─►│  Plan-Aware Execution         │   │
-│     └────────┬─────────┘      │  Ready steps = steps where    │   │
-│              │ No             │  all depends_on are DONE       │   │
-│              ▼                │  Execute each ready step       │   │
-│     ┌──────────────────┐      │  via bounded ACT loop         │   │
-│     │  Flat ACT Loop   │      └───────────────────────────────┘   │
-│     │  Iterate toward  │                                           │
-│     │  goal directly   │                                           │
-│     └──────────────────┘                                           │
+│  DMNMessageProcessor(raw_input=context, metadata).send()  🧠 LLM  │
+│    CHANNEL = 'dmn', ROLE = 'proactive_thought'                      │
+│    MAX_ITERATIONS = 15, MAX_TIMEOUT = 300s                          │
+│    getUserPrompt(): proactive_thought: <context>                    │
+│    postTurn(): metrics only                                         │
 │                                                                     │
-│  5. Bounded ACT Loop (both branches):           🧠 LLM  per iter  │
-│     max_iterations=5, cumulative_timeout=30min                     │
-│     Same fatigue model as interactive ACT loop                     │
-│                                                                     │
-│  6. Atomic checkpoint                           📤 DB              │
-│     persistent_tasks.progress (JSON as TEXT, atomic UPDATE)        │
-│     Saves: plan, coverage %, step statuses, last results           │
-│                                                                     │
-│  7. Coverage check                              ⚡ DET             │
-│     100% complete → mark COMPLETED                                 │
-│                                                                     │
-│  8. Adaptive surfacing (optional)                                   │
-│     After cycle 2, or coverage jumped > 15%                        │
-│     → Proactive message to user                                    │
-│     → 📤 M  pub/sub proactive channel                              │
-│                                                                     │
-│  PLAN DECOMPOSITION (called on task creation):  🧠 LLM  ~300ms    │
-│  PlanDecompositionService                                           │
-│  Prompt: plan-decomposition.md                                      │
-│  Output: { steps: [{ id, description, depends_on: [] }] }          │
-│  Validates: Kahn's cycle detection, quality gates (Jaccard <0.7),  │
-│             confidence > 0.5, step word count 4-30                 │
-│  Stores: persistent_tasks.progress.plan (JSON as TEXT)              │
+│  Exits silently if response contains DMN_NO_ACTION                  │
+│  Otherwise: OutputService.enqueue_proactive()  📤 M                │
+│             → pub/sub → WS → user                                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+`dmn_service._active_topic()` uses an Option A whitelist: reads only `channel='user'` rows from the transcript, falls back to `'general'` if none exist.
+
 ---
 
-## 7. Path E — Reasoning Loop (Background, 600s Idle-Only)
+## 6. Path C — Goal Pursuit (Background, Per-Goal Daemon Thread)
 
-Runs only when all PromptQueues are idle. Signal-driven continuous reasoning.
+A daemon thread is spawned by the `goal_pursuit` innate skill when the LLM calls it. Each pursuit is isolated on its own instance with flat channel `'goal_pursuit'`. The `pursuit_id` lives in `metadata` only — never in the channel string.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  reasoning_loop_service  (600s idle timeout, signal-driven)        │
+│  GoalPursuitProcessor(raw_input=goal, metadata).send()  🧠 LLM     │
 │                                                                     │
-│  Preconditions:                               ⚡ DET               │
-│    All queues idle?   📥 M  (queue lengths = 0)                    │
-│    Recent episodes exist? (lookback 168h)  📥 DB                   │
-│    Bail if user is in deep focus           📥 M  focus:{thread_id} │
+│  CHANNEL = 'goal_pursuit'   (flat — pursuit_id in metadata only)    │
+│  ROLE = 'goal_pursuit'                                              │
+│  MAX_ITERATIONS = 50, MAX_TIMEOUT = 7200s (2h)                     │
 │                                                                     │
-│  1. Seed Selection (weighted random)          ⚡ DET               │
-│     Salient  0.60 │ Insight  0.40                                   │
-│     Source: 📥 DB  episodes table (by category)                    │
+│  getUserPrompt(): goal_pursuit: <goal>  + ACT trail                 │
+│  postTurn(): metrics only                                           │
 │                                                                     │
-│  2. Spreading Activation (depth ≤ 2)          ⚡ DET               │
-│     📥 DB  semantic_concepts, semantic_relationships               │
-│     📥📤 M  cognitive_drift_activations  (sorted set)              │
-│     📥📤 M  cognitive_drift_concept_cooldowns  (hash)              │
-│     Collect top 5 activated concepts                               │
-│                                                                     │
-│  3. Thought Synthesis                         🧠 LLM  ~100ms       │
-│     Prompt: cognitive-drift.md + soul.md                           │
-│     Input:  activated concepts + soul axioms                       │
-│     Output: thought text                                            │
-│                                                                     │
-│  4. Store drift gist                          📤 M               │
-│     key: gist:{topic}  (30min TTL)                                  │
-│     Will surface in frontal cortex context on next user message    │
-│                                                                     │
-│  5. Action Decision Routing                   ⚡ DET               │
-│     Scores registered actions:                                      │
-│                                                                     │
-│     ┌───────────────┬──────────┬─────────────────────────────────┐ │
-│     │  Action       │ Priority │  What it does                   │ │
-│     ├───────────────┼──────────┼─────────────────────────────────┤ │
-│     │  COMMUNICATE  │    10    │  Push thought to user (deferred)│ │
-│     │  PLAN         │     7    │  Propose persistent task 🧠 LLM │ │
-│     │  SEED_THREAD  │     6    │  Plant new conversation seed    │ │
-│     │  REFLECT      │     5    │  Internal memory consolidation  │ │
-│     │  RECONCILE    │     4    │  Contradiction resolution       │ │
-│     │  AMBIENT_TOOL │     3    │  Context-triggered tool use     │ │
-│     │  NOTHING      │     0    │  Always available fallback      │ │
-│     └───────────────┴──────────┴─────────────────────────────────┘ │
-│                                                                     │
-│     Winner selected by score (ties broken by priority)             │
-│     PLAN action → calls PlanDecompositionService  🧠 LLM          │
-│                → stores in persistent_tasks  📤 DB                 │
-│                                                                     │
-│  6. Deferred queue                             📤 M               │
-│     COMMUNICATE → stores thought for quiet-hours delivery          │
-│     Async: flushes when user returns from absence                  │
+│  On completion: OutputService.enqueue_proactive()  📤 M            │
+│                 → pub/sub → WS → user                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 8. Complete Storage Access Map
+## 7. Path D — Scheduled Prompts (60s Poll)
+
+Fired by the scheduler service when a scheduled item comes due.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ScheduledMessageProcessor(raw_input=prompt, metadata).send()      │
+│                                                                     │
+│  CHANNEL = 'scheduled'   (flat — item_id in metadata only)          │
+│  ROLE = 'scheduled'                                                 │
+│  MAX_ITERATIONS = 30, MAX_TIMEOUT = 900s                            │
+│  Excludes 'schedule' + 'goal_pursuit' from NATIVE_TOOLS             │
+│                                                                     │
+│  getUserPrompt(): scheduled: <prompt>  + ACT trail                  │
+│  postTurn(): metrics + mark executed (best-effort)                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. Storage Access Map
 
 ### MemoryStore Keys Reference
 
 ```
-Key Pattern                        TTL        Read    Written by
+Key Pattern                        TTL        Read/Written by
 ─────────────────────────────────────────────────────────────────────
-fok:{topic}                        —          A,B     FOK update service
-world_model:items                  —          A       WorldStateService
-reasoning_loop:activations         —          E       Reasoning loop
-reasoning_loop:cooldowns           —          E       Reasoning loop
-output:{request_id}                short      /ws     digest_worker
-
-PromptQueues (in-memory, thread-safe):
-prompt-queue                       —          —       run.py → digest_worker
-episodic-memory-queue              —          D       encode event handler
-semantic_consolidation_queue       —          D       episodic_memory_worker
+steer:{request_id}                 short      UserMessageProcessor._drain_steering
+sse:{request_id}                   short      OutputService / narration callback
+active_channel:default             —          reset-thread channel advancement
+fok:{channel}                      —          memory system
 ```
 
 ### SQLite Tables Reference
 
 ```
-Table                      When Written                    When Read
+Table                      When Written                      When Read
 ──────────────────────────────────────────────────────────────────────
-interaction_log            Phase D (every message)         observability endpoints
-cortex_iterations          ACT loop, Path B                observability endpoints
-episodes                   episodic_memory_worker (async)  frontal_cortex, reasoning loop
-concepts                   semantic_consolidation (async)  drift engine, context assembly
-semantic_relationships     semantic_consolidation          drift engine
-user_traits                IIP hook                        identity service
-persistent_tasks           Path D (task worker)            persistent_task_worker
-topics                     Phase A (new topic)             topic_classifier
-threads                    session management              session_service
-topic_transcript           Phase D                         context_assembly
-place_fingerprints         ambient inference               place_learning_service
+transcript                 store() → append_atomic_turn()    getPreviousMessages()
+tool_calls                 store() → append_atomic_turn()    getPreviousMessages() (ephemeral=0 only)
+compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
+interaction_log            non-turn events only              observability endpoints
+episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
+data_graph                 DataGraphService.store()           memory_skill, data_graph callers
+memory_recall_log          recall_episodes() chokepoint      meta-harness tuning
 ```
 
 ---
 
-## 9. LLM Call Inventory
+## 10. LLM Call Inventory
 
 Every LLM call in the system, with typical latency and model used.
 
 ```
-Service                      Model            Prompt                   Latency   Triggered by
-────────────────────────────────────────────────────────────────────────────────────────────────
-TopicClassifierService       lightweight      topic-classifier.md      ~100ms    Every message
-ModeRouterService (tiebreaker) ONNX           mode-tiebreaker model    ~5ms      Non-user flows only
-FrontalCortex (UNIFIED)      primary model    soul + unified.md        ~500ms-2s User path
-FrontalCortex (ACT plan)     primary model    frontal-cortex-act.md    ~500ms-2s Path C ACT loop
-FrontalCortex (terminal)     primary model    mode-specific            ~500ms-2s After ACT loop
-CriticService                lightweight      critic.md                ~200ms    Path B (optional)
-ReasoningLoop (thought)      lightweight      cognitive-drift.md       ~100ms    Path E
-PlanDecompositionService     lightweight      plan-decomposition.md    ~300ms    On task creation
-episodic_memory_worker       lightweight      episodic-memory.md       ~200ms    Phase D async
-semantic_consolidation       lightweight      semantic-extract.md      ~200ms    Phase D async
-
+Service                          Model         Prompt                   Latency   Triggered by
+─────────────────────────────────────────────────────────────────────────────────────────────
+UserMessageProcessor (unified)   primary       frontal-cortex-unified   ~500ms-2s User WebSocket path
+MessageProcessor compaction      same as JOB   COMPACTION_PROMPT        ~500ms    At 80% ctx threshold (send)
+MessageProcessor tool compact    same as JOB   TOOL_COMPACTION_PROMPT   ~200ms    Stage 1 mid-ACT compaction
+DMNMessageProcessor              primary       DMNSystemMessagePrompt   ~500ms-2s DMN idle / cadence trigger
+GoalPursuitProcessor             primary       GoalPursuitSystemMsgPr.  ~500ms-2s Per-goal daemon thread
+ScheduledMessageProcessor        primary       ScheduledSystemMsgPrompt ~500ms-2s Scheduler service (60s poll)
+episodic extraction              lightweight   (inline trigger)         ~200ms    id%25 rolling trigger (async)
 ```
 
 **Deterministic paths (zero LLM):**
-- IIP hook (regex)
-- Intent classifier
-- Empty guard / CANCEL detection (inline in unified path)
-- Mode router scoring (non-user flows)
-- Fatigue budget check in ACT loop
-- Termination checks
-- Spreading activation in drift engine
-- Plan DAG cycle detection (Kahn's)
-- FOK / warmth / memory confidence calculations
+- `_run_memory_seed()` — calls `recall_episodes()` direct (no LLM, vector search only)
+- `handleTool()` dispatch — routes to skill handler (skill may call LLM internally)
+- Compaction threshold check — `estimate_tokens()` character heuristic
+- ACT loop termination check
+- `postTurn()` synchronous services (phase, situation, adaptive signals)
+- DMN timer trigger
 
 ---
 
-## 10. Latency Profile by Path
+## 11. Latency Profile by Path
 
 ```
 Path              P50 Latency    Bottleneck
 ────────────────────────────────────────────────────────────
-Unified (user)    1s – 3s        Unified LLM call (primary model)
-Unified + skills  2s – 30s       Skill execution (varies)
-B — ACT + Tools   5s – 30s+      Tool execution (background workers)
-D — Task Worker   30min cycle    Background, no user wait
-E — Drift         300s cycle     Background, no user wait
+User (no tools)   ~0.8s – 2s     Primary model LLM call
+User + tools      2s – 30s       Tool execution + extra LLM iterations
+DMN               ~1s – 3s       Background, no user wait
+Goal pursuit      minutes – 2h   Background, no user wait
+Scheduled         ~1s – 5s       Background, no user wait
 
-Component latency breakdown (unified path, typical):
-  Context assembly     <10ms   ── MemoryStore reads (all cached)
-  Intent classify      ~5ms    ── Deterministic
-  Unified LLM call     ~800ms  ── Primary model (varies by provider)
-  Working memory write <5ms    ── MemoryStore append
-  DB event log         ~10ms   ── SQLite WAL write
-  WS publish           ~1ms    ── MemoryStore pub/sub
+Component latency (user path, typical, no tools):
+  _run_memory_seed           <10ms   ── DB vector search (episodes)
+  getUserPrompt              <5ms    ── DB reads (transcript + compaction)
+  getSystemPrompt            <5ms    ── file read + placeholder replace
+  Primary LLM call           ~800ms  ── Varies by provider / model
+  store() → atomic turn      <5ms    ── SQLite WAL write
+  postTurn() sync services   <10ms   ── MemoryStore + DB writes
   ─────────────────────────────────────────────────────────
-  Total (typical)      ~0.85s
+  Total (typical)            ~850ms
 ```
 
 ---
 
-## 11. Architectural Principles Visible in the Flow
+## 12. Architectural Principles Visible in the Flow
 
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
-| **Attention is sacred** | Unified path lets LLM decide when to act vs respond — no wasted routing overhead; ACT fatigue model prevents runaway tool chains |
-| **Judgment over activity** | Single unified LLM call for user messages; mode router handles non-user flows deterministically |
-| **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
-| **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
-| **Single authority** | Router weight mutation bounded by single regulator (24h cycle, ±0.02/day max) |
+| **Per-turn instance, no singleton** | `UserMessageProcessor(raw_input, metadata, on_narration)` constructed fresh each WebSocket message — no `.instance()`, no `.process()` |
+| **Literal-text history, not messages[]** | `getPreviousMessages()` assembles a `## Previous Messages` text block; provider sees one-element `messages[]` containing the whole body |
+| **Atomic persistence** | `store()` calls `append_atomic_turn()` — single transaction writes input row, all accumulated DTOs, assistant row together; no mid-loop DB writes |
+| **Tool agnosticism** | `getTools()` resolves `NATIVE_TOOLS` by name at call time; `find_tools` extends `_discovered_tools` dynamically; no tool-name hardcoding |
+| **Per-subclass fan-out** | `postTurn()` is where each subclass fans out its own service work; no shared event bus; `UserMessageProcessor` runs 8 services; background subclasses run 2 |
+| **Compaction is in-loop** | Two-stage mid-ACT compaction fires inside `send()` on threshold breach — Stage 1 trims tool trail in place; Stage 2 restarts the loop from a fresh checkpoint |
+| **Flat channels** | `CHANNEL` is always a fixed string (`'user'`, `'dmn'`, `'goal_pursuit'`, `'scheduled'`); pursuit_id / item_id live in `metadata` only |
 
 ---
 
-*Last updated: 2026-03-21. See `docs/INDEX.md` for the full documentation map.*
+*Last updated: 2026-04-11. See `docs/INDEX.md` for the full documentation map.*

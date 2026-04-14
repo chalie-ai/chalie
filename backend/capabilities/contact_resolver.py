@@ -1,7 +1,7 @@
 """ContactResolver — passive people index from IMAP and CalDAV data.
 
-Mines email sender headers and calendar attendees into KnowledgeService
-as ``kind='relationship'``, ``entity='person'`` entries. Provides
+Mines email sender headers and calendar attendees into DataGraphService
+as ``kind='user_specific'``, ``key='contact:<email>'`` entries. Provides
 :func:`resolve` for cross-capability identity lookup (e.g. turning a
 raw email address into a display name, or vice versa).
 """
@@ -12,33 +12,29 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_CONTACT_KEY_PREFIX = "contact:"
 
-def _get_knowledge_service():
-    """Lazy-import KnowledgeService to avoid circular imports at module load."""
-    from services.database_service import get_shared_db_service
-    from services.knowledge_service import KnowledgeService
-    return KnowledgeService(get_shared_db_service())
+
+def _dgs():
+    from services.data_graph_service import get_data_graph_service
+    return get_data_graph_service()
 
 
 def index_person(email: str, name: str | None = None, source: str = "unknown") -> None:
-    """Store or reinforce a person identity in the knowledge graph.
+    """Store or reinforce a person identity in the data graph.
 
-    Uses ``kind='relationship'``, ``entity='person'``, ``key=<email>``,
-    ``value=<display_name>``, ``decay_class='slow'``.  KnowledgeService
-    UPSERTs on ``(entity, key)`` so repeated sightings reinforce confidence.
+    Uses ``kind='user_specific'``, ``key='contact:<email>'``,
+    ``value=<display_name>``.  DataGraphService handles reinforcement on
+    repeated sightings.
     """
     display = (name or "").strip()
     if not email or "@" not in str(email) or not display:
         return
     try:
-        _get_knowledge_service().store(
-            kind="relationship",
-            entity="person",
-            key=email.strip().lower(),
+        _dgs().store(
+            kind="user_specific",
+            key=f"{_CONTACT_KEY_PREFIX}{email.strip().lower()}",
             value=display,
-            data={"source": source},
-            decay_class="slow",
-            confidence=0.6,
             source=source,
         )
     except Exception as exc:
@@ -48,19 +44,23 @@ def index_person(email: str, name: str | None = None, source: str = "unknown") -
 def resolve(identifier: str, limit: int = 5) -> list[dict]:
     """Look up person entries matching *identifier*.
 
-    Uses KnowledgeService.recall() with RRF across exact key match,
-    FTS5 full-text, and vector KNN.
+    Uses DataGraphService.recall() with RRF across key/value vec + FTS5.
     """
     if not identifier or not str(identifier).strip():
         return []
     try:
-        rows = _get_knowledge_service().recall(
+        rows = _dgs().recall(
             query=identifier.strip(),
-            kinds=["relationship"],
-            entity="person",
+            kinds=["user_specific"],
             limit=limit,
         )
-        return [{"email": r["key"], "name": r.get("value", "")} for r in rows if r.get("key")]
+        contacts = []
+        for r in rows:
+            key = r.get("key", "")
+            if key.startswith(_CONTACT_KEY_PREFIX):
+                email = key[len(_CONTACT_KEY_PREFIX):]
+                contacts.append({"email": email, "name": r.get("value", "")})
+        return contacts
     except Exception as exc:
         logger.debug("[contact_resolver] resolve(%r) failed: %s", identifier, exc)
         return []

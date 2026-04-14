@@ -75,31 +75,26 @@ class WorldAwarenessService:
     def _extract_trait_interests(self) -> list:
         """Get interest terms from high-confidence user traits."""
         try:
-            conn = self._db.get_connection()
-            cursor = conn.execute(
-                """SELECT key, value, confidence, evidence_count
-                   FROM knowledge
-                   WHERE kind IN ('trait', 'preference')
-                     AND entity = 'user'
-                     AND deleted_at IS NULL
-                     AND confidence >= ?
-                     AND evidence_count >= ?
-
-                     AND json_extract(data, '$.category') IN ('preference', 'core')
-                   ORDER BY confidence DESC""",
-                (TRAIT_MIN_CONFIDENCE, TRAIT_MIN_REINFORCEMENTS),
+            from services.data_graph_service import get_data_graph_service
+            rows = get_data_graph_service().fetch(
+                kinds=['user_specific'],
+                order_by='retrieval_weight DESC',
             )
-            traits = cursor.fetchall()
+            traits = [
+                r for r in rows
+                if (r.get('retrieval_weight') or 0) >= TRAIT_MIN_CONFIDENCE
+                and (r.get('evidence_count') or 0) >= TRAIT_MIN_REINFORCEMENTS
+            ]
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to query traits: {e}")
             return []
 
         candidates = []
         for row in traits:
-            term = row[1].strip()
+            term = (row.get('value') or '').strip()
             if len(term) < 2 or len(term) > 100:
                 continue
-            score = row[2] * row[3]  # confidence * reinforcement_count
+            score = (row.get('retrieval_weight') or 0) * (row.get('evidence_count') or 1)
             candidates.append({"term": term, "score": score, "source": "trait"})
         return candidates
 
@@ -109,14 +104,14 @@ class WorldAwarenessService:
             conn = self._db.get_connection()
             cutoff = utc_now().isoformat()
             cursor = conn.execute(
-                """SELECT topic, COUNT(*) as freq,
+                """SELECT channel, COUNT(*) as freq,
                           MAX(created_at) as last_seen
-                   FROM topic_transcript
+                   FROM transcript
                    WHERE created_at >= datetime(?, '-' || ? || ' days')
                      AND role = 'user'
-                     AND topic IS NOT NULL
-                     AND topic != ''
-                   GROUP BY topic
+                     AND channel IS NOT NULL
+                     AND channel != ''
+                   GROUP BY channel
                    ORDER BY freq DESC
                    LIMIT 20""",
                 (cutoff, TOPIC_LOOKBACK_DAYS),

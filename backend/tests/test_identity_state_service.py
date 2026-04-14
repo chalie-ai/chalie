@@ -306,19 +306,3 @@ class TestIdentityStateServiceOnboardingState:
         assert written['_onboarding'] == onboarding
         assert written['name']['display'] == 'Dylan'
 
-    def test_user_state_is_pure_telemetry(self):
-        """_get_user_state returns telemetry only, no identity data."""
-        with patch('services.client_context_service.ClientContextService') as mock_cc:
-            mock_cc.return_value.get.return_value = {
-                'timezone': 'Europe/Malta',
-                'location_name': 'Malta',
-                'device': {'class': 'iPhone'},
-            }
-
-            from services.prompt_assembly_service import PromptAssemblyService
-
-            svc = object.__new__(PromptAssemblyService)
-            result = svc._get_user_state()
-
-        assert 'Malta' in result
-        assert 'iPhone' in result

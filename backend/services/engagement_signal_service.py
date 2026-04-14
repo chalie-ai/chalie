@@ -1,16 +1,7 @@
 """
-Engagement Signal Service — Read-only peer to EngagementTracker.
+Engagement Signal Service — reads ``proactive:engagement_score`` from MemoryStore
+and formats it as a WorldState item when engagement is noteworthy (< 0.35 or > 0.88).
 
-Boundary with EngagementTracker
---------------------------------
-EngagementTracker (services/autonomous_actions/engagement_tracker.py) scores
-individual proactive-message responses and writes ``proactive:engagement_score``
-to MemoryStore.  EngagementSignalService reads that score and formats it as a
-WorldState item when engagement is noteworthy (< 0.35 or > 0.88).  It does
-**not** write to MemoryStore or score messages.
-
-Usage
------
 Instantiate once and call ``get_engagement_items()`` to obtain a (possibly
 empty) list of world-state dicts suitable for inclusion in
 ``WorldStateService.get_world_state()``.
@@ -22,7 +13,7 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ENGAGEMENT SIGNAL]"
 
-# MemoryStore key written by EngagementTracker._recompute_engagement_score()
+# MemoryStore key holding the engagement score
 _ENGAGEMENT_SCORE_KEY = "proactive:engagement_score"
 
 # Thresholds that define the "unremarkable" band — scores inside this range
@@ -70,8 +61,7 @@ class EngagementSignalService:
         """
         Return world-state items that reflect notable engagement levels.
 
-        Reads ``proactive:engagement_score`` from MemoryStore (written by
-        :class:`~services.autonomous_actions.engagement_tracker.EngagementTracker`).
+        Reads ``proactive:engagement_score`` from MemoryStore.
 
         Decision table:
 

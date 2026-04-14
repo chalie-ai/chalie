@@ -46,11 +46,20 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def db_service(tmp_path):
     """DatabaseService backed by a real SQLite file with the full schema loaded."""
-    from tests.test_helpers import load_schema_sql
+    import re
+    from pathlib import Path
+    raw = (Path(__file__).parent.parent / 'schema.sql').read_text()
+    # Strip vec0/FTS5 virtual tables — extension not available in unit-test env.
+    schema_sql = re.sub(
+        r'CREATE\s+VIRTUAL\s+TABLE\s+.*?;',
+        '',
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     db_path = str(tmp_path / "test_domain_confidence.db")
     conn = sqlite3.connect(db_path)
-    conn.executescript(load_schema_sql())
+    conn.executescript(schema_sql)
     conn.commit()
     conn.close()
 
@@ -96,32 +105,30 @@ def svc_no_cache(db_service):
 
 
 def _insert_trait(db_service, domain, confidence=0.8, category="preference"):
-    """Insert a knowledge row of kind 'trait' whose key/value/category includes the domain."""
+    """Insert a data_graph row of kind 'user_specific' whose key/value includes the domain."""
     tid = str(uuid.uuid4())
     unique_suffix = tid[:8]
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-            VALUES ('trait', 'user', ?, ?, ?, ?)
+            INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+            VALUES ('user_specific', ?, ?, ?, 'test')
             """,
-            (f"{domain}_pref_{unique_suffix}", f"likes {domain}",
-             json.dumps({"category": category}), confidence),
+            (f"{domain}_pref_{unique_suffix}", f"likes {domain}", confidence),
         )
     return tid
 
 
 def _insert_concept(db_service, domain, confidence=0.7):
-    """Insert a knowledge row of kind 'concept' whose domain field matches the domain."""
+    """Insert a data_graph row of kind 'user_specific' whose key/value includes the domain."""
     cid = str(uuid.uuid4())
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-            VALUES ('concept', 'chalie', ?, ?, ?, ?)
+            INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+            VALUES ('user_specific', ?, ?, ?, 'test')
             """,
-            (f"{domain}_concept_{cid[:6]}", f"A concept about {domain}",
-             json.dumps({"domain": domain}), confidence),
+            (f"{domain}_concept_{cid[:6]}", f"A concept about {domain}", confidence),
         )
     return cid
 
@@ -133,7 +140,7 @@ def _insert_tool_result(db_service, domain, created_at=None):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'tool_result', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain, "result": "ok"}), ts),
@@ -148,7 +155,7 @@ def _insert_rejection(db_service, domain, created_at=None):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'action_gate_rejected', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain, "reason": "low_confidence"}), ts),
@@ -163,7 +170,7 @@ def _insert_recent_activity(db_service, domain, days_ago=1):
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO interaction_log (id, event_type, topic, payload, created_at)
+            INSERT INTO interaction_log (id, event_type, channel, payload, created_at)
             VALUES (?, 'message', ?, ?, ?)
             """,
             (eid, domain, json.dumps({"domain": domain}), ts),
@@ -236,16 +243,16 @@ class TestTraitDensitySignal:
         # Should be same as fresh (no meaningful trait signal)
         assert score_with_zero_conf <= 0.20
 
-    def test_trait_matched_by_category(self, svc_no_cache, db_service):
-        """A trait is matched when category contains the domain string."""
+    def test_trait_matched_by_key(self, svc_no_cache, db_service):
+        """A trait is matched when key contains the domain string."""
         tid = str(uuid.uuid4())
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-                VALUES ('trait', 'user', ?, 'yes', ?, ?)
+                INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+                VALUES ('user_specific', ?, 'yes', ?, 'test')
                 """,
-                (f"prefers_morning_{tid[:8]}", json.dumps({"category": "scheduling"}), 0.85),
+                (f"scheduling_morning_{tid[:8]}", 0.85),
             )
         score = svc_no_cache.compute_domain_confidence("scheduling")
         assert score > 0.15
@@ -323,30 +330,29 @@ class TestConceptDepthSignal:
         assert score <= 1.0
 
     def test_soft_deleted_concepts_excluded(self, svc_no_cache, db_service):
-        """Soft-deleted concepts (deleted_at IS NOT NULL) are not counted."""
+        """Soft-deleted data_graph rows (deleted_at IS NOT NULL) are not counted."""
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO knowledge (kind, entity, key, value, data, confidence, deleted_at)
-                VALUES ('concept', 'chalie', 'deleted_concept', 'def', ?, 0.9, ?)
+                INSERT INTO data_graph (kind, key, value, retrieval_weight, source, deleted_at, active)
+                VALUES ('user_specific', 'deleted_concept', 'deleted_domain info', 0.9, 'test', ?, 0)
                 """,
-                (json.dumps({"domain": "deleted_domain"}), utc_now().isoformat()),
+                (utc_now().isoformat(),),
             )
 
         score = svc_no_cache.compute_domain_confidence("deleted_domain")
-        assert score <= 0.20  # near-zero since concept is excluded
+        assert score <= 0.20  # near-zero since row is excluded
 
-    def test_concept_matched_by_definition(self, svc_no_cache, db_service):
-        """A concept is matched when its value (definition) mentions the domain."""
+    def test_concept_matched_by_value(self, svc_no_cache, db_service):
+        """A row is matched when its value mentions the domain."""
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO knowledge (kind, entity, key, value, data, confidence)
-                VALUES ('concept', 'chalie', 'alarm_setting',
+                INSERT INTO data_graph (kind, key, value, retrieval_weight, source)
+                VALUES ('user_specific', 'alarm_setting',
                         'User prefers early morning scheduling for meetings',
-                        ?, ?)
+                        0.75, 'test')
                 """,
-                (json.dumps({"domain": "general", "concept_type": "procedure"}), 0.75),
             )
 
         score = svc_no_cache.compute_domain_confidence("scheduling")

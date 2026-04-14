@@ -66,9 +66,8 @@ class PendingContradictionService:
 
         Returns count of records processed.
         """
-        from services.knowledge_service import KnowledgeService
-
-        ks = KnowledgeService(self.db)
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
 
         records = self.db.fetch_all(
             "SELECT id, trait_a_id, trait_b_id, surfaced_at FROM pending_contradictions"
@@ -92,24 +91,25 @@ class PendingContradictionService:
             if age_seconds < 3600:
                 continue
 
-            # Apply 50% confidence decay to both traits
+            # Apply 50% retrieval_weight decay to both traits
             should_delete_record = False
             for trait_id in (trait_a_id, trait_b_id):
-                conf_rows = self.db.fetch_all(
-                    "SELECT confidence FROM knowledge WHERE rowid = ?", (trait_id,)
+                rw_rows = self.db.fetch_all(
+                    "SELECT retrieval_weight FROM data_graph WHERE id = ? AND deleted_at IS NULL",
+                    (trait_id,)
                 )
-                if not conf_rows:
+                if not rw_rows:
                     should_delete_record = True
                     continue
-                current_conf = conf_rows[0]['confidence']
-                new_conf = current_conf * 0.5
-                if new_conf <= 0.10:
-                    ks.hard_delete_by_id(trait_id)
-                    logger.info(f"{LOG_PREFIX} Hard-deleted trait id={trait_id} confidence={new_conf:.3f}")
+                current_rw = rw_rows[0]['retrieval_weight']
+                new_rw = current_rw * 0.5
+                if new_rw <= 0.10:
+                    dgs.hard_delete_by_id(trait_id)
+                    logger.info(f"{LOG_PREFIX} Hard-deleted trait id={trait_id} retrieval_weight={new_rw:.3f}")
                     should_delete_record = True
                 else:
-                    ks.update_confidence(trait_id, new_conf)
-                    logger.debug(f"{LOG_PREFIX} Decayed trait id={trait_id} confidence {current_conf:.3f} → {new_conf:.3f}")
+                    dgs.demote(trait_id, factor=0.5)
+                    logger.debug(f"{LOG_PREFIX} Decayed trait id={trait_id} retrieval_weight {current_rw:.3f} → {new_rw:.3f}")
 
             if should_delete_record:
                 self.delete(record_id)

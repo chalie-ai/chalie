@@ -1,4 +1,4 @@
--- Durable auth sessions — survive MemoryStore wipes (container restart).
+-- Migration 028: ensure auth_sessions table and index exist
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,

@@ -20,6 +20,7 @@ Blueprint prefix
 import logging
 
 from flask import Blueprint, jsonify, request
+from services.vault_service import VaultLockedError
 
 from .auth import require_auth
 
@@ -202,6 +203,9 @@ def setup_capability(cap_id: str):
         # Catch any ValueError not already handled above (e.g. from connect())
         logger.warning("[capabilities] setup '%s' ValueError: %s", cap_id, exc)
         return jsonify({"error": str(exc)}), 400
+    except VaultLockedError:
+        logger.warning("[capabilities] setup '%s' failed: vault is locked", cap_id)
+        return jsonify({"error": "Vault is locked — please log out and log back in"}), 401
     except Exception as exc:
         logger.error("[capabilities] setup_capability('%s') error: %s", cap_id, exc, exc_info=True)
         return jsonify({"error": "Internal error during capability setup"}), 500

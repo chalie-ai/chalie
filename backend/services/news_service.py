@@ -45,36 +45,6 @@ _ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#039;": 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
-# Keyword → category fast path
-_CATEGORY_KEYWORDS = {
-    "tech": ("technology", "software", "programming", "ai", "artificial intelligence",
-             "computer", "startup", "app", "cyber", "silicon valley", "coding", "developer"),
-    "business": ("stock", "market", "economy", "finance", "investment", "bank",
-                 "trade", "gdp", "inflation", "corporate", "ceo", "ipo"),
-    "sports": ("football", "soccer", "basketball", "tennis", "cricket", "nba",
-               "nfl", "fifa", "olympic", "championship", "league", "match"),
-    "science": ("science", "research", "physics", "biology", "chemistry", "space",
-                "nasa", "climate", "genome", "quantum", "discovery"),
-    "entertainment": ("movie", "film", "music", "celebrity", "netflix", "hollywood",
-                      "tv show", "album", "concert", "oscar", "grammy"),
-    "us": ("congress", "senate", "white house", "republican", "democrat", "biden",
-           "trump", "washington dc", "federal", "supreme court"),
-    "uk": ("parliament", "westminster", "boris", "labour", "tory", "nhs",
-           "downing", "british", "brexit", "commons"),
-}
-
-# Category centroid texts for embedding-based fallback
-_CATEGORY_CENTROID_TEXTS = {
-    "international": "world news global international diplomacy conflict geopolitics",
-    "us": "united states american politics congress washington government federal",
-    "uk": "united kingdom british politics parliament london government",
-    "tech": "technology software programming artificial intelligence computers startups",
-    "business": "business finance economy markets stocks investment corporate trade",
-    "science": "science research discovery physics biology space climate",
-    "sports": "sports football basketball tennis cricket championship league match",
-    "entertainment": "entertainment movies music television celebrity hollywood culture",
-}
-
 # RSS subdomain prefixes to strip when deriving domain for Google News site: filter
 _RSS_SUBDOMAIN_RE = re.compile(r"^(?:feeds?2?|rss(?:feeds?)?|rssfeeds?|feed|moxie|www\d*)\.", re.IGNORECASE)
 _PROXY_HOSTS = {"rsshub.app", "hnrss.org", "feedburner.com", "feeds.feedburner.com"}
@@ -98,7 +68,6 @@ class NewsService:
     def __init__(self):
         self._embedding_svc = None
         self._store = None
-        self._category_centroids = None
 
     # ── Lazy accessors ────────────────────────────────────────
 
@@ -290,22 +259,12 @@ class NewsService:
 
     # ── Google News ───────────────────────────────────────────
 
-    def fetch_google_news(self, query: str, source_id: str = None,
+    def fetch_google_news(self, query: str, country_code: str = "US",
                           timeout: float = PER_FEED_TIMEOUT) -> list:
         """Fetch articles from Google News RSS search endpoint."""
         store = self._get_store()
-        q_parts = [query]
-
-        # Optionally scope to a source domain
-        if source_id:
-            src = news_sources.get_source_by_id(source_id)
-            if src:
-                domain = _derive_domain(src.feed_url)
-                if domain:
-                    q_parts.append(f"site:{domain}")
-
-        full_query = " ".join(q_parts)
-        cache_key = f"news:google:{hashlib.sha256(full_query.encode()).hexdigest()[:16]}"
+        full_query = query
+        cache_key = f"news:google:{hashlib.sha256((full_query + country_code).encode()).hexdigest()[:16]}"
         cached = store.get(cache_key)
         if cached:
             try:
@@ -313,7 +272,7 @@ class NewsService:
             except Exception:
                 pass
 
-        url = f"https://news.google.com/rss/search?q={quote_plus(full_query)}&hl=en&gl=US&ceid=US:en"
+        url = f"https://news.google.com/rss/search?q={quote_plus(full_query)}&hl=en&gl={country_code}&ceid={country_code}:en"
         try:
             resp = requests.get(
                 url, timeout=timeout,
@@ -325,7 +284,6 @@ class NewsService:
             logger.debug(f"{LOG_PREFIX} Google News fetch failed: {e}")
             return []
 
-        # Google News RSS uses standard RSS format
         dummy_src = news_sources.Source("google_news", "Google News", "international", url, "US")
         articles = self._parse_rss_items(root.findall(".//item"), dummy_src)
 
@@ -442,80 +400,18 @@ class NewsService:
         result.sort(key=lambda c: c["coverage"], reverse=True)
         return result[:limit]
 
-    # ── Category routing ──────────────────────────────────────
-
-    def route_to_category(self, query: str) -> str:
-        """Route a query to the best-matching news category."""
-        q_lower = query.lower()
-
-        # Keyword fast path
-        for category, keywords in _CATEGORY_KEYWORDS.items():
-            for kw in keywords:
-                if kw in q_lower:
-                    return category
-
-        # Embedding fallback
-        try:
-            centroids = self._get_category_centroids()
-            emb_svc = self._get_embedding_service()
-            query_emb = emb_svc.generate_embedding_np(query)
-
-            best_cat = "international"
-            best_score = -1.0
-            for cat, centroid in centroids.items():
-                score = float(np.dot(query_emb, centroid))
-                if score > best_score:
-                    best_score = score
-                    best_cat = cat
-            return best_cat
-        except Exception:
-            return "international"
-
-    def _get_category_centroids(self) -> dict:
-        if self._category_centroids is None:
-            emb_svc = self._get_embedding_service()
-            self._category_centroids = {}
-            for cat, text in _CATEGORY_CENTROID_TEXTS.items():
-                self._category_centroids[cat] = emb_svc.generate_embedding_np(text)
-        return self._category_centroids
-
     # ── Convenience methods ───────────────────────────────────
 
-    def search(self, query: str, source_ids: list = None, limit: int = 10) -> list:
+    def search(self, query: str, source_ids: list = None, limit: int = 10, country_code: str = "US") -> list:
         """Search news: fetch + Google News → deduplicate → rank → slice."""
-        if not source_ids:
-            cat = self.route_to_category(query)
-            source_ids = [s.id for s in news_sources.get_sources_by_category(cat)]
-
-        articles = self.fetch_feeds(source_ids)
-        articles.extend(self.fetch_google_news(query))
+        if source_ids:
+            articles = self.fetch_feeds(source_ids)
+            articles.extend(self.fetch_google_news(query, country_code=country_code))
+        else:
+            articles = self.fetch_google_news(query, country_code=country_code)
         articles = self.deduplicate(articles)
         articles = self.rank_by_relevance(articles, query)
         return articles[:limit]
-
-    def get_digest(self, source_ids: list = None, topics: list = None,
-                   location: str = None, limit_intl: int = 10,
-                   limit_local: int = 5) -> dict:
-        """Get a news digest with international and optional local sections."""
-        if not source_ids:
-            source_ids = [s.id for s in news_sources.get_sources_by_category("international")]
-
-        intl = self.fetch_feeds(source_ids)
-        intl = self.deduplicate(intl)
-        if topics:
-            intl = self.rank_by_relevance(intl, " ".join(topics))
-        else:
-            intl.sort(key=lambda a: a.published_at, reverse=True)
-        intl = intl[:limit_intl]
-
-        local = []
-        if location:
-            local = self.fetch_google_news(f"local news {location}")
-            local = self.deduplicate(local)
-            local.sort(key=lambda a: a.published_at, reverse=True)
-            local = local[:limit_local]
-
-        return {"international": intl, "local": local}
 
 
 # ── Module-level helpers ──────────────────────────────────────

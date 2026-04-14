@@ -13,6 +13,9 @@ export class ClientHeartbeat {
     this._interval = null;
     this._lastSentAt = 0;
     this._ambientSensor = null;
+    this._authFailureCb = null;
+    this._authFailureFired = false;
+    this._onVisibilityChange = null;
   }
 
   /**
@@ -21,6 +24,15 @@ export class ClientHeartbeat {
    */
   setAmbientSensor(sensor) {
     this._ambientSensor = sensor;
+  }
+
+  /**
+   * Register a callback invoked when /auth/status reports the user is no
+   * longer authenticated (e.g., vault locked after server restart).
+   * Called at most once per heartbeat lifetime.
+   */
+  onAuthFailure(cb) {
+    this._authFailureCb = cb;
   }
 
   /**
@@ -40,6 +52,16 @@ export class ClientHeartbeat {
 
     // Then every 5 minutes
     this._interval = setInterval(() => this._sendContext(), 5 * 60 * 1000);
+
+    // Also re-check auth (+ resend context) whenever the tab becomes visible
+    // again — catches "left the page open overnight, server was restarted"
+    // without waiting up to 5 minutes for the next interval tick.
+    this._onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !this._authFailureFired) {
+        this._sendContext();
+      }
+    };
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
   }
 
   /**
@@ -50,6 +72,37 @@ export class ClientHeartbeat {
       clearInterval(this._interval);
       this._interval = null;
     }
+    if (this._onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      this._onVisibilityChange = null;
+    }
+  }
+
+  /**
+   * Poll /auth/status. If the session is no longer valid (vault locked,
+   * session expired, etc.), fire the onAuthFailure callback and stop
+   * further polling.
+   */
+  async _checkAuth() {
+    if (this._authFailureFired) return;
+    try {
+      const res = await fetch(this._buildUrl('/auth/status'), {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) return; // transient — don't trigger redirect on network glitch
+      const data = await res.json();
+      // /auth/status already forces has_session=false when vault_state==='locked',
+      // so this single check covers session expiry AND vault-locked-after-restart.
+      // Only redirect if the account still exists — a fresh install with no
+      // master account is handled by the on-boarding redirect elsewhere.
+      if (data.has_master_account && !data.has_session) {
+        this._authFailureFired = true;
+        this.stop();
+        if (typeof this._authFailureCb === 'function') {
+          this._authFailureCb();
+        }
+      }
+    } catch (_) { /* network error — ignore, will retry next beat */ }
   }
 
   /**
@@ -232,5 +285,10 @@ export class ClientHeartbeat {
     } catch (err) {
       console.warn('[CLIENT HEARTBEAT] Error sending context:', err.message);
     }
+
+    // Always verify the session is still valid — /health is public, so the
+    // POST above succeeds even after the vault locks. /auth/status is the
+    // source of truth for auth state.
+    await this._checkAuth();
   }
 }

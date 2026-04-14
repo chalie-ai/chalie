@@ -128,6 +128,24 @@ def register_websocket(sock):
             except Exception as e:
                 logger.debug(f"[WS] Failed to drain buffered notification: {e}")
 
+        # Replay any persisted capability alerts so the banner shows after a page refresh.
+        # Keys are deleted after delivery — if the capability is still down, the next
+        # monitor cycle will recreate the key.
+        try:
+            alert_keys = store.keys('capability:alert:*')
+            for key in alert_keys:
+                raw = store.get(key)
+                if raw:
+                    try:
+                        data = json.loads(raw)
+                        seq = _next_seq()
+                        data['seq'] = seq
+                        _send_json(ws, data)
+                        store.delete(key)
+                    except Exception as e:
+                        logger.debug(f"[WS] Failed to send persisted capability alert: {e}")
+        except Exception as e:
+            logger.debug(f"[WS] Failed to scan capability alerts: {e}")
 
         # Background thread: push drift/output events to the WebSocket
         ws_open = threading.Event()
@@ -213,7 +231,7 @@ def _handle_resume(ws, msg):
 
 
 def _handle_action(ws, store, msg):
-    """Handle a deterministic action button click — bypasses mode router entirely."""
+    """Handle a deterministic action button click."""
     payload = msg.get('payload', {})
     skill = payload.get('skill', '')
     if not skill:
@@ -296,9 +314,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         return  # Nothing to process — silently drop
 
     # If user sent only images with no text, provide a sensible fallback.
-    # Image resolution (polling MemoryStore for analysis results) is handled by
-    # digest_worker._resolve_image_contexts() with a longer timeout (30s).
-    # The WS handler simply passes image_ids through in metadata.
+    # Image resolution (polling MemoryStore for analysis results) is handled
+    # in UserMessageProcessor. The WS handler passes image_ids through in metadata.
     if not text and image_ids:
         text = '[Image attached]'
 
@@ -322,17 +339,75 @@ def _handle_chat(ws, store, msg, active_request=None):
     bg_error = {}
     bg_done = threading.Event()
 
-    def run_digest_fallback():
-        """Fallback: direct digest_worker dispatch if signal emission fails."""
+    def _handle_chat_background():
+        """Background thread: process user message via UserMessageProcessor and publish response."""
         try:
-            from workers.digest_worker import digest_worker
-            digest_worker(text, metadata={
+            from services.user_message_processor import UserMessageProcessor
+            from services.output_service import OutputService
+
+            metadata = {
                 'uuid': request_id,
+                'exchange_id': request_id,
                 'source': source,
                 'image_ids': image_ids,
-            })
+                'channel': 'user',
+            }
+
+            def _on_narration(text, step=0):
+                """Publish per-iteration synthesis text to the per-request SSE channel."""
+                if not request_id or not text:
+                    return
+                try:
+                    from uuid import uuid4
+                    import json as _json
+                    narration_id = f"narr_{uuid4().hex[:12]}"
+                    # Reuse the outer `store` from ws_chat (line 113) — no need
+                    # to create a second MemoryClient connection per narration
+                    # (Commit 8 critic P2-1).
+                    store.set(f"output:{narration_id}", _json.dumps({
+                        'type': 'act_narration',
+                        'text': text,
+                        'step': step,
+                    }), ex=300)
+                    store.publish(f"sse:{request_id}", narration_id)
+                except Exception as e:
+                    logger.debug(f"[WS] Narration publish failed: {e}")
+
+            proc = UserMessageProcessor(
+                raw_input=text,
+                metadata=metadata,
+                on_narration=_on_narration,
+            )
+            response = proc.send(request_id=request_id)
+
+            output_svc = OutputService()
+            output_svc.enqueue_text(
+                topic='user',
+                response=response,
+                mode='UNIFIED',
+                confidence=1.0,
+                generation_time=0.0,
+                original_metadata=metadata,
+            )
+
+            # Store result at output:{request_id} so the fallback path can
+            # find it if the pub/sub message was missed.
+            try:
+                fallback_output = {
+                    "type": "TEXT",
+                    "topic": 'user',
+                    "metadata": {
+                        "blocks": _blocks_svc.from_markdown(response),
+                        "mode": "UNIFIED",
+                        "confidence": 1.0,
+                        "metadata": metadata,
+                    },
+                }
+                store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
+            except Exception as fb_err:
+                logger.debug(f"[WS] Fallback store failed: {fb_err}")
         except Exception as e:
-            logger.error(f"[WS] digest_worker error for {request_id}: {e}", exc_info=True)
+            logger.error(f"[WS] UserMessageProcessor error for {request_id}: {e}", exc_info=True)
             bg_error['message'] = str(e)
             try:
                 store.publish(sse_channel, json.dumps({"error": str(e)}))
@@ -341,34 +416,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         finally:
             bg_done.set()
 
-    # M3: Emit user_message signal to reasoning loop priority queue.
-    # The reasoning loop enriches the message with its cognitive context
-    # (active topics, recent discoveries, identity shifts) then dispatches
-    # to digest_worker. Fail-open: if signal emission fails, fall back to
-    # direct thread spawn (pre-M3 behavior).
-    try:
-        from services.reasoning_loop_service import ReasoningSignal
-        signal = ReasoningSignal(
-            signal_type='user_message',
-            source='websocket',
-            content=text,
-            activation_energy=1.0,
-            metadata={
-                'uuid': request_id,
-                'source': source,
-                'image_ids': image_ids,
-            },
-            wrapper_id='__chat_ui__',
-        )
-        store.rpush('reasoning:priority', signal.to_json())
-        # bg_done is never set via signal path — the reasoning loop spawns
-        # its own thread which publishes to sse:{request_id} on completion.
-        # The WebSocket wait loop below listens on that pub/sub channel
-        # regardless of how digest_worker was invoked.
-    except Exception as e:
-        logger.warning(f"[WS] Signal emission failed, falling back to direct dispatch: {e}")
-        thread = threading.Thread(target=run_digest_fallback, daemon=True)
-        thread.start()
+    thread = threading.Thread(target=_handle_chat_background, daemon=True)
+    thread.start()
 
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "thinking", "seq": seq})

@@ -270,9 +270,11 @@ class TestAuthAPI:
 
     def test_register_success_returns_201(self, client, auth_db):
         """POST /auth/register creates account + vault, 201."""
-        mv = _make_vault_mock(unlocked=True)
-        with patch(_P_CREATE) as mock_session, \
-             patch(_P_VAULT, return_value=mv):
+        from services.vault_service import VaultService
+        vault = VaultService(_db_mod._shared_db_service)
+
+        with patch(_P_CREATE), \
+             patch(_P_VAULT, return_value=vault):
             resp = client.post(
                 '/auth/register',
                 json={
@@ -292,18 +294,16 @@ class TestAuthAPI:
             ).fetchone()
             assert row[0] == 1
 
-            mock_session.assert_called_once()
-            mv.initialize.assert_called_once_with(
-                "securepassword123",
-            )
-            mv.unlock.assert_called_once_with(
-                "securepassword123",
-            )
+            # Verify vault was initialized and unlocked
+            assert vault.is_unlocked() is True
 
     def test_register_vault_failure_returns_500(
         self, client, auth_db,
     ):
         """POST /auth/register returns 500 on vault failure."""
+        # To test failure, we can't use a real VaultService easily without
+        # breaking its internal state or mocking the crypto library.
+        # We'll keep a targeted mock here for this specific error path.
         mv = _make_vault_mock(
             initialize_raises=RuntimeError("disk full"),
         )
@@ -378,10 +378,13 @@ class TestAuthAPI:
         """POST /auth/login with valid creds unlocks vault."""
         pw = _seed_account(auth_db, "securepassword123")
 
-        mv = _make_vault_mock(unlocked=True, unlock_returns=True)
-        with patch(_P_CREATE) as mock_session, \
-             patch(_P_VAULT, return_value=mv), \
-             patch(_P_RECONNECT) as mock_rc:
+        from services.vault_service import VaultService
+        vault = VaultService(_db_mod._shared_db_service)
+        vault.initialize(pw)
+
+        with patch(_P_CREATE), \
+             patch(_P_VAULT, return_value=vault), \
+             patch(_P_RECONNECT):
             resp = client.post(
                 '/auth/login',
                 json={"username": "admin", "password": pw},
@@ -392,10 +395,7 @@ class TestAuthAPI:
             data = resp.get_json()
             assert data["ok"] is True
             assert data.get("vault_state") == "unlocked"
-
-            mock_session.assert_called_once()
-            mv.unlock.assert_called_once_with(pw)
-            mock_rc.assert_called_once()
+            assert vault.is_unlocked() is True
 
     def test_login_vault_unlock_false_returns_401(
         self, client, auth_db,
@@ -403,9 +403,12 @@ class TestAuthAPI:
         """POST /auth/login → 401 when unlock() returns False."""
         pw = _seed_account(auth_db, "securepassword123")
 
-        # unlock=False signals vault inconsistency
-        mv = _make_vault_mock(unlock_returns=False)
-        with patch(_P_VAULT, return_value=mv):
+        # To test a failing unlock, we use a vault initialized with a DIFFERENT password
+        from services.vault_service import VaultService
+        vault = VaultService(_db_mod._shared_db_service)
+        vault.initialize("some-other-password")
+
+        with patch(_P_VAULT, return_value=vault):
             resp = client.post(
                 '/auth/login',
                 json={"username": "admin", "password": pw},

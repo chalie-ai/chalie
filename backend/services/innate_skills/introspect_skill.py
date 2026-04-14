@@ -19,9 +19,9 @@ TOOL_SCHEMA = {
         "Perception directed inward. Returns a comprehensive internal state report "
         "covering four scopes: memory health (episode/concept counts, working memory depth, "
         "consolidation recency), skill and tool usage (table with counts and last results), "
-        "reasoning state (active focus, persistent tasks, upcoming reminders, recent autonomous "
-        "actions), and identity (relationship depth, communication style, personality, "
-        "autobiography recency). All deterministic — no LLM calls. "
+        "reasoning state (active focus, upcoming reminders, recent autonomous actions), "
+        "and identity (relationship depth, communication style, personality). "
+        "All deterministic — no LLM calls. "
         "Use when the user asks about system state, capabilities, or what you have been doing, "
         "or when you need to gauge how much context you have before deciding what to do."
     ),
@@ -30,16 +30,6 @@ TOOL_SCHEMA = {
         "properties": {},
         "required": [],
     },
-}
-
-# Identity dimension labels and their natural-language descriptions
-_DIMENSION_LABELS = {
-    'curiosity': 'curious',
-    'warmth': 'warm',
-    'assertiveness': 'assertive',
-    'skepticism': 'skeptical',
-    'playfulness': 'playful',
-    'uncertainty_tolerance': 'uncertainty-tolerant',
 }
 
 # Communication style dimension humanisation
@@ -51,12 +41,12 @@ _FORMALITY_LABELS = [(8, 'formal'), (6, 'semi-formal'), (5, 'neutral'),
                      (3, 'casual'), (1, 'very casual')]
 
 
-def handle_introspect(topic: str, params: dict) -> str:
+def handle_introspect(channel: str, params: dict) -> str:
     """
     Return a comprehensive natural-language internal state report.
 
     Args:
-        topic: Current conversation topic (unused — all scopes are global)
+        channel: Current conversation channel (unused — all scopes are global)
         params: {} (no parameters required)
 
     Returns:
@@ -138,17 +128,17 @@ def _query_last_consolidation(db) -> str:
 
 
 def _query_semantic_structure(db) -> str:
-    """Summarise the knowledge graph: top kinds, relationship count, density."""
+    """Summarise the data graph: top kinds, relationship count, density."""
     try:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Top kinds in knowledge table
+            # Top kinds in data_graph table
             cursor.execute(
                 """
                 SELECT kind, COUNT(*) AS c
-                FROM knowledge
-                WHERE deleted_at IS NULL
+                FROM data_graph
+                WHERE deleted_at IS NULL AND active=1
                 GROUP BY kind
                 ORDER BY c DESC
                 LIMIT 5
@@ -156,15 +146,17 @@ def _query_semantic_structure(db) -> str:
             )
             kind_rows = cursor.fetchall()
 
-            # Relationship count (kind='relationship')
+            # Contact count (contact: prefix in user_specific)
             cursor.execute(
-                "SELECT COUNT(*) FROM knowledge WHERE kind = 'relationship' AND deleted_at IS NULL"
+                "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' "
+                "AND key LIKE 'contact:%' AND deleted_at IS NULL AND active=1"
             )
             rel_count = cursor.fetchone()[0] or 0
 
-            # Concept count for density
+            # user_specific count for density
             cursor.execute(
-                "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"
+                "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' "
+                "AND deleted_at IS NULL AND active=1"
             )
             concept_count = cursor.fetchone()[0] or 0
 
@@ -197,9 +189,6 @@ def _query_semantic_structure(db) -> str:
 def _scope_skill_tool_usage() -> str:
     rows = []
 
-    # Innate skills via KnowledgeService (procedural entries)
-    rows.extend(_innate_skill_rows())
-
     # External tools via user_tool_preferences
     rows.extend(_external_tool_rows())
 
@@ -214,46 +203,6 @@ def _scope_skill_tool_usage() -> str:
     )
     table_rows = '\n'.join(rows)
     return f'{header}\n{table_rows}'
-
-
-def _innate_skill_rows() -> list:
-    try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
-        from services.innate_skills.registry import ALL_SKILL_NAMES, SKILL_DESCRIPTIONS
-
-        db = get_shared_db_service()
-        ks = KnowledgeService(db)
-        rows = []
-
-        for skill_name in sorted(ALL_SKILL_NAMES):
-            entry = ks.get('chalie', skill_name)
-            if not entry or entry.get('kind') != 'procedure':
-                continue
-            data = entry.get('data', {})
-            if isinstance(data, str):
-                import json
-                try:
-                    data = json.loads(data)
-                except (json.JSONDecodeError, TypeError):
-                    data = {}
-            attempts = data.get('total_attempts', 0)
-            if attempts == 0:
-                continue
-
-            successes = data.get('total_successes', 0)
-            updated_at = entry.get('updated_at', '')
-            last_used = _relative_time(updated_at) if updated_at else 'never'
-            last_result = 'success' if successes >= attempts * 0.5 else 'failed'
-            summary = SKILL_DESCRIPTIONS.get(skill_name, '')[:50]
-
-            rows.append(
-                f'| {skill_name:<15} | {summary:<50}| {attempts:<4} | {last_used:<13} | {last_result:<11} |'
-            )
-        return rows
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] innate_skill_rows failed: {e}')
-        return []
 
 
 def _external_tool_rows() -> list:
@@ -317,11 +266,6 @@ def _tool_summary(tool_name: str) -> str:
 def _scope_reasoning_state() -> str:
     parts = []
 
-    # Persistent tasks
-    task_line = _reasoning_persistent_tasks()
-    if task_line:
-        parts.append(task_line)
-
     # Upcoming reminders
     reminder_line = _reasoning_upcoming_reminders()
     if reminder_line:
@@ -336,38 +280,6 @@ def _scope_reasoning_state() -> str:
         return 'No active reasoning state.'
     return '\n'.join(parts)
 
-
-def _reasoning_persistent_tasks() -> str:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT goal, status, iterations_used "
-                "FROM persistent_tasks "
-                "WHERE status IN ('accepted', 'in_progress', 'paused') "
-                "ORDER BY updated_at DESC LIMIT 5"
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return ''
-
-        count = len(rows)
-        summaries = []
-        for row in rows:
-            goal = (row[0] or '').strip()[:40]
-            status = row[1] or ''
-            summaries.append(f"'{goal}' ({status})")
-
-        label = 'persistent task' if count == 1 else 'persistent tasks'
-        return f'{count} {label}: {", ".join(summaries)}.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_persistent_tasks failed: {e}')
-        return ''
 
 
 def _reasoning_upcoming_reminders() -> str:
@@ -399,7 +311,7 @@ def _reasoning_upcoming_reminders() -> str:
 
 
 def _reasoning_recent_actions() -> str:
-    RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
+    RELEVANT_TYPES = ('proactive_sent', 'plan_proposed')
     try:
         from services.database_service import get_shared_db_service
 
@@ -437,7 +349,6 @@ def _reasoning_recent_actions() -> str:
 def _action_label(event_type: str) -> str:
     labels = {
         'proactive_sent': 'sent proactive message',
-        'cron_tool_executed': 'ran scheduled tool',
         'plan_proposed': 'proposed plan',
     }
     return labels.get(event_type, event_type.replace('_', ' '))
@@ -458,16 +369,6 @@ def _scope_identity_snapshot() -> str:
     style_line = _identity_communication_style()
     if style_line:
         parts.append(style_line)
-
-    # Personality from identity vectors
-    personality_line = _identity_personality()
-    if personality_line:
-        parts.append(personality_line)
-
-    # Autobiography recency
-    auto_line = _identity_autobiography()
-    if auto_line:
-        parts.append(auto_line)
 
     if not parts:
         return 'Identity data unavailable.'
@@ -504,16 +405,15 @@ def _identity_relationship_depth() -> str:
 
 def _identity_communication_style() -> str:
     try:
-        from services.knowledge_service import KnowledgeService
-        from services.database_service import get_shared_db_service
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        rows = dgs.fetch(kinds=['user_specific'])
 
-        db = get_shared_db_service()
-        ks = KnowledgeService(db)
-
-        # Look up communication style traits from knowledge table
+        # Look up communication style traits from data_graph
         style = {}
         for dim in ('verbosity', 'directness', 'formality'):
-            entry = ks.get('user', f'communication_style_{dim}')
+            key = f'communication_style_{dim}'
+            entry = next((r for r in rows if r.get('key') == key), None)
             if entry and entry.get('value'):
                 try:
                     style[dim] = float(entry['value'])
@@ -551,53 +451,6 @@ def _identity_communication_style() -> str:
         return f'Communication style: {", ".join(descriptors)}.'
     except Exception as e:
         logger.debug(f'[INTROSPECT] identity_communication_style failed: {e}')
-        return ''
-
-
-def _identity_personality() -> str:
-    try:
-        from services.identity_service import IdentityService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        vectors = IdentityService(db).get_vectors()
-        if not vectors:
-            return ''
-
-        # Pick top dimensions by current_activation, threshold > 0.6
-        scored = []
-        for dim_name, data in vectors.items():
-            activation = data.get('current_activation', 0.0)
-            if activation > 0.6 and dim_name in _DIMENSION_LABELS:
-                scored.append((activation, _DIMENSION_LABELS[dim_name]))
-
-        scored.sort(reverse=True)
-        top = [label for _, label in scored[:3]]
-        if not top:
-            return ''
-        return f'Personality leans toward {" and ".join(top)}.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_personality failed: {e}')
-        return ''
-
-
-def _identity_autobiography() -> str:
-    try:
-        from services.autobiography_service import AutobiographyService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        narrative = AutobiographyService(db).get_current_narrative()
-        if not narrative:
-            return 'No self-narrative synthesized yet.'
-
-        created_at = narrative.get('created_at', '')
-        if created_at:
-            when = _relative_time(created_at)
-            return f'Self-narrative last updated {when}.'
-        return 'Self-narrative exists.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_autobiography failed: {e}')
         return ''
 
 

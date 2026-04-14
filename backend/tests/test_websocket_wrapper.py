@@ -2,13 +2,11 @@
 Unit tests for WS6 — Chat UI wrapper contract integration.
 
 Covers:
-  - ReasoningSignal created with wrapper_id='__chat_ui__' for chat messages
   - IntentService intent delivery via _drift_sender intent poll
   - __chat_ui__ auto-registration via WrapperAuthService.create_token with wrapper_id_override
   - CognitiveIntent emission in OutputService.enqueue_text
 """
 
-import json
 import sqlite3
 import contextlib
 import pytest
@@ -47,73 +45,6 @@ def _make_fake_db():
 
 
 # ---------------------------------------------------------------------------
-# Phase A — Signal path: chat messages become ReasoningSignals with wrapper_id
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestChatSignalPath:
-    """Chat messages must be expressible as ReasoningSignals tagged with __chat_ui__."""
-
-    def test_reasoning_signal_accepts_wrapper_id(self):
-        """ReasoningSignal dataclass accepts wrapper_id='__chat_ui__'."""
-        from services.reasoning_loop_service import ReasoningSignal
-
-        signal = ReasoningSignal(
-            signal_type='user_message',
-            source='websocket',
-            content='Hello, Chalie',
-            activation_energy=1.0,
-            metadata={'uuid': 'req-123', 'source': 'text', 'image_ids': []},
-            wrapper_id='__chat_ui__',
-        )
-
-        assert signal.signal_type == 'user_message'
-        assert signal.wrapper_id == '__chat_ui__'
-        assert signal.content == 'Hello, Chalie'
-        assert signal.activation_energy == 1.0
-
-    def test_reasoning_signal_serialises_wrapper_id(self):
-        """wrapper_id is preserved through JSON round-trip."""
-        from services.reasoning_loop_service import ReasoningSignal
-
-        signal = ReasoningSignal(
-            signal_type='user_message',
-            source='websocket',
-            content='test',
-            activation_energy=1.0,
-            wrapper_id='__chat_ui__',
-        )
-        payload = json.loads(signal.to_json())
-        assert payload['wrapper_id'] == '__chat_ui__'
-        assert payload['signal_type'] == 'user_message'
-
-    def test_reasoning_signal_pushed_to_priority_queue(self):
-        """_handle_chat pushes a signal with wrapper_id=__chat_ui__ to reasoning:priority."""
-        from services.memory_store import MemoryStore
-
-        store = MemoryStore()
-
-        # Simulate the signal-push portion of _handle_chat (M3 path)
-        from services.reasoning_loop_service import ReasoningSignal
-        signal = ReasoningSignal(
-            signal_type='user_message',
-            source='websocket',
-            content='integration test message',
-            activation_energy=1.0,
-            metadata={'uuid': 'req-abc', 'source': 'text', 'image_ids': []},
-            wrapper_id='__chat_ui__',
-        )
-        store.rpush('reasoning:priority', signal.to_json())
-
-        queued_raw = store.lpop('reasoning:priority')
-        assert queued_raw is not None
-        queued = json.loads(queued_raw)
-        assert queued['wrapper_id'] == '__chat_ui__'
-        assert queued['signal_type'] == 'user_message'
-
-
-# ---------------------------------------------------------------------------
 # Phase B — Intent path: present_response intents for __chat_ui__
 # ---------------------------------------------------------------------------
 
@@ -135,7 +66,7 @@ class TestIntentDelivery:
             intent_id=str(uuid.uuid4()),
             intent_type='present_response',
             target_wrapper='__chat_ui__',
-            payload={'content': 'Hello back', 'thread_id': 'thread-1', 'output_id': 'out-1', 'mode': 'UNIFIED'},
+            payload={'content': 'Hello back', 'output_id': 'out-1', 'mode': 'UNIFIED'},
             urgency='normal',
             confidence=1.0,
         )
@@ -161,7 +92,7 @@ class TestIntentDelivery:
             intent_id=intent_id,
             intent_type='present_response',
             target_wrapper='__chat_ui__',
-            payload={'content': 'Hello', 'thread_id': 't', 'output_id': 'o', 'mode': 'UNIFIED'},
+            payload={'content': 'Hello', 'output_id': 'o', 'mode': 'UNIFIED'},
         )
         svc.emit(intent)
 
@@ -178,7 +109,7 @@ class TestIntentDelivery:
             'intent_id': 'id-999',
             'intent_type': 'present_response',
             'target_wrapper': '__chat_ui__',
-            'payload': {'content': 'Hi', 'thread_id': 't', 'output_id': 'o', 'mode': 'UNIFIED'},
+            'payload': {'content': 'Hi', 'output_id': 'o', 'mode': 'UNIFIED'},
             'urgency': 'normal',
             'confidence': 1.0,
         }
@@ -222,7 +153,7 @@ class TestChatUIRegistration:
                 'intents': ['present_response', 'show_card', 'show_narration'],
             },
             permissions={
-                'query': ['situation', 'world-state', 'identity', 'memory', 'relevance'],
+                'query': ['situation', 'world-state', 'memory', 'relevance'],
                 'update': ['context', 'feedback', 'memory', 'belief'],
                 'broadcast': False,
             },

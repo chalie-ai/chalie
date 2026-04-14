@@ -12,7 +12,7 @@ from types import MappingProxyType
 
 # ── Read-only actions (no side effects) ────────────────────────────────────
 READ_ACTIONS: frozenset = frozenset({
-    'memory', 'recall', 'introspect', 'associate', 'autobiography', 'find_tools', 'goals',
+    'memory', 'recall', 'introspect', 'find_tools', 'goals',
 })
 
 # ── Deterministic actions (always succeed, high confidence) ────────────────
@@ -23,7 +23,7 @@ DETERMINISTIC_ACTIONS: frozenset = frozenset({
 # ── Safe actions (can be silently corrected by critic without user
 #    confirmation — no irreversible side effects) ──────────────────────────
 SAFE_ACTIONS: frozenset = frozenset({
-    'memory', 'recall', 'memorize', 'introspect', 'associate', 'autobiography', 'find_tools', 'goals',
+    'memory', 'recall', 'memorize', 'introspect', 'find_tools', 'goals',
 })
 
 # ── Critic-skippable reads: simple reads where the critic is skipped
@@ -38,6 +38,5 @@ ACTION_FATIGUE_COSTS: MappingProxyType = MappingProxyType({
     'memory': 0.8,
     'memorize': 0.8,
     'recall': 1.0,
-    'associate': 1.0,
     'find_tools': 0.5,
 })
