@@ -141,8 +141,8 @@ frontend/
 - **`event_bus_service.py`** — Pub/sub event routing
 
 #### Documents & File Management
-- **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic via sqlite-vec + FTS5 + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
-- **`document_processing_service.py`** — Full extraction pipeline: text extraction (pdfplumber, python-docx, python-pptx, trafilatura), regex-based metadata extraction (dates, companies, monetary values, reference numbers, document type heuristic), adaptive chunk sizing by document type, SimHash fingerprinting, language detection (langdetect)
+- **`document_service.py`** — Document CRUD, soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings). Documents on disk remain source of truth; search uses data_graph artifacts.
+- **`document_skill.py`** stores document content as overlapping 512-1024 char artifacts (`kind='document'`) in data_graph via `create_document_artifacts()`. File uploads extract text via `text_extractor.py` then follow the same artifact path. Memory recall surfaces top-3 document artifacts alongside regular knowledge.
 
 ### Innate Skills (`backend/services/innate_skills/`)
 
