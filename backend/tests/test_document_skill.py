@@ -55,22 +55,6 @@ def _make_doc(
     }
 
 
-def _make_chunk(
-    doc_id="doc00001",
-    chunk_index=0,
-    content="This warranty covers manufacturer defects for 24 months.",
-    page_number=1,
-    section_title="Coverage",
-):
-    return {
-        "document_id": doc_id,
-        "chunk_index": chunk_index,
-        "content": content,
-        "page_number": page_number,
-        "section_title": section_title,
-        "token_count": 15,
-    }
-
 
 def _make_search_result(
     doc_id="doc00001",
@@ -94,6 +78,7 @@ def _make_search_result(
 _P_DB = "services.database_service.get_shared_db_service"
 _P_DOC_SVC = "services.document_service.DocumentService"
 _P_EMB = "services.embedding_service.get_embedding_service"
+_P_DGS = "services.data_graph_service.get_data_graph_service"
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +228,6 @@ class TestViewAction:
         doc = _make_doc()
         mock_svc.get_document.return_value = None  # id lookup fails
         mock_svc.search_documents_metadata.return_value = [doc]
-        mock_svc.get_chunks_for_document.return_value = [_make_chunk()]
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
@@ -342,9 +326,6 @@ class TestRestoreAction:
 
         assert "Restored" in result
         mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
-
-
-_P_DGS = "services.data_graph_service.get_data_graph_service"
 
 
 @pytest.mark.unit

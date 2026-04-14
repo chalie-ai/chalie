@@ -85,7 +85,6 @@ class TestSchemaConvergence:
             "schema_migrations",
             "schema_version",
             "documents",
-            "document_chunks",
             "providers",
             "tool_calls",
             "compactions",
@@ -106,7 +105,6 @@ class TestSchemaConvergence:
         assert "episodes_fts" in fts_tables
         assert "knowledge_fts" in fts_tables
         assert "documents_fts" in fts_tables
-        assert "document_chunks_fts" in fts_tables
 
     def test_fresh_db_creates_vec0_virtual_tables(self, tmp_path):
         """vec0 virtual tables are created on a fresh database."""

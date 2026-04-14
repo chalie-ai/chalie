@@ -1,8 +1,9 @@
 """
 Document Service — Data access layer for document storage, retrieval, and search.
 
-Manages document metadata, chunk storage, soft delete/purge lifecycle,
-duplicate detection (hash + semantic), and hybrid search (vector + full-text + keyword boost).
+Manages document metadata, soft delete/purge lifecycle, duplicate detection
+(hash + semantic), and metadata search. Document content is stored as data_graph
+artifacts and retrieved via DocumentSkill.
 
 Documents are reference material — retrieved via the document skill (ACT loop),
 NOT injected into context assembly.
@@ -623,11 +624,10 @@ class DocumentService:
             return False
 
     def hard_delete(self, doc_id: str) -> bool:
-        """Permanently delete a document record, its chunks, and its file from disk.
+        """Permanently delete a document record and its file from disk.
 
-        Removes entries from the ``documents_vec``, ``document_chunks_vec``, and
-        ``document_chunks_fts`` virtual tables before deleting the parent row so
-        that FK-unaware virtual tables are cleaned up correctly.
+        Removes the entry from the ``documents_vec`` virtual table before deleting
+        the parent row so that FK-unaware virtual tables are cleaned up correctly.
 
         Args:
             doc_id: Eight-character hex document identifier.
@@ -641,27 +641,17 @@ class DocumentService:
                 return False
 
             def _hard_delete(did=doc_id, db=self.db):
-                """Delete all virtual-table rows then the document row; return rowcount."""
+                """Delete virtual-table rows then the document row; return rowcount."""
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     # Clean up virtual tables BEFORE the document delete —
-                    # sqlite-vec and FTS5 virtual tables don't support FK cascades.
+                    # sqlite-vec virtual tables don't support FK cascades.
                     cursor.execute(
                         "DELETE FROM documents_vec WHERE rowid = "
                         "(SELECT rowid FROM documents WHERE id = ?)",
                         (did,),
                     )
-                    cursor.execute(
-                        "DELETE FROM document_chunks_vec WHERE rowid IN "
-                        "(SELECT id FROM document_chunks WHERE document_id = ?)",
-                        (did,),
-                    )
-                    cursor.execute(
-                        "DELETE FROM document_chunks_fts WHERE rowid IN "
-                        "(SELECT id FROM document_chunks WHERE document_id = ?)",
-                        (did,),
-                    )
-                    # Delete document — CASCADE removes document_chunks rows.
+                    # Delete document record.
                     cursor.execute("DELETE FROM documents WHERE id = ?", (did,))
                     affected = cursor.rowcount
                     cursor.close()
@@ -720,240 +710,6 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] purge_expired failed: {e}")
             return 0
-
-    # ─────────────────────────────────────────────
-    # Chunk operations
-    # ─────────────────────────────────────────────
-
-    def store_chunks(self, doc_id: str, chunks: List[Dict]) -> None:
-        """Bulk-insert chunks and their embeddings into the database.
-
-        Inserts each chunk into ``document_chunks`` and, when an embedding is
-        present, into the ``document_chunks_vec`` sqlite-vec virtual table.
-
-        Args:
-            doc_id: Parent document identifier.
-            chunks: List of chunk dicts with keys ``chunk_index``, ``content``,
-                ``page_number``, ``section_title``, ``token_count``, and optional
-                ``embedding``.
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
-        if not chunks:
-            return
-
-        try:
-            # Pre-pack all embeddings on the calling thread to keep the closure small
-            prepared = []
-            for chunk in chunks:
-                raw_emb = chunk.get('embedding')
-                prepared.append({
-                    'chunk_index': chunk['chunk_index'],
-                    'content': chunk['content'],
-                    'page_number': chunk.get('page_number'),
-                    'section_title': chunk.get('section_title'),
-                    'token_count': chunk.get('token_count'),
-                    'packed_emb': _pack_embedding(raw_emb) if raw_emb is not None else None,
-                })
-
-            def _store(did=doc_id, items=prepared, db=self.db):
-                """Bulk-insert chunks and their embeddings on the write-queue thread."""
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    for item in items:
-                        cursor.execute(
-                            """INSERT INTO document_chunks
-                                   (document_id, chunk_index, content, page_number,
-                                    section_title, token_count)
-                               VALUES (?, ?, ?, ?, ?, ?)""",
-                            (
-                                did,
-                                item['chunk_index'],
-                                item['content'],
-                                item['page_number'],
-                                item['section_title'],
-                                item['token_count'],
-                            ),
-                        )
-                        rowid = cursor.lastrowid
-                        # FTS5 index for full-text search
-                        cursor.execute(
-                            "INSERT INTO document_chunks_fts (rowid, content, section_title) VALUES (?, ?, ?)",
-                            (rowid, item['content'], item.get('section_title') or ''),
-                        )
-                        if item['packed_emb'] is not None:
-                            cursor.execute(
-                                "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
-                                (rowid, item['packed_emb']),
-                            )
-                    cursor.close()
-
-            self._write_queue.submit_sync(_store)
-            logger.info(f"[DOCS] Stored {len(chunks)} chunks for document {doc_id}")
-
-        except Exception as e:
-            logger.error(f"[DOCS] store_chunks failed: {e}")
-            raise
-
-    def get_chunks_for_document(self, doc_id: str) -> List[Dict[str, Any]]:
-        """Retrieve all text chunks for a document ordered by chunk index.
-
-        Args:
-            doc_id: Parent document identifier.
-
-        Returns:
-            List of chunk dicts with keys ``id``, ``document_id``,
-            ``chunk_index``, ``content``, ``page_number``,
-            ``section_title``, and ``token_count``.
-        """
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, document_id, chunk_index, content, page_number,
-                           section_title, token_count
-                    FROM document_chunks
-                    WHERE document_id = ?
-                    ORDER BY chunk_index ASC
-                """, (doc_id,))
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [
-                {
-                    'id': row[0],
-                    'document_id': row[1],
-                    'chunk_index': row[2],
-                    'content': row[3],
-                    'page_number': row[4],
-                    'section_title': row[5],
-                    'token_count': row[6],
-                }
-                for row in rows
-            ]
-
-        except Exception as e:
-            logger.error(f"[DOCS] get_chunks_for_document failed: {e}")
-            return []
-
-    # ─────────────────────────────────────────────
-    # Hybrid search (vector + full-text + keyword)
-    # ─────────────────────────────────────────────
-
-    def search_chunks(
-        self,
-        query_embedding: list,
-        query_text: str,
-        limit: int = 5,
-        distance_threshold: float = 1.5,
-    ) -> List[Dict[str, Any]]:
-        """
-        Hybrid 2-signal search across document chunks:
-        1. Semantic vector search on chunks (sqlite-vec)
-        2. Full-text search on chunks (FTS5)
-
-        Results merged via Reciprocal Rank Fusion (RRF, k=60).
-        """
-        try:
-            import re as _re
-
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-
-                packed_query = _pack_embedding(query_embedding) if query_embedding else None
-
-                # Signal A: semantic search across all ready chunks
-                if packed_query:
-                    cursor.execute("""
-                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
-                               dc.page_number, dc.section_title, dc.token_count,
-                               v.distance, d.original_name, d.created_at
-                        FROM document_chunks_vec v
-                        JOIN document_chunks dc ON dc.rowid = v.rowid
-                        JOIN documents d ON d.id = dc.document_id
-                        WHERE v.embedding MATCH ? AND k = ?
-                          AND d.deleted_at IS NULL
-                          AND d.status = 'ready'
-                        ORDER BY v.distance
-                    """, (packed_query, limit * 3))
-                    semantic_results = cursor.fetchall()
-                else:
-                    semantic_results = []
-
-                # Signal B: FTS5 across all ready chunks
-                fts_query = _re.sub(r'[:\(\)\*\^"\\?,\'.]', ' ', query_text)
-                fts_query = _re.sub(r'\s+', ' ', fts_query).strip() or '*'
-                cursor.execute("""
-                    SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
-                           dc.page_number, dc.section_title, dc.token_count,
-                           fts.rank, d.original_name, d.created_at
-                    FROM document_chunks_fts fts
-                    JOIN document_chunks dc ON dc.rowid = fts.rowid
-                    JOIN documents d ON d.id = dc.document_id
-                    WHERE document_chunks_fts MATCH ?
-                      AND d.deleted_at IS NULL
-                      AND d.status = 'ready'
-                    ORDER BY fts.rank
-                    LIMIT ?
-                """, (fts_query, limit * 3))
-                text_results = cursor.fetchall()
-
-                cursor.close()
-
-            # RRF merge (k=60)
-            rrf_scores = {}
-            chunk_data = {}
-
-            for rank, row in enumerate(semantic_results):
-                chunk_id = row[0]
-                distance = float(row[7])
-                if distance > distance_threshold:
-                    continue
-                rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (60 + rank + 1)
-                if chunk_id not in chunk_data:
-                    chunk_data[chunk_id] = {
-                        'chunk_id': chunk_id,
-                        'document_id': row[1],
-                        'document_name': row[8] or '',
-                        'document_created_at': row[9],
-                        'chunk_index': row[2],
-                        'content': row[3],
-                        'page_number': row[4],
-                        'section_title': row[5],
-                        'token_count': row[6],
-                        'distance': distance,
-                    }
-
-            for rank, row in enumerate(text_results):
-                chunk_id = row[0]
-                rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (60 + rank + 1)
-                if chunk_id not in chunk_data:
-                    chunk_data[chunk_id] = {
-                        'chunk_id': chunk_id,
-                        'document_id': row[1],
-                        'document_name': row[8] or '',
-                        'document_created_at': row[9],
-                        'chunk_index': row[2],
-                        'content': row[3],
-                        'page_number': row[4],
-                        'section_title': row[5],
-                        'token_count': row[6],
-                        'distance': None,
-                    }
-
-            sorted_ids = sorted(rrf_scores.keys(), key=lambda cid: rrf_scores[cid], reverse=True)
-            results = []
-            for chunk_id in sorted_ids[:limit]:
-                data = chunk_data[chunk_id]
-                data['rrf_score'] = rrf_scores[chunk_id]
-                results.append(data)
-
-            return results
-
-        except Exception as e:
-            logger.error(f"[DOCS] search_chunks failed: {e}")
-            return []
 
     def search_by_metadata(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

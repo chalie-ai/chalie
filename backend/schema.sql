@@ -464,6 +464,10 @@ DROP TABLE IF EXISTS cognitive_reflexes;
 DROP TABLE IF EXISTS cognitive_reflexes_vec;
 -- triage_calibration_events table removed — TriageCalibrationService removed.
 DROP TABLE IF EXISTS triage_calibration_events;
+-- document_chunks tables removed — replaced by data_graph artifacts.
+DROP TABLE IF EXISTS document_chunks_vec;
+DROP TABLE IF EXISTS document_chunks_fts;
+DROP TABLE IF EXISTS document_chunks;
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -534,23 +538,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
     original_name, summary, clean_text, content='documents', content_rowid='rowid'
 );
 
-CREATE TABLE IF NOT EXISTS document_chunks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    page_number INTEGER,
-    section_title TEXT,
-    token_count INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks(document_id);
-
--- FTS5 for chunk search (porter stemming: "temperatures" matches "temperature")
-CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
-    content, section_title, content='document_chunks', content_rowid='id',
-    tokenize='porter unicode61'
-);
 
 -- ────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION
@@ -645,7 +632,6 @@ CREATE INDEX IF NOT EXISTS idx_goal_evidence_type ON goal_evidence(signal_type);
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);

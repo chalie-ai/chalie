@@ -54,20 +54,13 @@ def _make_doc_dict(
     }
 
 
-def _make_chunk_dict(chunk_index=0, content="Chunk content here."):
-    return {
-        "chunk_index": chunk_index,
-        "content": content,
-        "page_number": 1,
-        "section_title": "Intro",
-        "token_count": 10,
-    }
 
 
 # Patch targets — module-level helpers use direct paths, local imports use source module
 _P_SVC = "api.documents._get_document_service"
 _P_ENQ = "api.documents._process_upload"
 _P_EMB = "services.embedding_service.get_embedding_service"
+_P_DGS = "services.data_graph_service.get_data_graph_service"
 
 
 # ---------------------------------------------------------------------------
@@ -140,19 +133,26 @@ class TestDocumentsAPI:
 
     def test_get_document(self, client):
         doc = _make_doc_dict()
-        chunks = [_make_chunk_dict(0), _make_chunk_dict(1)]
-        with patch(_P_SVC) as mock_get:
+        mock_rows = [("doc:doc00001:000", "Preview text one"), ("doc:doc00001:001", "Preview text two")]
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.execute.return_value.fetchall.return_value = mock_rows
+        mock_dgs = MagicMock()
+        mock_dgs.db.connection.return_value = mock_conn
+        with patch(_P_SVC) as mock_get, \
+             patch(_P_DGS, return_value=mock_dgs):
             mock_svc = MagicMock()
             mock_get.return_value = mock_svc
             mock_svc.get_document.return_value = doc
-            mock_svc.get_chunks_for_document.return_value = chunks
 
             resp = client.get("/documents/doc00001")
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["item"]["id"] == "doc00001"
-        assert len(data["item"]["chunks"]) == 2
+        assert len(data["item"]["artifacts"]) == 2
+        assert data["item"]["artifacts"][0]["key"] == "doc:doc00001:000"
 
     def test_get_document_not_found(self, client):
         with patch(_P_SVC) as mock_get:
@@ -168,22 +168,29 @@ class TestDocumentsAPI:
     # GET /documents/<id>/content
     # ------------------------------------------------------------------
 
-    def test_get_content_paginates(self, client):
+    def test_get_content_returns_artifacts(self, client):
         doc = _make_doc_dict()
-        chunks = [_make_chunk_dict(i, f"Chunk {i}") for i in range(10)]
-        with patch(_P_SVC) as mock_get:
+        mock_rows = [("doc:doc00001:000", "Full text of artifact zero."),
+                     ("doc:doc00001:001", "Full text of artifact one.")]
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.execute.return_value.fetchall.return_value = mock_rows
+        mock_dgs = MagicMock()
+        mock_dgs.db.connection.return_value = mock_conn
+        with patch(_P_SVC) as mock_get, \
+             patch(_P_DGS, return_value=mock_dgs):
             mock_svc = MagicMock()
             mock_get.return_value = mock_svc
             mock_svc.get_document.return_value = doc
-            mock_svc.get_chunks_for_document.return_value = chunks
 
-            resp = client.get("/documents/doc00001/content?page=1&per_page=3")
+            resp = client.get("/documents/doc00001/content")
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["total_chunks"] == 10
-        assert data["page"] == 1
-        assert len(data["chunks"]) == 3
+        assert data["total_artifacts"] == 2
+        assert data["artifacts"][0]["key"] == "doc:doc00001:000"
+        assert data["artifacts"][0]["content"] == "Full text of artifact zero."
 
     def test_get_content_not_found(self, client):
         with patch(_P_SVC) as mock_get:

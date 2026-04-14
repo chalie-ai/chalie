@@ -131,6 +131,11 @@ def db(_db_template, tmp_path):
     original = _db_mod._shared_db_service
     _db_mod._shared_db_service = db_service
 
+    # Reset data_graph singleton so it binds to this test's db on next access
+    import services.data_graph_service as _dgs_mod
+    original_dgs_instance = _dgs_mod._instance
+    _dgs_mod._instance = None
+
     conn = db_service._get_connection()
     try:
         yield conn
@@ -139,6 +144,7 @@ def db(_db_template, tmp_path):
         _db_mod._shared_db_service = original
         _db_mod._local.conn = None
         _db_mod._local.db_path = None
+        _dgs_mod._instance = original_dgs_instance
 
 
 # ── Non-DB mock fixtures ──────────────────────────────────────────

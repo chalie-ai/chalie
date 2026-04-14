@@ -74,6 +74,7 @@ class TestDecayEngineService:
              patch.object(svc, '_process_pending_reconsolidation',   side_effect=_record('reconsolidation', 0)), \
              patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
+             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
@@ -108,6 +109,7 @@ class TestDecayEngineService:
              patch.object(svc, '_process_pending_reconsolidation',   side_effect=_record('reconsolidation', 0)), \
              patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
+             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \

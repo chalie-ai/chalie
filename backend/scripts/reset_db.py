@@ -29,7 +29,6 @@ DATA_TABLES = [
     'list_items',
     'list_events',
     'documents',
-    'document_chunks',
     'place_fingerprints',
     'tool_performance_metrics',
 ]

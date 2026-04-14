@@ -195,8 +195,7 @@ def _slice_relevance(query: str) -> dict:
 
     # Goal matching via goals table
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+        db = _get_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

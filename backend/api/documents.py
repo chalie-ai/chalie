@@ -292,18 +292,22 @@ def list_documents():
 @documents_bp.route("/documents/<doc_id>", methods=["GET"])
 @require_session
 def get_document(doc_id):
-    """Get document metadata + first N chunks."""
+    """Get document metadata + first N data_graph artifact previews."""
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
             return jsonify({"error": "Not found"}), 404
 
-        # Include first 5 chunks
-        chunks = svc.get_chunks_for_document(doc_id)[:5]
-
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        with dgs.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT key, substr(value, 1, 200) as preview FROM data_graph WHERE source=? AND active=1 ORDER BY key LIMIT 5",
+                (f'document:{doc_id}',),
+            ).fetchall()
         result = _serialize_doc(doc)
-        result['chunks'] = chunks
+        result['artifacts'] = [{'key': r[0], 'preview': r[1]} for r in rows]
         return jsonify({"item": result})
     except Exception as e:
         logger.error(f"[DOCS API] get_document error: {e}")
@@ -313,26 +317,26 @@ def get_document(doc_id):
 @documents_bp.route("/documents/<doc_id>/content", methods=["GET"])
 @require_session
 def get_document_content(doc_id):
-    """Get full extracted text, paginated by chunks."""
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 20))
-
+    """Get full document text reconstructed from data_graph artifacts."""
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
             return jsonify({"error": "Not found"}), 404
 
-        chunks = svc.get_chunks_for_document(doc_id)
-        start = (page - 1) * per_page
-        end = start + per_page
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        with dgs.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
+                (f'document:{doc_id}',),
+            ).fetchall()
 
+        artifacts = [{'key': r[0], 'content': r[1]} for r in rows]
         return jsonify({
             "document_id": doc_id,
-            "total_chunks": len(chunks),
-            "page": page,
-            "per_page": per_page,
-            "chunks": chunks[start:end],
+            "total_artifacts": len(artifacts),
+            "artifacts": artifacts,
         })
     except Exception as e:
         logger.error(f"[DOCS API] get_content error: {e}")

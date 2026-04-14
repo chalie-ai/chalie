@@ -59,7 +59,7 @@ def data_summary():
                 "scheduled_items",
                 "lists", "list_items", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
-                "documents", "document_chunks",
+                "documents",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -100,7 +100,7 @@ def export_data():
         "place_fingerprints",
         "interaction_log", "cortex_iterations",
         "user_tool_preferences",
-        "documents", "document_chunks", "watched_folders",
+        "documents", "watched_folders",
     ]
 
     store_patterns = [
