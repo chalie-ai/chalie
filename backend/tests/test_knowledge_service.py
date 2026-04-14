@@ -469,7 +469,7 @@ class TestStrengthen:
                   value='a fact with episodes')
 
         before = svc.get('user', 'strengthen_ep_test')
-        assert svc.strengthen('user', 'strengthen_ep_test', episode_id='ep-2') is True
+        assert svc.strengthen('user', 'strengthen_ep_test') is True
 
         after = svc.get('user', 'strengthen_ep_test')
         assert after['evidence_count'] == before['evidence_count'] + 1
@@ -1196,7 +1196,7 @@ class TestDoc2QueryService:
 
         assert errors == []
         # All threads should get the same instance
-        assert len(set(id(i) for i in instances)) == 1
+        assert len({id(i) for i in instances}) == 1
 
 
 # ── Doc2Query wiring — additional store() paths ───────────────────────────────

@@ -369,10 +369,7 @@ class UserMessageProcessor(MessageProcessor):
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
                 if trigger:
-                    save_svc.emit_save_card(
-                        save_flag.get('topic', channel),
-                        save_flag['content_type'],
-                    )
+                    save_svc.emit_save_card(save_flag['content_type'])
                     save_svc.clear_flag()
 
             # 3b: Response-side saveable content detection — sets new flag.

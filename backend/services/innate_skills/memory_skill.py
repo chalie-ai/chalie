@@ -194,7 +194,7 @@ def _handle_reflect(channel: str, params: dict) -> str:
     top = raw_episodes[0]
 
     # 2. Expand up to 3 layers deep
-    supporting = _expand_episode_layers(top, channel)
+    supporting = _expand_episode_layers(top)
 
     # 3. Data graph (limit 2)
     dg_hits, _ = _search_data_graph(query, 2)
@@ -202,7 +202,7 @@ def _handle_reflect(channel: str, params: dict) -> str:
     return _format_reflect(query, top, supporting, dg_hits)
 
 
-def _expand_episode_layers(episode: Dict, channel: str) -> List[Dict]:
+def _expand_episode_layers(episode: Dict) -> List[Dict]:
     """Recursively expand an episode graph up to 3 levels deep.
 
     Walks consolidated_from (child episodes) recursively. Transcript

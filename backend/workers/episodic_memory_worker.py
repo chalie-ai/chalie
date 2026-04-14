@@ -36,7 +36,7 @@ def _safe_json_load(text: str) -> dict | None:
         return None
 
 
-def _check_goal_emergence(episode_id: str, gist: str, embedding: list, channel: str):
+def _check_goal_emergence(episode_id: str, gist: str, embedding: list):
     """
     Check if a newly created episode clusters with existing episodes,
     suggesting an emergent goal.

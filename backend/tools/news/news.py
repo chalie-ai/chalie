@@ -33,13 +33,13 @@ def _get_service():
     return _service
 
 
-def _resolve_country_code(country: str) -> str:
+def _resolve_country_code(country) -> str:
     if not country:
         return "US"
     return _COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
 
 
-def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict:
+def execute(topic: str, params: dict, config=None, telemetry=None) -> dict:
     query = (params.get("query") or "").strip()
     if not query:
         return {"text": "", "error": "A 'query' parameter is required."}

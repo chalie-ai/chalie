@@ -223,7 +223,7 @@ class TestEmotionalRanges:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_valence'] == 1.0
+        assert result[0]['emotional_valence'] == pytest.approx(1.0)
 
     def test_emotional_valence_negative_clamped(self):
         episode = _make_valid_episode([1])
@@ -233,7 +233,7 @@ class TestEmotionalRanges:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_valence'] == -1.0
+        assert result[0]['emotional_valence'] == pytest.approx(-1.0)
 
     def test_emotional_arousal_clamped_to_zero_to_one(self):
         episode = _make_valid_episode([1])
@@ -243,7 +243,7 @@ class TestEmotionalRanges:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_arousal'] == 0.0
+        assert result[0]['emotional_arousal'] == pytest.approx(0.0)
 
     def test_emotional_arousal_above_one_clamped(self):
         episode = _make_valid_episode([1])
@@ -253,7 +253,7 @@ class TestEmotionalRanges:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_arousal'] == 1.0
+        assert result[0]['emotional_arousal'] == pytest.approx(1.0)
 
     def test_none_emotional_values_stay_none(self):
         episode = _make_valid_episode([1])

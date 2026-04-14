@@ -450,7 +450,7 @@ class TestRunConsolidationCycle:
             "SELECT storage_strength FROM episodes WHERE consolidated_from != '[]'"
         ).fetchone()
         # 4.0 + 4.0 + 4.0 = 12.0, capped at 10.0
-        assert row[0] == 10.0
+        assert row[0] == pytest.approx(10.0)
 
     def test_storage_strength_sum_below_cap(self, mem_db, fake_db):
         """Super episode storage_strength = exact sum when below 10."""

@@ -33,7 +33,7 @@ def _ensure_services_package_loadable():
             continue
         try:
             with open(mod_path, 'rb'):
-                pass
+                pass  # intentional: just tests that the file is readable
             continue  # readable — nothing to do
         except PermissionError:
             pass  # fall through to stub insertion

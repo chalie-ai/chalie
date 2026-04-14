@@ -14,7 +14,7 @@ SELECT topic, role, content, created_at FROM (
     WHERE response_message IS NOT NULL AND response_message != ''
 )
 WHERE NOT EXISTS (SELECT 1 FROM topic_transcript LIMIT 1)
-ORDER BY created_at;
+ORDER BY created_at ASC;
 
 -- 2. Backfill missing job→provider assignments for existing installs.
 -- Covers all current cognitive jobs to prevent fallback warnings.

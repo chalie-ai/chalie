@@ -278,8 +278,8 @@ class TestStore:
         assert result['key'] == 'user_name'
         assert result['value'] == 'Dylan'
         assert result['evidence_count'] == 1
-        assert result['retrieval_weight'] == 1.0
-        assert result['storage_strength'] == 0.5
+        assert result['retrieval_weight'] == pytest.approx(1.0)
+        assert result['storage_strength'] == pytest.approx(0.5)
 
         # Row persisted in DB
         row_id = _rid(result)
@@ -314,7 +314,7 @@ class TestStore:
         r2 = svc.store(KIND_USER_SPECIFIC, 'favourite_food', 'pizza')
         assert r2 is not None
         assert r2['evidence_count'] == 2
-        assert r2['retrieval_weight'] == 1.0
+        assert r2['retrieval_weight'] == pytest.approx(1.0)
         assert r2['storage_strength'] > r1['storage_strength']
 
         # Only one active row for this key — first_seen_at must be unchanged
@@ -730,7 +730,7 @@ class TestReinforceAndDemote:
         raw = _raw_row(db_service, rowid)
         assert raw['evidence_count'] == 3
         assert raw['storage_strength'] > 0.6
-        assert raw['retrieval_weight'] == 1.0
+        assert raw['retrieval_weight'] == pytest.approx(1.0)
 
     def test_reinforce_storage_strength_capped_at_one(self, svc, db_service):
         """storage_strength never exceeds 1.0 after reinforcement."""

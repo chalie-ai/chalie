@@ -1,6 +1,7 @@
 """Generate search queries for knowledge entries using doc2query T5 model."""
 
 import logging
+import math
 import os
 import threading
 import time
@@ -178,7 +179,7 @@ class Doc2QueryService:
     def _sample_top_p(logits, top_p=0.95, temperature=1.0):
         import numpy as np
 
-        if temperature != 1.0:
+        if not math.isclose(temperature, 1.0):
             logits = logits / temperature
 
         logits = logits - logits.max()
@@ -194,7 +195,7 @@ class Doc2QueryService:
         filtered_probs = sorted_probs * mask
         filtered_probs /= filtered_probs.sum()
 
-        chosen_idx = np.random.choice(len(filtered_probs), p=filtered_probs)
+        chosen_idx = np.random.default_rng().choice(len(filtered_probs), p=filtered_probs)
         return int(sorted_indices[chosen_idx])
 
 

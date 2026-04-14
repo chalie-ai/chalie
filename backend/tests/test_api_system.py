@@ -193,7 +193,7 @@ class TestSystemAPI:
         assert data['concepts'] == 8
         assert data['traits'] == 8
         assert data['facts'] == 8  # falls back to traits when no facts:* keys
-        assert data['avg_episode_activation'] == 1.0
+        assert data['avg_episode_activation'] == pytest.approx(1.0)
         assert data['avg_trait_strength'] == pytest.approx(0.6234, abs=0.001)
         assert data['working_memory'] == 8
         assert 'generated_at' in data

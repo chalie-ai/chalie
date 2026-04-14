@@ -542,7 +542,7 @@ class TestEmotionalClampingEdgeCases:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_valence'] == 1.0
+        assert result[0]['emotional_valence'] == pytest.approx(1.0)
 
     def test_extremely_large_negative_valence_clamped_to_minus_one(self):
         """A very large negative valence is clamped to -1.0."""
@@ -553,7 +553,7 @@ class TestEmotionalClampingEdgeCases:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_valence'] == -1.0
+        assert result[0]['emotional_valence'] == pytest.approx(-1.0)
 
     def test_extremely_large_arousal_clamped_to_one(self):
         """A very large arousal value is clamped to 1.0."""
@@ -564,7 +564,7 @@ class TestEmotionalClampingEdgeCases:
 
         result = svc.extract(entries, 'test')
 
-        assert result[0]['emotional_arousal'] == 1.0
+        assert result[0]['emotional_arousal'] == pytest.approx(1.0)
 
     def test_numeric_string_valence_is_cast_and_clamped(self):
         """A numeric string like '0.5' is cast to float and preserved in range."""

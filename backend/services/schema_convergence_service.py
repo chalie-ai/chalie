@@ -182,7 +182,7 @@ class SchemaConvergenceService:
                 result[name] = self._normalize_ddl(ddl)
         return result
 
-    def _normalize_ddl(self, ddl: str) -> str:
+    def _normalize_ddl(self, ddl) -> str:
         """Lowercase, collapse whitespace, strip IF NOT EXISTS for comparison."""
         if not ddl:
             return ""
@@ -548,7 +548,7 @@ class SchemaConvergenceService:
         ddl = match.group(1).strip()
         # Replace hardcoded vec0 dimension with configured value
         if self._embedding_dimensions != 768 and "vec0" in ddl.lower():
-            ddl = re.sub(r"float\[768\]", f"float[{self._embedding_dimensions}]", ddl)
+            ddl = ddl.replace("float[768]", f"float[{self._embedding_dimensions}]")
         return ddl
 
     def _restore_if_not_exists(self, normalized_ddl: str, obj_type: str) -> str:

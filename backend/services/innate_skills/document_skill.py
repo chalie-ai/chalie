@@ -104,17 +104,17 @@ def handle_document(channel: str, params: dict) -> str:
 
 def _dispatch(service, action: str, params: dict, channel: str) -> str:
     if action == 'search':
-        return _handle_search(service, params, channel)
+        return _handle_search(service, params)
     elif action == 'list':
-        return _handle_list(service, channel)
+        return _handle_list(service)
     elif action == 'view':
-        return _handle_view(service, params, channel)
+        return _handle_view(service, params)
     elif action == 'delete':
-        return _handle_delete(service, params, channel)
+        return _handle_delete(service, params)
     elif action == 'restore':
-        return _handle_restore(service, params, channel)
+        return _handle_restore(service, params)
     elif action == 'create':
-        return _handle_create(service, params, channel)
+        return _handle_create(service, params)
     else:
         valid = 'search, list, view, delete, restore, create'
         return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
@@ -137,7 +137,7 @@ def _resolve_document(service, params: dict) -> Optional[dict]:
     return None
 
 
-def _handle_search(service, params: dict, channel: str) -> str:
+def _handle_search(service, params: dict) -> str:
     query = params.get('query', '').strip()
     if not query:
         return "[DOCUMENT] 'query' is required for search."
@@ -187,7 +187,7 @@ def _handle_search(service, params: dict, channel: str) -> str:
         return f"[DOCUMENT] Search failed: {e}"
 
 
-def _handle_list(service, channel: str) -> str:
+def _handle_list(service) -> str:
     """List all confirmed (ready) documents."""
     docs = service.get_all_documents()
     docs = [d for d in docs if d.get('status') == 'ready']
@@ -223,7 +223,7 @@ def _handle_list(service, channel: str) -> str:
     return '\n'.join(lines)
 
 
-def _handle_view(service, params: dict, channel: str) -> str:
+def _handle_view(service, params: dict) -> str:
     """
     Phase 2: Load full document content for analysis.
 
@@ -300,7 +300,7 @@ def _handle_view(service, params: dict, channel: str) -> str:
     return '\n'.join(lines)
 
 
-def _handle_delete(service, params: dict, channel: str) -> str:
+def _handle_delete(service, params: dict) -> str:
     """Soft-delete a document and cascade-delete its data_graph artifacts."""
     doc = _resolve_document(service, params)
     if not doc:
@@ -319,7 +319,7 @@ def _handle_delete(service, params: dict, channel: str) -> str:
     return f"[DOCUMENT] Deleted '{doc['original_name']}'. {deleted_count} artifact(s) removed."
 
 
-def _handle_restore(service, params: dict, channel: str) -> str:
+def _handle_restore(service, params: dict) -> str:
     """Restore a soft-deleted document."""
     doc_id = params.get('id', '').strip()
     name = params.get('name', '').strip()
@@ -434,7 +434,7 @@ def create_document_artifacts(doc_id: str, text_content: str) -> int:
     return len(artifacts)
 
 
-def _handle_create(service, params: dict, channel: str) -> str:
+def _handle_create(service, params: dict) -> str:
     """Create a new document from text content.
 
     Required params:

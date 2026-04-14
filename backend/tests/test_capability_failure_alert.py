@@ -38,7 +38,7 @@ class _StubCapability(AbstractCapability):
         return {"id": self._cap_id, "name": self._cap_name}
 
     def configure(self, credentials):
-        pass
+        pass  # stub — no configuration needed for this test double
 
     def connect(self):
         self._connected = True
@@ -54,7 +54,7 @@ class _StubCapability(AbstractCapability):
         return []
 
     def _do_monitor(self):
-        pass
+        pass  # stub — monitoring not exercised in this test
 
     def act(self, action, params):
         return {"success": True}

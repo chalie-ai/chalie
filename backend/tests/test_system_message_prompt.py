@@ -35,11 +35,11 @@ class TestImport:
             GoalPursuitSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
         )
-        assert SystemMessagePrompt is not None
-        assert UnifiedSystemMessagePrompt is not None
-        assert DMNSystemMessagePrompt is not None
-        assert GoalPursuitSystemMessagePrompt is not None
-        assert ScheduledSystemMessagePrompt is not None
+        assert callable(SystemMessagePrompt)
+        assert callable(UnifiedSystemMessagePrompt)
+        assert callable(DMNSystemMessagePrompt)
+        assert callable(GoalPursuitSystemMessagePrompt)
+        assert callable(ScheduledSystemMessagePrompt)
 
     def test_import_does_not_hit_database(self):
         """Importing the module must not open any DB connections."""
@@ -140,7 +140,7 @@ class TestUnifiedSystemMessagePrompt:
         """UnifiedSystemMessagePrompt() takes no parameters."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         sut = UnifiedSystemMessagePrompt()
-        assert sut is not None
+        assert isinstance(sut, UnifiedSystemMessagePrompt)
 
     def test_init_rejects_unexpected_kwargs(self):
         """Passing legacy parameters (original_prompt / thread_id) must raise.

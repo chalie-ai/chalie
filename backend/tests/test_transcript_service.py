@@ -198,7 +198,7 @@ class TestKeywordSearch:
             append('topic-a', 'user', 'Malta weather')
 
         results = _keyword_search('topic-a', 'Malta', limit=5)
-        assert results[0]['topic'] == 'topic-a'
+        assert results[0]['channel'] == 'topic-a'
 
     def test_keyword_search_date_range(self, db):
         from services.transcript_service import _keyword_search, append

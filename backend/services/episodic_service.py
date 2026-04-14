@@ -113,7 +113,7 @@ class EpisodicService:
                         if new_span > 0 and overlap_count / new_span > 0.5:
                             cursor.close()
                             logging.info(
-                                f"Skipping duplicate episode for transcript range "
+                                "Skipping duplicate episode for transcript range "
                                 f"[{transcript_id_start}, {transcript_id_end}] — "
                                 f">50% overlap with existing episode {overlap_row[0]}"
                             )

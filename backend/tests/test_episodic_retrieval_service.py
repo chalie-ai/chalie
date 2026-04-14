@@ -494,8 +494,8 @@ class TestAdaptiveRadius:
         for count, expected in test_cases:
             captured = {}
 
-            def capture(embedding, text, er, telemetry=None, _expected=expected):
-                captured['er'] = er
+            def capture(embedding, text, er, telemetry=None, _expected=expected, _captured=captured):
+                _captured['er'] = er
                 return []
 
             with patch.object(svc, '_generate_embedding', return_value=[0.0] * 256), \

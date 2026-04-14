@@ -286,7 +286,7 @@ class SaveSuggestionService:
     # Suggestion emission
     # ──────────────────────────────────────────────────────────────────────────
 
-    def emit_save_card(self, topic: str, content_type: str) -> None:
+    def emit_save_card(self, content_type: str) -> None:
         """Save suggestion (card system removed -- detection still works, UI pending)."""
         logger.info(f"{LOG_PREFIX} Save suggestion detected: {content_type}")
 

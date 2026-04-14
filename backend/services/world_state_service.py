@@ -17,6 +17,7 @@ Ambient context, active topics, and reasoning focus are also surfaced.
 import json
 import logging
 import math
+from typing import Optional
 
 from services.embedding_utils import pack_embedding
 import time
@@ -75,7 +76,7 @@ class WorldStateService:
     def get_world_state(
         self,
         topic: str,
-        message_embedding: list = None,
+        message_embedding: Optional[list] = None,
     ) -> str:
         """
         Generate world state context from salient signals.

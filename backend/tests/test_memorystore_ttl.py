@@ -328,7 +328,7 @@ class TestSystemAPIChannelResetTTL:
     """Channel reset sets active_channel:{id} with ex=604800."""
 
     def test_reset_thread_sets_ttl_on_channel_key(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _db_conn, store = authed_client
 
         channel_id = "default"
         # Seed an existing channel so the reset branch fires

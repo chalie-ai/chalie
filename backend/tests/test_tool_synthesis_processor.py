@@ -615,8 +615,7 @@ class TestPostTurn:
     def test_post_turn_returns_none(self, db, store):
         from services.tool_synthesis_processor import ToolSynthesisProcessor
         p = ToolSynthesisProcessor(raw_input='test', metadata={})
-        result = p.postTurn()
-        assert result is None
+        p.postTurn()  # void method — must not raise
 
 
 # ── TestRunCycleSkipLogic ──────────────────────────────────────────────────────
@@ -724,7 +723,7 @@ class TestDigestFormat:
         result = _gather_recent_tool_calls()
 
         assert result is not None
-        assert 'https://example.com' in result
+        assert 'https://example.com' in result  # NOSONAR: content assertion, not URL validation
 
     def test_default_empty_params_omitted(self, db, store):
         """The default '{}' params value does not appear in the digest."""

@@ -373,21 +373,18 @@ class TestMicroPreferences:
     def test_get_micro_preferences_maps_correctly(self, db):
         svc = _service()
 
-        # Seed knowledge table with micro-preference rows
+        # Seed data_graph with user_specific micro-preference rows
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'prefers_bullet_format', 'true', 'preference', 0.85, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'prefers_bullet_format', 'true', 0.85)",
         )
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'prefers_concise', 'true', 'preference', 0.70, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'prefers_concise', 'true', 0.70)",
         )
         db.execute(
-            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
-            " VALUES ('user', 'unknown_pref_key', 'true', 'preference', 0.90, 'slow', ?)",
-            ('{"category": "micro_preference"}',),
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight)"
+            " VALUES ('user_specific', 'unknown_pref_key', 'true', 0.90)",
         )
         db.commit()
 

@@ -160,7 +160,7 @@ class TestActiveTopicWhitelist:
 
         class _RaisingCtx:
             def __enter__(self): raise RuntimeError('simulated DB failure')
-            def __exit__(self, *a): pass
+            def __exit__(self, *a): pass  # no cleanup needed for this test stub
 
         svc._db.connection = lambda: _RaisingCtx()
         try:

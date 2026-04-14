@@ -292,8 +292,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
-        # store() writes assistant row; _uid is set by send(), not store()
-        assert True
+        # store() writes assistant row; no exception = pass
 
     def test_send_is_wired_in_commit_6(self, db):
         """send() calls provider, does not raise NotImplementedError."""
@@ -313,8 +312,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
-        # store() writes assistant row; _uid is set by send(), not store()
-        assert True
+        # store() writes assistant row; no exception = pass
 
     def test_send_accepts_request_id(self, db):
         """send() accepts an optional request_id parameter."""
@@ -334,8 +332,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             p.store('response text')
-        # store() writes assistant row; _uid is set by send(), not store()
-        assert True
+        # store() writes assistant row; no exception = pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +475,7 @@ class TestGetPreviousMessagesChannelIsolation:
 
     def test_test_channel_does_not_see_user_channel(self, db):
         self._seed_all_channels(db)
-        p = _GPMFakeProcessor.make()  # CHANNEL='test_channel'
+        p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.getPreviousMessages()
         assert 'Content from user' not in result
         assert f'Content from {_GPM_CHANNEL}' in result
@@ -813,7 +810,7 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
         )
         db.commit()
 
-        p = _GPMFakeProcessor.make()  # CHANNEL='test_channel'
+        p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.getPreviousMessages()
         assert result == ''
 

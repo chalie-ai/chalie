@@ -156,7 +156,7 @@ class TestGetSnapshot:
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
         assert pressure["trait_count"] == 15
-        assert pressure["avg_activation"] == 1.0
+        assert pressure["avg_activation"] == pytest.approx(1.0)
 
     def test_queue_depth_from_store(self, mock_store):
         """Queue depths reflect actual list lengths in MemoryStore."""

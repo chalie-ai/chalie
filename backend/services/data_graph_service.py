@@ -173,7 +173,7 @@ class DataGraphService:
 
     # ── Private helpers ───────────────────────────────────────────────
 
-    def _row_to_dict(self, row) -> dict:
+    def _row_to_dict(self, row) -> Optional[dict]:
         if row is None:
             return None
         return dict(row)
@@ -343,7 +343,7 @@ class DataGraphService:
 
     # ── store() ───────────────────────────────────────────────────────
 
-    def store(self, kind: str, key: str, value: str, *, source=None) -> dict:
+    def store(self, kind: str, key: str, value: str, *, source=None) -> Optional[dict]:
         if kind not in VALID_KINDS:
             logger.warning("[DATA GRAPH] Invalid kind '%s'", kind)
             return None

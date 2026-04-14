@@ -828,7 +828,7 @@ class KnowledgeService:
 
     # ── Core: strengthen ───────────────────────────────────────────────
 
-    def strengthen(self, entity: str, key: str, episode_id: str = None) -> bool:
+    def strengthen(self, entity: str, key: str) -> bool:
         """Increment evidence_count, boost confidence with diminishing returns."""
         try:
             with self.db.connection() as conn:

@@ -111,9 +111,9 @@ def handle_scheduler(channel: str, params: dict) -> str:
     if action == "create":
         result = _create(channel, params)
     elif action == "list":
-        result = _list(channel, params)
+        result = _list(params)
     elif action == "cancel":
-        result = _cancel(channel, params)
+        result = _cancel(params)
     else:
         result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
 
@@ -267,7 +267,7 @@ def _create(channel: str, params: dict) -> dict:
         return {"status": "error", "error": f"Create failed: {e}"}
 
 
-def _list(channel: str, params: dict) -> dict:
+def _list(params: dict) -> dict:
     """List pending scheduled items, optionally filtered by time_range."""
     try:
         from services.database_service import get_shared_db_service
@@ -372,7 +372,7 @@ def _resolve_time_range(time_range: str):
         return None, None, "All Scheduled Items"
 
 
-def _cancel(channel: str, params: dict) -> dict:
+def _cancel(params: dict) -> dict:
     """Cancel a scheduled item by item_id or by fuzzy message match."""
     try:
         from services.database_service import get_shared_db_service

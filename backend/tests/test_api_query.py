@@ -567,7 +567,7 @@ class TestMemoryEndpoint:
                     client.get("/api/query/memory?q=test&k=3")
 
         call_kwargs = ep_instance.retrieve_episodes.call_args[1]
-        assert call_kwargs["radius"] == 0.5
+        assert call_kwargs["radius"] == pytest.approx(0.5)
 
     def test_service_unavailable_returns_empty(self, cookie_app):
         with cookie_app.test_client() as client:
