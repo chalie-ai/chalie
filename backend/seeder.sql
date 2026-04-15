@@ -42,10 +42,3 @@ FROM (
     UNION ALL SELECT 'failure-analysis'
 )
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;
-
--- v0.3.3: Purge innate skill rows from tool_capability_profiles.
--- Innate skills are pre-injected from TOOL_SCHEMA — they never use profiles.
--- Their rows pollute the k-NN window for find_tools.
-DELETE FROM tool_capability_profiles WHERE tool_type = 'skill';
-DELETE FROM tool_capability_profiles_vec
-    WHERE rowid NOT IN (SELECT rowid FROM tool_capability_profiles);
