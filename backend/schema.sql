@@ -52,51 +52,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     gist, action, content='episodes', content_rowid='rowid'
 );
 
--- ────────────────────────────────────────────────────────────────
--- CORTEX ITERATIONS — ACT loop audit trail
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS cortex_iterations (
-    id TEXT PRIMARY KEY,
-    channel TEXT NOT NULL,
-    exchange_id TEXT,
-    session_id TEXT,
-    loop_id TEXT NOT NULL,
-    iteration_number INTEGER NOT NULL,
-    started_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT,
-    execution_time_ms REAL,
-    chosen_mode TEXT,
-    chosen_confidence REAL,
-    alternative_paths TEXT,                   -- JSONB
-    iteration_cost REAL,
-    diminishing_cost REAL,
-    uncertainty_cost REAL,
-    action_base_cost REAL,
-    total_cost REAL,
-    cumulative_cost REAL,
-    efficiency_score REAL,
-    expected_confidence_gain REAL,
-    task_value REAL,
-    future_leverage REAL,
-    effort_estimate TEXT,
-    effort_multiplier REAL,
-    iteration_penalty REAL,
-    exploration_bonus REAL,
-    net_value REAL,
-    decision_override INTEGER,               -- BOOLEAN
-    overridden_mode TEXT,
-    termination_reason TEXT,
-    actions_executed TEXT,                    -- JSONB
-    action_count INTEGER,
-    action_success_count INTEGER,
-    frontal_cortex_response TEXT,             -- JSONB
-    config_snapshot TEXT,                     -- JSONB
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_loop ON cortex_iterations(loop_id, iteration_number);
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_channel ON cortex_iterations(channel, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(exchange_id);
+-- cortex_iterations removed — CortexIterationService not wired into runtime.
 
 -- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
@@ -454,6 +410,9 @@ CREATE TABLE IF NOT EXISTS place_fingerprints (
 );
 
 CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
+
+-- cortex_iterations removed — CortexIterationService not wired into runtime.
+DROP TABLE IF EXISTS cortex_iterations;
 
 -- persistent_tasks table removed — replaced by goal_pursuit skill + GoalPursuitProcessor.
 DROP TABLE IF EXISTS persistent_tasks;
