@@ -27,7 +27,6 @@ backend/
 ├── listeners/         # Input handlers (direct REST API)
 ├── api/               # REST API blueprints (conversation, memory, proactive, privacy, system)
 ├── configs/           # Configuration files (connections.json, agent configs, generated/)
-├── migrations/        # Database migrations
 ├── prompts/           # LLM prompt templates (mode-specific)
 ├── tools/             # First-party tool modules
 ├── tests/             # Test suite
@@ -134,7 +133,7 @@ frontend/
 
 #### Infrastructure
 - **`database_service.py`** — SQLite connection management (WAL mode, thread-local connections)
-- **`schema_convergence_service.py`** — Declarative schema management: converges live DB to match `schema.sql` (tables, columns, indexes, virtual tables)
+- **`schema_convergence_service.py`** — Bidirectional declarative schema management: converges live DB to match `schema.sql` (tables, columns, indexes, virtual tables). Adds anything missing AND drops anything no longer declared. Destructive ops gated by env flag `CHALIE_SCHEMA_ALLOW_DESTRUCTIVE` (default on). Replaces the deleted `migrations/` folder — schema.sql is the only source of truth for shape
 - **`memory_store.py`** — MemoryStore: thread-safe, in-memory key-value store with Redis-compatible API
 - **`config_service.py`** — JSON file config loader (agent configs, connection names); runtime config (port, host) managed by `runtime_config.py` via CLI args
 - **`output_service.py`** — Output queue management for responses
@@ -419,7 +418,7 @@ A daemon thread pings all paired interfaces every 30 seconds. After 3 consecutiv
 - `services/interface_registry_service.py` — Core lifecycle management
 - `api/interfaces.py` — REST API for pairing, listing, removal
 - `workers/interface_health_worker.py` — Health monitor daemon
-- `migrations/012_interfaces.sql` — Database schema
+- `schema.sql` — Interface tables (interfaces, interface_tools); shape converged on every boot by `SchemaConvergenceService`
 
 ## Glossary
 

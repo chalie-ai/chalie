@@ -2,9 +2,10 @@
 Tests for SchemaConvergenceService — declarative SQLite schema management.
 
 Covers: fresh DB convergence, idempotency, missing table/column/index recovery,
-virtual table creation, seed data, migration stamping, pending migration execution,
+virtual table creation, seed data, bidirectional convergence (auto-drop of
+stale tables/columns/indexes/virtual tables), env-flag safety gate,
 embedding dimension override, DDL comment handling, shadow table exclusion,
-stale column logging, and job-assignment convergence (orphan-pruning).
+and job-assignment convergence (orphan-pruning).
 
 Each test method creates its own temp DB via tmp_path — no shared state.
 """
@@ -82,7 +83,6 @@ class TestSchemaConvergence:
             "transcript",
             "goals",
             "settings",
-            "schema_migrations",
             "schema_version",
             "documents",
             "providers",
@@ -92,6 +92,12 @@ class TestSchemaConvergence:
         }
         missing = expected - tables
         assert not missing, f"Missing tables after fresh convergence: {missing}"
+
+        # schema_migrations belongs to the deleted migration scaffolding —
+        # bidirectional convergence must NOT recreate it.
+        assert "schema_migrations" not in tables, (
+            "schema_migrations should not exist — migration scaffolding was removed"
+        )
 
     def test_fresh_db_creates_fts5_virtual_tables(self, tmp_path):
         """FTS5 virtual tables are created on a fresh database."""
@@ -396,83 +402,147 @@ class TestSchemaConvergence:
 
         assert count == 1, f"Expected 1 api_key row, got {count}"
 
-    # ── 9. Migration stamping on fresh DB ─────────────────────────────────────
+    # ── 9. Bidirectional convergence — drop stale schema objects ──────────────
 
-    def test_all_migration_files_stamped_on_fresh_db(self, tmp_path):
-        """All *.sql files in the migrations directory are recorded in schema_migrations on fresh install."""
+    def test_stale_table_is_dropped(self, tmp_path):
+        """A table present in the live DB but not in schema.sql is dropped on converge."""
         db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        svc.converge()
-
-        migrations_dir = svc._migrations_dir
-        expected_files = {f.name for f in sorted(migrations_dir.glob("*.sql"))}
-
-        with db.connection() as conn:
-            rows = conn.execute("SELECT filename FROM schema_migrations").fetchall()
-
-        stamped = {r[0] for r in rows}
-        missing = expected_files - stamped
-        assert not missing, f"These migration files were not stamped: {missing}"
-
-    def test_migration_stamp_count_matches_file_count(self, tmp_path):
-        """The number of stamped migrations equals the number of *.sql files."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        svc.converge()
-
-        migrations_dir = svc._migrations_dir
-        file_count = len(list(migrations_dir.glob("*.sql")))
-
-        with db.connection() as conn:
-            stamped_count = conn.execute(
-                "SELECT COUNT(*) FROM schema_migrations"
-            ).fetchone()[0]
-
-        assert stamped_count == file_count
-
-    # ── 10. Pending migration execution ───────────────────────────────────────
-
-    def test_pending_migration_is_applied(self, tmp_path):
-        """A migration not yet in schema_migrations is applied on the next converge."""
-        db = _make_db(tmp_path)
-        # First full convergence — stamps all migrations
         _converge(db)
 
-        # Remove one stamped migration to simulate it being unapplied
         with db.connection() as conn:
-            conn.execute(
-                "DELETE FROM schema_migrations WHERE filename='028_auth_sessions.sql'"
+            conn.execute("CREATE TABLE legacy_widget (id INTEGER PRIMARY KEY, name TEXT)")
+            assert "legacy_widget" in _table_names(conn)
+
+        _converge(db)
+
+        with db.connection() as conn:
+            assert "legacy_widget" not in _table_names(conn), (
+                "Stale table legacy_widget should have been auto-dropped"
             )
-            # Also verify the target table still exists (the migration is idempotent)
-            tables_before = _table_names(conn)
 
-        assert "auth_sessions" in tables_before
-
-        # Re-converge — pending migration should re-run (idempotently)
-        _converge(db)
-
-        with db.connection() as conn:
-            row = conn.execute(
-                "SELECT filename FROM schema_migrations WHERE filename='028_auth_sessions.sql'"
-            ).fetchone()
-
-        assert row is not None, "028_auth_sessions.sql was not re-stamped after pending run"
-
-    def test_already_applied_migrations_not_re_run(self, tmp_path):
-        """Migrations already in schema_migrations are not applied again."""
+    def test_stale_column_is_dropped(self, tmp_path):
+        """A column added to a live table but absent from schema.sql is dropped on converge."""
         db = _make_db(tmp_path)
         _converge(db)
 
         with db.connection() as conn:
-            before = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+            conn.execute("ALTER TABLE settings ADD COLUMN obsolete_flag INTEGER DEFAULT 0")
+            assert "obsolete_flag" in _column_names(conn, "settings")
 
-        # Second convergence — no new migrations should be added
         _converge(db)
 
         with db.connection() as conn:
-            after = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+            assert "obsolete_flag" not in _column_names(conn, "settings"), (
+                "Stale column settings.obsolete_flag should have been auto-dropped"
+            )
 
-        assert before == after, "Extra migration rows added on re-convergence"
+    def test_stale_index_is_dropped(self, tmp_path):
+        """An index present in the live DB but not in schema.sql is dropped."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        with db.connection() as conn:
+            conn.execute("CREATE INDEX idx_obsolete_settings_value ON settings(value)")
+            assert "idx_obsolete_settings_value" in _index_names(conn)
+
+        _converge(db)
+
+        with db.connection() as conn:
+            assert "idx_obsolete_settings_value" not in _index_names(conn), (
+                "Stale index should have been auto-dropped"
+            )
+
+    def test_stale_virtual_table_is_dropped(self, tmp_path):
+        """A vec0 virtual table not declared in schema.sql is dropped."""
+        db = _make_db(tmp_path)
+        _converge(db, embedding_dimensions=256)
+
+        with db.connection() as conn:
+            conn.execute("CREATE VIRTUAL TABLE obsolete_vec USING vec0(embedding float[256])")
+            assert "obsolete_vec" in _virtual_table_names(conn)
+
+        _converge(db, embedding_dimensions=256)
+
+        with db.connection() as conn:
+            assert "obsolete_vec" not in _virtual_table_names(conn), (
+                "Stale virtual table obsolete_vec should have been auto-dropped"
+            )
+
+    def test_protected_sqlite_tables_never_dropped(self, tmp_path):
+        """sqlite_sequence and sqlite_* tables must survive bidirectional convergence."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        # Create a row that triggers sqlite_sequence creation
+        with db.connection() as conn:
+            conn.execute("INSERT INTO settings (key, value) VALUES ('trigger_seq_test', 'x')")
+
+        _converge(db)  # second pass should not even attempt to drop sqlite_*
+
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'sqlite_%'"
+            ).fetchall()
+        # sqlite_sequence is created lazily by SQLite; just confirm convergence
+        # did not blow up trying to manipulate it.
+        for (name,) in rows:
+            assert name.startswith("sqlite_"), f"Unexpected system table name: {name}"
+
+    def test_fts5_shadow_tables_survive_convergence(self, tmp_path):
+        """FTS5 shadow tables (xxx_data, xxx_idx, etc.) must not be dropped as 'stale'."""
+        db = _make_db(tmp_path)
+        _converge(db)
+        _converge(db)  # second run — would drop shadow tables if filter is broken
+
+        with db.connection() as conn:
+            tables = _table_names(conn)
+
+        # episodes_fts is a virtual table; its shadow tables (episodes_fts_data,
+        # episodes_fts_idx, episodes_fts_docsize, episodes_fts_config) must survive.
+        for shadow in ("episodes_fts_data", "episodes_fts_idx", "episodes_fts_docsize"):
+            assert shadow in tables, (
+                f"Shadow table {shadow} was incorrectly dropped — virtual table cleanup logic broke"
+            )
+
+    def test_destructive_disabled_via_env_flag(self, tmp_path, monkeypatch):
+        """Setting CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=0 prevents drops; logs WARNING instead."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        with db.connection() as conn:
+            conn.execute("CREATE TABLE legacy_widget (id INTEGER PRIMARY KEY)")
+
+        monkeypatch.setenv("CHALIE_SCHEMA_ALLOW_DESTRUCTIVE", "0")
+        _converge(db)
+
+        with db.connection() as conn:
+            assert "legacy_widget" in _table_names(conn), (
+                "legacy_widget should NOT be dropped when destructive ops are disabled"
+            )
+
+    def test_convergence_idempotent_with_no_drift(self, tmp_path):
+        """Converging an already-converged DB is a no-op (no spurious drops)."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        with db.connection() as conn:
+            tables_before = _table_names(conn)
+            indexes_before = _index_names(conn)
+
+        _converge(db)
+
+        with db.connection() as conn:
+            tables_after = _table_names(conn)
+            indexes_after = _index_names(conn)
+
+        assert tables_before == tables_after, (
+            f"Tables changed on idempotent re-converge: "
+            f"added={tables_after - tables_before}, removed={tables_before - tables_after}"
+        )
+        assert indexes_before == indexes_after, (
+            f"Indexes changed on idempotent re-converge: "
+            f"added={indexes_after - indexes_before}, removed={indexes_before - indexes_after}"
+        )
 
     # ── 11. Embedding dimensions override ─────────────────────────────────────
 
@@ -610,36 +680,30 @@ class TestSchemaConvergence:
         overlap = set(normal_tables.keys()) & set(virtual_tables.keys())
         assert not overlap, f"Virtual tables found in normal table set: {overlap}"
 
-    # ── 14. Stale column logging ──────────────────────────────────────────────
+    # ── 14. Stale column drop logging ─────────────────────────────────────────
 
-    def test_stale_column_is_logged_not_dropped(self, tmp_path, caplog):
-        """An extra column in a live table that is absent from desired schema is
-        logged at DEBUG level but NOT dropped."""
+    def test_stale_column_drop_emits_warning_log(self, tmp_path, caplog):
+        """When a stale column is dropped, a WARNING-level log is emitted naming the column."""
         db = _make_db(tmp_path)
         _converge(db)
 
-        # Add a column that is not in schema.sql
         with db.connection() as conn:
             conn.execute(
                 "ALTER TABLE lists ADD COLUMN legacy_field TEXT DEFAULT NULL"
             )
 
-        # Re-converge with DEBUG logging captured
-        with caplog.at_level(logging.DEBUG, logger="services.schema_convergence_service"):
+        with caplog.at_level(logging.WARNING, logger="services.schema_convergence_service"):
             _converge(db)
 
-        # Column must still be present (not dropped)
         with db.connection() as conn:
             cols = _column_names(conn, "lists")
+        assert "legacy_field" not in cols, "Stale column should be dropped by bidirectional convergence"
 
-        assert "legacy_field" in cols, "Stale column was dropped — it should be preserved"
-
-        # A debug log entry mentioning the stale column should exist
-        stale_logs = [
+        warn_logs = [
             r.message for r in caplog.records
-            if "stale" in r.message.lower() and "legacy_field" in r.message
+            if r.levelname == "WARNING" and "legacy_field" in r.message and "DROPPED" in r.message
         ]
-        assert stale_logs, "No debug log entry found for the stale column"
+        assert warn_logs, "Expected WARNING log entry for the dropped stale column"
 
     # ── 15. DDL normalization ─────────────────────────────────────────────────
 
@@ -670,25 +734,45 @@ class TestSchemaConvergence:
         assert svc._normalize_ddl("") == ""
         assert svc._normalize_ddl(None) == ""
 
-    # ── 16. Drop statements ───────────────────────────────────────────────────
+    # ── 16. Removed-table cleanup via bidirectional convergence ───────────────
 
-    def test_drop_statements_executed_during_convergence(self, tmp_path):
-        """Tables listed in DROP TABLE IF EXISTS blocks in schema.sql are removed."""
+    def test_legacy_tables_absent_after_fresh_convergence(self, tmp_path):
+        """Tables that no longer exist in schema.sql must not appear after convergence.
+
+        Replaces the old DROP-TABLE-statement scaffolding: bidirectional
+        convergence handles removal automatically.  Use historically-removed
+        tables as canaries — if these reappear, schema.sql has regressed.
+        """
         db = _make_db(tmp_path)
         _converge(db)
 
-        # schema.sql drops cognitive_reflexes and triage_calibration_events
         with db.connection() as conn:
             tables = _table_names(conn)
 
-        assert "cognitive_reflexes" not in tables
-        assert "triage_calibration_events" not in tables
+        for legacy in (
+            "cognitive_reflexes",
+            "triage_calibration_events",
+            "persistent_tasks",
+            "document_chunks",
+            "cortex_iterations",
+        ):
+            assert legacy not in tables, (
+                f"Removed table {legacy!r} must not be created on fresh convergence"
+            )
 
-    def test_drop_statements_applied_even_if_table_does_not_exist(self, tmp_path):
-        """DROP TABLE IF EXISTS is safe when the table never existed — no error raised."""
+    def test_legacy_table_present_in_live_db_is_dropped(self, tmp_path):
+        """If a legacy table somehow exists in the live DB, convergence drops it."""
         db = _make_db(tmp_path)
-        # Should complete without raising even though dropped tables don't exist yet
         _converge(db)
+
+        with db.connection() as conn:
+            conn.execute("CREATE TABLE persistent_tasks (id INTEGER PRIMARY KEY)")
+            assert "persistent_tasks" in _table_names(conn)
+
+        _converge(db)
+
+        with db.connection() as conn:
+            assert "persistent_tasks" not in _table_names(conn)
 
     # ── 17. _is_fresh_db ──────────────────────────────────────────────────────
 

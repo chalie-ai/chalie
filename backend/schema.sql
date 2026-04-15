@@ -411,22 +411,11 @@ CREATE TABLE IF NOT EXISTS place_fingerprints (
 
 CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
 
--- cortex_iterations removed — CortexIterationService not wired into runtime.
-DROP TABLE IF EXISTS cortex_iterations;
-
--- persistent_tasks table removed — replaced by goal_pursuit skill + GoalPursuitProcessor.
-DROP TABLE IF EXISTS persistent_tasks;
-DROP TABLE IF EXISTS persistent_tasks_vec;
-
--- cognitive_reflexes table removed — CognitiveReflexService removed.
-DROP TABLE IF EXISTS cognitive_reflexes;
-DROP TABLE IF EXISTS cognitive_reflexes_vec;
--- triage_calibration_events table removed — TriageCalibrationService removed.
-DROP TABLE IF EXISTS triage_calibration_events;
--- document_chunks tables removed — replaced by data_graph artifacts.
-DROP TABLE IF EXISTS document_chunks_vec;
-DROP TABLE IF EXISTS document_chunks_fts;
-DROP TABLE IF EXISTS document_chunks;
+-- Note: tables that disappear from this schema are dropped automatically by
+-- SchemaConvergenceService on the next boot.  No explicit DROP statements
+-- needed here.  Past examples: cortex_iterations, persistent_tasks,
+-- cognitive_reflexes, triage_calibration_events, document_chunks,
+-- knowledge_vec, scheduled_items_vec, lists_vec, goals_vec.
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -508,18 +497,10 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- ────────────────────────────────────────────────────────────────
--- SCHEMA MIGRATIONS TRACKING
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT UNIQUE NOT NULL,
-    applied_at TEXT DEFAULT (datetime('now'))
-);
-
--- uncertainties table removed — dropped by migration 025, replaced by
--- pending_contradictions. Migration 009 is now a no-op so this table
--- no longer needs to exist in schema.sql for the migration chain.
+-- schema_migrations table removed — SchemaConvergenceService is now the
+-- single source of truth.  schema.sql declares the desired shape and the
+-- service converges the live DB to match.  Numbered migration files are
+-- gone; legacy schema_migrations rows are auto-dropped on the next boot.
 
 -- ────────────────────────────────────────────────────────────────
 -- PENDING CONTRADICTIONS — trait contradictions awaiting user resolution
