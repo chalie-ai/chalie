@@ -78,7 +78,7 @@ def handle_find_tools(channel: str, params: dict) -> dict:
             cursor.execute(
                 """
                 SELECT tcp.tool_name, tcp.tool_type, tcp.short_summary,
-                       tcp.full_profile, tcp.domain, tcp.effort,
+                       tcp.full_profile, tcp.effort,
                        v.distance, tcp.keywords
                 FROM tool_capability_profiles_vec v
                 JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
@@ -103,7 +103,7 @@ def handle_find_tools(channel: str, params: dict) -> dict:
     # Debug: log raw k-NN results with distances
     for row in rows:
         name = row[0] if not isinstance(row, dict) else row['tool_name']
-        dist = row[6] if not isinstance(row, dict) else row['distance']
+        dist = row[5] if not isinstance(row, dict) else row['distance']
         logger.info(f"{LOG_PREFIX} k-NN: {name} distance={dist:.4f}")
 
     # Filter to only registered tools (not innate skills) and check availability
@@ -152,10 +152,9 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
         tool_type = row[1] if not isinstance(row, dict) else row['tool_type']
         short_summary = row[2] if not isinstance(row, dict) else row['short_summary']
         full_profile = row[3] if not isinstance(row, dict) else row['full_profile']
-        domain = row[4] if not isinstance(row, dict) else row['domain']
-        effort = row[5] if not isinstance(row, dict) else row['effort']
-        distance = row[6] if not isinstance(row, dict) else row['distance']
-        keywords = row[7] if not isinstance(row, dict) else row.get('keywords', '')
+        effort = row[4] if not isinstance(row, dict) else row['effort']
+        distance = row[5] if not isinstance(row, dict) else row['distance']
+        keywords = row[6] if not isinstance(row, dict) else row.get('keywords', '')
 
         # Skip innate skills — they're already injected
         if tool_type == 'skill':
@@ -184,7 +183,6 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
             'tool_name': tool_name,
             'short_summary': short_summary,
             'full_profile': full_profile,
-            'domain': domain,
             'effort': effort,
             'score': score,
             'distance': distance,
@@ -236,7 +234,7 @@ def _fallback_keyword_search(query: str, limit: int) -> dict:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT tool_name, tool_type, short_summary, domain, effort
+                SELECT tool_name, tool_type, short_summary, effort
                 FROM tool_capability_profiles
                 WHERE tool_type = 'tool'
                   AND (short_summary LIKE ? OR full_profile LIKE ? OR tool_name LIKE ?)
