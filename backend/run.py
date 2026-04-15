@@ -161,6 +161,29 @@ def main():
     except Exception as _triage_err:
         logger.warning(f"[Startup] triage column drop skipped: {_triage_err}")
 
+    # Purge innate skill rows from tool_capability_profiles (v0.3.3)
+    # Skill rows pollute the k-NN window for find_tools — they're never written by current code.
+    try:
+        _skill_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-profile-purge-skills-v1.done',
+        )
+        if not _os.path.exists(_skill_sentinel):
+            with database_service.connection() as _conn:
+                _conn.execute(
+                    "DELETE FROM tool_capability_profiles WHERE tool_type = 'skill'"
+                )
+                _conn.execute(
+                    "DELETE FROM tool_capability_profiles_vec "
+                    "WHERE rowid NOT IN (SELECT rowid FROM tool_capability_profiles)"
+                )
+                _conn.commit()
+            with open(_skill_sentinel, 'w') as _f:
+                _f.write('done')
+            logger.info("[Startup] Purged innate skill rows from tool_capability_profiles")
+    except Exception as _skill_err:
+        logger.warning(f"[Startup] skill profile purge skipped: {_skill_err}")
+
     # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
