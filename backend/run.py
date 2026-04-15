@@ -135,6 +135,32 @@ def main():
     except Exception as _drop_err:
         logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
+    # Drop dead triage columns from tool_capability_profiles (v0.3.3)
+    # find_tools uses short_summary + full_profile only; triage system removed.
+    try:
+        _triage_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-profile-drop-triage-cols-v1.done',
+        )
+        if not _os.path.exists(_triage_sentinel):
+            _triage_cols = ['usage_scenarios', 'anti_scenarios', 'complementary_skills',
+                            'triage_triggers', 'domain', 'descriptor']
+            with database_service.connection() as _conn:
+                _live_cols = [r[1] for r in _conn.execute(
+                    "PRAGMA table_info(tool_capability_profiles)"
+                ).fetchall()]
+                for _col in _triage_cols:
+                    if _col in _live_cols:
+                        _conn.execute(
+                            f"ALTER TABLE tool_capability_profiles DROP COLUMN {_col}"
+                        )
+                _conn.commit()
+            with open(_triage_sentinel, 'w') as _f:
+                _f.write('done')
+            logger.info("[Startup] Dropped dead triage columns from tool_capability_profiles")
+    except Exception as _triage_err:
+        logger.warning(f"[Startup] triage column drop skipped: {_triage_err}")
+
     # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
