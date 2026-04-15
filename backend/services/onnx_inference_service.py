@@ -52,6 +52,7 @@ DEFAULT_MODELS_REPO = "chalie-ai/models"
 # Each entry: (subdirectory_name, github_repo_or_None_for_default, release_asset_prefix)
 MODEL_REGISTRY = [
     ("contradiction", None, "contradiction"),
+    ("thinking_level", None, "thinking_level"),
 ]
 
 # Shared base model config

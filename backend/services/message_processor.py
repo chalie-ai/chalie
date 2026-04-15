@@ -162,6 +162,8 @@ class MessageProcessor:
         self._act_trail: list[str] = []
         self._discovered_tools: list[dict] = []
         self._uid: int | None = None
+        self._thinking_level: str = 'medium'
+        self._thinking_plan: str | None = None
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
@@ -226,7 +228,8 @@ class MessageProcessor:
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
         body = self.SYSTEM_PROMPT_CLASS().getPrompt()
-        return f"{self.getUserDefinition()}\n\n{body}"
+        assembled = f"{self.getUserDefinition()}\n\n{body}"
+        return self._apply_thinking_level(assembled)
 
     def getTools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
@@ -528,6 +531,7 @@ class MessageProcessor:
             self._dispatcher = ActDispatcherService(execution_gate=False)
 
             self._run_memory_seed()
+            self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
             raw_limit = Providers.instance().get_context_limit(job=self.JOB)
             context_limit: int = (
@@ -965,6 +969,276 @@ class MessageProcessor:
         ToolRenderAndRecordService (ephemeral=False).
         """
         pass
+
+    # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
+
+    def _run_thinking_gate(self) -> None:
+        """Classify deliberation depth for this turn; persist on the input row.
+
+        No-op for non-user channels (classifier is OOD for autonomous flows).
+        All exceptions trapped — gate failure must never kill the turn.
+        Result stored on self._thinking_level and self._thinking_plan,
+        and written to transcript.thinking_level for self._uid so future turns
+        can read it as prev_level.
+        """
+        if self.CHANNEL != 'user':
+            return
+
+        try:
+            from services.thinking_level_classifier_service import (
+                ThinkingLevelClassifierService,
+            )
+
+            prev_level = self._read_prev_thinking_level()
+            result = ThinkingLevelClassifierService().classify(
+                self._raw_input, prev_level=prev_level,
+            )
+            # Capture RAW classifier output before any runtime degradation.
+            # Persisted to the input row so the next turn's sticky-fallback
+            # sees what the classifier said, not a downstream failure
+            # (planner unavailable, etc.). Prevents silent cascades across
+            # turns when the planner is temporarily down.
+            raw_level = result.get('level', 'medium')
+            self._thinking_level = raw_level
+
+            if self._thinking_level == 'high':
+                self._thinking_plan = self._generate_thinking_plan()
+                if not self._thinking_plan:
+                    # plan failed → degrade current turn to medium
+                    # (raw_level stays 'high' in the persist call below)
+                    self._thinking_level = 'medium'
+
+            self._persist_thinking_level_on_input_row(raw_level)
+
+        except Exception as exc:
+            logger.info(
+                "[THINKING] gate failed (%s) — defaulting to medium", exc
+            )
+            self._thinking_level = 'medium'
+            self._thinking_plan = None
+
+    def _read_prev_thinking_level(self) -> str:
+        """Read the most recent user-row thinking_level for this channel.
+
+        Returns 'none' on first turn or when nothing classified yet.
+        """
+        from services.database_service import get_shared_db_service
+
+        try:
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT thinking_level FROM transcript "
+                    "WHERE channel = ? AND role = 'user' "
+                    "AND thinking_level IS NOT NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (self.CHANNEL,),
+                ).fetchone()
+            if row and row[0] in ('low', 'medium', 'high'):
+                return row[0]
+        except Exception as exc:
+            logger.debug("[THINKING] prev-level read failed: %s", exc)
+        return 'none'
+
+    def _persist_thinking_level_on_input_row(self, level: str) -> None:
+        """Update transcript row self._uid with the given classifier level.
+
+        ``level`` is the RAW classifier prediction (pre-degradation). The
+        caller passes it explicitly so that next-turn sticky-fallback reads
+        the classifier's intent, not the current turn's runtime-degraded
+        value (e.g. 'high' that degraded to 'medium' because the planner
+        LLM was unavailable).
+        """
+        if self._uid is None:
+            return
+        from services.database_service import get_shared_db_service
+        try:
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE transcript SET thinking_level = ? WHERE id = ?",
+                    (level, self._uid),
+                )
+        except Exception as exc:
+            logger.debug("[THINKING] persist failed: %s", exc)
+
+    def _generate_thinking_plan(self) -> str | None:
+        """Fire a one-shot planning LLM call for high-mode turns.
+
+        Uses the thinking-planner agent config (low temp, text) with
+        ``tools=[]`` — an explicit empty list so Providers.send_messages()
+        does NOT fall back to default tools. The planner must produce a
+        plain-text plan, never a tool call.
+
+        The user message passed to the planner bundles:
+          - the NATIVE tool catalog (names + one-line descriptions) as
+            TEXT, so the planner can reason ABOUT tools without the
+            ability to call them;
+          - a compact "Previous Messages" summary (built off the same
+            transcript source as the main ACT loop);
+          - the current user message;
+          - the spec's planning prompt, verbatim.
+
+        External / discovered tools are intentionally excluded — they are
+        lazy-loaded during the real ACT loop via ``find_tools`` and are
+        not known at planning time.
+
+        Returns plan text, or None on failure (turn degrades to medium).
+        """
+        from services.providers import Providers
+
+        plan_system = (
+            "Analyse tools/prompt/chat history. Think deep. Plan how to "
+            "tackle user message: which tools to call, what parameters, "
+            "what self-evals to run. Maximum compliance, accurate results. "
+            "Externalise thoughts, be dense.\n"
+            "CRITICAL: DO NOT CALL TOOLS. OUTPUT PLAIN TEXT PLAN ONLY."
+        )
+
+        user_body = self._build_thinking_plan_user_body()
+        messages = [{'role': 'user', 'content': user_body}]
+
+        try:
+            # tools=[] (NOT None) — Providers.send_messages treats tools=None
+            # as "use job defaults" and would return all innate skills, which
+            # would let the planner actually call tools mid-plan.
+            response = Providers.instance().send_messages(
+                plan_system, messages, job='thinking-planner', tools=[],
+            )
+            plan = (response.text or '').strip()
+            return plan or None
+        except Exception as exc:
+            logger.info("[THINKING] plan call failed: %s", exc)
+            return None
+
+    def _build_thinking_plan_user_body(self) -> str:
+        """Assemble the user-message body for the thinking-plan LLM call.
+
+        Structure (dense, caveman-compressed — planner cost stays low):
+
+            ### Available Tools
+            - <name>: <one-line description>
+            ...
+
+            ### Previous Messages
+            <compact transcript summary>
+
+            ### Current User Message
+            <self._raw_input>
+
+            ### Your Task
+            <verbatim spec planning prompt>
+
+        Tool catalog is built from ``self.NATIVE_TOOLS`` (same source the
+        main ACT loop uses for innate skills). External tools are out of
+        scope — they are lazy-loaded at runtime.
+
+        Previous Messages reuses ``getPreviousMessages()`` (same transcript
+        assembly the main loop uses) so the planner sees the same history
+        context the actual ACT loop will see, not a divergent reconstruction.
+        """
+        sections: list[str] = []
+
+        # 1. Native tool catalog (name + one-line description).
+        sections.append(self._render_native_tool_catalog())
+
+        # 2. Previous messages (uses the same assembly as the ACT loop).
+        prev = ''
+        try:
+            prev = self.getPreviousMessages()
+        except Exception as exc:
+            logger.debug("[THINKING] prev-messages fetch failed: %s", exc)
+            prev = ''
+        if prev:
+            sections.append(f"### Previous Messages\n{prev}")
+
+        # 3. Current user message.
+        sections.append(f"### Current User Message\n{self._raw_input}")
+
+        # 4. Verbatim planning prompt from user spec.
+        sections.append(
+            "### Your Task\n"
+            "Analyse the **tools, prompt and chat history** you have been "
+            "provided. Think deeply and come up with a plan on how to best "
+            "tackle the user's message. What tools to call, what parameters "
+            "to supply, self-evals you can perform at the end, etc... You "
+            "need to ensure maximum compliance and the accurate results for "
+            "the user's message. Take you time and externalise your "
+            "thoughts. IMPORTANT: DO NOT MAKE TOOL CALLS - ONLY PLAN"
+        )
+
+        return '\n\n'.join(sections)
+
+    def _render_native_tool_catalog(self) -> str:
+        """Render the NATIVE tool list as a text catalog for the planner.
+
+        Lines: ``- <name>: <first sentence of description>``. Description is
+        trimmed to the first line / first sentence to keep the catalog
+        dense. Returns a ``### Available Tools`` section (header + list).
+        Emits ``(none)`` when NATIVE_TOOLS is empty so the planner sees an
+        explicit signal rather than a missing section.
+        """
+        lines: list[str] = ["### Available Tools"]
+        try:
+            if self.NATIVE_TOOLS:
+                from services.tool_schema_service import get_skill_schemas
+                schemas = get_skill_schemas(self.NATIVE_TOOLS)
+            else:
+                schemas = []
+        except Exception as exc:
+            logger.debug("[THINKING] tool catalog build failed: %s", exc)
+            schemas = []
+
+        if not schemas:
+            lines.append("- (none)")
+            return '\n'.join(lines)
+
+        for s in schemas:
+            name = s.get('name') or 'unnamed'
+            desc = (s.get('description') or '').strip()
+            # Keep it one line — take up to the first newline / period.
+            if desc:
+                first_line = desc.split('\n', 1)[0].strip()
+                # Also trim to first sentence for density.
+                if '. ' in first_line:
+                    first_line = first_line.split('. ', 1)[0].strip() + '.'
+                lines.append(f"- {name}: {first_line}")
+            else:
+                lines.append(f"- {name}")
+        return '\n'.join(lines)
+
+    def _apply_thinking_level(self, prompt: str) -> str:
+        """Append the level-specific tag to the assembled system prompt.
+
+        Called at the end of every getSystemPrompt() implementation so the
+        mutation sits at the very end of the prompt (preserves KV-cache
+        stable prefix above). No-op for non-user channels.
+
+        Precedence:
+          - ``high`` + plan present  → [THINKING]<plan>[/THINKING]
+          - ``medium`` OR ``high`` without plan → [RULE]... fallback
+            (consistent degradation: a classifier that said 'high' but
+            whose planner call produced nothing must still get the
+            medium-level deliberation rule, never less guidance than a
+            'medium' classification would give.)
+          - ``low`` → unchanged
+        """
+        if self.CHANNEL != 'user':
+            return prompt
+        level = self._thinking_level
+        if level == 'high' and self._thinking_plan:
+            return f"{prompt}\n\n[THINKING]{self._thinking_plan}[/THINKING]"
+        if level in ('medium', 'high'):
+            # 'high' without a plan falls through to the same [RULE] as
+            # 'medium' — never silently drop to "no guidance".
+            return (
+                f"{prompt}\n\n"
+                "[RULE]Think deeply internally to come up with the most "
+                "efficient and accurate way to answer to the user's prompt "
+                "and make sure to self-eval the result before responding to "
+                "the user.[/RULE]"
+            )
+        return prompt
 
     def postTurn(self) -> None:
         """Per-channel post-turn service fan-out.

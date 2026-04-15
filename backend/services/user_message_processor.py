@@ -204,7 +204,7 @@ class UserMessageProcessor(MessageProcessor):
         template = template.replace('{{voice_modulation}}', self._get_voice_modulation())
         template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
-        return f"{self.getUserDefinition()}\n\n{template}"
+        return self._apply_thinking_level(f"{self.getUserDefinition()}\n\n{template}")
 
     def getTools(self) -> list[dict]:
         """Narrow native tools for voice mode (exclude rich_render).
