@@ -520,6 +520,57 @@ class TestSchemaConvergence:
                 "legacy_widget should NOT be dropped when destructive ops are disabled"
             )
 
+    def test_safety_guard_refuses_mass_drop_on_truncated_schema(self, tmp_path, monkeypatch, caplog):
+        """If schema.sql is corrupted to near-empty, convergence refuses to drop the live DB."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        # Count live tables before.
+        with db.connection() as conn:
+            before = _table_names(conn)
+        assert len(before) >= 10, "Test requires ≥10 live tables to exercise guard"
+
+        # Point the service at a 2-table schema.sql stub — looks like a truncation.
+        stub = tmp_path / "stub_schema.sql"
+        stub.write_text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY);\n"
+                        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);\n")
+
+        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+        monkeypatch.setattr(svc, "_schema_path", stub)
+
+        with caplog.at_level(logging.ERROR, logger="services.schema_convergence_service"):
+            svc.converge()
+
+        with db.connection() as conn:
+            after = _table_names(conn)
+
+        # No mass-drop occurred — live DB retains its tables.
+        assert len(after) >= len(before), (
+            f"Safety guard failed: live DB lost tables on truncated schema "
+            f"(before={len(before)}, after={len(after)})"
+        )
+        safety_logs = [r.message for r in caplog.records if "SAFETY" in r.message]
+        assert safety_logs, "Safety guard did not emit an ERROR-level SAFETY log"
+
+    def test_safety_guard_refuses_empty_schema(self, tmp_path, monkeypatch, caplog):
+        """An empty schema.sql must NOT wipe the live DB."""
+        db = _make_db(tmp_path)
+        _converge(db)
+
+        empty = tmp_path / "empty_schema.sql"
+        empty.write_text("-- empty schema\n")
+
+        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+        monkeypatch.setattr(svc, "_schema_path", empty)
+
+        with caplog.at_level(logging.ERROR, logger="services.schema_convergence_service"):
+            svc.converge()
+
+        with db.connection() as conn:
+            tables = _table_names(conn)
+        # Live DB must still have its tables
+        assert "settings" in tables, "Safety guard failed on empty schema — live DB was wiped"
+
     def test_convergence_idempotent_with_no_drift(self, tmp_path):
         """Converging an already-converged DB is a no-op (no spurious drops)."""
         db = _make_db(tmp_path)

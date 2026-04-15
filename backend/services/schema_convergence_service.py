@@ -115,8 +115,13 @@ class SchemaConvergenceService:
                 desired_virtual, live_virtual, conn, schema_sql
             )
 
-            # Destructive pass (gated).
-            if _destructive_allowed():
+            # Destructive pass (gated).  Safety: if the desired state looks
+            # suspiciously empty or truncated, refuse to drop anything — the
+            # live DB is more trustworthy than a corrupt schema.sql.
+            destructive_safe = self._destructive_safety_check(
+                desired_tables, live_tables
+            )
+            if _destructive_allowed() and destructive_safe:
                 # Order: virtual tables first (cascades shadow tables) → indexes
                 # (some auto-drop with their owning table) → columns within
                 # surviving tables → stale regular tables last.
@@ -414,6 +419,29 @@ class SchemaConvergenceService:
                     f"[convergence] Failed to drop stale virtual table {table_name}: {exc}"
                 )
         return dropped
+
+    def _destructive_safety_check(self, desired_tables: dict, live_tables: dict) -> bool:
+        """Refuse destructive ops if schema.sql looks corrupted or truncated.
+
+        Heuristics (tripping any one trips the guard):
+          * Desired state has zero tables — schema.sql unreadable or empty.
+          * Live DB has ≥10 tables and desired has fewer than half of them —
+            likely a corrupt or partial schema.sql.
+        """
+        if not desired_tables:
+            logger.error(
+                "[convergence] SAFETY: desired schema has zero tables — "
+                "refusing destructive ops.  Check schema.sql integrity."
+            )
+            return False
+        if len(live_tables) >= 10 and len(desired_tables) < len(live_tables) / 2:
+            logger.error(
+                f"[convergence] SAFETY: desired={len(desired_tables)} tables vs "
+                f"live={len(live_tables)} — too large a shrink, refusing destructive "
+                f"ops.  Check schema.sql integrity."
+            )
+            return False
+        return True
 
     def _is_droppable_table(
         self,
