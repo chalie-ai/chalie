@@ -89,17 +89,17 @@ def main():
 
     results = []
 
-    # 1. Embedding model (gte-modernbert-base)
-    print("[1/2] Embedding model (gte-modernbert-base)")
+    # 1. Embedding model (gte-modernbert-base) — also shared encoder for all classifiers
+    print("[1/1] Embedding + classifier encoder (gte-modernbert-base)")
     emb_raw = MODELS_DIR / "gte-modernbert-base" / "onnx" / "model.onnx"
     emb_opt = emb_raw.with_suffix(".optimized.onnx")
     results.append(("embedding", optimize_model(emb_raw, emb_opt, intra_threads=2)))
 
-    # 2. ONNX classifier base (Qwen2.5-0.5B)
-    print("[2/2] Classifier base model (Qwen2.5-0.5B)")
-    cls_raw = MODELS_DIR / "qwen2.5-0.5b_base" / "model.onnx"
-    cls_opt = cls_raw.with_suffix(".optimized.onnx")
-    results.append(("classifier-base", optimize_model(cls_raw, cls_opt, intra_threads=1)))
+    # NOTE: The shared gte-modernbert-base ONNX is the only encoder used for
+    # all classifiers (v0.9.0+). Per-task heads are tiny .npz files — no
+    # separate ONNX per classifier task. The embedding model above covers both
+    # embedding and classifier inference.
+    print("[2/2] Classifier base — shared with embedding model (already optimized above)")
 
     print()
     for name, ok in results:

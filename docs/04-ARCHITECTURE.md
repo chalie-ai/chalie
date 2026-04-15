@@ -267,11 +267,6 @@ Built-in cognitive skills always available to the LLM:
 - Active templates: `frontal-cortex-unified` (user + goal pursuit), `dmn` (background intelligence), scheduled flows reuse unified
 - Focused scope prevents prompt bloat and allows smaller models to handle each function
 
-### Deterministic Mode Router (non-user flows only)
-- **Scope**: Only consulted for DMN fallback and non-WebSocket flows; user turns never pass through it
-- **Signals**: ~17 observable signals from context + NLP (context warmth, question marks, greeting patterns, etc.)
-- **Scores**: Each mode gets weighted composite score; highest wins; ONNX tie-breaker for ambiguous cases
-
 ### Memory Hierarchy
 - **Transcript** (SQLite + sqlite-vec, `transcript` table) — Persistent, channel-scoped, append-only conversation record; `getPreviousMessages()` reads entries above the compaction watermark and renders them as a literal `## Previous Messages` text block; written atomically per turn via `transcript_service.append_atomic_turn()`; `thinking_level` column stores the raw classifier output (`low`/`medium`/`high`) on user-role rows for continuity signal across turns
 - **Compaction** (SQLite, `compactions` table) — Incremental LLM summarization triggered at 80% of the provider's context limit inside `MessageProcessor.send()`; stores `compacted_text` + `compacted_up_to_id` watermark; keyed by `channel`; surfaced to the LLM via the `### Checkpoint` envelope prepended by `_wrap_with_checkpoint()`

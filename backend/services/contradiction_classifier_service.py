@@ -7,28 +7,31 @@ Output: classification enum + confidence + recommended resolution.
 Used by:
   - memory_skill._handle_store() via _check_trait_contradiction
 
-Classifications (STATIC — changing these requires retraining the ONNX model):
-  A: temporal_change   — old belief replaced by new one (job switch, relocation, etc.)
-  B: true_contradiction — cannot both be true simultaneously
-  C: context_dependent  — both true but in different contexts
-  D: figurative         — one memory is non-literal (hyperbole, humor)
-  E: compatible         — no conflict; they can coexist (likes Honda + likes Toyota)
+Classifications (STATIC — changing these requires retraining the model):
+  temporal_change   — old belief replaced by new one (job switch, relocation, etc.)
+  true_contradiction — cannot both be true simultaneously
+  context_dependent  — both true but in different contexts
+  figurative         — one memory is non-literal (hyperbole, humor)
+  compatible         — no conflict; they can coexist (likes Honda + likes Toyota)
 
-ONNX MODEL CONTRACT
-===================
-This service has a companion ONNX classifier (trained in training/data/tasks/contradiction/).
-The ONNX model is the primary classifier; the LLM path (_classify_pair_llm) is the
-fallback when the ONNX model is unavailable or confidence is below threshold.
+MLP MODEL CONTRACT (v0.9.0)
+===========================
+This service has a companion MLP head classifier (gte-modernbert encoder +
+2-layer MLP, trained in training/data/tasks/contradiction/).
+The MLP head is the primary classifier; the LLM path (_classify_pair_llm) is the
+fallback when the model is unavailable or confidence is below threshold.
 
-The ONNX model was trained on a specific input format and signal contract. Changes to
+The model was trained on a specific input format and signal contract. Changes to
 any of the following REQUIRE retraining the model:
 
   1. Input JSON field names: text_a, text_b, type_a, type_b, age_a_days, age_b_days,
      established_a, established_b
   2. Memory type vocabulary: incoming, trait, concept, episode
-  3. The 5 classification labels and their A-E letter mapping
+  3. The 5 classification labels and their index order
   4. The _is_established() thresholds and logic
-  5. The prompt suffix format ("Options: A: ... Answer:")
+
+Note: the Options: A..E / Answer: suffix was retired in v0.9.0. The encoder
+now receives only the JSON blob from _build_onnx_input().
 
 See training/data/tasks/contradiction/SIGNALS.md for the full signal contract.
 """
@@ -296,20 +299,7 @@ class ContradictionClassifierService:
 
         return results
 
-    # ── ONNX wrapper (primary path) ────────────────────────────────────────
-
-    # Label mapping: ONNX model outputs single letters, callers expect class names.
-    #
-    # !! STATIC CONTRACT — must match CLASS_LABELS in
-    # !! training/data/tasks/contradiction/__init__.py
-    # !! and the Options line in _build_onnx_input().
-    _ONNX_LABEL_TO_CLASS = {
-        'A': 'temporal_change',
-        'B': 'true_contradiction',
-        'C': 'context_dependent',
-        'D': 'figurative',
-        'E': 'compatible',
-    }
+    # ── MLP wrapper (primary path) ─────────────────────────────────────────
 
     # Memory type mapping: the ONNX model only knows these 4 types.
     # Any source/type not in this set must be mapped before inference.
@@ -337,7 +327,7 @@ class ContradictionClassifierService:
         meta_b: dict,
     ) -> Optional[dict]:
         """
-        Classify a memory pair using the ONNX contradiction model.
+        Classify a memory pair using the MLP contradiction classifier.
 
         Returns a dict with {classification, confidence, temporal_signal,
         recommended_resolution} or None if the model is unavailable or
@@ -345,17 +335,12 @@ class ContradictionClassifierService:
 
         !! WRAPPER CONTRACT — RETRAINING REQUIRED IF CHANGED !!
         =====================================================
-        This method translates between the backend's internal representation
-        and the ONNX model's trained input format. The following elements
-        are FROZEN and must not be modified without retraining:
+        1. INPUT FORMAT: _build_onnx_input() must produce output identical to
+           training/data/tasks/contradiction/__init__.py::_format_input().
+           Only the JSON blob — no Options/Answer suffix (retired in v0.9.0).
 
-        1. INPUT FORMAT: The _build_onnx_input() method must produce the exact
-           same format as training/data/tasks/contradiction/__init__.py::_format_input().
-           This includes JSON field names, key order, the Options line, and the
-           "Answer:" suffix.
-
-        2. LABEL MAPPING: _ONNX_LABEL_TO_CLASS must match CLASS_LABELS in the
-           training task. The model outputs A/B/C/D/E; this dict maps to names.
+        2. LABELS: The model returns direct class strings (not A/B/C/D/E letters).
+           Labels are read from classifier_meta.json::labels.
 
         3. TYPE VOCABULARY: The model only knows 'incoming', 'trait', 'concept',
            'episode'. Any other type_a/type_b value MUST be mapped via
@@ -381,12 +366,13 @@ class ContradictionClassifierService:
 
             if confidence < self._ONNX_CONFIDENCE_THRESHOLD:
                 logger.info(
-                    f"{LOG_PREFIX} ONNX confidence {confidence:.3f} below "
+                    f"{LOG_PREFIX} MLP confidence {confidence:.3f} below "
                     f"threshold {self._ONNX_CONFIDENCE_THRESHOLD} — using LLM"
                 )
                 return None
 
-            classification = self._ONNX_LABEL_TO_CLASS.get(label, 'compatible')
+            # Labels are direct class strings (temporal_change, true_contradiction, etc.)
+            classification = label
 
             # Deterministic post-classification signals (not predicted by model)
             temporal_signal = classification == 'temporal_change'
@@ -398,7 +384,7 @@ class ContradictionClassifierService:
                 resolution = 'ignore'
 
             logger.info(
-                f"{LOG_PREFIX} ONNX classification: {classification} "
+                f"{LOG_PREFIX} MLP classification: {classification} "
                 f"(confidence={confidence:.3f}, resolution={resolution})"
             )
 
@@ -406,12 +392,12 @@ class ContradictionClassifierService:
                 'classification': classification,
                 'confidence': confidence,
                 'temporal_signal': temporal_signal,
-                'reasoning': f'ONNX classifier ({confidence:.2f})',
+                'reasoning': f'MLP classifier ({confidence:.2f})',
                 'surface_context': None,
                 'recommended_resolution': resolution,
             }
         except Exception as e:
-            logger.info(f"{LOG_PREFIX} ONNX classification failed: {e}")
+            logger.info(f"{LOG_PREFIX} MLP classification failed: {e}")
             return None
 
     def _build_onnx_input(
@@ -422,16 +408,14 @@ class ContradictionClassifierService:
         meta_b: dict,
     ) -> str:
         """
-        Build the ONNX model input string from a memory pair.
+        Build the MLP model input string from a memory pair.
 
         !! STATIC CONTRACT — RETRAINING REQUIRED IF CHANGED !!
         This method MUST produce output identical to:
             training/data/tasks/contradiction/__init__.py::_format_input()
 
-        The format is:
+        The format is the JSON blob ONLY (no Options/Answer suffix — retired v0.9.0):
             {JSON payload}
-            Options: A: temporal_change | B: true_contradiction | C: context_dependent | D: figurative | E: compatible
-            Answer:
 
         JSON fields (exact names, no extras):
             text_a, text_b, type_a, type_b, age_a_days, age_b_days,
@@ -471,7 +455,7 @@ class ContradictionClassifierService:
 
         # Build JSON payload — must match _format_input() exactly:
         # separators=(',', ':') for compact JSON, no spaces
-        payload = json.dumps({
+        return json.dumps({
             "text_a": text_a,
             "text_b": text_b,
             "type_a": type_a,
@@ -481,13 +465,6 @@ class ContradictionClassifierService:
             "established_a": established_a,
             "established_b": established_b,
         }, separators=(',', ':'))
-
-        return (
-            f"{payload}\n"
-            "Options: A: temporal_change | B: true_contradiction | "
-            "C: context_dependent | D: figurative | E: compatible\n"
-            "Answer:"
-        )
 
     # ── LLM fallback ───────────────────────────────────────────────────────
 

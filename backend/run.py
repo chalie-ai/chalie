@@ -81,11 +81,19 @@ def main():
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
             svc.ensure_models()
-            # Base model (~473MB ONNX → ~2GB RSS) is lazy-loaded on first
-            # predict() call.  Loading it here alongside the embedding model
-            # (already ~2.2GB) exceeds the Docker VM limit and triggers OOM.
+            # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
+            # fire before any user request arrives. The encoder session is already
+            # warm (loaded by embedding preload above), so registration is fast.
+            # _get_head() calls _register_task() which emits the boot marker and
+            # validates the sha256 pin — any mismatch raises RuntimeError here.
+            from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
+            for _task, _ in _CLASSIFIER_REGISTRY:
+                try:
+                    svc._get_head(_task)
+                except RuntimeError as _reg_err:
+                    logger.warning(f"[System] Classifier registration failed for {_task}: {_reg_err}")
             svc._ready = True
-            logger.info("[System] ONNX models verified (base model deferred to first use)")
+            logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
