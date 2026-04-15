@@ -337,6 +337,10 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     tool_type TEXT NOT NULL DEFAULT 'tool',
     short_summary TEXT NOT NULL,
     full_profile TEXT NOT NULL,
+    usage_scenarios TEXT NOT NULL DEFAULT '[]',    -- JSONB
+    anti_scenarios TEXT NOT NULL DEFAULT '[]',     -- JSONB
+    complementary_skills TEXT DEFAULT '[]',        -- JSONB
+    triage_triggers TEXT DEFAULT '[]',             -- JSONB
     manifest_hash TEXT,
     enrichment_episode_ids TEXT DEFAULT '[]',      -- JSONB
     enrichment_count INTEGER DEFAULT 0,
@@ -344,8 +348,10 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     avg_latency_ms REAL DEFAULT 0,
     cost_tier TEXT DEFAULT 'free',
     reliability_score REAL DEFAULT 1.0,
+    domain TEXT DEFAULT 'Other',
     effort TEXT DEFAULT 'moderate',
     skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
+    descriptor TEXT,                                -- compact discovery label: 'name (synonym1, synonym2, ...)'
     keywords TEXT DEFAULT '',                       -- comma-separated search keywords for 2-axis scoring
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
