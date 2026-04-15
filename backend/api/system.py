@@ -280,17 +280,19 @@ def observability_tools():
         if valid_names is not None:
             placeholders = ','.join('?' * len(valid_names))
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, effort, "
-                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, updated_at "
+                "SELECT tool_name, tool_type, short_summary, domain, effort, "
+                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+                "triage_triggers, updated_at "
                 f"FROM tool_capability_profiles WHERE tool_name IN ({placeholders}) "
-                "ORDER BY tool_name",
+                "ORDER BY domain, tool_name",
                 list(valid_names),
             )
         else:
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, effort, "
-                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, updated_at "
-                "FROM tool_capability_profiles ORDER BY tool_name"
+                "SELECT tool_name, tool_type, short_summary, domain, effort, "
+                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+                "triage_triggers, updated_at "
+                "FROM tool_capability_profiles ORDER BY domain, tool_name"
             )
 
         # Index performance stats by tool name for merging
@@ -302,17 +304,27 @@ def observability_tools():
         except Exception as e:
             logger.warning(f"[OBS] Tool performance stats unavailable: {e}")
 
+        import json as _json
         tools = []
         for r in (rows or []):
+            triggers = r.get('triage_triggers') or []
+            if isinstance(triggers, str):
+                try:
+                    triggers = _json.loads(triggers)
+                except Exception as e:
+                    logger.debug(f"[OBS] Failed to parse triage_triggers JSON for tool '{r.get('tool_name', '?')}': {e}")
+                    triggers = []
             entry = {
                 'tool_name': r['tool_name'],
                 'tool_type': r.get('tool_type', 'tool'),
                 'summary': f"{r.get('short_summary', '')} (effort: {r.get('effort') or 'moderate'})",
+                'domain': r.get('domain') or 'Other',
                 'effort': r.get('effort') or 'moderate',
                 'reliability_score': r.get('reliability_score', 1.0),
                 'cost_tier': r.get('cost_tier', 'free'),
                 'avg_latency_ms': r.get('avg_latency_ms', 0),
                 'enrichment_count': r.get('enrichment_count', 0),
+                'triage_triggers': triggers,
                 'updated_at': r.get('updated_at'),
             }
             if r['tool_name'] in perf_by_name:

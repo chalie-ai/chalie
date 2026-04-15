@@ -207,19 +207,21 @@ class TestSystemAPI:
         # Seed tool_capability_profiles rows
         db.execute(
             "INSERT INTO tool_capability_profiles "
-            "(id, tool_name, tool_type, short_summary, full_profile, effort, "
-            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
+            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+            "triage_triggers, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('tcp-1', 'weather', 'docker', 'Search', 'Full search profile',
-             'low', 0.9, 'free', 1200, 1, '2025-01-01T00:00:00'),
+             'Search', 'low', 0.9, 'free', 1200, 1, '[]', '2025-01-01T00:00:00'),
         )
         db.execute(
             "INSERT INTO tool_capability_profiles "
-            "(id, tool_name, tool_type, short_summary, full_profile, effort, "
-            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
+            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+            "triage_triggers, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('tcp-2', 'code_exec', 'docker', 'Execute', 'Full exec profile',
-             'moderate', 0.95, 'free', 800, 1, '2025-01-01T00:00:00'),
+             'Dev', 'moderate', 0.95, 'free', 800, 1, '[]', '2025-01-01T00:00:00'),
         )
         db.commit()
 

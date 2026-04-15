@@ -33,17 +33,17 @@ def _pack_embedding(values):
 
 
 def _seed_tool_profile(db, tool_name, tool_type='tool', summary='desc',
-                       profile='long desc', effort='moderate',
-                       embedding=None, **_kwargs):
+                       profile='long desc', domain='Other', effort='moderate',
+                       embedding=None):
     """Seed a tool_capability_profiles row and its vec companion.
 
     Returns the rowid so callers can verify lookups.
     """
     db.execute(
         "INSERT INTO tool_capability_profiles "
-        "(id, tool_name, tool_type, short_summary, full_profile, effort) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (f'tcp-{tool_name}', tool_name, tool_type, summary, profile, effort),
+        "(id, tool_name, tool_type, short_summary, full_profile, domain, effort) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (f'tcp-{tool_name}', tool_name, tool_type, summary, profile, domain, effort),
     )
     # Get the auto-generated rowid
     row = db.execute(
@@ -85,8 +85,8 @@ class TestHandleFindTools:
 class TestFilterAvailable:
 
     def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
-                  effort='moderate', distance=0.5, keywords='', **_kwargs):
-        return (name, tool_type, summary, profile, effort, distance, keywords)
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
 
     @patch(_REGISTRY)
     def test_filters_out_skills(self, mock_registry_cls):
@@ -302,8 +302,8 @@ class TestKeywordScoring:
     """Tests for two-axis scoring: (distance * 10) - kw_match_count."""
 
     def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
-                  effort='moderate', distance=0.5, keywords='', **_kwargs):
-        return (name, tool_type, summary, profile, effort, distance, keywords)
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
 
     @patch(_REGISTRY)
     def test_case_insensitive_keyword_matching(self, mock_registry_cls):
@@ -347,7 +347,7 @@ class TestKeywordScoring:
         mock_registry_cls.return_value = mock_reg
 
         # Simulate a row where keywords column is NULL (None)
-        row = ('old_tool', 'tool', 'desc', 'full desc', 'moderate', 0.6, None)
+        row = ('old_tool', 'tool', 'desc', 'full desc', 'Other', 'moderate', 0.6, None)
         result = _filter_available([row], query='some query')
         assert len(result) == 1
         assert result[0]['score'] == pytest.approx(6.0, abs=0.01)
@@ -440,8 +440,8 @@ class TestFilterAvailableQueryPassthrough:
     """Verify that query text is forwarded to _filter_available for keyword matching."""
 
     def _make_row(self, name, tool_type='tool', summary='desc', profile='long desc',
-                  effort='moderate', distance=0.5, keywords='', **_kwargs):
-        return (name, tool_type, summary, profile, effort, distance, keywords)
+                  domain='Other', effort='moderate', distance=0.5, keywords=''):
+        return (name, tool_type, summary, profile, domain, effort, distance, keywords)
 
     @patch(_REGISTRY)
     @patch(_EMB)
