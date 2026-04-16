@@ -380,8 +380,20 @@ class DataGraphService:
 
                         if contradiction_mode == 'classify':
                             from services.contradiction_classifier_service import ContradictionClassifierService
+                            # Forward the existing row's meta so the ONNX model
+                            # sees correct age_b_days + established_b. Without
+                            # this, every well-established trait looks fresh,
+                            # which miscalibrates the contradiction head.
+                            existing_meta = {
+                                'type': 'trait',
+                                'created_at': existing_dict.get('first_seen_at'),
+                                'reinforcement_count': existing_dict.get('evidence_count', 1),
+                                'confidence': existing_dict.get('retrieval_weight', 0.5),
+                            }
                             cls_result = ContradictionClassifierService().check_new_trait(
-                                new_value, old_value, source='chat'
+                                new_value, old_value,
+                                source='chat',
+                                existing_meta=existing_meta,
                             )
                             if cls_result is None:
                                 # compatible — reinforce

@@ -84,6 +84,17 @@ def readiness_check():
         onnx_svc = get_onnx_inference_service()
         if onnx_svc.ready:
             components['onnx'] = {'status': 'ok'}
+        elif onnx_svc.degraded:
+            # Registration completed but one or more tasks failed (e.g. sha256
+            # gate refused on encoder mismatch). Surface this loudly — the boot
+            # gate exists precisely to catch these cases. Silent fallback would
+            # let the system run with a wrong/incomplete classifier.
+            failed = onnx_svc.failed_registrations
+            components['onnx'] = {
+                'status': 'degraded',
+                'failed_tasks': [t for t, _ in failed],
+                'message': '; '.join(f'{t}: {err}' for t, err in failed),
+            }
         else:
             components['onnx'] = {'status': 'loading'}
     except Exception as e:

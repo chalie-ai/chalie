@@ -159,7 +159,13 @@ class ContradictionClassifierService:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def check_new_trait(self, new_text: str, existing_text: str, source: str = 'chat') -> Optional[dict]:
+    def check_new_trait(
+        self,
+        new_text: str,
+        existing_text: str,
+        source: str = 'chat',
+        existing_meta: Optional[dict] = None,
+    ) -> Optional[dict]:
         """
         Classify whether new_text contradicts existing_text.
 
@@ -167,13 +173,30 @@ class ContradictionClassifierService:
         Returns dict with classification, confidence, temporal_signal, reasoning.
         Returns None if compatible or figurative.
 
-        source: 'chat' | 'ambient' — passed through for caller logic.
+        Args:
+            source: 'chat' | 'ambient' — passed through for caller logic.
+            existing_meta: optional dict with the existing trait's metadata
+                (created_at, reinforcement_count, confidence, …). Forwarded to
+                the ONNX model so `established_b` and `age_b_days` are computed
+                accurately. Without this, the model sees every existing trait as
+                fresh & unestablished — a training/inference mismatch that
+                miscalibrates well-reinforced traits.
         """
+        # New trait — incoming, by definition unestablished and age 0.
+        meta_a = {'type': 'incoming', 'source': source, 'established': False}
+        # Existing trait — pass full meta if caller provided it. The static type
+        # 'trait' is required for correct calibration; if existing_meta supplies
+        # an explicit type it wins.
+        meta_b = {'type': 'trait'}
+        if existing_meta:
+            meta_b.update({k: v for k, v in existing_meta.items() if k != 'type'})
+            if 'type' in existing_meta:
+                meta_b['type'] = existing_meta['type']
         result = self._classify_pair_llm(
             new_text, existing_text,
             context_hint=None,
-            meta_a={'source': source},
-            meta_b={'source': 'trait'},
+            meta_a=meta_a,
+            meta_b=meta_b,
         )
         if result is None:
             return None
@@ -423,9 +446,11 @@ class ContradictionClassifierService:
         """
         from services.time_utils import utc_now, parse_utc
 
-        # Resolve memory types — map internal source types to model vocabulary
-        type_a = meta_a.get('source', meta_a.get('type', 'incoming'))
-        type_b = meta_b.get('source', meta_b.get('type', 'incoming'))
+        # Resolve memory types — map internal source types to model vocabulary.
+        # Explicit `type` wins over `source` so callers can disambiguate when a
+        # source string is ambiguous (e.g. source='chat' but type='trait').
+        type_a = meta_a.get('type', meta_a.get('source', 'incoming'))
+        type_b = meta_b.get('type', meta_b.get('source', 'incoming'))
         type_a = self._SOURCE_TYPE_MAP.get(type_a, type_a)
         type_b = self._SOURCE_TYPE_MAP.get(type_b, type_b)
         # Final guard: unknown types default to 'episode'
@@ -544,6 +569,10 @@ class ContradictionClassifierService:
                 if (row.get('retrieval_weight') or 0) <= 0.3:
                     continue
                 meta = {
+                    # Explicit type is required so _build_onnx_input maps to
+                    # 'trait' instead of falling through to 'incoming' default.
+                    # Bypassing this drops the model's type-aware calibration.
+                    'type': 'trait',
                     'confidence': row.get('retrieval_weight', 0),
                     'reinforcement_count': row.get('evidence_count', 1),
                     'created_at': row.get('first_seen_at', ''),

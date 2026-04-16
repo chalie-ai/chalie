@@ -87,13 +87,28 @@ def main():
             # _get_head() calls _register_task() which emits the boot marker and
             # validates the sha256 pin — any mismatch raises RuntimeError here.
             from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
+            _failures: list[tuple[str, str]] = []
             for _task, _ in _CLASSIFIER_REGISTRY:
                 try:
                     svc._get_head(_task)
                 except RuntimeError as _reg_err:
-                    logger.warning(f"[System] Classifier registration failed for {_task}: {_reg_err}")
+                    # sha256 gate refused this task. Surface this loudly — silent
+                    # fallback in production would defeat the boot-pin invariant.
+                    logger.error(
+                        f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
+                        f"reason={_reg_err}"
+                    )
+                    _failures.append((_task, str(_reg_err)))
+            svc._failed_registrations = _failures
             svc._ready = True
-            logger.info("[System] ONNX classifier heads registered")
+            if _failures:
+                logger.error(
+                    f"[System] ONNX classifier DEGRADED — {len(_failures)} task(s) "
+                    f"failed registration: {[t for t, _ in _failures]} — health "
+                    f"endpoint will report not-ready until resolved"
+                )
+            else:
+                logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 

@@ -189,13 +189,36 @@ class OnnxInferenceService:
         self._heads: Dict[str, _ClassifierHead] = {}
         self._heads_lock = threading.Lock()
 
-        # Boot readiness — set to True after ensure_models() completes
+        # Boot readiness — set to True after registration attempt completes
         self._ready = False
+        # Tasks whose boot-time registration failed (e.g. sha256 gate refused).
+        # If non-empty, the service is in a degraded state — predict() returns
+        # (None, 0.0) silently for those tasks. Health endpoint surfaces this.
+        # List of (task_name, error_message) tuples.
+        self._failed_registrations: list[tuple[str, str]] = []
 
     @property
     def ready(self) -> bool:
-        """True after ensure_models() has completed."""
-        return self._ready
+        """True only after registration attempt completed AND every task registered.
+
+        A degraded service (one or more tasks failed sha256 gate) reports NOT
+        ready so /api/system can fail-fast for monitoring. Use `degraded` to
+        distinguish "still loading" from "loaded but some tasks refused".
+        """
+        return self._ready and not self._failed_registrations
+
+    @property
+    def degraded(self) -> bool:
+        """True if registration finished but at least one task failed.
+
+        Inspect `failed_registrations` for the per-task error messages.
+        """
+        return self._ready and bool(self._failed_registrations)
+
+    @property
+    def failed_registrations(self) -> list[tuple[str, str]]:
+        """Snapshot of (task_name, error) for tasks whose registration failed."""
+        return list(self._failed_registrations)
 
     # ── Encoder access (borrowed from embedding_service) ──────────────────────
 
