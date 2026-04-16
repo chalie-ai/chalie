@@ -9,9 +9,13 @@
 """
 ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 
-Architecture (v0.9.0):
+Architecture:
     1 shared ONNX encoder (gte-modernbert-base, already loaded by embedding_service)
     N 2-layer MLP heads loaded from per-task .npz files → class logits
+
+Release tag: resolved dynamically from GitHub's "latest release" API at boot
+(see ``_get_release_tag``). Hardcoding the tag caused a silent outage when
+the assets-only repo was retagged and every container 404'd on curl.
 
 The encoder session and tokenizer are borrowed from embedding_service's module-level
 singletons so the 596 MB model is loaded exactly once per process. Each classifier
@@ -33,6 +37,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -45,8 +51,89 @@ LOG_PREFIX = "[ONNX]"
 # Default GitHub repo for model releases
 DEFAULT_MODELS_REPO = "chalie-ai/models"
 
-# v0.9.0 release tag — assets fetched from this specific tag
-_RELEASE_TAG = "v0.9.0"
+# Release tag is resolved dynamically from GitHub's "latest release" API at first
+# use, then cached for the life of the process. Hardcoding a tag caused a silent
+# outage when the assets-only repo was retagged from v0.9.0 → v0.9.1 and every
+# container boot 404'd on curl. Auto-latest eliminates the drift by construction.
+_release_tag_cache: Optional[str] = None
+_release_tag_lock = threading.Lock()
+_RELEASE_TAG_API_TIMEOUT = 10  # seconds
+
+
+def _get_release_tag() -> str:
+    """Return the latest release tag on the models repo, cached per process.
+
+    On first call: GET https://api.github.com/repos/<repo>/releases/latest
+    and cache the tag_name. Subsequent calls return the cached value.
+
+    If the API is unreachable, scans backend/data/models/*/classifier_meta.json
+    for a previously installed version and falls back to it — better to run
+    with a slightly stale model than no model at all. If no prior install
+    exists either, raises RuntimeError so the caller logs and skips.
+    """
+    global _release_tag_cache
+    if _release_tag_cache is not None:
+        return _release_tag_cache
+
+    with _release_tag_lock:
+        if _release_tag_cache is not None:
+            return _release_tag_cache
+
+        api_url = f"https://api.github.com/repos/{DEFAULT_MODELS_REPO}/releases/latest"
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "chalie-onnx-service"},
+            )
+            with urllib.request.urlopen(req, timeout=_RELEASE_TAG_API_TIMEOUT) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            tag = payload.get("tag_name")
+            if not tag or not isinstance(tag, str):
+                raise RuntimeError(f"release payload missing tag_name: {payload!r}")
+            _release_tag_cache = tag
+            logger.info(f"{LOG_PREFIX} latest release resolved: {tag}")
+            return tag
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as e:
+            logger.warning(
+                f"{LOG_PREFIX} latest-release API unreachable ({type(e).__name__}: {e}) — "
+                f"falling back to locally installed version if present"
+            )
+            fallback = _find_local_release_tag()
+            if fallback:
+                _release_tag_cache = fallback
+                logger.info(f"{LOG_PREFIX} using locally cached release tag: {fallback}")
+                return fallback
+            raise RuntimeError(
+                "cannot resolve release tag: GitHub API unreachable and no local install"
+            ) from e
+
+
+def _find_local_release_tag() -> Optional[str]:
+    """Scan backend/data/models/*/classifier_meta.json for a prior install version.
+
+    Returns the first non-empty ``version`` field found, or None if no task has
+    a local meta. Used as fallback when the GitHub API is unreachable.
+    """
+    try:
+        models_dir = Path(os.environ.get("CHALIE_MODELS_DIR", "backend/data/models"))
+        if not models_dir.exists():
+            return None
+        for task_dir in models_dir.iterdir():
+            if not task_dir.is_dir():
+                continue
+            meta_path = task_dir / _CLASSIFIER_META_FILENAME
+            if not meta_path.exists():
+                continue
+            try:
+                with open(meta_path) as f:
+                    version = json.load(f).get("version")
+                if version and isinstance(version, str):
+                    return version
+            except (json.JSONDecodeError, OSError):
+                continue
+    except Exception:
+        return None
+    return None
 
 # Tasks to auto-download and register on boot.
 # Each entry: (task_name, asset_name_prefix)
@@ -271,14 +358,25 @@ class OnnxInferenceService:
     # ── Download / update ─────────────────────────────────────────────────────
 
     def ensure_models(self):
-        """Download missing or stale model assets from the v0.9.0 GitHub release."""
+        """Download missing or stale model assets from the latest GitHub release.
+
+        Release tag is resolved once at first use via the GitHub API (see
+        ``_get_release_tag``). Individual task assets may be absent from the
+        latest release — those failures are logged and isolated; they do not
+        stop other tasks from being installed.
+        """
+        try:
+            release_tag = _get_release_tag()
+        except RuntimeError as e:
+            logger.warning(f"{LOG_PREFIX} ensure_models skipped: {e}")
+            return
         for task_name, asset_prefix in MODEL_REGISTRY:
             try:
-                self._ensure_task(task_name, asset_prefix)
+                self._ensure_task(task_name, asset_prefix, release_tag)
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} Failed to ensure {task_name}: {e}")
 
-    def _ensure_task(self, task_name: str, asset_prefix: str):
+    def _ensure_task(self, task_name: str, asset_prefix: str, release_tag: str):
         """Download classifier_meta.json and head .npz for one task if missing/stale."""
         task_dir = self._models_dir / task_name
         meta_path = task_dir / _CLASSIFIER_META_FILENAME
@@ -292,15 +390,15 @@ class OnnxInferenceService:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        if local_version == _RELEASE_TAG:
-            logger.info(f"{LOG_PREFIX} {task_name}: up to date ({_RELEASE_TAG})")
+        if local_version == release_tag:
+            logger.info(f"{LOG_PREFIX} {task_name}: up to date ({release_tag})")
             return
 
         action = "Updating" if local_version else "Downloading"
-        logger.info(f"{LOG_PREFIX} {action} {task_name}: {local_version or '(none)'} → {_RELEASE_TAG}")
+        logger.info(f"{LOG_PREFIX} {action} {task_name}: {local_version or '(none)'} → {release_tag}")
 
-        base_url = f"https://github.com/{DEFAULT_MODELS_REPO}/releases/download/{_RELEASE_TAG}"
-        # Asset naming in v0.9.0: `<prefix>-classifier_meta.json` and `<prefix>_head.npz`
+        base_url = f"https://github.com/{DEFAULT_MODELS_REPO}/releases/download/{release_tag}"
+        # Asset naming convention: `<prefix>-classifier_meta.json` and `<prefix>_head.npz`
         # (hyphen before "classifier", underscore before "head" — confirmed against
         # the release manifest; do NOT collapse these separators).
         meta_url = f"{base_url}/{asset_prefix}-classifier_meta.json"
@@ -316,7 +414,7 @@ class OnnxInferenceService:
             _download_with_curl(meta_url, staging / _CLASSIFIER_META_STAGING_FILENAME)
             with open(staging / _CLASSIFIER_META_STAGING_FILENAME) as f:
                 meta = json.load(f)
-            meta["version"] = _RELEASE_TAG
+            meta["version"] = release_tag
             with open(staging / _CLASSIFIER_META_FILENAME, "w") as f:
                 json.dump(meta, f, indent=2)
             (staging / _CLASSIFIER_META_STAGING_FILENAME).unlink()
@@ -337,7 +435,7 @@ class OnnxInferenceService:
             with self._heads_lock:
                 self._heads.pop(task_name, None)
 
-            logger.info(f"{LOG_PREFIX} Installed {task_name} ({_RELEASE_TAG})")
+            logger.info(f"{LOG_PREFIX} Installed {task_name} ({release_tag})")
 
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Download failed for {task_name}: {e}")
