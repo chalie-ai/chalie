@@ -71,7 +71,14 @@ class ThinkingLevelClassifierService:
                                             extra_features=onehot)
 
             if label is None or confidence < _CONFIDENCE_THRESHOLD:
-                fallback_level = prev_level if prev_level != 'none' else 'medium'
+                # Cold-start fallback is 'low' — a no-op that lets the LLM
+                # answer without the [RULE] "think deeply" tail. 'medium' was
+                # the previous default but it is an ACTIVE intervention, not
+                # a neutral default; applying it whenever classifier confidence
+                # dropped below threshold on the very first turn caused
+                # spurious deliberation on simple recall/chit-chat turns in
+                # the benchmark suite.
+                fallback_level = prev_level if prev_level != 'none' else 'low'
                 logger.info(
                     "%s MLP level=%s confidence=%.3f prev=%s fallback=true",
                     LOG_PREFIX,
@@ -88,7 +95,9 @@ class ThinkingLevelClassifierService:
             return {'level': label, 'confidence': confidence, 'fallback': False}
 
         except Exception as exc:
-            fallback_level = prev_level if prev_level != 'none' else 'medium'
+            # Same reasoning as the low-confidence fallback above: default to
+            # 'low' (no-op) on cold start, not 'medium' (active [RULE] tail).
+            fallback_level = prev_level if prev_level != 'none' else 'low'
             logger.info(
                 "%s classify failed (%s) — fallback: %s",
                 LOG_PREFIX, exc, fallback_level,

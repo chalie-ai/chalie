@@ -179,12 +179,12 @@ class FallbackLLMService:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
-            return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+            return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
-            return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+            return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
 
     def get_context_limit(self) -> int:
         return self._primary.get_context_limit()
@@ -251,8 +251,8 @@ class LoggingLLMService:
         _log_llm_call(self._job_name, result)
         return result
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
-        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._job_name, result)
         return result
 
@@ -397,9 +397,9 @@ class RefreshableLLMService:
         _log_llm_call(self._agent_name, result)
         return result
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         self._ensure_fresh()
-        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._agent_name, result)
         return result
 
@@ -520,7 +520,7 @@ class AnthropicService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         import anthropic
 
         client = self._get_client()
@@ -548,6 +548,16 @@ class AnthropicService:
             # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
             create_kwargs['tools'] = tools  # Anthropic format matches our schema directly
 
+        _thinking_budgets = {'medium': 4096, 'high': 16384}
+        if thinking_mode in _thinking_budgets:
+            create_kwargs['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': _thinking_budgets[thinking_mode],
+            }
+            logger.info(
+                f"[THINKING] native flag passed: provider=anthropic mode={thinking_mode} model={self.model}"
+            )
+
         def _call():
             try:
                 return client.messages.create(**create_kwargs)
@@ -561,6 +571,14 @@ class AnthropicService:
                         except (ValueError, TypeError) as e:
                             logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+            except (anthropic.BadRequestError, anthropic.APIError) as e:
+                if 'thinking' in str(e).lower() and 'thinking' in create_kwargs:
+                    logger.info(
+                        f"[THINKING] native flag rejected by provider=anthropic model={self.model} — retried without"
+                    )
+                    fallback_kwargs = {k: v for k, v in create_kwargs.items() if k != 'thinking'}
+                    return client.messages.create(**fallback_kwargs)
+                raise
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -781,7 +799,7 @@ class OpenAIService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         import openai as openai_mod
         import json as _json
 
@@ -817,6 +835,13 @@ class OpenAIService:
         # mention "json" (OpenAI requires it), and tool calling uses its own
         # structured output protocol. Legacy JSON output lives in send_message.
 
+        _reasoning_efforts = {'medium': 'medium', 'high': 'high'}
+        if thinking_mode in _reasoning_efforts:
+            create_kwargs['reasoning_effort'] = _reasoning_efforts[thinking_mode]
+            logger.info(
+                f"[THINKING] native flag passed: provider=openai mode={thinking_mode} model={self.model}"
+            )
+
         def _call():
             try:
                 return client.chat.completions.create(**create_kwargs)
@@ -830,6 +855,16 @@ class OpenAIService:
                         except (ValueError, TypeError) as e:
                             logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
                 raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
+            except (openai_mod.BadRequestError, openai_mod.APIError) as e:
+                if 'reasoning_effort' in create_kwargs and (
+                    'reasoning_effort' in str(e).lower() or 'unsupported' in str(e).lower()
+                ):
+                    logger.info(
+                        f"[THINKING] native flag rejected by provider=openai model={self.model} — retried without"
+                    )
+                    fallback_kwargs = {k: v for k, v in create_kwargs.items() if k != 'reasoning_effort'}
+                    return client.chat.completions.create(**fallback_kwargs)
+                raise
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -1041,7 +1076,7 @@ class GeminiService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
             from google import genai
         except ImportError:
@@ -1077,6 +1112,15 @@ class GeminiService:
                 ])
             ]
 
+        _thinking_budgets = {'medium': 4096, 'high': 16384}
+        if thinking_mode in _thinking_budgets:
+            gen_config_kwargs['thinking_config'] = genai.types.ThinkingConfig(
+                thinking_budget=_thinking_budgets[thinking_mode]
+            )
+            logger.info(
+                f"[THINKING] native flag passed: provider=gemini mode={thinking_mode} model={self.model}"
+            )
+
         def _call():
             try:
                 return client.models.generate_content(
@@ -1090,6 +1134,18 @@ class GeminiService:
                     raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
                 if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
                     raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
+                if 'thinking_config' in gen_config_kwargs and (
+                    'thinking' in str(e).lower() or 'unsupported' in str(e).lower()
+                ):
+                    logger.info(
+                        f"[THINKING] native flag rejected by provider=gemini model={self.model} — retried without"
+                    )
+                    fallback_kwargs = {k: v for k, v in gen_config_kwargs.items() if k != 'thinking_config'}
+                    return client.models.generate_content(
+                        model=self.model,
+                        contents=gemini_contents,
+                        config=genai.types.GenerateContentConfig(**fallback_kwargs),
+                    )
                 raise
 
         response = _call_with_retry(_call)

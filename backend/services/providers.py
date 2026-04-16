@@ -34,17 +34,17 @@ class Providers:
                     cls._instance = cls()
         return cls._instance
 
-    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True):
+    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
         """Sync send. Returns LLMResponse."""
         if tools is None:
             tools = self._get_tools(job)
         provider = self._resolve(job)
         messages = [{"role": "user", "content": user_prompt}]
-        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools, thinking_mode=thinking_mode)
         self._log_after_call(system_prompt, messages, tools, job, response)
         return response
 
-    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True):
+    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
         """Multi-turn send with a pre-built messages array. Returns LLMResponse.
 
         Used by the tool loop in MessageProcessor to send growing message arrays
@@ -56,11 +56,13 @@ class Providers:
             job: Provider job name used to resolve the LLM config.
             tools: Tool schemas. If None, Providers resolves defaults.
             cache_prefix: Whether to apply prompt prefix caching.
+            thinking_mode: Native deliberation flag. None = disabled (default),
+                'medium' or 'high' = provider-native thinking enabled.
         """
         if tools is None:
             tools = self._get_tools(job)
         provider = self._resolve(job)
-        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools)
+        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools, thinking_mode=thinking_mode)
         self._log_after_call(system_prompt, messages, tools, job, response)
         return response
 
