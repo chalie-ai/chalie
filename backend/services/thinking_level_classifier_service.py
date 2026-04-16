@@ -9,10 +9,9 @@ Classes:
   medium — bounded research, short synthesis, single-function code
   high   — multi-step reasoning, multi-tool orchestration, planning
 
-Input contract (v0.9.0):
+Input contract:
   - Raw user turn goes straight into the encoder. No prefix, no suffix, no
-    options list — the old [prev=...] / Options: A..C / Answer: format was
-    retired when the Qwen single-token classifier was dropped.
+    options list.
   - prev_level is encoded as a 4-dim one-hot concatenated to the 768-d
     embedding before the MLP head. Index order is FROZEN:
     {none: 0, low: 1, medium: 2, high: 3}

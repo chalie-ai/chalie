@@ -42,14 +42,14 @@ Open **http://localhost:8081/on-boarding/** and:
 ## LLM Providers
 
 > **Recommended setup:**
-> - **Local / private** — Install [Ollama](https://ollama.ai), run `ollama pull qwen:8b`, point Chalie at `http://localhost:11434`. Free, no data leaves your machine.
+> - **Local / private** — Install [Ollama](https://ollama.ai), run `ollama pull gemma3:4b`, point Chalie at `http://localhost:11434`. Free, no data leaves your machine.
 > - **Easiest cloud** — Use OpenAI or Anthropic. Paste an API key during onboarding and you're done.
 
 ### Ollama (local)
 
 ```bash
 # Install from https://ollama.ai, then:
-ollama pull qwen:8b
+ollama pull gemma3:4b
 ```
 
 In onboarding, select **Ollama** and set the endpoint to `http://localhost:11434`.

@@ -37,7 +37,7 @@ Each provider needs a **name** (any label you want), the **platform**, a **model
 **Ollama** — Runs entirely on your machine. No API key needed.
 - **Platform**: Ollama
 - **Host**: `http://localhost:11434`
-- **Model**: Any model you've pulled (e.g., `qwen:8b`). Run `ollama list` to see available models.
+- **Model**: Any model you've pulled (e.g., `gemma3:4b`). Run `ollama list` to see available models.
 
 #### Cloud
 

@@ -360,10 +360,10 @@ class ContradictionClassifierService:
         =====================================================
         1. INPUT FORMAT: _build_onnx_input() must produce output identical to
            training/data/tasks/contradiction/__init__.py::_format_input().
-           Only the JSON blob — no Options/Answer suffix (retired in v0.9.0).
+           JSON blob only.
 
-        2. LABELS: The model returns direct class strings (not A/B/C/D/E letters).
-           Labels are read from classifier_meta.json::labels.
+        2. LABELS: The model returns direct class strings. Labels are read
+           from classifier_meta.json::labels.
 
         3. TYPE VOCABULARY: The model only knows 'incoming', 'trait', 'concept',
            'episode'. Any other type_a/type_b value MUST be mapped via
