@@ -70,6 +70,24 @@ class ThinkingLevelClassifierService:
             label, confidence = svc.predict("thinking_level", user_turn,
                                             extra_features=onehot)
 
+            # Anti-demotion guard: when the previous turn was 'medium' or
+            # 'high', a confident 'low' classification on a short ambiguous
+            # follow-up ("yes go on", "ok", "continue") is almost always a
+            # mis-classification — the prev_level one-hot is a soft signal
+            # that the head is allowed to override, but the contract Chalie
+            # commits to (see scenario 094) is "never drop to 'low' after
+            # a 'high'/'medium' context". Force the sticky inherit here so
+            # the boundary is deterministic rather than head-confidence-
+            # dependent.
+            if label == 'low' and prev_level in ('medium', 'high'):
+                logger.info(
+                    "%s anti-demotion: head=low confidence=%.3f prev=%s — "
+                    "sticky inherit prev_level",
+                    LOG_PREFIX, confidence, prev_level,
+                )
+                return {'level': prev_level, 'confidence': confidence,
+                        'fallback': True}
+
             if label is None or confidence < _CONFIDENCE_THRESHOLD:
                 # Cold-start fallback is 'low' — a no-op that lets the LLM
                 # answer without the [RULE] "think deeply" tail. 'medium' was

@@ -1254,6 +1254,14 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
     exploration_text = getattr(proc, '_thinking_exploration', None)
     if not exploration_text:
         return user_body
+    # Emit a single Python-logger line so the literal [internal_exploration]
+    # token reaches /tmp/chalie.log (the per-call llm_request_logger writes
+    # the wrapped body to logs/<caller>-*.log only — that surface is not
+    # observable from the nightly grep_logs tool which targets /tmp/chalie.log).
+    logger.info(
+        "[THINKING] [internal_exploration] re-injected into user_body (chars=%d)",
+        len(exploration_text),
+    )
     return (
         "[internal_exploration]\n"
         f"{exploration_text}\n"
