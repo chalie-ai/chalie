@@ -168,6 +168,10 @@ class MessageProcessor:
         # regressing benchmark behaviour on simple recall/chit-chat.
         self._thinking_level: str = 'low'
         self._thinking_exploration: str | None = None
+        # Single-shot flag: _wrap_with_exploration emits its INFO log at most
+        # once per turn even though it runs every ACT iteration (up to
+        # MAX_ITERATIONS times).
+        self._exploration_logged: bool = False
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
@@ -533,6 +537,13 @@ class MessageProcessor:
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService(execution_gate=False)
 
+            # Anchor the MAX_TIMEOUT clock BEFORE the thinking gate. The
+            # exploration pass (high-mode only) can run a full LLM call and
+            # we refuse to let it sit outside the wall-clock deadline — a
+            # hung exploration would otherwise consume time silently before
+            # the ACT loop even starts counting.
+            loop_start = time.time()
+
             self._run_memory_seed()
             self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
@@ -543,7 +554,6 @@ class MessageProcessor:
                 else 32_000
             )
 
-            loop_start = time.time()
             iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -998,7 +1008,7 @@ class MessageProcessor:
 
             prev_level = self._read_prev_thinking_level()
             result = ThinkingLevelClassifierService().classify(
-                self._raw_input, prev_level=prev_level,
+                self._raw_input, prev_level=prev_level, channel=self.CHANNEL,
             )
             # Capture RAW classifier output. Persisted to the input row so the
             # next turn's sticky-fallback sees what the classifier said, not a
@@ -1087,6 +1097,16 @@ class MessageProcessor:
 
         Returns None on any failure (network, provider rejection, etc).
         Logged at INFO. NEVER raises.
+
+        Trade-off — no quality gate: whatever the provider returns is
+        persisted verbatim. A degenerate exploration ("I don't know, try
+        searching") still ends up re-injected into every ACT iteration
+        because the cost of mid-turn quality-checking another LLM call
+        outweighs the noise floor of a weak exploration. The only
+        filtering is emptiness: blank/whitespace output returns None and
+        the turn proceeds without the [internal_exploration] envelope.
+        If exploration quality becomes a measurable regression, gate
+        here via a confidence classifier or length/structure heuristic.
         """
         from services.providers import Providers
 
@@ -1254,14 +1274,23 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
     exploration_text = getattr(proc, '_thinking_exploration', None)
     if not exploration_text:
         return user_body
-    # Emit a single Python-logger line so the literal [internal_exploration]
-    # token reaches /tmp/chalie.log (the per-call llm_request_logger writes
-    # the wrapped body to logs/<caller>-*.log only — that surface is not
-    # observable from the nightly grep_logs tool which targets /tmp/chalie.log).
-    logger.info(
-        "[THINKING] [internal_exploration] re-injected into user_body (chars=%d)",
-        len(exploration_text),
-    )
+    # Emit a single Python-logger line per turn so the literal
+    # [internal_exploration] token reaches /tmp/chalie.log (the per-call
+    # llm_request_logger writes the wrapped body to logs/<caller>-*.log
+    # only — that surface is not observable from the nightly grep_logs tool
+    # which targets /tmp/chalie.log). Guarded by _exploration_logged so the
+    # marker is logged exactly once per turn, not up to MAX_ITERATIONS times.
+    if not getattr(proc, '_exploration_logged', False):
+        logger.info(
+            "[THINKING] [internal_exploration] re-injected into user_body (chars=%d)",
+            len(exploration_text),
+        )
+        try:
+            proc._exploration_logged = True
+        except Exception:
+            # Best-effort: if the processor rejects attribute assignment
+            # (frozen/slots class), we lose de-dupe but still emit correctly.
+            pass
     return (
         "[internal_exploration]\n"
         f"{exploration_text}\n"

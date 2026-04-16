@@ -162,9 +162,15 @@ class OllamaService:
                 # substring guard would mask real failures. Cost of one extra
                 # call is negligible vs the cost of dropping the entire turn.
                 if response.status_code == 400 and payload.get("think"):
-                    logging.info(
+                    # Log at WARNING: if the original 400 was caused by an
+                    # unrelated payload bug (tool schema, content format),
+                    # the retry without 'think' will ALSO 400 and propagate
+                    # as a real failure. Operators should see both lines to
+                    # diagnose correctly — INFO would get lost.
+                    logging.warning(
                         f"[THINKING] native flag rejected by provider=ollama "
-                        f"model={self.model} body={response.text[:200]!r} — retried without"
+                        f"model={self.model} body={response.text[:200]!r} — retrying without "
+                        f"think (if retry also 400s, root cause is unrelated to thinking flag)"
                     )
                     payload.pop("think", None)
                     response = requests.post(url, json=payload, timeout=self.timeout)

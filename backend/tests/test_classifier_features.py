@@ -184,8 +184,15 @@ class TestThinkingLevelClassifier:
         verifies the full service honours that contract regardless of what
         the MLP head predicted.
         """
-        from services.thinking_level_classifier_service import ThinkingLevelClassifierService
+        from services.thinking_level_classifier_service import (
+            ThinkingLevelClassifierService,
+            _INHERIT_COUNT_BY_CHANNEL,
+        )
         import services.onnx_inference_service as _onnx_mod
+
+        # Isolate the inherit counter — prior tests may have left state on
+        # channel='' which would otherwise trigger the chain-break path.
+        _INHERIT_COUNT_BY_CHANNEL.clear()
 
         # Inject our module-level real svc as the singleton for this test
         original_instance = _onnx_mod._instance

@@ -36,6 +36,34 @@ PREV_LEVEL_TO_IDX = {'none': 0, 'low': 1, 'medium': 2, 'high': 3}
 
 _CONFIDENCE_THRESHOLD = 0.70
 
+# Per-channel consecutive-inherit counter. Prevents the anti-demotion guard
+# from permanently locking a channel in 'high'/'medium' once the user has
+# actually moved to chit-chat.
+#
+# Mechanic: each time the guard inherits prev_level on a low-head signal,
+# increment the channel's counter. On the SECOND consecutive inherit we
+# allow demotion — i.e. the guard protects a single ambiguous follow-up
+# ("yes", "go on") but yields to the head after two consecutive low signals.
+#
+# Reset to 0 whenever:
+#   - the head emits a non-low label confidently (above threshold)
+#   - the user turn genuinely classifies as 'low' (prev was none/low, no
+#     inherit needed)
+# Scope: in-memory, keyed by channel. Process restart resets the chain,
+# which is the correct behaviour (ambiguous short follow-ups at cold start
+# fall back to 'low'/'none' anyway).
+_INHERIT_COUNT_BY_CHANNEL: dict[str, int] = {}
+_INHERIT_LIMIT = 2
+
+
+def _reset_inherit_counter(channel: str) -> None:
+    _INHERIT_COUNT_BY_CHANNEL.pop(channel, None)
+
+
+def _bump_inherit_counter(channel: str) -> int:
+    _INHERIT_COUNT_BY_CHANNEL[channel] = _INHERIT_COUNT_BY_CHANNEL.get(channel, 0) + 1
+    return _INHERIT_COUNT_BY_CHANNEL[channel]
+
 
 class ThinkingLevelClassifierService:
     """Classify the deliberation depth required for a user turn.
@@ -45,7 +73,8 @@ class ThinkingLevelClassifierService:
     All exceptions are silently trapped — gate failure must never kill a turn.
     """
 
-    def classify(self, user_turn: str, prev_level: str = 'none') -> dict:
+    def classify(self, user_turn: str, prev_level: str = 'none',
+                 channel: str = '') -> dict:
         """Return {'level': str, 'confidence': float, 'fallback': bool}.
 
         Flow:
@@ -54,6 +83,10 @@ class ThinkingLevelClassifierService:
           3. Call onnx_inference_service.predict('thinking_level', user_turn, onehot).
           4. If label is None OR confidence < threshold: sticky fallback.
           5. Otherwise: return direct label + confidence, fallback=False.
+
+        ``channel`` keys the anti-demotion inherit counter. Omit (default '')
+        for callers that don't care about chain-breaking — they simply never
+        lock in.
         """
         if prev_level not in _VALID_PREV:
             prev_level = 'none'
@@ -73,17 +106,29 @@ class ThinkingLevelClassifierService:
             # Anti-demotion guard: when the previous turn was 'medium' or
             # 'high', a confident 'low' classification on a short ambiguous
             # follow-up ("yes go on", "ok", "continue") is almost always a
-            # mis-classification — the prev_level one-hot is a soft signal
-            # that the head is allowed to override, but the contract Chalie
-            # commits to (see scenario 094) is "never drop to 'low' after
-            # a 'high'/'medium' context". Force the sticky inherit here so
-            # the boundary is deterministic rather than head-confidence-
-            # dependent.
+            # mis-classification on the FIRST such turn.
+            #
+            # Chain-break rule: after _INHERIT_LIMIT consecutive inherits on
+            # the same channel, yield to the head. Prevents the "permanent
+            # lock-in" failure mode where a channel that hit 'high' once
+            # never escapes back to 'low' even when the user has clearly
+            # moved on to chit-chat.
             if label == 'low' and prev_level in ('medium', 'high'):
+                inherits = _INHERIT_COUNT_BY_CHANNEL.get(channel, 0)
+                if inherits >= _INHERIT_LIMIT:
+                    logger.info(
+                        "%s anti-demotion chain broken: head=low confidence=%.3f "
+                        "prev=%s channel=%s inherits=%d — yielding to head",
+                        LOG_PREFIX, confidence, prev_level, channel, inherits,
+                    )
+                    _reset_inherit_counter(channel)
+                    return {'level': 'low', 'confidence': confidence,
+                            'fallback': False}
+                count = _bump_inherit_counter(channel)
                 logger.info(
-                    "%s anti-demotion: head=low confidence=%.3f prev=%s — "
-                    "sticky inherit prev_level",
-                    LOG_PREFIX, confidence, prev_level,
+                    "%s anti-demotion: head=low confidence=%.3f prev=%s "
+                    "channel=%s inherits=%d — sticky inherit prev_level",
+                    LOG_PREFIX, confidence, prev_level, channel, count,
                 )
                 return {'level': prev_level, 'confidence': confidence,
                         'fallback': True}
@@ -104,8 +149,17 @@ class ThinkingLevelClassifierService:
                     confidence if label is not None else 0.0,
                     prev_level,
                 )
+                # Low-confidence fallback that inherits a non-low prev_level
+                # is the SAME lock-in risk as the anti-demotion path above.
+                # Count it too.
+                if fallback_level in ('medium', 'high'):
+                    _bump_inherit_counter(channel)
+                else:
+                    _reset_inherit_counter(channel)
                 return {'level': fallback_level, 'confidence': 0.0, 'fallback': True}
 
+            # Confident non-low classification — chain broken, reset counter.
+            _reset_inherit_counter(channel)
             logger.info(
                 "%s MLP level=%s confidence=%.3f prev=%s fallback=false",
                 LOG_PREFIX, label, confidence, prev_level,
@@ -120,4 +174,8 @@ class ThinkingLevelClassifierService:
                 "%s classify failed (%s) — fallback: %s",
                 LOG_PREFIX, exc, fallback_level,
             )
+            if fallback_level in ('medium', 'high'):
+                _bump_inherit_counter(channel)
+            else:
+                _reset_inherit_counter(channel)
             return {'level': fallback_level, 'confidence': 0.0, 'fallback': True}
