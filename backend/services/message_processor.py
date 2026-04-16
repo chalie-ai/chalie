@@ -26,6 +26,7 @@ import contextlib
 import contextvars
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import parse_utc, utc_now
@@ -97,7 +98,8 @@ class MessageProcessor:
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
     NATIVE_TOOLS: list[str] = []
     MAX_ITERATIONS: int = 30
-    MAX_TIMEOUT: int = 900  # seconds
+    MAX_TIMEOUT: int = 900    # seconds — ACT loop only
+    THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
     COMPACTION_PROMPT: str = (
         "Summarize the following conversation context into a compact, actionable summary.\n"
         "\n"
@@ -168,10 +170,6 @@ class MessageProcessor:
         # regressing benchmark behaviour on simple recall/chit-chat.
         self._thinking_level: str = 'low'
         self._thinking_exploration: str | None = None
-        # Single-shot flag: _wrap_with_exploration emits its INFO log at most
-        # once per turn even though it runs every ACT iteration (up to
-        # MAX_ITERATIONS times).
-        self._exploration_logged: bool = False
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
@@ -490,6 +488,9 @@ class MessageProcessor:
           ``user_steer`` and ephemeral=0) into a single ``act_restart``
           DTO, clears the trail + discovered tools, and resets
           ``iteration`` to 0 for a clean loop restart.
+        - ``loop_start`` is anchored AFTER ``_run_thinking_gate()`` completes.
+          The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
+          (independent budget). MAX_TIMEOUT covers only ACT loop iterations.
         - ``loop_start`` is intentionally NOT reset on Stage 2 restart —
           the MAX_TIMEOUT wall-clock guard keeps ticking so runaway turns
           eventually hit the cap.
@@ -537,15 +538,21 @@ class MessageProcessor:
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService(execution_gate=False)
 
-            # Anchor the MAX_TIMEOUT clock BEFORE the thinking gate. The
-            # exploration pass (high-mode only) can run a full LLM call and
-            # we refuse to let it sit outside the wall-clock deadline — a
-            # hung exploration would otherwise consume time silently before
-            # the ACT loop even starts counting.
-            loop_start = time.time()
-
             self._run_memory_seed()
             self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
+
+            # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
+            # runs under its own THINKING_TIMEOUT envelope (independent budget),
+            # so MAX_TIMEOUT covers only ACT loop iterations.
+            loop_start = time.time()
+
+            # Log exploration injection once per turn — at this single point,
+            # not inside the ACT loop.
+            if self._thinking_exploration:
+                logger.info(
+                    "[THINKING] [internal_exploration] injected into user body (chars=%d)",
+                    len(self._thinking_exploration),
+                )
 
             raw_limit = Providers.instance().get_context_limit(job=self.JOB)
             context_limit: int = (
@@ -1008,7 +1015,7 @@ class MessageProcessor:
 
             prev_level = self._read_prev_thinking_level()
             result = ThinkingLevelClassifierService().classify(
-                self._raw_input, prev_level=prev_level, channel=self.CHANNEL,
+                self._raw_input, prev_level=prev_level,
             )
             # Capture RAW classifier output. Persisted to the input row so the
             # next turn's sticky-fallback sees what the classifier said, not a
@@ -1018,7 +1025,19 @@ class MessageProcessor:
 
             if self._thinking_level == 'high':
                 try:
-                    self._thinking_exploration = self._run_thinking_exploration()
+                    with ThreadPoolExecutor(max_workers=1) as _pool:
+                        _future = _pool.submit(self._run_thinking_exploration)
+                        try:
+                            self._thinking_exploration = _future.result(
+                                timeout=self.THINKING_TIMEOUT
+                            )
+                        except FuturesTimeoutError:
+                            logger.warning(
+                                "[THINKING] exploration exceeded THINKING_TIMEOUT=%ds"
+                                " — proceeding without exploration",
+                                self.THINKING_TIMEOUT,
+                            )
+                            self._thinking_exploration = None
                 except Exception as exc:
                     logger.info(
                         "[THINKING] exploration failed (%s) — high turn proceeds "
@@ -1211,10 +1230,11 @@ _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 #: resolved 2026-04-10.)
 #:
 #: ``thinking`` — the pre-turn exploration block is stored ``ephemeral=0`` as
-#: an audit row via ``_persist_exploration_to_tool_calls``, but is injected
+#: an audit row via ``_persist_exploration_to_tool_calls``, but is prepended
 #: live into the ACT-loop user body via ``_wrap_with_exploration`` on every
-#: iteration. Rendering it again in Previous Messages would double-inject the
-#: exploration text and pollute the transcript for the LLM.
+#: iteration (cheap string-prefix, single LLM call before the loop). Rendering
+#: it again in Previous Messages would double-inject the exploration text and
+#: pollute the transcript for the LLM.
 #:
 #: ``tool_compaction`` and ``act_restart`` do NOT need to be listed here —
 #: both are stored ``ephemeral=1`` and are already filtered out of Previous
@@ -1263,6 +1283,11 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
     - no active processor is bound (called outside a turn)
     - ``_thinking_exploration`` is falsy (None, empty string)
 
+    The exploration LLM call runs ONCE per turn (inside _run_thinking_gate).
+    This helper is called on each ACT iteration to keep the already-computed
+    exploration text in the user body. The INFO log for the injection is
+    emitted once pre-loop inside send() — not here.
+
     Apply this wrapper BEFORE ``_wrap_with_checkpoint`` so the exploration block
     sits at the top of ``### Current State`` when a compaction exists.
     """
@@ -1274,23 +1299,6 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
     exploration_text = getattr(proc, '_thinking_exploration', None)
     if not exploration_text:
         return user_body
-    # Emit a single Python-logger line per turn so the literal
-    # [internal_exploration] token reaches /tmp/chalie.log (the per-call
-    # llm_request_logger writes the wrapped body to logs/<caller>-*.log
-    # only — that surface is not observable from the nightly grep_logs tool
-    # which targets /tmp/chalie.log). Guarded by _exploration_logged so the
-    # marker is logged exactly once per turn, not up to MAX_ITERATIONS times.
-    if not getattr(proc, '_exploration_logged', False):
-        logger.info(
-            "[THINKING] [internal_exploration] re-injected into user_body (chars=%d)",
-            len(exploration_text),
-        )
-        try:
-            proc._exploration_logged = True
-        except Exception:
-            # Best-effort: if the processor rejects attribute assignment
-            # (frozen/slots class), we lose de-dupe but still emit correctly.
-            pass
     return (
         "[internal_exploration]\n"
         f"{exploration_text}\n"
