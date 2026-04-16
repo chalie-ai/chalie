@@ -358,21 +358,28 @@ See API blueprints in `backend/api/` for full reference.
 
 ## Testing Strategy
 
+**Feature tests, zero mocks, real-world only.** Every test runs the real production stack — real services, real DB, real models. No `MagicMock`, no `patch`, no `monkeypatch` of production code. See `docs/12-TESTING.md` for the full discipline.
+
 ### Test Markers
-- `@pytest.mark.unit` — No external dependencies (fast)
-- `@pytest.mark.integration` — Requires SQLite/MemoryStore (slower)
+- `@pytest.mark.unit` — Pure functions only (no IO, no collaborators, no state)
+- `@pytest.mark.integration` — Feature tests against the real stack (default for anything touching a service, DB, model, or network)
+
+### Hard Rules
+- **3–10 feature tests per service.** More than 10 is a design smell.
+- **Nightly YAML scenarios** (`/Volumes/llm/chalie-nightly-test/scenarios/`) are the primary feature tests. Python-level feature tests are a fast-feedback supplement.
+- **Coder agent never writes or modifies tests.** The `tester` agent has exclusive ownership.
 
 ### Test Organization
 ```
 backend/tests/
-├── test_services/         # Service unit tests
-├── test_workers/          # Worker integration tests
-└── fixtures/              # Shared test fixtures
+├── test_<service>_features.py    # Integration-marked feature tests (real stack)
+├── test_<module>_pure_functions.py   # Unit-marked pure-function tests
+└── helpers.py                    # Deterministic data factories, NOT mocks
 ```
 
 Run all tests: `pytest`
-Run only unit: `pytest -m unit`
-Run with verbose: `pytest -v`
+Run unit only: `pytest -m unit`
+Run feature tests: `pytest -m integration`
 
 ## Development Workflow
 

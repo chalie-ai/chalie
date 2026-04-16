@@ -1,257 +1,242 @@
 # Testing Guide
 
+## Philosophy — FEATURE TESTS, ZERO MOCKS, REAL-WORLD ONLY
+
+Every test answers one question: **does this service do what it claims?**
+
+- Given **real** input X
+- Through the **real** production stack (real DB, real services, real models, real cache, real config)
+- Assert **real** observable output Y
+
+If a test does not fit that shape, it does not belong in the suite. Delete it.
+
+### Hard rules
+
+1. **ZERO MOCKS.** No `MagicMock`, `Mock`, `patch`, `monkeypatch` of production code, stubs, spies, or fakes. The real production stack runs. In-memory SQLite is allowed because it is still SQLite, not a mock.
+
+2. **3–10 feature tests per service. Hard cap.** More than 10 is a design smell — the service is doing too much. Escalate as a system design issue; do not write the 11th test.
+
+3. **Real-world scenarios only.** Test what the service is responsible for, not how it is wired. Contradiction service → does it detect contradictions? Thinking-level classifier → does it route turns to the right level? Memory recall → does it return relevant memories?
+
+4. **No contract / plumbing / version-pin / shape / field-list / call-count / enum-membership tests.** If the behaviour matters, a feature test catches it for free with a better signal. Delete these on sight.
+
+5. **No unit tests unless the unit is pure.** A pure function (no IO, no collaborators, no state — e.g. math helpers, deterministic formatters) may have unit tests. Everything else is a feature test.
+
+6. **The coder agent never writes or modifies tests.** The tester agent has exclusive ownership. See `~/.claude/agents/` for the full agent contracts.
+
 ## Quick Start
 
 ```bash
 cd backend
 
-# Run all unit tests (fast, no external deps)
+# Unit tests (pure functions only — fast, in-memory, no external deps)
 pytest -m unit
 
-# Run a specific test file
-pytest tests/test_message_processor.py
+# Feature tests (real production stack — slow, loads real models/services)
+pytest -m integration
 
-# Run a single test
-pytest tests/test_message_processor.py::TestMessageProcessorBase::test_get_system_prompt
+# A specific test file
+pytest tests/test_classifier_features.py
+
+# A single test
+pytest tests/test_classifier_features.py::TestContradictionClassifier::test_contradicting_locations_detected
 
 # Verbose output
 pytest -m unit -v
 ```
 
-## Conventions
-
-### Naming
-
-```
-test_{behavior}_when_{condition}
-```
-
-Omit `_when_` for obvious cases:
+## Markers
 
 ```python
-def test_empty_query_returns_empty(self):       # obvious
-def test_site_goes_down(self):                   # obvious
-def test_accept_task_enforces_max_active_limit(self):  # with condition
+@pytest.mark.unit          # Pure-function tests only — no IO, no collaborators
+@pytest.mark.integration   # Real services, real DB, real models — the feature tests
 ```
 
-### Structure (AAA)
+**Integration is the default** for anything touching a service, the DB, a model, or the network. The unit marker is reserved for genuinely pure helpers.
 
-Every test follows **Arrange / Act / Assert**:
+## Anatomy of a Feature Test
 
 ```python
-def test_get_returns_value_when_found(self, mock_db):
-    # Arrange
-    db, _, result = mock_db
-    result.fetchone.return_value = ('my-value',)
-    service = SettingsService(db)
+# backend/tests/test_classifier_features.py
 
-    # Act
-    value = service.get('some_key')
+import pytest
+from pathlib import Path
 
-    # Assert
-    assert value == 'my-value'
+pytestmark = pytest.mark.integration
+
+_MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
+
+
+@pytest.fixture(scope="module")
+def onnx_svc():
+    """Real OnnxInferenceService pointed at production models."""
+    from services.onnx_inference_service import OnnxInferenceService
+    return OnnxInferenceService(_MODELS_DIR)
+
+
+class TestContradictionClassifier:
+
+    def test_contradicting_locations_detected(self, onnx_svc):
+        """Valletta vs Swieqi — relocation → temporal_change."""
+        from services.contradiction_classifier_service import ContradictionClassifierService
+
+        svc = ContradictionClassifierService()
+        payload = svc._build_onnx_input(
+            text_a="I live in Valletta",
+            text_b="I live in Swieqi",
+            meta_a={"type": "incoming", "established": False},
+            meta_b={"type": "trait", "reinforcement_count": 5},
+        )
+
+        label, confidence = onnx_svc.predict("contradiction", payload)
+
+        assert label in ("temporal_change", "true_contradiction")
+        assert confidence > 0.4
 ```
 
-### Markers
+What this test does:
+- Loads the **real** 596 MB `gte-modernbert-base` encoder
+- Loads the **real** contradiction MLP head from disk (`.npz`)
+- Feeds **real** text
+- Asserts a **real** classification
 
-```python
-@pytest.mark.unit          # No external deps (MemoryStore, SQLite, LLM)
-@pytest.mark.integration   # Requires running services
+What it does not do:
+- Mock the ONNX service
+- Assert the output dict has fields `{"label", "confidence"}` (that is a contract test)
+- Assert the version pin is right (a real feature test catches misconfig faster)
+- Assert it calls `_build_onnx_input` with argument X (wiring theater)
+
+## Naming
+
+```
+test_{behavior}_{condition_if_needed}
 ```
 
-### Banned Patterns
+Names describe the **real-world scenario**, not the code path.
 
-- `assert True` — always passes, tests nothing
-- `assert isinstance(x, dict)` as sole assertion — verify content, not type
-- `assert x is not None` without content check — verify the actual value
-- Tests with zero assertions — every test must assert specific behavior
-
-## Fixture Catalog
-
-All fixtures live in `tests/conftest.py`.
-
-### `mock_memory_store`
-In-memory MemoryStore instance. Patches `MemoryStore` connections. Flushes on teardown.
-
-### `mock_config`
-Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for frontal-cortex.
-
-### `mock_ollama`
-Returns `LLMResponse(text='{"gists": [], "scope": "test"}', model='test-model', provider='ollama')`. Also mocks `generate_embedding` → `[0.0] * 256`.
-
-### `mock_db`
-Basic DB mock. Context manager yields cursor directly. Good for simple services.
-
-### `mock_db_rows`
-Extended DB mock with programmable cursor returns. Supports both patterns:
-- `db.connection()` → conn → `conn.cursor()` → cursor
-- `db.get_session()` → session → `session.execute()` → result
-
-Returns `(db, cursor)` tuple.
-
-### `mock_llm`
-Configurable LLM mock. Set `mock_llm.response_text` before calling:
 ```python
-def test_something(self, mock_llm):
-    mock_llm.response_text = '{"verdict": "good"}'
-    # Services calling create_llm_service().send_message() get that text
+# Good — describes what the feature does
+def test_contradicting_locations_detected(self):
+def test_simple_factual_lookup_routes_to_low(self):
+def test_architecture_question_routes_to_high(self):
+
+# Bad — describes the plumbing
+def test_build_onnx_input_returns_dict(self):
+def test_sha256_mismatch_raises_error(self):
+def test_all_valid_labels_pass_through(self):
 ```
 
-### `authed_client`
-Full Flask app with all blueprints, auth bypassed, DB/MemoryStore mocked:
-```python
-def test_endpoint(self, authed_client):
-    client, mock_db, mock_store = authed_client
-    response = client.get('/health')
-    assert response.status_code == 200
-```
-
-## Test Data Factories
-
-Located in `tests/helpers.py`. Return tuples matching actual DB column orders:
+## Structure — Arrange / Act / Assert
 
 ```python
-from tests.helpers import make_task_row, make_scheduled_item, make_trait_row
-
-# 18-element tuple matching persistent_tasks SELECT
-row = make_task_row(status='accepted', goal='Monitor weather')
-
-# 11-element tuple matching scheduled_items SELECT
-row = make_scheduled_item(message='Take medicine', recurrence='daily')
-
-# 4-element tuple matching user_traits SELECT
-row = make_trait_row(trait_key='timezone', trait_value='CET')
-
-# Dict matching episodic retrieval service output
-episode = make_episode_row(gist='Discussed morning routine')
-
-# 9-element tuple matching providers SELECT
-provider = make_provider_row(platform='ollama', model='gemma4:31b')
-```
-
-## Mock Strategies
-
-### LLM Mocking
-
-Never call real LLMs in unit tests. Two approaches:
-
-**Via `mock_llm` fixture** (patches `create_llm_service`):
-```python
-def test_critic(self, mock_llm):
-    mock_llm.response_text = '{"safe": true, "verdict": "ok"}'
-    result = critic.evaluate(action_result)
-```
-
-**Via `mock_ollama` fixture** (patches `OllamaService`):
-```python
-def test_chunker(self, mock_ollama, mock_config):
-    mock_ollama.send_message.return_value = LLMResponse(
-        text='{"gists": [{"content": "test"}]}',
-        model='test', provider='ollama'
+def test_contradicting_locations_detected(self, onnx_svc):
+    # Arrange — build real input, load real service
+    svc = ContradictionClassifierService()
+    payload = svc._build_onnx_input(
+        text_a="I live in Valletta",
+        text_b="I live in Swieqi",
+        meta_a={"type": "incoming"},
+        meta_b={"type": "trait", "reinforcement_count": 5},
     )
+
+    # Act — run the real classifier
+    label, confidence = onnx_svc.predict("contradiction", payload)
+
+    # Assert — observable output
+    assert label in ("temporal_change", "true_contradiction")
+    assert confidence > 0.4
 ```
 
-### DB Mocking — Connection Pattern
+## Banned Patterns
 
-For services using `db.connection()` → cursor (most services):
+- `assert True` — tests nothing
+- `assert isinstance(x, dict)` as sole assertion — type checks
+- `assert x is not None` without content check — truthiness theatre
+- Tests with zero assertions
+- Any `MagicMock`, `Mock`, `patch`, `monkeypatch` of production code
+- Parametrised label pass-throughs (`@pytest.mark.parametrize("label", [...])` where the test just asserts the mock returned the label)
+- Tests that assert version strings, SHA pins, weight shapes, field lists, or `.called_with(...)`
+
+## Nightly Scenarios — the Primary Feature Tests
+
+The black-box YAML scenarios at `/Volumes/llm/chalie-nightly-test/scenarios/` are the **primary feature tests** for Chalie. They exercise the entire stack: HTTP → auth → message processing → LLM → memory → response.
+
+Python-level feature tests are a **fast-feedback supplement** for behaviours you want to catch before running a full nightly. They do not replace the nightly scenarios.
+
+See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
+
+## What If a Service Cannot Be Tested Without Mocks?
+
+**STOP.** Do not write the test. Escalate.
+
+If the only way to test a service is to mock its collaborators, the code is too coupled to test in production shape. That is a design signal worth surfacing, not hiding behind a mock.
+
+Possible outcomes:
+- Add a legitimate dependency-injection seam (via the coder agent, not the tester)
+- Test the service at a higher level where real collaborators can run
+- Accept that the behaviour is only covered by a nightly scenario, and leave the Python-level test unwritten
+
+The wrong answer is always: write a mock-heavy test that proves nothing.
+
+## Service Size — the 10-Test Cap
+
+If a service needs more than 10 feature tests to cover its behaviour, it is doing too much. Break it up.
+
+Typical cap:
+- Simple services: 3–5 feature tests
+- Complex services: 6–10 feature tests
+- More than 10: system design problem — escalate
+
+Feature tests are expensive (they load real models and DBs). The cap is not a suggestion — it is a forcing function that keeps services small and focused.
+
+## Pure-Function Unit Tests
+
+The one exception to "feature tests only" — pure functions may have unit tests:
 
 ```python
-@pytest.fixture
-def mock_db(self):
-    db = MagicMock()
-    cursor = MagicMock()
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=conn)
-    ctx.__exit__ = MagicMock(return_value=False)
-    db.connection.return_value = ctx
-    return db, cursor
+# backend/tests/test_classifier_pure_functions.py
+
+import pytest
+pytestmark = pytest.mark.unit
+
+from services.contradiction_classifier_service import _cosine_similarity
+
+
+class TestCosineSimilarity:
+
+    def test_identical_vectors_return_one(self):
+        assert _cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+
+    def test_orthogonal_vectors_return_zero(self):
+        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 ```
 
-### DB Mocking — Session Pattern
+Criteria for a legitimate unit test:
+- No IO (no disk, no network, no DB)
+- No collaborators (no other service instances)
+- No state (same input → same output, always)
 
-For services using `db.get_session()` → session (SettingsService, ProviderDbService, auth):
+If any of those are false, it is not a unit test — it is a feature test disguised as one. Write it under `@pytest.mark.integration`.
 
-```python
-@pytest.fixture
-def mock_db(self):
-    db = MagicMock()
-    session = MagicMock()
-    result = MagicMock()
-    session.execute.return_value = result
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=session)
-    ctx.__exit__ = MagicMock(return_value=False)
-    db.get_session.return_value = ctx
-    return db, session, result
+## Running the Suite
+
+```bash
+# Fast — pure functions only (~1 second)
+pytest -m unit
+
+# Slow — real stack, real models (loads 596 MB encoder once per module)
+pytest -m integration
+
+# Both
+pytest
+
+# Parallel (if using pytest-xdist)
+pytest -m integration -n 4
 ```
 
-### Auth Bypass for API Tests
+## Examples in the Codebase
 
-The `@require_session` decorator checks `validate_session(request)` at runtime:
+- `backend/tests/test_classifier_features.py` — reference feature test file (real encoder, real heads, zero mocks)
+- `backend/tests/test_classifier_pure_functions.py` — reference pure-function file
 
-```python
-@pytest.fixture(autouse=True)
-def bypass_auth(self):
-    with patch('services.auth_session_service.validate_session', return_value=True):
-        yield
-```
-
-### Optional Dependencies
-
-Use `pytest.importorskip` for tools with optional deps:
-
-```python
-some_dep = pytest.importorskip('some_dep', reason='some_dep not installed')
-from tools.my_tool import execute
-```
-
-### Module Injection for Missing Packages
-
-When a dependency is lazily imported inside a function and not installed:
-
-```python
-MockWebPushException = type('WebPushException', (Exception,), {})
-mock_pywebpush = MagicMock()
-mock_pywebpush.webpush = MagicMock()
-mock_pywebpush.WebPushException = MockWebPushException
-
-with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
-    send_push_to_all("Test", "Body")
-```
-
-## Adding Tests for a New Service
-
-1. Create `tests/test_my_service.py`
-2. Import the service: `from services.my_service import MyService`
-3. Add `@pytest.mark.unit` to the test class
-4. Mock external deps (DB, MemoryStore, LLM) in fixtures
-5. Write tests following AAA structure
-6. Run: `pytest tests/test_my_service.py -v`
-7. Verify: `pytest -m unit` still passes
-
-## Adding Tests for a New API Blueprint
-
-1. Create `tests/test_api_my_endpoint.py`
-2. Register only the blueprint you're testing:
-   ```python
-   @pytest.fixture
-   def client(self):
-       app = Flask(__name__)
-       app.register_blueprint(my_bp)
-       app.config['TESTING'] = True
-       return app.test_client()
-   ```
-3. Add `bypass_auth` autouse fixture
-4. Patch service constructors at their lazy-import points
-5. Test HTTP status codes, JSON response shape, and key field values
-6. Test validation (400), not-found (404), and error (500) paths
-
-## Adding Tests for a New Tool
-
-1. Create `tests/test_tool_my_tool.py`
-2. Import: `from tools.my_tool import execute`
-3. Mock external HTTP calls via `patch('requests.get')`
-4. Test the `execute(topic, params, config, telemetry)` contract
-5. Test error cases: missing config, API failures, invalid responses
+Study these before writing a new test file. Match the pattern.
