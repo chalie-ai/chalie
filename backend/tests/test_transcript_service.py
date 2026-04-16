@@ -235,3 +235,78 @@ class TestGetRecentTopicContext:
             results = get_recent('test')
 
         assert results == []
+
+
+class TestPerChannelExtractionCounter:
+    """_channel_insert_counts is keyed per channel, not globally.
+
+    Two independent channels each accumulate their own counter. Hitting the
+    threshold on channel A must not fire on channel B, and vice versa.
+    """
+
+    def test_each_channel_has_independent_counter(self):
+        """Inserting 34 times on channel-A then once on channel-B should NOT
+        trigger extraction on channel-B (its count is only 1, not 35)."""
+        import services.transcript_service as ts
+
+        fired_channels = []
+
+        def _fake_trigger(channel, rowid):
+            fired_channels.append(channel)
+
+        original_counts = ts._channel_insert_counts.copy()
+        ts._channel_insert_counts.clear()
+
+        try:
+            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
+                # Push channel-A to the threshold (EXTRACTION_INTERVAL - 1 = 34)
+                for i in range(34):
+                    ts._maybe_trigger_extraction('channel-A', i)
+
+                # channel-A has not fired yet (count is 34, threshold is 35)
+                assert 'channel-A' not in fired_channels
+
+                # One insert on channel-B — must NOT fire (its count is 1)
+                ts._maybe_trigger_extraction('channel-B', 99)
+                assert 'channel-B' not in fired_channels
+
+                # The 35th insert on channel-A now fires
+                ts._maybe_trigger_extraction('channel-A', 35)
+                assert fired_channels == ['channel-A']
+
+                # channel-A counter has reset; next 34 inserts must not fire again
+                fired_channels.clear()
+                for i in range(34):
+                    ts._maybe_trigger_extraction('channel-A', i + 36)
+                assert fired_channels == []
+
+        finally:
+            ts._channel_insert_counts.clear()
+            ts._channel_insert_counts.update(original_counts)
+
+    def test_two_channels_fire_independently(self):
+        """Both channels firing at threshold doesn't interfere with each other."""
+        import services.transcript_service as ts
+
+        fired_channels = []
+
+        def _fake_trigger(channel, rowid):
+            fired_channels.append(channel)
+
+        original_counts = ts._channel_insert_counts.copy()
+        ts._channel_insert_counts.clear()
+
+        try:
+            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
+                interval = ts._EXTRACTION_INTERVAL
+                for i in range(interval):
+                    ts._maybe_trigger_extraction('alpha', i)
+                for i in range(interval):
+                    ts._maybe_trigger_extraction('beta', i)
+
+                assert fired_channels.count('alpha') == 1
+                assert fired_channels.count('beta') == 1
+
+        finally:
+            ts._channel_insert_counts.clear()
+            ts._channel_insert_counts.update(original_counts)

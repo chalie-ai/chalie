@@ -93,16 +93,21 @@ class EpisodicService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
-                # Deduplication: skip if >50% transcript ID overlap with existing episode
+                # When >50% transcript overlap with an existing episode, store the new
+                # episode anyway and create a super episode linking both.
+                overlapping_episodes = []
                 if transcript_id_start is not None and transcript_id_end is not None:
                     new_span = transcript_id_end - transcript_id_start + 1
                     cursor.execute("""
-                        SELECT id, transcript_id_start, transcript_id_end FROM episodes
+                        SELECT id, transcript_id_start, transcript_id_end,
+                               transcript_ids, gist, entities, goal_tags
+                        FROM episodes
                         WHERE transcript_id_start IS NOT NULL
                           AND transcript_id_end IS NOT NULL
                           AND transcript_id_start <= ?
                           AND transcript_id_end >= ?
                           AND deleted_at IS NULL
+                          AND (consolidated_from IS NULL OR consolidated_from = '[]')
                     """, (transcript_id_end, transcript_id_start))
                     for overlap_row in cursor.fetchall():
                         existing_start = overlap_row[1]
@@ -111,13 +116,15 @@ class EpisodicService:
                         overlap_end = min(transcript_id_end, existing_end)
                         overlap_count = max(0, overlap_end - overlap_start + 1)
                         if new_span > 0 and overlap_count / new_span > 0.5:
-                            cursor.close()
-                            logging.info(
-                                "Skipping duplicate episode for transcript range "
-                                f"[{transcript_id_start}, {transcript_id_end}] — "
-                                f">50% overlap with existing episode {overlap_row[0]}"
-                            )
-                            return overlap_row[0]
+                            overlapping_episodes.append({
+                                'id': overlap_row[0],
+                                'transcript_id_start': existing_start,
+                                'transcript_id_end': existing_end,
+                                'transcript_ids': overlap_row[3],
+                                'gist': overlap_row[4] or '',
+                                'entities': overlap_row[5],
+                                'goal_tags': overlap_row[6],
+                            })
 
                 cursor.execute("""
                     INSERT INTO episodes (
@@ -165,6 +172,108 @@ class EpisodicService:
                     conn.execute(
                         "INSERT INTO episodes_fts(rowid, gist, action) VALUES (?, ?, ?)",
                         (rowid[0], episode_data['gist'], episode_data['action']),
+                    )
+
+                # Create super episodes for each overlapping existing episode
+                for existing in overlapping_episodes:
+                    existing_ids_raw = existing['transcript_ids']
+                    if isinstance(existing_ids_raw, str):
+                        try:
+                            existing_ids = json.loads(existing_ids_raw)
+                        except Exception:
+                            existing_ids = []
+                    else:
+                        existing_ids = existing_ids_raw or []
+
+                    new_ids = episode_data.get('transcript_ids', [])
+                    if isinstance(new_ids, str):
+                        try:
+                            new_ids = json.loads(new_ids)
+                        except Exception:
+                            new_ids = []
+
+                    merged_ids = sorted(set(existing_ids) | set(new_ids))
+                    super_start = min(
+                        existing['transcript_id_start'],
+                        transcript_id_start,
+                    )
+                    super_end = max(
+                        existing['transcript_id_end'],
+                        transcript_id_end,
+                    )
+                    existing_gist = existing['gist'][:200]
+                    new_gist = episode_data['gist'][:200]
+                    super_gist = f"{existing_gist} | {new_gist}"
+                    super_id = str(uuid.uuid4())
+
+                    # Merge entities and goal_tags from both episodes
+                    existing_entities_raw = existing.get('entities')
+                    if isinstance(existing_entities_raw, str):
+                        try:
+                            existing_entities = json.loads(existing_entities_raw)
+                        except Exception:
+                            existing_entities = []
+                    else:
+                        existing_entities = existing_entities_raw or []
+
+                    existing_goal_tags_raw = existing.get('goal_tags')
+                    if isinstance(existing_goal_tags_raw, str):
+                        try:
+                            existing_goal_tags = json.loads(existing_goal_tags_raw)
+                        except Exception:
+                            existing_goal_tags = []
+                    else:
+                        existing_goal_tags = existing_goal_tags_raw or []
+
+                    merged_entities = list(set(existing_entities) | set(episode_data.get('entities', [])))
+                    merged_goal_tags = list(set(existing_goal_tags) | set(episode_data.get('goal_tags', [])))
+
+                    cursor.execute("""
+                        INSERT INTO episodes (
+                            id, intent, context, action, emotion, outcome, gist,
+                            salience, channel,
+                            salience_factors, open_loops,
+                            transcript_ids, transcript_id_start, transcript_id_end,
+                            entities, goal_tags, emotional_valence, emotional_arousal,
+                            consolidated_from, storage_strength, retrieval_weight
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        super_id,
+                        json.dumps(episode_data['intent']),
+                        json.dumps(episode_data['context']) if isinstance(episode_data['context'], (dict, list)) else episode_data['context'],
+                        episode_data['action'],
+                        json.dumps(episode_data['emotion']),
+                        episode_data['outcome'],
+                        super_gist,
+                        episode_data['salience'],
+                        episode_data['channel'],
+                        json.dumps(episode_data.get('salience_factors', {})),
+                        json.dumps(episode_data.get('open_loops', [])),
+                        json.dumps(merged_ids),
+                        super_start,
+                        super_end,
+                        json.dumps(merged_entities),
+                        json.dumps(merged_goal_tags),
+                        episode_data.get('emotional_valence'),
+                        episode_data.get('emotional_arousal'),
+                        json.dumps([existing['id'], episode_id]),
+                        1.0,
+                        1.0,
+                    ))
+
+                    super_rowid = cursor.execute(
+                        "SELECT rowid FROM episodes WHERE id = ?", (super_id,)
+                    ).fetchone()
+                    if super_rowid:
+                        conn.execute(
+                            "INSERT INTO episodes_fts(rowid, gist, action) VALUES (?, ?, ?)",
+                            (super_rowid[0], super_gist, episode_data['action']),
+                        )
+
+                    logging.info(
+                        f"Created super episode {super_id} linking "
+                        f"{existing['id']} + {episode_id}"
                     )
 
                 cursor.close()
@@ -442,6 +551,14 @@ class EpisodicService:
                         open_loops = json.loads(open_loops)
                     except Exception:
                         open_loops = []
+
+                ep_transcript_ids = episode.get('transcript_ids', [])
+                if isinstance(ep_transcript_ids, str):
+                    try:
+                        ep_transcript_ids = json.loads(ep_transcript_ids)
+                    except Exception:
+                        ep_transcript_ids = []
+
                 try:
                     self.store_episode({
                         'intent': episode.get('intent', {}),
@@ -456,6 +573,9 @@ class EpisodicService:
                         'salience_factors': {'source': 'reconsolidation', 'original_episode': episode_id},
                         'storage_strength': 1.0,
                         'retrieval_weight': 1.0,
+                        'transcript_ids': ep_transcript_ids,
+                        'transcript_id_start': episode.get('transcript_id_start'),
+                        'transcript_id_end': episode.get('transcript_id_end'),
                     })
                 except Exception as e:
                     logging.warning(f"Failed to store corrected episode for {episode_id}: {e}")
@@ -1051,65 +1171,3 @@ class EpisodicService:
         except Exception as e:
             logging.warning(f"Failed to get consolidated date range: {e}")
             return fallback_str
-
-
-def backfill_episode_transcript_ids() -> int:
-    """Best-effort backfill of transcript_ids for existing episodes that have none.
-
-    Matches episodes to transcript entries by timestamp proximity (±5 minutes,
-    same topic). Returns the number of episodes updated.
-    """
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT id, channel, created_at
-                FROM episodes
-                WHERE deleted_at IS NULL
-                  AND (transcript_ids IS NULL OR transcript_ids = '[]')
-                  AND transcript_id_start IS NULL
-            """)
-            episodes_to_backfill = cursor.fetchall()
-
-            if not episodes_to_backfill:
-                cursor.close()
-                return 0
-
-            updated = 0
-            for ep_id, channel, created_at_str in episodes_to_backfill:
-                try:
-                    cursor.execute("""
-                        SELECT id FROM transcript
-                        WHERE channel = ?
-                          AND created_at BETWEEN datetime(?, '-5 minutes')
-                                             AND datetime(?, '+5 minutes')
-                        ORDER BY id ASC
-                    """, (channel, created_at_str, created_at_str))
-                    matching = cursor.fetchall()
-                    if not matching:
-                        continue
-
-                    ids = [r[0] for r in matching]
-                    cursor.execute("""
-                        UPDATE episodes
-                        SET transcript_ids = ?,
-                            transcript_id_start = ?,
-                            transcript_id_end = ?
-                        WHERE id = ?
-                    """, (json.dumps(ids), min(ids), max(ids), ep_id))
-                    updated += 1
-                except Exception:
-                    pass
-
-            cursor.close()
-
-        logging.info(f"[EPISODIC] Backfilled transcript_ids for {updated} episodes")
-        return updated
-
-    except Exception as e:
-        logging.warning(f"[EPISODIC] backfill_episode_transcript_ids failed: {e}")
-        return 0

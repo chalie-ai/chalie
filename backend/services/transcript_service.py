@@ -28,6 +28,11 @@ _EMBED_TOKEN_THRESHOLD = 50
 # Default TTL for pruning (90 days in seconds)
 _PRUNE_TTL_DAYS = 90
 
+# Per-channel insert counters for rolling episode extraction
+_channel_insert_counts: dict[str, int] = {}
+_channel_insert_lock = threading.Lock()
+_EXTRACTION_INTERVAL = 35
+
 
 def append(
     channel: str,
@@ -69,9 +74,7 @@ def append(
         if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
             _embed_entry(rowid, content)
 
-        # Rolling episode extraction trigger every 25 entries (per global rowid)
-        if rowid % 25 == 0:
-            _trigger_episode_extraction(channel, rowid)
+        _maybe_trigger_extraction(channel, rowid)
 
         return rowid
 
@@ -461,6 +464,19 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
 # ── Internal helpers ─────────────────────────────────────────────────
 
 
+def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
+    with _channel_insert_lock:
+        count = _channel_insert_counts.get(channel, 0) + 1
+        _channel_insert_counts[channel] = count
+        if count >= _EXTRACTION_INTERVAL:
+            _channel_insert_counts[channel] = 0
+            trigger = True
+        else:
+            trigger = False
+    if trigger:
+        _trigger_episode_extraction(channel, rowid)
+
+
 def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     """Fire-and-forget episode extraction for the window ending at rowid.
 
@@ -506,6 +522,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     'content': r[2],
                     'tool_name': r[3],
                     'created_at': r[4],
+                    'channel': channel,
                 }
                 for r in reversed(rows)
             ]
@@ -605,6 +622,9 @@ def write_input_row(channel: str, role: str, content: str) -> int:
             logger.debug(f"{LOG_PREFIX} embed-input hook crashed: {exc}")
 
     threading.Thread(target=_embed, daemon=True).start()
+
+    _maybe_trigger_extraction(channel, row_id)
+
     return row_id
 
 
@@ -634,8 +654,7 @@ def write_assistant_row(channel: str, content: str) -> int:
 
     threading.Thread(target=_embed, daemon=True).start()
 
-    if row_id % 25 == 0:
-        _trigger_episode_extraction(channel, row_id)
+    _maybe_trigger_extraction(channel, row_id)
 
     return row_id
 

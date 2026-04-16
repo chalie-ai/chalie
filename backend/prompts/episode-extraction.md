@@ -4,8 +4,8 @@ You are an episodic memory encoder. Your job is to read a transcript window and 
 {{topic}}
 
 ## Transcript Window
-Each line is formatted as: [id] (timestamp) role: content
-The `id` is the transcript entry's integer ID — use these IDs in `transcript_ids`.
+Each line is formatted as: [id] (timestamp) role [channel]: content
+The `id` is the transcript entry's integer ID. Use the 0-based position index of each entry (not the `id` value) in `entry_range`.
 
 {{transcript_window}}
 
@@ -49,7 +49,7 @@ Read the transcript and identify distinct episodes. An episode is a coherent seg
     "open_loop_created": false
   },
   "open_loops": ["list of unresolved questions, pending actions, or things the user said they would do"],
-  "transcript_ids": [1, 2, 3],
+  "entry_range": [0, 14],
   "entities": ["list of people, places, organizations, or products mentioned by name"],
   "goal_tags": ["list of active goal labels detected, e.g. 'learn python', 'plan holiday', 'fix bug in auth'"],
   "emotional_valence": 0.0,
@@ -67,6 +67,8 @@ Read the transcript and identify distinct episodes. An episode is a coherent seg
 
 ### Field guidance:
 
+**entry_range** — a two-element array `[start_index, end_index]` (inclusive, 0-based) indicating which entries in the window this episode covers. Entry 0 is the first line, entry 1 is the second, and so on. Each entry can belong to at most one episode.
+
 **salience_factors** — integer scores 0–3:
 - `novelty`: how new or surprising this was (0 = routine, 3 = completely new)
 - `emotional_weight`: how emotionally charged (0 = flat, 3 = intense)
@@ -77,8 +79,6 @@ Read the transcript and identify distinct episodes. An episode is a coherent seg
 **emotional_valence** — float from -1.0 (strongly negative) to 1.0 (strongly positive). 0.0 = neutral.
 
 **emotional_arousal** — float from 0.0 (calm, low engagement) to 1.0 (intense, high activation). This is independent of valence — anxiety is high arousal negative, calm joy is low arousal positive. High arousal strengthens memory consolidation.
-
-**transcript_ids** — the integer IDs from the transcript window that this episode covers. An entry can belong to at most one episode. Assign each entry to the episode it most naturally belongs to.
 
 **traits** — personal facts about the user revealed in this segment. Only extract traits that are clearly stated or strongly implied. Do not infer speculatively.
 - `kind` options: `trait` (personality/identity), `fact` (objective info), `preference` (likes/dislikes), `procedure` (how they do things), `rule` (constraints they operate under), `metric` (a measurable quantity about them)
@@ -104,7 +104,7 @@ Example of a single-episode response:
     "gist": "User encountered a 401 authentication error in their web app. The issue was traced to a missing JWT_SECRET environment variable in production. The fix was confirmed and the user will deploy an updated .env file.",
     "salience_factors": { "novelty": 2, "emotional_weight": 1, "goal_relevance": 3, "decision_made": true, "open_loop_created": true },
     "open_loops": ["User still needs to deploy the fix"],
-    "transcript_ids": [101, 102, 103, 104],
+    "entry_range": [0, 3],
     "entities": [],
     "goal_tags": ["fix auth bug", "ship web app"],
     "emotional_valence": 0.2,

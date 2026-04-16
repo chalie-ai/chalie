@@ -12,7 +12,7 @@ Episode Extractor Service — produces structured episodes from transcript windo
 Takes a list of transcript entries and sends them to an LLM which handles:
 - Boundary detection within the window (goal shifts, emotional register changes, new entities, causal breaks)
 - Salience filtering (omits trivial/routine segments)
-- Structured episode extraction with transcript ID references
+- Structured episode extraction with positional entry_range references
 
 The extractor is a pure function — it does NOT store episodes. The caller handles storage.
 """
@@ -20,6 +20,7 @@ The extractor is a pure function — it does NOT store episodes. The caller hand
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 
 from services.config_service import ConfigService
@@ -29,8 +30,10 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_EPISODE_FIELDS = {
     'intent', 'context', 'action', 'emotion', 'outcome', 'gist',
-    'salience_factors', 'transcript_ids',
+    'salience_factors', 'entry_range',
 }
+
+_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "episode-extraction.md"
 
 
 def _extract_json(text: str) -> str:
@@ -45,15 +48,19 @@ def _safe_json_load(text: str) -> Optional[list]:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         logger.error("[EXTRACTOR] Failed to parse JSON from LLM output")
-        logger.debug(f"[EXTRACTOR] Raw output: {cleaned[:500]}")
+        logger.warning(f"[EXTRACTOR] Raw output: {cleaned[:500]}")
         return None
 
 
 class EpisodeExtractorService:
     def __init__(self):
-        config = ConfigService.resolve_agent_config("episode-extraction")
+        config = ConfigService.resolve_agent_config("frontal-cortex-unified")
         self._llm = create_llm_service(config)
-        self._prompt_template = ConfigService.get_agent_prompt("episode-extraction")
+        try:
+            self._prompt_template = _PROMPT_PATH.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.error(f"[EXTRACTOR] Failed to load prompt from {_PROMPT_PATH}: {e}")
+            self._prompt_template = ""
 
     def extract(self, entries: list[dict], channel: str) -> list[dict]:
         """
@@ -65,20 +72,10 @@ class EpisodeExtractorService:
 
         Returns:
             List of episode dicts. Each episode has:
-            - intent: dict with type and direction
-            - context: str
-            - action: str
-            - emotion: dict with valence and intensity
-            - outcome: str
-            - gist: str (structured summary, not one-liner)
-            - salience_factors: dict
-            - open_loops: list
-            - transcript_ids: list[int] — which entry IDs this episode covers
-            - entities: list[str] — entities mentioned
-            - goal_tags: list[str] — active goal tags detected
-            - emotional_valence: float (-1.0 to 1.0)
-            - emotional_arousal: float (0.0 to 1.0)
-            - traits: list[dict] — each has {key, value, kind, decay_class}
+            - intent, context, action, emotion, outcome, gist, salience_factors
+            - open_loops, entities, goal_tags, emotional_valence, emotional_arousal, traits
+            - transcript_ids: list[int] — computed from entry_range
+            - transcript_id_start, transcript_id_end: int — min/max of transcript_ids
         """
         if not entries:
             return []
@@ -107,7 +104,6 @@ class EpisodeExtractorService:
             logger.warning("[EXTRACTOR] LLM returned non-list JSON — expected array of episodes")
             return []
 
-        valid_entry_ids = {entry['id'] for entry in entries if 'id' in entry}
         episodes = []
         for ep in parsed:
             if not isinstance(ep, dict):
@@ -120,8 +116,27 @@ class EpisodeExtractorService:
             ep['emotional_valence'] = self._clamp(ep.get('emotional_valence'), -1.0, 1.0)
             ep['emotional_arousal'] = self._clamp(ep.get('emotional_arousal'), 0.0, 1.0)
 
-            ids = ep.get('transcript_ids', [])
-            ep['transcript_ids'] = [i for i in ids if i in valid_entry_ids]
+            entry_range = ep.get('entry_range', [])
+            if not isinstance(entry_range, list) or len(entry_range) != 2:
+                logger.warning("[EXTRACTOR] Episode has invalid entry_range — skipping")
+                continue
+
+            start, end = int(entry_range[0]), int(entry_range[1])
+            if start < 0 or end < start or end >= len(entries):
+                logger.warning(
+                    f"[EXTRACTOR] entry_range [{start}, {end}] out of bounds "
+                    f"for window of {len(entries)} entries — skipping"
+                )
+                continue
+
+            transcript_ids = [entries[i]['id'] for i in range(start, end + 1) if 'id' in entries[i]]
+            if not transcript_ids:
+                logger.warning("[EXTRACTOR] entry_range maps to entries with no id — skipping")
+                continue
+
+            ep['transcript_ids'] = transcript_ids
+            ep['transcript_id_start'] = min(transcript_ids)
+            ep['transcript_id_end'] = max(transcript_ids)
 
             if not isinstance(ep.get('traits'), list):
                 ep['traits'] = []
@@ -135,13 +150,6 @@ class EpisodeExtractorService:
             if not isinstance(ep.get('open_loops'), list):
                 ep['open_loops'] = []
 
-            if not ep['transcript_ids']:
-                logger.warning("[EXTRACTOR] Episode has no valid transcript_ids after filtering — skipping")
-                continue
-
-            ep['transcript_id_start'] = min(ep['transcript_ids'])
-            ep['transcript_id_end'] = max(ep['transcript_ids'])
-
             episodes.append(ep)
 
         return episodes
@@ -154,9 +162,12 @@ class EpisodeExtractorService:
             content = entry.get('content', '')
             tool_name = entry.get('tool_name')
             created_at = entry.get('created_at', '')
+            channel = entry.get('channel', '')
 
             if tool_name:
                 lines.append(f"[{entry_id}] ({created_at}) {role} [{tool_name}]: {content}")
+            elif channel:
+                lines.append(f"[{entry_id}] ({created_at}) {role} [{channel}]: {content}")
             else:
                 lines.append(f"[{entry_id}] ({created_at}) {role}: {content}")
 

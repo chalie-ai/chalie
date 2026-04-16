@@ -151,7 +151,8 @@ class EpisodeConsolidationService:
                 cursor.execute("""
                     SELECT id, rowid, gist, context, intent, outcome, open_loops,
                            entities, goal_tags, emotional_valence, emotional_arousal,
-                           salience, storage_strength, retrieval_weight
+                           salience, storage_strength, retrieval_weight,
+                           transcript_id_start, transcript_id_end, channel
                     FROM episodes
                     WHERE deleted_at IS NULL
                       AND retrieval_weight > 0.1
@@ -179,6 +180,9 @@ class EpisodeConsolidationService:
                         'salience': row[11] or 1.0,
                         'storage_strength': row[12] or 1.0,
                         'retrieval_weight': row[13] or 1.0,
+                        'transcript_id_start': row[14],
+                        'transcript_id_end': row[15],
+                        'channel': row[16] or '',
                     })
             return result
 
@@ -212,7 +216,8 @@ class EpisodeConsolidationService:
                            e.open_loops, e.entities, e.goal_tags,
                            e.emotional_valence, e.emotional_arousal,
                            e.salience, e.storage_strength, e.retrieval_weight,
-                           v.distance
+                           v.distance, e.transcript_id_start, e.transcript_id_end,
+                           e.channel
                     FROM episodes e
                     JOIN episodes_vec v ON v.rowid = e.rowid
                     WHERE v.embedding MATCH ? AND k = 10
@@ -248,6 +253,9 @@ class EpisodeConsolidationService:
                     'salience': row[11] or 1.0,
                     'storage_strength': row[12] or 1.0,
                     'retrieval_weight': row[13] or 1.0,
+                    'transcript_id_start': row[15],
+                    'transcript_id_end': row[16],
+                    'channel': row[17] or '',
                 })
             return results
 
@@ -344,6 +352,20 @@ class EpisodeConsolidationService:
             logger.warning("[CONSOLIDATION] LLM returned no gist — skipping")
             return None
 
+        # Inherit transcript range from source episodes
+        starts = [ep['transcript_id_start'] for ep in cluster if ep.get('transcript_id_start') is not None]
+        ends = [ep['transcript_id_end'] for ep in cluster if ep.get('transcript_id_end') is not None]
+        super_transcript_start = min(starts) if starts else None
+        super_transcript_end = max(ends) if ends else None
+
+        # Majority-vote channel from source episodes
+        channel_counts: dict[str, int] = {}
+        for ep in cluster:
+            ch = ep.get('channel') or ''
+            if ch:
+                channel_counts[ch] = channel_counts.get(ch, 0) + 1
+        channel = max(sorted(channel_counts), key=channel_counts.get) if channel_counts else 'consolidated'
+
         episode_id = str(uuid.uuid4())
 
         try:
@@ -363,11 +385,12 @@ class EpisodeConsolidationService:
                         id, intent, context, action, emotion, outcome, gist,
                         salience, channel,
                         salience_factors, open_loops,
-                        transcript_ids, entities, goal_tags,
+                        transcript_ids, transcript_id_start, transcript_id_end,
+                        entities, goal_tags,
                         emotional_valence, emotional_arousal,
                         consolidated_from, storage_strength, retrieval_weight
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     json.dumps(intent),
@@ -377,10 +400,12 @@ class EpisodeConsolidationService:
                     outcome,
                     gist,
                     salience,
-                    'consolidated',
+                    channel,
                     json.dumps(salience_factors),
                     json.dumps(open_loops),
                     json.dumps([]),
+                    super_transcript_start,
+                    super_transcript_end,
                     json.dumps(merged_entities),
                     json.dumps(merged_goal_tags),
                     emotional_valence,

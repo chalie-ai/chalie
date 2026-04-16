@@ -4,56 +4,54 @@ Tests for the Episodic Memory Pipeline Redesign — Phase 0 (Schema) and Phase 1
 Covers the new store_episode() behaviour (10 new columns, deduplication, freshness-optional)
 and edge cases in EpisodeExtractorService that were not covered by the original test file.
 
-Database strategy: builds an in-memory SQLite database with the full episodes table
-schema (including all Phase 0 columns) directly — bypasses the session-scoped template
-fixture so migration idempotency issues in the dev environment do not affect these tests.
+Database strategy: builds an in-memory SQLite database using the real schema.sql so that
+column definitions, constraints, and indexes are never out of sync with production.
 """
 
 import json
+import re
 import sqlite3
 import uuid
+from pathlib import Path
 import pytest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 pytestmark = pytest.mark.unit
 
-# ── Minimal episodes schema ───────────────────────────────────────────────────
-# This is the full post-Phase-0 schema.  It must stay in sync with schema.sql.
-# SQLite does not support default values that call functions (datetime('now'))
-# in the CREATE TABLE body, so timestamps default to NULL here for simplicity.
-_EPISODES_DDL = """
-CREATE TABLE IF NOT EXISTS episodes (
-    id TEXT PRIMARY KEY,
-    intent TEXT NOT NULL,
-    context TEXT NOT NULL,
-    action TEXT NOT NULL,
-    emotion TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    gist TEXT NOT NULL,
-    salience INTEGER NOT NULL,
-    channel TEXT NOT NULL,
-    created_at TEXT,
-    updated_at TEXT,
-    last_accessed_at TEXT,
-    access_count INTEGER DEFAULT 0,
-    deleted_at TEXT,
-    salience_factors TEXT DEFAULT '{}',
-    open_loops TEXT DEFAULT '[]',
-    transcript_ids TEXT DEFAULT '[]',
-    transcript_id_start INTEGER,
-    transcript_id_end INTEGER,
-    entities TEXT DEFAULT '[]',
-    goal_tags TEXT DEFAULT '[]',
-    emotional_valence REAL,
-    emotional_arousal REAL,
-    consolidated_from TEXT DEFAULT '[]',
-    storage_strength REAL DEFAULT 1.0,
-    retrieval_weight REAL DEFAULT 1.0
-);
+_SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
 
-CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(gist, action);
-"""
+
+def _build_schema(conn: sqlite3.Connection) -> None:
+    """Apply the full production schema.sql to an in-memory connection.
+
+    Tries to load sqlite-vec first. If unavailable, skips vec0 statements so
+    that the rest of the schema (episodes, FTS5, indexes) still applies.
+    """
+    sql = _SCHEMA_PATH.read_text()
+
+    vec_available = False
+    try:
+        conn.enable_load_extension(True)
+        import sqlite_vec
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        vec_available = True
+    except Exception:
+        pass
+
+    if vec_available:
+        conn.executescript(sql)
+    else:
+        for stmt in re.split(r';', sql):
+            s = stmt.strip()
+            if not s or 'vec0' in s.lower():
+                continue
+            try:
+                conn.execute(s)
+            except Exception:
+                pass
+        conn.commit()
 
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -72,11 +70,10 @@ class _FakeDB:
 
 @pytest.fixture
 def mem_db():
-    """In-memory SQLite with the Phase-0 episodes schema, no migration dependency."""
+    """In-memory SQLite built from the real schema.sql — no DDL duplication."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.executescript(_EPISODES_DDL)
-    conn.commit()
+    _build_schema(conn)
     yield conn
     conn.close()
 
@@ -264,59 +261,72 @@ class TestStoreEpisodeNewColumns:
         assert row['retrieval_weight'] == pytest.approx(0.9)
 
 
-# ── store_episode: deduplication on overlapping transcript ranges ─────────────
+# ── store_episode: overlap → super episode ────────────────────────────────────
 
-class TestStoreEpisodeDeduplication:
+class TestStoreEpisodeOverlap:
 
-    def test_exact_range_overlap_is_skipped(self, mem_db, episodic_svc):
-        """Storing an episode with the exact same transcript range returns the
-        existing episode ID and does not insert a second row."""
-        data = _ep(transcript_id_start=1, transcript_id_end=25)
+    def test_exact_range_overlap_stores_both_and_creates_super(self, mem_db, episodic_svc):
+        """Storing an episode with the exact same transcript range stores the new episode
+        and creates a super episode linking both — does not skip or deduplicate."""
+        data = _ep(transcript_id_start=1, transcript_id_end=25,
+                   transcript_ids=[1, 2, 3], gist='First episode')
 
         first_id = episodic_svc.store_episode(data)
-        second_id = episodic_svc.store_episode(data)
+        second_id = episodic_svc.store_episode(
+            _ep(transcript_id_start=1, transcript_id_end=25,
+                transcript_ids=[1, 2, 3], gist='Second episode')
+        )
 
-        assert second_id == first_id
+        assert second_id != first_id
 
         count = mem_db.execute(
             "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
         ).fetchone()[0]
-        assert count == 1
+        # first + second + super = 3
+        assert count == 3
 
-    def test_overlapping_range_is_skipped(self, mem_db, episodic_svc):
-        """An episode whose range partially overlaps an existing one is skipped.
-
-        Overlap condition: existing.start <= new.end AND existing.end >= new.start
-        """
+    def test_overlapping_range_stores_new_and_creates_super(self, mem_db, episodic_svc):
+        """An episode whose range partially overlaps an existing one is stored,
+        and a super episode is created linking both."""
         first_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=1, transcript_id_end=25)
+            _ep(transcript_id_start=1, transcript_id_end=25,
+                transcript_ids=list(range(1, 26)), gist='First')
         )
-        # New range [10, 35] overlaps [1, 25]
         second_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=10, transcript_id_end=35)
+            _ep(transcript_id_start=10, transcript_id_end=35,
+                transcript_ids=list(range(10, 36)), gist='Second')
         )
 
-        assert second_id == first_id
+        assert second_id != first_id
 
-        count = mem_db.execute(
-            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
-        ).fetchone()[0]
-        assert count == 1
+        supers = mem_db.execute(
+            "SELECT consolidated_from FROM episodes WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
+        ).fetchall()
+        assert len(supers) == 1
+        cf = json.loads(supers[0][0])
+        assert first_id in cf
+        assert second_id in cf
 
-    def test_contained_range_is_skipped(self, mem_db, episodic_svc):
-        """A range entirely inside an existing episode's range is a duplicate."""
-        first_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=1, transcript_id_end=50)
+    def test_super_episode_has_merged_transcript_range(self, mem_db, episodic_svc):
+        """Super episode's transcript range spans both source episodes."""
+        episodic_svc.store_episode(
+            _ep(transcript_id_start=1, transcript_id_end=20,
+                transcript_ids=list(range(1, 21)), gist='A')
         )
-        # [10, 20] is fully inside [1, 50]
-        second_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=10, transcript_id_end=20)
+        episodic_svc.store_episode(
+            _ep(transcript_id_start=10, transcript_id_end=30,
+                transcript_ids=list(range(10, 31)), gist='B')
         )
 
-        assert second_id == first_id
+        row = mem_db.execute(
+            "SELECT transcript_id_start, transcript_id_end FROM episodes "
+            "WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
+        ).fetchone()
+        assert row[0] == 1
+        assert row[1] == 30
 
-    def test_adjacent_non_overlapping_range_is_stored(self, mem_db, episodic_svc):
-        """Episodes with non-overlapping ranges are both stored."""
+    def test_adjacent_non_overlapping_range_is_stored_without_super(self, mem_db, episodic_svc):
+        """Episodes with non-overlapping ranges are both stored with no super episode."""
         episodic_svc.store_episode(_ep(transcript_id_start=1, transcript_id_end=25))
         episodic_svc.store_episode(_ep(transcript_id_start=26, transcript_id_end=50))
 
@@ -325,19 +335,22 @@ class TestStoreEpisodeDeduplication:
         ).fetchone()[0]
         assert count == 2
 
-    def test_soft_deleted_episode_does_not_block_new_store(self, mem_db, episodic_svc):
-        """A soft-deleted episode's range should not block a fresh store."""
+        supers = mem_db.execute(
+            "SELECT COUNT(*) FROM episodes WHERE consolidated_from != '[]'"
+        ).fetchone()[0]
+        assert supers == 0
+
+    def test_soft_deleted_episode_does_not_trigger_super(self, mem_db, episodic_svc):
+        """A soft-deleted episode's range is excluded from overlap detection."""
         first_id = episodic_svc.store_episode(
             _ep(transcript_id_start=1, transcript_id_end=25)
         )
-        # Soft-delete the first episode
         mem_db.execute(
             "UPDATE episodes SET deleted_at = datetime('now') WHERE id = ?",
             (first_id,)
         )
         mem_db.commit()
 
-        # Same range should now be stored fresh
         second_id = episodic_svc.store_episode(
             _ep(transcript_id_start=1, transcript_id_end=25)
         )
@@ -346,10 +359,11 @@ class TestStoreEpisodeDeduplication:
         active = mem_db.execute(
             "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
         ).fetchone()[0]
+        # only the second episode is active (no super created for deleted overlap)
         assert active == 1
 
-    def test_no_transcript_range_always_stores(self, mem_db, episodic_svc):
-        """Episodes without transcript_id_start/end skip deduplication check."""
+    def test_no_transcript_range_always_stores_without_super(self, mem_db, episodic_svc):
+        """Episodes without transcript_id_start/end skip overlap check entirely."""
         id1 = episodic_svc.store_episode(_ep())
         id2 = episodic_svc.store_episode(_ep())
 
@@ -360,11 +374,16 @@ class TestStoreEpisodeDeduplication:
         ).fetchone()[0]
         assert count == 2
 
+        supers = mem_db.execute(
+            "SELECT COUNT(*) FROM episodes WHERE consolidated_from != '[]'"
+        ).fetchone()[0]
+        assert supers == 0
+
 
 # ── EpisodeExtractorService: additional edge cases ───────────────────────────
 # These supplement the cases already in test_episode_extractor_service.py.
 
-def _make_valid_ep(transcript_ids: list) -> dict:
+def _make_valid_ep(entry_range: list) -> dict:
     return {
         'intent': {'type': 'exploration', 'direction': 'understand topic'},
         'context': 'User learning Python',
@@ -377,7 +396,7 @@ def _make_valid_ep(transcript_ids: list) -> dict:
             'decision_made': False, 'open_loop_created': False,
         },
         'open_loops': [],
-        'transcript_ids': transcript_ids,
+        'entry_range': entry_range,
         'entities': [],
         'goal_tags': [],
         'emotional_valence': 0.3,
@@ -399,10 +418,10 @@ def _make_extractor(llm_response_text: str):
 
     with patch('services.episode_extractor_service.ConfigService.resolve_agent_config',
                return_value={}), \
-         patch('services.episode_extractor_service.ConfigService.get_agent_prompt',
-               return_value='Prompt: {{transcript_window}} Topic: {{topic}}'), \
+         patch('services.episode_extractor_service._PROMPT_PATH') as mock_path, \
          patch('services.episode_extractor_service.create_llm_service',
                return_value=mock_llm):
+        mock_path.read_text.return_value = 'Prompt: {{transcript_window}} Topic: {{topic}}'
         from services.episode_extractor_service import EpisodeExtractorService
         svc = EpisodeExtractorService()
 
@@ -424,7 +443,7 @@ class TestExtractorSingleObjectResponse:
 
     def test_llm_returns_single_object_not_array_returns_empty(self):
         """LLM that returns a single JSON object (not array) must be rejected."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         svc = _make_extractor(json.dumps(episode))  # object, not [object]
         entries = [_make_entry(1)]
 
@@ -434,7 +453,7 @@ class TestExtractorSingleObjectResponse:
 
     def test_llm_returns_object_wrapped_in_markdown_returns_empty(self):
         """Single object in a markdown code block is also rejected."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         response = f"```json\n{json.dumps(episode)}\n```"
         svc = _make_extractor(response)
         entries = [_make_entry(1)]
@@ -446,22 +465,22 @@ class TestExtractorSingleObjectResponse:
 
 class TestExtractorEntriesWithoutId:
 
-    def test_entries_missing_id_field_episode_skipped(self):
-        """Entries without an 'id' key are excluded from valid_entry_ids set,
-        so episodes referencing only invalid IDs are skipped entirely."""
+    def test_entries_missing_id_field_transcript_ids_empty_skips(self):
+        """When no entries in the range have an 'id' key, the episode is skipped."""
         entry_without_id = {'role': 'user', 'content': 'hello', 'created_at': 'now'}
-        episode = _make_valid_ep([999])  # 999 won't appear in valid IDs
+        episode = _make_valid_ep([0, 0])
         svc = _make_extractor(json.dumps([episode]))
 
         result = svc.extract([entry_without_id], 'test')
 
         assert result == []
 
-    def test_mixed_entries_with_and_without_id(self):
-        """Only entries that have an 'id' key contribute valid IDs."""
+    def test_mixed_entries_only_those_with_id_in_range(self):
+        """entry_range maps to positional slots; only entries with 'id' contribute transcript_ids."""
         entry_no_id = {'role': 'user', 'content': 'hello', 'created_at': 'now'}
         entry_with_id = _make_entry(42)
-        episode = _make_valid_ep([42, 999])  # 42 valid, 999 invalid
+        # range [0, 1] covers both; but entry at index 0 has no id, index 1 has id=42
+        episode = _make_valid_ep([0, 1])
         svc = _make_extractor(json.dumps([episode]))
 
         result = svc.extract([entry_no_id, entry_with_id], 'test')
@@ -474,7 +493,7 @@ class TestTraitValidation:
     def test_trait_missing_key_field_still_returned(self):
         """A trait dict missing required keys is still passed through — the extractor
         does not validate trait field completeness, that is the caller's concern."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['traits'] = [{'value': 'Dylan', 'kind': 'trait'}]  # no 'key'
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -487,7 +506,7 @@ class TestTraitValidation:
 
     def test_empty_traits_list_preserved(self):
         """An explicit empty traits list is preserved as-is."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['traits'] = []
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -498,7 +517,7 @@ class TestTraitValidation:
 
     def test_traits_as_dict_instead_of_list_replaced_with_empty(self):
         """A traits value that is a dict (not a list) is normalised to []."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['traits'] = {'key': 'name', 'value': 'Alice'}  # dict not list
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -512,7 +531,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_nan_string_valence_clamped_to_none(self):
         """A non-numeric string for valence becomes None (can't float() a word)."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_valence'] = 'positive'  # string, not numeric
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -524,7 +543,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_nan_string_arousal_clamped_to_none(self):
         """A non-numeric string for arousal becomes None."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_arousal'] = 'high'
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -535,7 +554,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_positive_valence_clamped_to_one(self):
         """A very large positive valence is clamped to 1.0."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_valence'] = 1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -546,7 +565,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_negative_valence_clamped_to_minus_one(self):
         """A very large negative valence is clamped to -1.0."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_valence'] = -1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -557,7 +576,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_arousal_clamped_to_one(self):
         """A very large arousal value is clamped to 1.0."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_arousal'] = 1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -568,7 +587,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_numeric_string_valence_is_cast_and_clamped(self):
         """A numeric string like '0.5' is cast to float and preserved in range."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_valence'] = '0.5'  # valid numeric string
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -579,7 +598,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_zero_valence_preserved(self):
         """Zero is a valid valence value and must not become None."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_valence'] = 0.0
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -590,7 +609,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_zero_arousal_preserved(self):
         """Zero is the minimum valid arousal value and must not be dropped."""
-        episode = _make_valid_ep([1])
+        episode = _make_valid_ep([0, 0])
         episode['emotional_arousal'] = 0.0
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -622,10 +641,10 @@ class TestExtractorLlmFailure:
 
         with patch('services.episode_extractor_service.ConfigService.resolve_agent_config',
                    return_value={}), \
-             patch('services.episode_extractor_service.ConfigService.get_agent_prompt',
-                   return_value='Prompt: {{transcript_window}} Topic: {{topic}}'), \
+             patch('services.episode_extractor_service._PROMPT_PATH') as mock_path, \
              patch('services.episode_extractor_service.create_llm_service',
                    return_value=mock_llm):
+            mock_path.read_text.return_value = 'Prompt: {{transcript_window}} Topic: {{topic}}'
             from services.episode_extractor_service import EpisodeExtractorService
             svc = EpisodeExtractorService()
 
@@ -635,3 +654,92 @@ class TestExtractorLlmFailure:
         result = svc.extract(entries, 'test')
 
         assert result == []
+
+
+# ── Reconsolidation: correction carries transcript links forward ──────────────
+
+
+class TestReconsolidationCorrectTranscriptLinks:
+    """When reconsolidation detects a contradiction and stores a correction
+    episode, the correction must carry forward the original episode's transcript
+    link columns (transcript_id_start, transcript_id_end, transcript_ids).
+
+    The reconsolidation LLM is mocked because we cannot run a real LLM in tests.
+    """
+
+    def _make_episodic_svc(self, mem_db):
+        from services.episodic_service import EpisodicService
+        fake_db = _FakeDB(mem_db)
+        return EpisodicService(fake_db)
+
+    def test_correction_episode_carries_transcript_id_start_and_end(self, mem_db):
+        """A reconsolidation contradiction correction preserves the original
+        episode's transcript_id_start and transcript_id_end on the new episode."""
+        svc = self._make_episodic_svc(mem_db)
+
+        original_id = svc.store_episode(_ep(
+            transcript_ids=[10, 11, 12],
+            transcript_id_start=10,
+            transcript_id_end=12,
+            gist='Original memory: user lives in Valletta',
+            open_loops=['confirm address'],
+        ))
+
+        reconsolidate_response = json.dumps({
+            'verdict': 'contradiction',
+            'resolved_loops': [],
+            'correction': 'User now lives in Swieqi, not Valletta',
+        })
+
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=reconsolidate_response)
+
+        with patch('services.background_llm_queue.create_background_llm_proxy',
+                   return_value=mock_llm):
+            svc._reconsolidate_episode(original_id, 'User corrected their address to Swieqi')
+
+        # The correction episode (action = 'reconsolidation_correction') must exist
+        row = mem_db.execute(
+            "SELECT transcript_id_start, transcript_id_end, transcript_ids "
+            "FROM episodes WHERE action = 'reconsolidation_correction'"
+        ).fetchone()
+
+        assert row is not None, "Correction episode was not stored"
+        assert row['transcript_id_start'] == 10, (
+            f"Expected transcript_id_start=10, got {row['transcript_id_start']}"
+        )
+        assert row['transcript_id_end'] == 12, (
+            f"Expected transcript_id_end=12, got {row['transcript_id_end']}"
+        )
+        stored_ids = json.loads(row['transcript_ids'])
+        assert stored_ids == [10, 11, 12], (
+            f"Expected transcript_ids=[10,11,12], got {stored_ids}"
+        )
+
+    def test_correction_episode_does_not_appear_when_verdict_is_none(self, mem_db):
+        """When the LLM returns verdict='none', no correction episode is stored."""
+        svc = self._make_episodic_svc(mem_db)
+
+        original_id = svc.store_episode(_ep(
+            transcript_id_start=5,
+            transcript_id_end=8,
+            gist='Stable fact',
+        ))
+
+        no_change_response = json.dumps({
+            'verdict': 'none',
+            'resolved_loops': [],
+            'correction': '',
+        })
+
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=no_change_response)
+
+        with patch('services.background_llm_queue.create_background_llm_proxy',
+                   return_value=mock_llm):
+            svc._reconsolidate_episode(original_id, 'Everything still correct')
+
+        count = mem_db.execute(
+            "SELECT COUNT(*) FROM episodes WHERE action = 'reconsolidation_correction'"
+        ).fetchone()[0]
+        assert count == 0

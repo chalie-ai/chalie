@@ -1,64 +1,69 @@
 """
 Unit tests for EpisodeConsolidationService.
 
-Uses in-memory SQLite with the full episodes + episodes_vec schema.
-All LLM calls and embedding generation are mocked.
+Uses in-memory SQLite built from schema.sql — the single source of truth for
+the episodes table definition. LLM calls and embedding generation are mocked
+because we cannot call a real LLM in unit tests.
 """
 
 import json
+import re
 import sqlite3
 import struct
 import uuid
+from pathlib import Path
 import pytest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 pytestmark = pytest.mark.unit
 
-# ── Minimal schema ────────────────────────────────────────────────────────────
+_SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
 
-_DDL = """
-CREATE TABLE IF NOT EXISTS episodes (
-    id TEXT PRIMARY KEY,
-    intent TEXT NOT NULL,
-    context TEXT NOT NULL,
-    action TEXT NOT NULL,
-    emotion TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    gist TEXT NOT NULL,
-    salience REAL NOT NULL DEFAULT 5.0,
-    channel TEXT NOT NULL DEFAULT 'test',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT,
-    last_accessed_at TEXT,
-    access_count INTEGER DEFAULT 0,
-    deleted_at TEXT,
-    salience_factors TEXT DEFAULT '{}',
-    open_loops TEXT DEFAULT '[]',
-    transcript_ids TEXT DEFAULT '[]',
-    transcript_id_start INTEGER,
-    transcript_id_end INTEGER,
-    entities TEXT DEFAULT '[]',
-    goal_tags TEXT DEFAULT '[]',
-    emotional_valence REAL,
-    emotional_arousal REAL,
-    consolidated_from TEXT DEFAULT '[]',
-    storage_strength REAL DEFAULT 1.0,
-    retrieval_weight REAL DEFAULT 1.0
-);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(
-    embedding float[4]
-);
+def _build_schema(conn: sqlite3.Connection) -> None:
+    """Apply the real production schema.sql to an in-memory connection.
 
-CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, action
-);
-"""
+    Tries sqlite-vec first; if unavailable, skips vec0 statements so the rest
+    of the schema (episodes table, FTS5, indexes) still applies cleanly.
+    """
+    sql = _SCHEMA_PATH.read_text()
+
+    vec_available = False
+    try:
+        conn.enable_load_extension(True)
+        import sqlite_vec
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        vec_available = True
+    except Exception:
+        pass
+
+    if vec_available:
+        conn.executescript(sql)
+    else:
+        for stmt in re.split(r';', sql):
+            s = stmt.strip()
+            if not s or 'vec0' in s.lower():
+                continue
+            try:
+                conn.execute(s)
+            except Exception:
+                pass
+        conn.commit()
+
+
+_VEC_DIM = 768  # must match schema.sql episodes_vec float[768]
 
 
 def _pack(vec) -> bytes:
     return struct.pack(f'{len(vec)}f', *vec)
+
+
+def _make_embedding(seed: list) -> list:
+    """Return a 768-element float list. Pads seed with zeros to reach _VEC_DIM."""
+    padded = list(seed) + [0.0] * (_VEC_DIM - len(seed))
+    return padded[:_VEC_DIM]
 
 
 class _FakeDB:
@@ -73,67 +78,26 @@ class _FakeDB:
 
 @pytest.fixture
 def mem_db():
+    """In-memory SQLite built from the real schema.sql — no DDL duplication."""
     conn = sqlite3.connect(":memory:")
+    _build_schema(conn)
 
-    # Try to load sqlite-vec; fall back to a plain table that mimics the interface
-    _vec_loaded = False
-    try:
-        conn.enable_load_extension(True)
-        import sqlite_vec
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        _vec_loaded = True
-    except Exception:
-        pass
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS episodes (
-            id TEXT PRIMARY KEY,
-            intent TEXT NOT NULL,
-            context TEXT NOT NULL,
-            action TEXT NOT NULL,
-            emotion TEXT NOT NULL,
-            outcome TEXT NOT NULL,
-            gist TEXT NOT NULL,
-            salience REAL NOT NULL DEFAULT 5.0,
-            channel TEXT NOT NULL DEFAULT 'test',
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT,
-            last_accessed_at TEXT,
-            access_count INTEGER DEFAULT 0,
-            deleted_at TEXT,
-            salience_factors TEXT DEFAULT '{}',
-            open_loops TEXT DEFAULT '[]',
-            transcript_ids TEXT DEFAULT '[]',
-            transcript_id_start INTEGER,
-            transcript_id_end INTEGER,
-            entities TEXT DEFAULT '[]',
-            goal_tags TEXT DEFAULT '[]',
-            emotional_valence REAL,
-            emotional_arousal REAL,
-            consolidated_from TEXT DEFAULT '[]',
-            storage_strength REAL DEFAULT 1.0,
-            retrieval_weight REAL DEFAULT 1.0
-        )
-    """)
-
-    if _vec_loaded:
-        conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[4])"
-        )
-    else:
+    # When sqlite-vec is unavailable the vec0 tables are absent.  The
+    # consolidation tests that exercise KNN (via _find_similar_episodes) mock
+    # that method directly, so the missing vec table doesn't affect them.
+    # For tests that insert embeddings via _insert_episode, we need a fallback
+    # plain table only if episodes_vec wasn't created.
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table','shadow')"
+    ).fetchall()}
+    if 'episodes_vec' not in tables:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS episodes_vec (
                 rowid INTEGER PRIMARY KEY,
                 embedding BLOB
             )
         """)
-
-    conn.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(gist, action)"
-    )
-
-    conn.commit()
+        conn.commit()
 
     yield conn
     conn.close()
@@ -145,18 +109,20 @@ def fake_db(mem_db):
 
 
 def _insert_episode(conn, ep_id=None, gist="test gist", entities=None,
-                    goal_tags=None, salience=5.0, storage_strength=1.0,
+                    goal_tags=None, salience=5, storage_strength=1.0,
                     retrieval_weight=0.5, consolidated_from=None,
                     open_loops=None, emotional_valence=0.0, emotional_arousal=0.5,
-                    embedding=None):
+                    embedding=None, channel='test',
+                    transcript_id_start=None, transcript_id_end=None):
     ep_id = ep_id or str(uuid.uuid4())
     conn.execute("""
         INSERT INTO episodes (
             id, intent, context, action, emotion, outcome, gist,
             salience, channel, entities, goal_tags, storage_strength,
             retrieval_weight, consolidated_from, open_loops,
-            emotional_valence, emotional_arousal
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            emotional_valence, emotional_arousal,
+            transcript_id_start, transcript_id_end
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ep_id,
         json.dumps({'type': 'exploration', 'direction': 'test'}),
@@ -166,7 +132,7 @@ def _insert_episode(conn, ep_id=None, gist="test gist", entities=None,
         'test outcome',
         gist,
         salience,
-        'test',
+        channel,
         json.dumps(entities or []),
         json.dumps(goal_tags or []),
         storage_strength,
@@ -175,11 +141,13 @@ def _insert_episode(conn, ep_id=None, gist="test gist", entities=None,
         json.dumps(open_loops or []),
         emotional_valence,
         emotional_arousal,
+        transcript_id_start,
+        transcript_id_end,
     ))
     conn.commit()
 
     if embedding is not None:
-        blob = _pack(embedding)
+        blob = _pack(_make_embedding(embedding))
         cursor = conn.execute("SELECT rowid FROM episodes WHERE id = ?", (ep_id,))
         row = cursor.fetchone()
         if row:
@@ -260,7 +228,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = mock_find_similar
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 1
@@ -306,7 +274,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = mock_find_similar
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             svc.run_consolidation_cycle()
 
         for ep_id in [ep1, ep2, ep3]:
@@ -343,7 +311,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = mock_find_similar
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 1
@@ -388,7 +356,7 @@ class TestRunConsolidationCycle:
         svc = self._make_svc(fake_db, llm_resp)
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 0
@@ -404,7 +372,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = MagicMock(return_value=[])
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 0
@@ -442,7 +410,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = mock_find_similar
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 1
@@ -484,7 +452,7 @@ class TestRunConsolidationCycle:
         svc._find_similar_episodes = mock_find_similar
 
         with patch('services.embedding_service.get_embedding_service') as mock_emb:
-            mock_emb.return_value.generate_embedding.return_value = [0.1, 0.2, 0.3, 0.4]
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
             count = svc.run_consolidation_cycle()
 
         assert count == 1
@@ -492,3 +460,93 @@ class TestRunConsolidationCycle:
             "SELECT storage_strength FROM episodes WHERE consolidated_from != '[]'"
         ).fetchone()
         assert abs(row[0] - 4.5) < 0.01
+
+    def test_super_episode_inherits_transcript_range_from_sources(self, mem_db, fake_db):
+        """Super episode transcript_id_start/end spans all source episodes."""
+        ep1 = _insert_episode(mem_db, gist="Ep1", embedding=[0.1, 0.2, 0.3, 0.4],
+                              transcript_id_start=1, transcript_id_end=10)
+        ep2 = _insert_episode(mem_db, gist="Ep2", embedding=[0.1, 0.2, 0.3, 0.4],
+                              transcript_id_start=8, transcript_id_end=20)
+        ep3 = _insert_episode(mem_db, gist="Ep3", embedding=[0.1, 0.2, 0.3, 0.4],
+                              transcript_id_start=18, transcript_id_end=30)
+
+        llm_resp = _make_llm_response(gist="Transcript range test")
+        svc = self._make_svc(fake_db, llm_resp)
+
+        def mock_find_similar(embedding, exclude_id, exclude_ids):
+            all_eps = [
+                {'id': ep1, 'rowid': 1, 'gist': 'Ep1', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': 1, 'transcript_id_end': 10, 'channel': 'chat'},
+                {'id': ep2, 'rowid': 2, 'gist': 'Ep2', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': 8, 'transcript_id_end': 20, 'channel': 'chat'},
+                {'id': ep3, 'rowid': 3, 'gist': 'Ep3', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': 18, 'transcript_id_end': 30, 'channel': 'chat'},
+            ]
+            return [ep for ep in all_eps if ep['id'] != exclude_id and ep['id'] not in exclude_ids]
+
+        svc._find_similar_episodes = mock_find_similar
+
+        with patch('services.embedding_service.get_embedding_service') as mock_emb:
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
+            count = svc.run_consolidation_cycle()
+
+        assert count == 1
+        row = mem_db.execute(
+            "SELECT transcript_id_start, transcript_id_end FROM episodes "
+            "WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
+        ).fetchone()
+        assert row[0] == 1
+        assert row[1] == 30
+
+    def test_super_episode_channel_from_majority_vote(self, mem_db, fake_db):
+        """Super episode channel is the most common channel among source episodes."""
+        ep1 = _insert_episode(mem_db, gist="Ep1", embedding=[0.1, 0.2, 0.3, 0.4],
+                              channel='voice')
+        ep2 = _insert_episode(mem_db, gist="Ep2", embedding=[0.1, 0.2, 0.3, 0.4],
+                              channel='chat')
+        ep3 = _insert_episode(mem_db, gist="Ep3", embedding=[0.1, 0.2, 0.3, 0.4],
+                              channel='chat')
+
+        llm_resp = _make_llm_response(gist="Channel test")
+        svc = self._make_svc(fake_db, llm_resp)
+
+        def mock_find_similar(embedding, exclude_id, exclude_ids):
+            all_eps = [
+                {'id': ep1, 'rowid': 1, 'gist': 'Ep1', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': None, 'transcript_id_end': None, 'channel': 'voice'},
+                {'id': ep2, 'rowid': 2, 'gist': 'Ep2', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': None, 'transcript_id_end': None, 'channel': 'chat'},
+                {'id': ep3, 'rowid': 3, 'gist': 'Ep3', 'context': '', 'intent': '',
+                 'outcome': '', 'open_loops': [], 'entities': [], 'goal_tags': [],
+                 'emotional_valence': 0.0, 'emotional_arousal': 0.5,
+                 'salience': 5.0, 'storage_strength': 1.0, 'retrieval_weight': 0.5,
+                 'transcript_id_start': None, 'transcript_id_end': None, 'channel': 'chat'},
+            ]
+            return [ep for ep in all_eps if ep['id'] != exclude_id and ep['id'] not in exclude_ids]
+
+        svc._find_similar_episodes = mock_find_similar
+
+        with patch('services.embedding_service.get_embedding_service') as mock_emb:
+            mock_emb.return_value.generate_embedding.return_value = _make_embedding([0.1, 0.2, 0.3, 0.4])
+            count = svc.run_consolidation_cycle()
+
+        assert count == 1
+        row = mem_db.execute(
+            "SELECT channel FROM episodes WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
+        ).fetchone()
+        assert row[0] == 'chat'
