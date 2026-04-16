@@ -45,6 +45,8 @@ _EXCLUDED_TOOLS: frozenset[str] = frozenset({
     'user_steer',
     'tool_compaction',
     'act_restart',
+    'thinking',  # exploration-pass output stored for ACT-loop re-injection only
+
     # Raw ephemeral data — snapshot at time of call, no durable knowledge
     'weather',
     'get_current_time',
