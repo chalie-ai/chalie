@@ -550,7 +550,7 @@ class MessageProcessor:
             # not inside the ACT loop.
             if self._thinking_exploration:
                 logger.info(
-                    "[THINKING] [internal_exploration] injected into user body (chars=%d)",
+                    "[THINKING] Chain of Thought injected into user body (chars=%d)",
                     len(self._thinking_exploration),
                 )
 
@@ -1105,36 +1105,38 @@ class MessageProcessor:
     def _run_thinking_exploration(self) -> 'str | None':
         """One same-job exploration pass for high-mode turns.
 
-        Returns plain-text exploration output that lists 1–2 alternative paths
-        Chalie could take. Caller stores it on self._thinking_exploration. The
-        ACT loop then prepends it to the user_body via _wrap_with_exploration
-        on every iteration so the model can pivot mid-turn.
+        Asks the model to think out loud about the user's request: assess
+        gaps in its knowledge, evaluate which tools would help, and flag
+        non-obvious aspects. Output is Chain-of-Thought that gets
+        re-injected into the ACT loop via _wrap_with_exploration so the
+        model can act on its own reasoning.
 
-        Tools schema is left visible (soft-disabled in the prompt). If the
-        exploration response includes tool_calls, they are discarded — the
-        exploration is single-pass only.
+        Tools schema is sent so the model can reason about available
+        capabilities, but the prompt instructs it not to invoke them.
+        Any tool_calls in the response are discarded (single-pass only).
+
+        The model may output 'NOTHING' if the request is straightforward,
+        in which case None is returned and no exploration is injected.
 
         Returns None on any failure (network, provider rejection, etc).
         Logged at INFO. NEVER raises.
-
-        Trade-off — no quality gate: whatever the provider returns is
-        persisted verbatim. A degenerate exploration ("I don't know, try
-        searching") still ends up re-injected into every ACT iteration
-        because the cost of mid-turn quality-checking another LLM call
-        outweighs the noise floor of a weak exploration. The only
-        filtering is emptiness: blank/whitespace output returns None and
-        the turn proceeds without the [internal_exploration] envelope.
-        If exploration quality becomes a measurable regression, gate
-        here via a confidence classifier or length/structure heuristic.
         """
         from services.providers import Providers
 
         _EXPLORATION_PREFIX = (
-            "Before answering, briefly outline 1–2 alternative paths you could take "
-            "to address the user's request. Just names + one-line description each. "
-            "Don't commit to one. Tools are available but discouraged for this "
-            "exploration — list options first; you may pivot or abandon these "
-            "during the actual response. Output plain text only.\n\n---\n\n"
+            "Think out loud about the user's request before responding.\n\n"
+            "Consider:\n"
+            "- What does the ideal response look like? What would make it genuinely useful?\n"
+            "- Do you already know enough to answer well, or are there gaps?\n"
+            "- Would any of your available tools fill those gaps? Which ones, in what order?\n"
+            "- Is there anything non-obvious about this request you might miss on a first read?\n\n"
+            "Whatever you output here will be shown to you as Chain of Thought on the next "
+            "pass — write to your future self. Be specific: name the tools you plan to use, "
+            "flag uncertainties, note key facts you want to remember to include.\n\n"
+            "If the request is straightforward and you have nothing useful to say to yourself, "
+            "output exactly: NOTHING\n\n"
+            "DO NOT INVOKE TOOLS — they are disabled in this phase. Think only."
+            "\n\n---\n\n"
         )
 
         try:
@@ -1158,6 +1160,8 @@ class MessageProcessor:
                 )
 
             text = (response.text or '').strip()
+            if text.upper() == 'NOTHING':
+                return None
             return text if text else None
 
         except Exception as exc:
@@ -1300,9 +1304,12 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
     if not exploration_text:
         return user_body
     return (
-        "[internal_exploration]\n"
-        f"{exploration_text}\n"
-        "[/internal_exploration]\n\n"
+        "## Chain of Thought\n"
+        "Below is your initial reaction to this prompt, played back. "
+        "Use it as grounding but pivot as needed based on the conversation.\n\n"
+        "---\n\n"
+        f"{exploration_text}\n\n"
+        "---\n\n"
         + user_body
     )
 
