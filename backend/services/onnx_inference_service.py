@@ -58,6 +58,10 @@ MODEL_REGISTRY = [
     ("thinking_level", "thinking-level"),
 ]
 
+# Asset filename constants
+_CLASSIFIER_META_FILENAME = "classifier_meta.json"
+_CLASSIFIER_META_STAGING_FILENAME = "classifier_meta_dl.json"
+
 # sha256 of the shared encoder ONNX — computed once, cached here
 _encoder_sha256_cache: Optional[str] = None
 _encoder_sha256_lock = threading.Lock()
@@ -277,7 +281,7 @@ class OnnxInferenceService:
     def _ensure_task(self, task_name: str, asset_prefix: str):
         """Download classifier_meta.json and head .npz for one task if missing/stale."""
         task_dir = self._models_dir / task_name
-        meta_path = task_dir / "classifier_meta.json"
+        meta_path = task_dir / _CLASSIFIER_META_FILENAME
 
         # Check local version
         local_version = None
@@ -309,13 +313,13 @@ class OnnxInferenceService:
             staging.mkdir(parents=True)
 
             # Download meta JSON
-            _download_with_curl(meta_url, staging / "classifier_meta_dl.json")
-            with open(staging / "classifier_meta_dl.json") as f:
+            _download_with_curl(meta_url, staging / _CLASSIFIER_META_STAGING_FILENAME)
+            with open(staging / _CLASSIFIER_META_STAGING_FILENAME) as f:
                 meta = json.load(f)
             meta["version"] = _RELEASE_TAG
-            with open(staging / "classifier_meta.json", "w") as f:
+            with open(staging / _CLASSIFIER_META_FILENAME, "w") as f:
                 json.dump(meta, f, indent=2)
-            (staging / "classifier_meta_dl.json").unlink()
+            (staging / _CLASSIFIER_META_STAGING_FILENAME).unlink()
 
             # Download head .npz
             head_asset = meta.get("head_asset", f"{asset_prefix}_head.npz")
@@ -349,10 +353,10 @@ class OnnxInferenceService:
         Returns None if the task directory or meta is missing.
         """
         task_dir = self._models_dir / task_name
-        meta_path = task_dir / "classifier_meta.json"
+        meta_path = task_dir / _CLASSIFIER_META_FILENAME
 
         if not meta_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing classifier_meta.json for task '{task_name}'")
+            logger.warning(f"{LOG_PREFIX} Missing {_CLASSIFIER_META_FILENAME} for task '{task_name}'")
             return None
 
         try:

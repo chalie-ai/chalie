@@ -329,7 +329,7 @@ class SchemaConvergenceService:
         virtual_names = set(live_virtual.keys())
         shadow_prefixes = tuple(f"{vn}_" for vn in virtual_names)
 
-        for table_name in list(actual.keys()):
+        for table_name in actual:
             if table_name in desired:
                 continue
             if not self._is_droppable_table(table_name, virtual_names, shadow_prefixes):
@@ -360,7 +360,7 @@ class SchemaConvergenceService:
             if table_name not in actual:
                 continue
             live_cols = actual[table_name]
-            for col_name in list(live_cols.keys()):
+            for col_name in live_cols:
                 if col_name in desired_cols:
                     continue
                 try:
@@ -385,7 +385,7 @@ class SchemaConvergenceService:
         already filtered out by ``_introspect_indexes``.
         """
         dropped = 0
-        for idx_name in list(actual.keys()):
+        for idx_name in actual:
             if idx_name in desired:
                 continue
             try:
@@ -407,7 +407,7 @@ class SchemaConvergenceService:
         Dropping a virtual table cascades to its shadow tables automatically.
         """
         dropped = 0
-        for table_name in list(actual.keys()):
+        for table_name in actual:
             if table_name in desired:
                 continue
             try:

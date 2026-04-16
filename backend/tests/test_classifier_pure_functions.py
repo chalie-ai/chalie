@@ -32,13 +32,13 @@ class TestCosimeSimilarity:
         assert abs(_cosine_similarity([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]) - 1.0) < 1e-6
 
     def test_orthogonal_vectors_return_zero(self):
-        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
+        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 
     def test_empty_vectors_return_zero(self):
-        assert _cosine_similarity([], []) == 0.0
+        assert _cosine_similarity([], []) == pytest.approx(0.0)
 
     def test_mismatched_lengths_return_zero(self):
-        assert _cosine_similarity([1.0, 2.0], [1.0]) == 0.0
+        assert _cosine_similarity([1.0, 2.0], [1.0]) == pytest.approx(0.0)
 
     def test_opposite_vectors_return_minus_one(self):
         assert abs(_cosine_similarity([1.0, 0.0], [-1.0, 0.0]) - (-1.0)) < 1e-6
