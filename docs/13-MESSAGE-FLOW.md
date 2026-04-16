@@ -155,7 +155,7 @@ Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProces
 │    Post-commit daemon threads (outside transaction):                │
 │      _embed_entry(input_id)                                         │
 │      _embed_entry(assistant_id)                                     │
-│      _trigger_episode_extraction(channel, assistant_id)             │
+│      _maybe_trigger_extraction(channel, assistant_id)               │
 │                                                                     │
 │  postTurn() → 8-service fan-out (see §4)                            │
 └─────────────────────────────────────────────────────────────────────┘
