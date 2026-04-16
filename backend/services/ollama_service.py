@@ -60,6 +60,8 @@ class OllamaService:
         self.timeout = config.get('timeout', 60)
         self.format = config.get('format', 'json')
         self.max_retries = config.get('max_retries', 2)
+        # Cached result of _model_supports_thinking(). None = not yet checked.
+        self._thinking_supported: bool | None = None
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message to Ollama and return the response."""
@@ -144,36 +146,27 @@ class OllamaService:
                 for t in tools
             ]
 
-        # Ollama native thinking: binary True/False in the chat API.
-        # 'medium' and 'high' both map to True — Ollama has no budget granularity.
+        # Ollama native thinking: binary True/False in the chat API (top-level
+        # field, not nested under options). 'medium' and 'high' both map to
+        # True — Ollama has no budget granularity.
+        # Pre-flight: only send the flag when the model advertises 'thinking'
+        # in its /api/show capabilities list. Unknown models default to False
+        # (safe — the flag simply doesn't appear in the payload).
         if thinking_mode in ('medium', 'high'):
-            payload["think"] = True
-            logging.info(
-                f"[THINKING] native flag passed: provider=ollama mode={thinking_mode} model={self.model}"
-            )
+            if self._model_supports_thinking():
+                payload["think"] = True
+                logging.info(
+                    f"[THINKING] native flag passed: provider=ollama mode={thinking_mode} model={self.model}"
+                )
+            else:
+                logging.info(
+                    f"[THINKING] provider=ollama model={self.model} does not support "
+                    f"native think — request sent without flag"
+                )
 
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
-                # Silent retry without `think` whenever the server rejects the
-                # request and the field was set. Older Ollama builds and most
-                # non-reasoning models reject the field with a generic 400 whose
-                # body does not always literally contain the word "think", so a
-                # substring guard would mask real failures. Cost of one extra
-                # call is negligible vs the cost of dropping the entire turn.
-                if response.status_code == 400 and payload.get("think"):
-                    # Log at WARNING: if the original 400 was caused by an
-                    # unrelated payload bug (tool schema, content format),
-                    # the retry without 'think' will ALSO 400 and propagate
-                    # as a real failure. Operators should see both lines to
-                    # diagnose correctly — INFO would get lost.
-                    logging.warning(
-                        f"[THINKING] native flag rejected by provider=ollama "
-                        f"model={self.model} body={response.text[:200]!r} — retrying without "
-                        f"think (if retry also 400s, root cause is unrelated to thinking flag)"
-                    )
-                    payload.pop("think", None)
-                    response = requests.post(url, json=payload, timeout=self.timeout)
                 response.raise_for_status()
                 data = response.json()
 
@@ -230,6 +223,37 @@ class OllamaService:
                         raise
                 else:
                     raise
+
+    def _model_supports_thinking(self) -> bool:
+        """Return True if the configured model advertises thinking capability.
+
+        Queries /api/show once per OllamaService instance and caches the result.
+        Returns False on any network or parse error (safe default — the think
+        flag simply won't be sent).
+
+        Ollama's /api/show response includes a ``capabilities`` list. Models
+        that support the think flag include ``'thinking'`` in that list.
+        """
+        if self._thinking_supported is not None:
+            return self._thinking_supported
+        try:
+            resp = requests.post(
+                f"{self.host}/api/show",
+                json={"name": self.model},
+                timeout=5,
+            )
+            if resp.ok:
+                data = resp.json()
+                caps = data.get('capabilities', [])
+                self._thinking_supported = 'thinking' in caps
+                return self._thinking_supported
+        except Exception as exc:
+            logging.debug(
+                f"[OllamaService] _model_supports_thinking check failed for "
+                f"model={self.model}: {exc}"
+            )
+        self._thinking_supported = False
+        return False
 
     def get_context_limit(self) -> int:
         """Query Ollama for model's context window size, cached."""
