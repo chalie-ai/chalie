@@ -90,7 +90,7 @@ class TestSchemaValidation:
         """Absorbs scenario 200: reliability column exists on knowledge.
 
         uncertainties table was removed from schema.sql (dropped by migration
-        025, replaced by pending_contradictions). Reliability column is still
+        025). Reliability column is still
         present on knowledge (for migration 026 compat).
         """
         cols = _get_columns(schema_db, 'knowledge')

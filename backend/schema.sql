@@ -503,16 +503,21 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 -- gone; legacy schema_migrations rows are auto-dropped on the next boot.
 
 -- ────────────────────────────────────────────────────────────────
--- PENDING CONTRADICTIONS — trait contradictions awaiting user resolution
+-- CONCEPT LUT MISSES — keys that didn't match the concept LUT
+-- Rows accumulate as the LUT is encountered at runtime; used to
+-- identify canonical key candidates for future LUT expansion.
 -- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS pending_contradictions (
-    id TEXT PRIMARY KEY,
-    trait_a_id INTEGER NOT NULL,
-    trait_b_id INTEGER NOT NULL,
-    question TEXT NOT NULL,
-    surfaced_at TEXT NOT NULL,
-    source TEXT NOT NULL  -- 'chat' | 'ambient'
+CREATE TABLE IF NOT EXISTS concept_lut_misses (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value_preview TEXT,
+    count      INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT NOT NULL,
+    last_seen  TEXT NOT NULL,
+    UNIQUE(kind, key)
 );
+CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)

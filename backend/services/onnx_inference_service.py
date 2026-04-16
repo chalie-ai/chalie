@@ -54,7 +54,6 @@ _RELEASE_TAG = "v0.9.0"
 # - head asset: <prefix>_head.npz             → models/<task>/<head_asset from meta>
 # (note the mixed separator: hyphen before "classifier", underscore before "head")
 MODEL_REGISTRY = [
-    ("contradiction", "contradiction"),
     ("thinking_level", "thinking-level"),
 ]
 
@@ -182,7 +181,7 @@ class OnnxInferenceService:
     Usage:
         svc = OnnxInferenceService("/models")
         svc.ensure_models()
-        label, confidence = svc.predict("contradiction", input_text)
+        label, confidence = svc.predict("thinking_level", input_text)
     """
 
     def __init__(self, models_dir: str):
@@ -443,7 +442,7 @@ class OnnxInferenceService:
         """Run single-label MLP classification.
 
         Args:
-            task_name:      Registered task ('thinking_level', 'contradiction', …).
+            task_name:      Registered task (e.g. 'thinking_level').
             prompt:         Raw text to encode.
             extra_features: Optional (1, extra_dim) float32 array to concatenate
                             after the embedding (e.g. prev_level one-hot).

@@ -1,0 +1,466 @@
+# concept_lut.yaml — high-level concepts (v3)
+#
+# Source of truth for user-trait concepts + update rules in Chalie's data_graph.
+# Regenerate sqlite artifact with: python -m utils.generate_concept_lut
+#
+# v3 restructure (2026-04-16):
+#   Radical simplification from 149 fine-grained concepts to 27 high-level ones.
+#   Calibration on v2 showed 134/488 (27%) aliases routed to the wrong canonical
+#   — surface-form token overlap (step_*, _preference suffix, current_ prefix,
+#   employment_* prefix, "phone"/"name" tokens) dominated the embedding signal
+#   at the canonical_key granularity. gte-modernbert cannot discriminate between
+#   `job_title` and `job_location` — they look like the same concept to it.
+#
+#   Fix: collapse to ~27 semantically distant canonical keys. The VALUE carries
+#   the detail ("job_title: senior engineer" stored under `employment`). Aliases
+#   are documentation only — not embedded separately.
+#
+# Rules:
+#   temporal   - new value replaces old; most recent wins. Supersede + edge.
+#                History preserved via active=0 rows + superseded_by edges.
+#   coexist    - multiple values simultaneously true. All stored, nothing superseded.
+#   immutable  - should never change. If a contradiction arrives, flag for review
+#                rather than silently overwriting.
+
+version: 3
+
+concepts:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Immutable — facts that don't change across a lifetime
+  # ─────────────────────────────────────────────────────────────────────
+
+  - canonical_key: birth_date
+    rule: immutable
+    aliases:
+      - date_of_birth
+      - dob
+      - birthday
+      - born_on
+      - birth_day
+
+  - canonical_key: birth_place
+    rule: immutable
+    aliases:
+      - place_of_birth
+      - birthplace
+      - born_in
+      - hometown_of_origin
+      - where_born
+
+  - canonical_key: biological_parents
+    rule: immutable
+    aliases:
+      - birth_mother
+      - birth_father
+      - biological_mother
+      - biological_father
+      - birth_parents
+      - genetic_parents
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Temporal — current state, replaced when it changes
+  # ─────────────────────────────────────────────────────────────────────
+
+  - canonical_key: residence
+    rule: temporal
+    aliases:
+      - home
+      - current_home
+      - home_address
+      - current_address
+      - current_city
+      - current_country
+      - lives_in
+      - where_i_live
+      - neighbourhood
+      - neighborhood
+      - residency
+      - current_residence
+
+  - canonical_key: gender
+    rule: temporal
+    aliases:
+      - gender_identity
+      - sex
+      - gender_expression
+
+  - canonical_key: religion
+    rule: temporal
+    aliases:
+      - faith
+      - spiritual_tradition
+      - belief_system
+      - denomination
+      - religious_affiliation
+
+  - canonical_key: timezone
+    rule: temporal
+    aliases:
+      - current_timezone
+      - tz
+      - local_timezone
+
+  - canonical_key: partner
+    rule: temporal
+    aliases:
+      - spouse
+      - husband
+      - wife
+      - fiance
+      - fiancee
+      - boyfriend
+      - girlfriend
+      - significant_other
+      - life_partner
+      - partner_married
+
+  - canonical_key: employment
+    rule: temporal
+    aliases:
+      - job
+      - job_title
+      - job_position
+      - employer
+      - current_role
+      - current_job
+      - occupation
+      - profession
+      - work
+      - job_location
+      - office_location
+      - employment_start
+      - job_start_date
+      - employment_status
+      - working_hours
+      - work_schedule
+      - department
+      - industry
+      - sector
+      - company
+
+  - canonical_key: financial_status
+    rule: temporal
+    aliases:
+      - salary
+      - income
+      - net_worth
+      - earnings
+      - financial_situation
+      - wealth
+      - compensation
+      - annual_income
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Coexist — accumulating sets, multiple values simultaneously true
+  # ─────────────────────────────────────────────────────────────────────
+
+  - canonical_key: name
+    rule: coexist
+    aliases:
+      - first_name
+      - last_name
+      - given_name
+      - family_name
+      - surname
+      - forename
+      - middle_name
+      - nickname
+      - full_name
+      - pronouns
+      - preferred_name
+      - name_used
+      - maiden_name
+
+  - canonical_key: heritage
+    rule: coexist
+    aliases:
+      - nationality
+      - ethnicity
+      - citizenship
+      - passport_country
+      - passport_countries
+      - languages_spoken
+      - mother_tongue
+      - native_language
+      - ancestry
+      - cultural_background
+      - country_of_origin
+
+  - canonical_key: family
+    rule: coexist
+    aliases:
+      - father
+      - papa
+      - dad
+      - mother
+      - mom
+      - mum
+      - parents
+      - siblings
+      - brothers
+      - sisters
+      - brothers_and_sisters
+      - older_brother
+      - younger_brother
+      - older_sister
+      - younger_sister
+      - children
+      - sons
+      - daughters
+      - cousins
+      - grandparents
+      - grandmother
+      - grandfather
+      - aunt
+      - uncle
+      - step_father
+      - step_mother
+      - step_siblings
+      - step_brothers
+      - step_sisters
+      - step_sons
+      - step_daughters
+      - stepchildren
+      - in_laws
+      - mother_in_law
+      - father_in_law
+      - relatives
+      - family_members
+      - extended_family
+
+  - canonical_key: relationships
+    rule: coexist
+    aliases:
+      - friends
+      - best_friend
+      - colleagues
+      - coworkers
+      - subordinates
+      - manager
+      - reports_to
+      - mentors
+      - coaches
+      - mentees
+      - people_i_mentor
+      - teachers
+      - peers
+      - acquaintances
+      - enemies
+      - neighbours
+      - neighbors
+      - roommates
+      - housemates
+
+  - canonical_key: education
+    rule: coexist
+    aliases:
+      - school
+      - current_school
+      - university
+      - college
+      - degree
+      - degrees
+      - qualifications
+      - certifications
+      - certificates
+      - field_of_study
+      - academic_field
+      - major
+      - minor
+      - alma_mater
+      - courses_taken
+      - school_attended
+
+  - canonical_key: health
+    rule: coexist
+    aliases:
+      - allergies
+      - medical_conditions
+      - medications
+      - disabilities
+      - surgeries
+      - therapist
+      - doctor
+      - fitness_level
+      - physical_activity
+      - exercise_routine
+      - workout_routine
+      - mental_health
+      - lifestyle
+      - health_conditions
+
+  - canonical_key: food_and_drink
+    rule: coexist
+    aliases:
+      - favorite_foods
+      - foods_i_like
+      - disliked_foods
+      - avoid_foods
+      - dietary_restrictions
+      - diet
+      - dietary_preference
+      - food_preference
+      - food_preference_diet
+      - cuisine
+      - favorite_cuisine
+      - coffee_preference
+      - tea_preference
+      - beverages
+      - drinks
+      - favorite_drinks
+      - alcohol_preference
+
+  - canonical_key: entertainment
+    rule: coexist
+    aliases:
+      - favorite_movies
+      - favorite_films
+      - favorite_books
+      - favorite_music
+      - favorite_songs
+      - favorite_albums
+      - favorite_artists
+      - favorite_authors
+      - tv_shows
+      - favorite_tv_shows
+      - podcasts
+      - favorite_podcasts
+      - video_games
+      - favorite_games
+      - genres
+      - favorite_genres
+
+  - canonical_key: sports
+    rule: coexist
+    aliases:
+      - favorite_sports
+      - sports_i_watch
+      - favorite_sports_teams
+      - teams_i_support
+      - teams_supported
+      - sports_played
+      - athletes_i_admire
+      - favorite_athletes
+
+  - canonical_key: style
+    rule: coexist
+    aliases:
+      - favorite_colors
+      - fashion_style
+      - clothing_style
+      - design_preferences
+      - aesthetic_tastes
+      - art_style
+      - favorite_aesthetic
+      - visual_preferences
+
+  - canonical_key: skills_and_interests
+    rule: coexist
+    aliases:
+      - skills
+      - expertise
+      - hobbies
+      - interests
+      - topics_i_like
+      - topics_of_interest
+      - talents
+      - tech_stack
+      - frameworks_used
+      - tools_used
+      - programming_languages
+      - areas_of_expertise
+
+  - canonical_key: contact_info
+    rule: coexist
+    aliases:
+      - email
+      - email_address
+      - phone
+      - primary_phone
+      - phone_numbers
+      - mobile_phone
+      - cell_phone
+      - telephone
+      - mailing_address
+      - social_handle
+      - social_media
+      - twitter_handle
+      - linkedin
+      - github
+      - website
+      - personal_website
+      - messaging_app
+
+  - canonical_key: tech_setup
+    rule: coexist
+    aliases:
+      - devices
+      - computer
+      - laptop
+      - phone_model
+      - operating_system
+      - os
+      - software_used
+      - workflow_apps
+      - code_editor
+      - ide
+      - dev_environment
+      - productivity_tools
+
+  - canonical_key: personality
+    rule: coexist
+    aliases:
+      - personality_traits
+      - mbti
+      - enneagram
+      - big_five
+      - values
+      - character_traits
+      - temperament
+      - core_values
+      - character
+
+  - canonical_key: life_events
+    rule: coexist
+    aliases:
+      - achievements
+      - proud_moments
+      - awards
+      - milestones
+      - publications
+      - articles_written
+      - books_written
+      - accomplishments
+      - relocations
+      - moves
+      - major_events
+      - significant_events
+      - life_milestones
+
+  - canonical_key: goals_and_projects
+    rule: coexist
+    aliases:
+      - current_goals
+      - goals
+      - aspirations
+      - ambitions
+      - plans
+      - projects
+      - current_project
+      - side_projects
+      - life_goals
+      - objectives
+
+  - canonical_key: routines_and_habits
+    rule: coexist
+    aliases:
+      - daily_routine
+      - daily_routines
+      - habits
+      - rituals
+      - morning_routine
+      - evening_routine
+      - bedtime_routine
+      - schedule_of_day
+      - typical_day

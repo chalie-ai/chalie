@@ -9,10 +9,6 @@ cached in memory) and are marked @pytest.mark.integration.
 Primary defense is the nightly YAML scenarios:
   094-thinking-level-sticky-fallback.yaml
   095-classifier-encoder-sha256-boot-gate.yaml
-  096-contradiction-mlp-json-input.yaml
-
-These pytest tests are a faster in-process complement that catch regressions
-before a nightly run is needed.
 """
 
 from pathlib import Path
@@ -38,87 +34,6 @@ def onnx_svc():
     from services.onnx_inference_service import OnnxInferenceService
     svc = OnnxInferenceService(_MODELS_DIR)
     return svc
-
-
-# ── Contradiction classifier ───────────────────────────────────────────────────
-
-
-class TestContradictionClassifier:
-    """Feed real memory pairs into the ONNX contradiction head; assert real labels."""
-
-    def test_contradicting_locations_detected(self, onnx_svc):
-        """'I live in Valletta' vs 'I live in Swieqi' — same-category location swap.
-
-        The model must resolve this as temporal_change (relocation) or
-        true_contradiction, not compatible. Confidence must be meaningful (>0.4).
-        """
-        from services.contradiction_classifier_service import ContradictionClassifierService
-
-        svc = ContradictionClassifierService()
-        # Inject our real onnx_svc directly through predict so we control the model
-        input_text = svc._build_onnx_input(
-            text_a="I live in Valletta",
-            text_b="I live in Swieqi",
-            meta_a={"type": "incoming", "established": False},
-            meta_b={"type": "trait", "reinforcement_count": 5},
-        )
-
-        label, confidence = onnx_svc.predict("contradiction", input_text)
-
-        assert label is not None, "Model returned None — is the contradiction head loaded?"
-        assert label in ("temporal_change", "true_contradiction"), (
-            f"Two locations for the same person should be temporal_change or "
-            f"true_contradiction, got {label!r}"
-        )
-        assert confidence > 0.4, (
-            f"Expected meaningful confidence for a clear contradiction, got {confidence:.3f}"
-        )
-
-    def test_compatible_statements_not_flagged(self, onnx_svc):
-        """'I like Honda' vs 'I like Toyota' — compatible preferences.
-
-        A person can like both car brands; this must not be flagged as a contradiction.
-        """
-        from services.contradiction_classifier_service import ContradictionClassifierService
-
-        svc = ContradictionClassifierService()
-        input_text = svc._build_onnx_input(
-            text_a="I like Honda cars",
-            text_b="I like Toyota cars",
-            meta_a={"type": "incoming", "established": False},
-            meta_b={"type": "trait", "reinforcement_count": 3},
-        )
-
-        label, confidence = onnx_svc.predict("contradiction", input_text)
-
-        assert label is not None, "Model returned None — is the contradiction head loaded?"
-        assert label == "compatible", (
-            f"Honda + Toyota should be 'compatible', got {label!r} (confidence={confidence:.3f})"
-        )
-
-    def test_job_switch_is_temporal_change(self, onnx_svc):
-        """'I worked at Google' vs 'I work at Apple' — career evolution.
-
-        Past-tense + present-tense job statements indicate temporal change,
-        not a simultaneous contradiction.
-        """
-        from services.contradiction_classifier_service import ContradictionClassifierService
-
-        svc = ContradictionClassifierService()
-        input_text = svc._build_onnx_input(
-            text_a="I work at Apple",
-            text_b="I worked at Google",
-            meta_a={"type": "incoming", "established": False},
-            meta_b={"type": "trait", "reinforcement_count": 4},
-        )
-
-        label, confidence = onnx_svc.predict("contradiction", input_text)
-
-        assert label is not None, "Model returned None — is the contradiction head loaded?"
-        assert label in ("temporal_change", "true_contradiction"), (
-            f"A job switch should be temporal_change or true_contradiction, "
-            f"got {label!r} (confidence={confidence:.3f})"
-        )
 
 
 # ── Thinking-level classifier ──────────────────────────────────────────────────

@@ -34,16 +34,21 @@ EXPAND_FACTOR_CEILING: float = 2.2
 TOOL_SCHEMA = {
     "name": "memory",
     "description": (
-        "Store or recall knowledge about the user. Store personal facts "
-        "the moment they're disclosed. Recall before recommending anything."
+        "Store, recall, or forget knowledge about the user. Store personal facts "
+        "the moment they're disclosed. Recall before recommending anything. "
+        "Use forget to remove a specific memory when asked."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["store", "recall", "reflect"],
-                "description": "store: save a fact. recall: search memory - fast. reflect: deep search about a topic",
+                "enum": ["store", "recall", "reflect", "forget"],
+                "description": (
+                    "store: save a fact. recall: search memory - fast. "
+                    "reflect: deep search about a topic. "
+                    "forget: permanently remove a memory."
+                ),
             },
             "kind": {
                 "type": "string",
@@ -57,11 +62,14 @@ TOOL_SCHEMA = {
             },
             "key": {
                 "type": "string",
-                "description": "For store: short identifier (e.g. 'user_name', 'favourite_food').",
+                "description": "For store/forget: short identifier (e.g. 'residence', 'food_and_drink').",
             },
             "value": {
                 "type": "string",
-                "description": "For store: the fact itself.",
+                "description": (
+                    "For store: the fact itself. "
+                    "For forget: required when removing one value from a multi-value key."
+                ),
             },
             "query": {
                 "type": "string",
@@ -86,10 +94,12 @@ def handle_memory(channel: str, params: dict) -> str:
             return _handle_recall(channel, params)
         elif action == "reflect":
             return _handle_reflect(channel, params)
+        elif action == "forget":
+            return _handle_forget(channel, params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
-                f"Valid: store, recall, reflect"
+                f"Valid: store, recall, reflect, forget"
             )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
@@ -117,24 +127,122 @@ def _handle_store(channel: str, params: dict) -> str:
     if result is None:
         return f"{LOG_PREFIX} Store failed — invalid kind '{kind}' or internal error."
 
-    if result.get("conflict"):
-        classification = result.get("classification", "ambiguous")
-        existing = result.get("existing", {})
-        old_value = existing.get("value", "")
-        proposed_value = result.get("proposed_value", value)
-        proposed_key = result.get("proposed_key", key)
+    return _format_store_response(result)
 
-        if classification == "true_contradiction":
-            return (
-                f"{LOG_PREFIX} Conflict detected: existing '{proposed_key}' says "
-                f"'{old_value}' but new claim is '{proposed_value}'. Which is correct?"
-            )
+
+def _format_store_response(result: dict) -> str:
+    status = result.get("status", "")
+    canonical = result.get("canonical_key", "")
+    provided = result.get("provided_key", "")
+    value = result.get("value", "")
+    date = result.get("date")
+
+    if canonical != provided:
+        key_display = f"'{canonical}' (canonical of '{provided}')"
+    else:
+        key_display = f"'{canonical}'"
+
+    if status == "created":
+        rule = result.get("rule")
+        if rule == "coexist":
+            return f"{key_display} saved as ['{value}']."
+        return f"{key_display} saved as '{value}'."
+
+    if status == "reinforced":
+        return f"{key_display} was already set on {date}. Memory reinforced."
+
+    if status == "superseded":
+        old = result.get("old_value", "")
+        return f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
+
+    if status == "conflict":
+        old = result.get("old_value", "")
         return (
-            f"{LOG_PREFIX} Not sure if this conflicts with existing '{proposed_key}': "
-            f"'{old_value}'. Should I store '{proposed_value}'?"
+            f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
+            f"New value '{value}' rejected. Use 'forget' first if you're sure."
         )
 
-    return f"{LOG_PREFIX} Stored '{key}'."
+    if status == "appended":
+        all_vals = result.get("all_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in all_vals)
+        return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
+
+    if status == "lut_miss_created":
+        return f"'{provided}' saved as '{value}'."
+
+    if status == "lut_miss_reinforced":
+        return f"'{provided}' already set to '{value}'. Memory reinforced."
+
+    if status == "lut_miss_appended":
+        all_vals = result.get("all_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in all_vals)
+        return f"'{provided}' updated. Values now: [{vals_str}]."
+
+    return f"'{provided}' stored."
+
+
+# ── Forget ───────────────────────────────────────────────────────────
+
+
+def _handle_forget(channel: str, params: dict) -> str:
+    key = params.get("key")
+    value = params.get("value")
+    kind = params.get("kind", "user_specific")
+
+    if not key:
+        return f"{LOG_PREFIX} Error: 'key' is required for forget."
+
+    from services.data_graph_service import get_data_graph_service
+
+    dgs = get_data_graph_service()
+    result = dgs.forget(kind=kind, key=key, value=value, source=f"skill:memory:forget:{channel}")
+
+    if result is None:
+        return f"{LOG_PREFIX} Forget failed — invalid kind or internal error."
+
+    return _format_forget_response(result)
+
+
+def _format_forget_response(result: dict) -> str:
+    status = result.get("status", "")
+    canonical = result.get("canonical_key", "")
+    provided = result.get("provided_key", "")
+    value = result.get("value")
+    date = result.get("date")
+
+    if canonical and provided and canonical != provided:
+        key_display = f"'{canonical}' (canonical of '{provided}')"
+    else:
+        key_display = f"'{canonical or provided}'"
+
+    if status == "forgotten":
+        rule = result.get("rule")
+        if rule == "coexist":
+            remaining = result.get("remaining_values") or []
+            vals_str = ", ".join(f"'{v}'" for v in remaining)
+            return f"'{value}' removed from {key_display}. Remaining: [{vals_str}]."
+        old = result.get("old_value") or value
+        return f"{key_display} forgotten (was '{old}', set {date})."
+
+    if status == "forgotten_all":
+        n = result.get("versions_removed", 0)
+        return f"{key_display} forgotten. All {n} versions removed."
+
+    if status == "forgotten_empty":
+        return f"'{value}' removed from {key_display}. No values remain — key fully forgotten."
+
+    if status == "value_not_found":
+        remaining = result.get("remaining_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in remaining)
+        return f"'{value}' not found in {key_display}. Currently stored: [{vals_str}]."
+
+    if status == "not_found":
+        return f"No memory stored under {key_display}. Nothing to forget."
+
+    if status == "error":
+        return f"{LOG_PREFIX} {result.get('message', 'Unknown error')}"
+
+    return f"{key_display} forget operation completed."
 
 
 # ── Recall ───────────────────────────────────────────────────────────

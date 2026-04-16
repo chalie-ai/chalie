@@ -361,23 +361,23 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
-    # Hourly cleanup for stale pending contradictions
-    def _pending_contradiction_cleanup_loop():
-        import time
-        from services.pending_contradiction_service import PendingContradictionService
-        from services.database_service import get_shared_db_service
-        while True:
-            try:
-                db = get_shared_db_service()
-                svc = PendingContradictionService(db)
-                count = svc.cleanup_stale()
-                if count > 0:
-                    logging.info(f"[PENDING_CONTRADICTION] Cleanup: processed {count} stale records")
-            except Exception as e:
-                logging.warning(f"[PENDING_CONTRADICTION] Cleanup error: {e}")
-            time.sleep(3600)
-
-    threading.Thread(target=_pending_contradiction_cleanup_loop, daemon=True, name="pending-contradiction-cleanup").start()
+    # Verify concept LUT is present and has embeddings
+    try:
+        _lut_db = _os.path.join(
+            _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
+        )
+        if _os.path.exists(_lut_db):
+            _c = _sql.connect(_lut_db)
+            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            _c.close()
+            if "lut_embeddings" in _tables:
+                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
+            else:
+                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
+        else:
+            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
+    except Exception as e:
+        logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):

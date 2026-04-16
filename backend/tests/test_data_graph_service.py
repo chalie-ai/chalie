@@ -1,7 +1,7 @@
-"""Tests for DataGraphService — typed knowledge graph with decay, edges, and contradiction handling.
+"""Tests for DataGraphService — typed knowledge graph with decay, edges, and LUT canonicalization.
 
 Covers store, recall, fetch, edge operations, reinforce/demote, deletion,
-decay_cycle, and seed_from_legacy_knowledge.
+decay_cycle, seed_from_legacy_knowledge, and LUT-based upsert paths.
 """
 
 import contextlib
@@ -116,6 +116,19 @@ DATA_GRAPH_DDL = [
         deleted_at  TEXT,
         search_queries TEXT DEFAULT NULL,
         UNIQUE(entity, key)
+    )
+    """,
+    # LUT miss tracking — required by the LUT miss path in store()
+    """
+    CREATE TABLE IF NOT EXISTS concept_lut_misses (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind       TEXT NOT NULL,
+        key        TEXT NOT NULL,
+        value_preview TEXT,
+        count      INTEGER NOT NULL DEFAULT 1,
+        first_seen TEXT NOT NULL,
+        last_seen  TEXT NOT NULL,
+        UNIQUE(kind, key)
     )
     """,
 ]
@@ -336,90 +349,181 @@ class TestStore:
         assert _rid(r2) == _rid(r1)
         assert r2['evidence_count'] == r1['evidence_count']
 
-    def test_store_contradiction_classify_temporal(self, svc, db_service):
-        """user_specific + different value + classifier returns temporal_change
-        → old row demoted (active=0), new row inserted, supersedes edges created."""
-        r1 = svc.store(KIND_USER_SPECIFIC, 'job', 'Engineer')
+    _FAKE_EMB = [0.1] * 768  # non-None sentinel; KNN is patched so value doesn't matter
+
+    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
+        """Build a fake LUT hit dict for patching _lookup_concept_lut."""
+        return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
+
+    def test_store_user_specific_lut_temporal_canonicalizes_and_supersedes(self, svc, db_service):
+        """New key hits LUT → canonical key rewrite → existing canonical row demoted, new inserted, edges created."""
+        # Seed a row with the canonical key directly
+        seed_rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence', value='Valletta')
+        seed_id = _get_db_id(db_service, seed_rowid)
+
+        # Store with an alias key — LUT maps it to 'residence' (temporal rule).
+        # _generate_embedding must return a non-None value so _lookup_concept_lut is invoked.
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
+            r2 = svc.store(KIND_USER_SPECIFIC, 'residency', 'Swieqi')
+
+        assert r2 is not None
+        assert r2['value'] == 'Swieqi'
+        assert r2['key'] == 'residence'
+        assert r2['id'] != seed_id
+
+        # Old canonical row demoted
+        old = _raw_row(db_service, seed_rowid)
+        assert old['active'] == 0
+        assert old['retrieval_weight'] < 1.0
+
+        # supersedes/superseded_by edges present
+        with db_service.connection() as conn:
+            edges = conn.execute("SELECT from_id, to_id, edge_type FROM data_graph_edges").fetchall()
+        edge_set = {(e[0], e[1], e[2]) for e in edges}
+        assert (r2['id'], seed_id, 'supersedes') in edge_set
+        assert (seed_id, r2['id'], 'superseded_by') in edge_set
+
+    def test_store_user_specific_lut_temporal_exact_key_demotes_existing(self, svc, db_service):
+        """Exact key match + temporal LUT rule → old row demoted on different value."""
+        r1 = svc.store(KIND_USER_SPECIFIC, 'job_title', 'CEO')
         assert r1 is not None
         r1_rowid = _rid(r1)
         r1_id = r1['id']
 
-        cls_result = {'classification': 'temporal_change', 'reasoning': 'career change'}
-        with patch('services.contradiction_classifier_service.ContradictionClassifierService') as MockCls:
-            MockCls.return_value.check_new_trait.return_value = cls_result
-            r2 = svc.store(KIND_USER_SPECIFIC, 'job', 'Architect')
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('job_title', 'temporal')):
+            r2 = svc.store(KIND_USER_SPECIFIC, 'job_title', 'CTO')
 
         assert r2 is not None
-        assert r2['value'] == 'Architect'
-        r2_id = r2['id']
-        assert r2_id != r1_id
+        assert r2['value'] == 'CTO'
+        assert r2['id'] != r1_id
 
-        # Old row demoted to active=0 with reduced retrieval_weight
         old = _raw_row(db_service, r1_rowid)
         assert old['active'] == 0
-        assert old['retrieval_weight'] < 1.0
 
-        # supersedes edge: new→old; superseded_by edge: old→new
         with db_service.connection() as conn:
-            edges = conn.execute(
-                "SELECT from_id, to_id, edge_type FROM data_graph_edges"
-            ).fetchall()
+            edges = conn.execute("SELECT from_id, to_id, edge_type FROM data_graph_edges").fetchall()
         edge_set = {(e[0], e[1], e[2]) for e in edges}
-        assert (r2_id, r1_id, 'supersedes') in edge_set
-        assert (r1_id, r2_id, 'superseded_by') in edge_set
+        assert (r2['id'], r1_id, 'supersedes') in edge_set
 
-    def test_store_contradiction_classify_true_returns_conflict(self, svc):
-        """user_specific + true_contradiction → conflict dict returned, no new row stored."""
-        svc.store(KIND_USER_SPECIFIC, 'eye_colour', 'blue')
-
-        cls_result = {'classification': 'true_contradiction', 'reasoning': 'cannot both be true'}
-        with patch('services.contradiction_classifier_service.ContradictionClassifierService') as MockCls:
-            MockCls.return_value.check_new_trait.return_value = cls_result
-            result = svc.store(KIND_USER_SPECIFIC, 'eye_colour', 'brown')
-
-        assert result is not None
-        assert result.get('conflict') is True
-        assert result['classification'] == 'true_contradiction'
-        assert 'existing' in result
-        assert result['proposed_value'] == 'brown'
-        # No id/rowid on a conflict dict — proves no row was inserted
-        assert 'id' not in result or result.get('conflict')
-
-    def test_store_contradiction_classify_ambiguous_returns_conflict(self, svc):
-        """Ambiguous classification also yields a conflict dict, not a stored row."""
-        svc.store(KIND_USER_SPECIFIC, 'city', 'Valletta')
-
-        cls_result = {'classification': 'ambiguous', 'reasoning': 'unclear'}
-        with patch('services.contradiction_classifier_service.ContradictionClassifierService') as MockCls:
-            MockCls.return_value.check_new_trait.return_value = cls_result
-            result = svc.store(KIND_USER_SPECIFIC, 'city', 'Mosta')
-
-        assert result.get('conflict') is True
-        assert result['classification'] == 'ambiguous'
-
-    def test_store_contradiction_classify_compatible_reinforces(self, svc, db_service):
-        """Classifier returns None (compatible) → reinforce the existing row, no new insert."""
-        r1 = svc.store(KIND_USER_SPECIFIC, 'favourite_sport', 'tennis')
+    def test_store_user_specific_lut_coexist_same_value_reinforces(self, svc, db_service):
+        """Coexist rule + exact same value → reinforce (same-value path fires before LUT lookup)."""
+        r1 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pizza')
         assert r1 is not None
         r1_id = _rid(r1)
 
-        with patch('services.contradiction_classifier_service.ContradictionClassifierService') as MockCls:
-            MockCls.return_value.check_new_trait.return_value = None
-            r2 = svc.store(KIND_USER_SPECIFIC, 'favourite_sport', 'squash')
+        # Same-value check fires before LUT is consulted; LUT patch is decorative here.
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('favorite_foods', 'coexist')):
+            r2 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pizza')
 
-        # Same row reinforced
+        # Same row reinforced, evidence bumped
         assert _rid(r2) == r1_id
         assert r2['evidence_count'] == 2
 
-    def test_store_newest_wins_for_system_kind(self, svc, db_service):
-        """system kind uses newest_wins: old demoted, new inserted, classifier NOT called."""
+    def test_store_user_specific_lut_coexist_different_value_inserts_new(self, svc, db_service):
+        """Coexist rule + different value → both rows active, no supersession."""
+        r1 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pizza')
+        assert r1 is not None
+
+        # _generate_embedding must return non-None so LUT lookup is attempted.
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('favorite_foods', 'coexist')):
+            r2 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pasta')
+
+        assert r2 is not None
+        assert r2['id'] != r1['id']
+
+        # Both rows active
+        with db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT active FROM data_graph WHERE key='favorite_foods'"
+            ).fetchall()
+        assert all(r[0] == 1 for r in rows), "Both coexist rows must be active"
+        assert len(rows) == 2
+
+        # No supersedes edge
+        with db_service.connection() as conn:
+            edges = conn.execute(
+                "SELECT edge_type FROM data_graph_edges"
+            ).fetchall()
+        assert not any(e[0] == 'supersedes' for e in edges)
+
+    def test_store_user_specific_lut_immutable_same_value_reinforces(self, svc, db_service):
+        """Immutable rule + same value → reinforce, no conflict."""
+        r1 = svc.store(KIND_USER_SPECIFIC, 'birth_date', '1990-01-01')
+        assert r1 is not None
+        r1_id = _rid(r1)
+
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
+            r2 = svc.store(KIND_USER_SPECIFIC, 'birth_date', '1990-01-01')
+
+        assert _rid(r2) == r1_id
+        assert r2['evidence_count'] == 2
+
+    def test_store_user_specific_lut_immutable_different_value_returns_conflict(self, svc, db_service):
+        """Immutable rule + different value → conflict dict returned, original row preserved."""
+        svc.store(KIND_USER_SPECIFIC, 'birth_date', 'March 15')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
+            result = svc.store(KIND_USER_SPECIFIC, 'birth_date', 'March 20')
+
+        assert result is not None
+        assert result.get('status') == 'conflict'
+        assert result['rule'] == 'immutable'
+        assert result.get('old_value') == 'March 15'
+        assert result.get('value') == 'March 20'
+
+        # Original row still active
+        with db_service.connection() as conn:
+            active_rows = conn.execute(
+                "SELECT value FROM data_graph WHERE key='birth_date' AND active=1"
+            ).fetchall()
+        assert len(active_rows) == 1
+        assert active_rows[0][0] == 'March 15'
+
+    def test_store_user_specific_lut_miss_inserts_and_records_miss(self, svc, db_service):
+        """LUT miss (no hit above threshold) → row inserted with original key, miss recorded."""
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=None), \
+             patch.object(svc, '_get_lut_miss_top_cos', return_value=0.42):
+            result = svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 3 in a row')
+
+        assert result is not None
+        assert result['key'] == 'dryer_streak'
+        assert result['value'] == 'won 3 in a row'
+
+        with db_service.connection() as conn:
+            miss = conn.execute(
+                "SELECT count, key FROM concept_lut_misses WHERE key='dryer_streak'"
+            ).fetchone()
+        assert miss is not None
+        assert miss[0] == 1
+
+    def test_store_user_specific_lut_multiple_misses_create_separate_rows(self, svc, db_service):
+        """Multiple LUT misses with distinct keys each create a separate miss row."""
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=None), \
+             patch.object(svc, '_get_lut_miss_top_cos', return_value=0.3):
+            svc.store(KIND_USER_SPECIFIC, 'niche_key_a', 'value_a')
+            svc.store(KIND_USER_SPECIFIC, 'niche_key_b', 'value_b')
+
+        with db_service.connection() as conn:
+            misses = conn.execute(
+                "SELECT key FROM concept_lut_misses WHERE kind=?", (KIND_USER_SPECIFIC,)
+            ).fetchall()
+        miss_keys = {r[0] for r in misses}
+        assert 'niche_key_a' in miss_keys
+        assert 'niche_key_b' in miss_keys
+
+    def test_store_system_exact_key_different_value_supersedes(self, svc, db_service):
+        """system kind + exact key + different value → temporal supersession (cosine_supersede policy)."""
         r1 = svc.store(KIND_SYSTEM, 'tone', 'formal')
         assert r1 is not None
         r1_rowid = _rid(r1)
 
-        with patch('services.contradiction_classifier_service.ContradictionClassifierService') as MockCls:
-            r2 = svc.store(KIND_SYSTEM, 'tone', 'casual')
-            MockCls.assert_not_called()
+        r2 = svc.store(KIND_SYSTEM, 'tone', 'casual')
 
         assert r2 is not None
         assert r2['value'] == 'casual'
@@ -427,6 +531,37 @@ class TestStore:
 
         old = _raw_row(db_service, r1_rowid)
         assert old['active'] == 0
+
+    def test_store_system_cosine_close_keys_supersedes(self, svc, db_service):
+        """system kind + no exact key + cosine match → supersession via _find_system_key_match."""
+        r1 = svc.store(KIND_SYSTEM, 'response_style', 'formal')
+        assert r1 is not None
+        r1_rowid = _rid(r1)
+
+        # Simulate a cosine-close key arriving (different key string, similar meaning)
+        match_row = _raw_row(db_service, r1_rowid)
+        with patch.object(svc, '_find_system_key_match', return_value=match_row):
+            r2 = svc.store(KIND_SYSTEM, 'reply_tone', 'casual')
+
+        assert r2 is not None
+        # Old row demoted
+        old = _raw_row(db_service, r1_rowid)
+        assert old['active'] == 0
+
+    def test_store_system_cosine_below_threshold_inserts_new(self, svc, db_service):
+        """system kind + no exact key + no cosine match → plain insert, original untouched."""
+        r1 = svc.store(KIND_SYSTEM, 'response_style', 'formal')
+        assert r1 is not None
+        r1_id = _rid(r1)
+
+        with patch.object(svc, '_find_system_key_match', return_value=None):
+            r2 = svc.store(KIND_SYSTEM, 'unrelated_system_key', 'value')
+
+        assert r2 is not None
+        assert _rid(r2) != r1_id
+        # Original still active
+        old = _raw_row(db_service, r1_id)
+        assert old['active'] == 1
 
     def test_store_no_contradiction_check_for_misc(self, svc, db_service):
         """misc kind has contradiction=None — different value inserts a second row directly."""
@@ -1068,7 +1203,7 @@ class TestKindPolicy:
     def test_user_specific_policy_shape(self):
         p = _KIND_POLICY[KIND_USER_SPECIFIC]
         assert p['reinforce'] is True
-        assert p['contradiction'] == 'classify'
+        assert p['contradiction'] == 'lut_canonicalize'
         assert p['ttl_days'] == 30
         assert p['salience_floor'] == pytest.approx(0.2)
 
@@ -1077,7 +1212,7 @@ class TestKindPolicy:
         p = _KIND_POLICY[KIND_SYSTEM]
         assert p['ttl_days'] is None
         assert p['reinforce'] is True
-        assert p['contradiction'] == 'newest_wins'
+        assert p['contradiction'] == 'cosine_supersede'
 
     def test_misc_policy_hard_deletion(self):
         """misc kind is short-lived scratchpad with hard deletion."""
