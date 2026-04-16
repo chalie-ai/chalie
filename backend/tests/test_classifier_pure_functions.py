@@ -14,17 +14,14 @@ import struct
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.unit
-
-
-# ── imports ────────────────────────────────────────────────────────────────────
-
 from services.contradiction_classifier_service import (
     _cosine_similarity,
     _unpack_embedding,
     _is_established,
 )
 from services.onnx_inference_service import _softmax, _ClassifierHead
+
+pytestmark = pytest.mark.unit
 
 
 # ── _cosine_similarity ────────────────────────────────────────────────────────

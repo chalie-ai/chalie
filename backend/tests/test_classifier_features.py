@@ -15,7 +15,6 @@ These pytest tests are a faster in-process complement that catch regressions
 before a nightly run is needed.
 """
 
-import os
 from pathlib import Path
 
 import pytest
