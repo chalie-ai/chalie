@@ -155,9 +155,16 @@ class OllamaService:
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
-                if response.status_code == 400 and payload.get("think") and 'think' in response.text.lower():
+                # Silent retry without `think` whenever the server rejects the
+                # request and the field was set. Older Ollama builds and most
+                # non-reasoning models reject the field with a generic 400 whose
+                # body does not always literally contain the word "think", so a
+                # substring guard would mask real failures. Cost of one extra
+                # call is negligible vs the cost of dropping the entire turn.
+                if response.status_code == 400 and payload.get("think"):
                     logging.info(
-                        f"[THINKING] native flag rejected by provider=ollama model={self.model} — retried without"
+                        f"[THINKING] native flag rejected by provider=ollama "
+                        f"model={self.model} body={response.text[:200]!r} — retried without"
                     )
                     payload.pop("think", None)
                     response = requests.post(url, json=payload, timeout=self.timeout)
