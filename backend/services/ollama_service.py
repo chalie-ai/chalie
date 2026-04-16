@@ -119,6 +119,18 @@ class OllamaService:
                         logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
                         raise
                 else:
+                    # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
+                    # can diagnose — raise_for_status() otherwise discards it.
+                    body = ''
+                    try:
+                        body = e.response.text[:4000] if e.response is not None else ''
+                    except Exception:
+                        pass
+                    logging.error(
+                        f"[OllamaService] HTTP {e.response.status_code if e.response is not None else '?'} "
+                        f"model={self.model} think={payload.get('think', False)} "
+                        f"tools={len(payload.get('tools', []))} body={body!r}"
+                    )
                     raise
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
@@ -222,6 +234,18 @@ class OllamaService:
                         logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
                         raise
                 else:
+                    # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
+                    # can diagnose — raise_for_status() otherwise discards it.
+                    body = ''
+                    try:
+                        body = e.response.text[:4000] if e.response is not None else ''
+                    except Exception:
+                        pass
+                    logging.error(
+                        f"[OllamaService] HTTP {e.response.status_code if e.response is not None else '?'} "
+                        f"model={self.model} think={payload.get('think', False)} "
+                        f"tools={len(payload.get('tools', []))} body={body!r}"
+                    )
                     raise
 
     def _model_supports_thinking(self) -> bool:
