@@ -57,7 +57,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 -- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
 
--- interaction_log removed — append-only audit trail retired with DomainConfidenceService.
 -- procedural_memory removed — replaced by unified knowledge table.
 
 -- ────────────────────────────────────────────────────────────────
