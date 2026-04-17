@@ -510,7 +510,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
             db = get_shared_db_service()
 
-            # Fetch the window: up to 35 entries for this channel up to rowid
+            # Fetch the window: up to _EXTRACTION_WINDOW entries for this channel up to rowid
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
