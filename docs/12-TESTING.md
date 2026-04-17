@@ -161,6 +161,18 @@ Python-level feature tests are a **fast-feedback supplement** for behaviours you
 
 See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
 
+### LUT Canonicalization Scenarios (096–100)
+
+These five scenarios cover the deterministic 27-concept LUT engine shipped in `data_graph_service`:
+
+| File | What it tests |
+|---|---|
+| `096-lut-canonicalize-residence-temporal.yaml` | Non-canonical key (`residency`) → LUT hit → `residence` canonical → temporal supersession; asserts supersedes edge present and `[CONTRADICTION] MLP classification` log line absent |
+| `097-lut-coexist-favorite-foods.yaml` | `food_and_drink` coexist rule — two foods in two turns both remain active; no supersedes edge |
+| `098-job-title-temporal-supersedes.yaml` | `employment` temporal rule — CEO → CTO supersession across 3 recall angles; all return CTO |
+| `099-lut-miss-recorded.yaml` | Key not in LUT stored as-is; `concept_lut_misses` row created with `count=1`; repeat increments to `count=2` |
+| `100-contradiction-classifier-removed.yaml` | Structural check: `pending_contradictions` table absent from `sqlite_master`; `concept_lut_misses` present; `concept_lut.sqlite` path logged on boot |
+
 ## What If a Service Cannot Be Tested Without Mocks?
 
 **STOP.** Do not write the test. Escalate.
