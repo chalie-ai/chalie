@@ -34,8 +34,11 @@ EXPAND_FACTOR_CEILING: float = 2.2
 TOOL_SCHEMA = {
     "name": "memory",
     "description": (
-        "Store, recall, or forget knowledge about the user. Store personal facts "
-        "the moment they're disclosed. Recall before recommending anything. "
+        "Store, recall, or forget knowledge about the user. "
+        "STORE EVERY personal fact the user discloses — no judgment, no "
+        "filtering. Quirky habits, streaks, hobbies, niche preferences, "
+        "throwaway details: store them ALL. The user told you because it "
+        "matters to them. Recall before recommending anything. "
         "Use forget to remove a specific memory when asked.\n\n"
         "STORE RULES — read carefully:\n"
         "1. One fact per call. Never summarize multiple facts into one value. "
@@ -46,7 +49,10 @@ TOOL_SCHEMA = {
         "3. Atomic values only. 'Valletta' not 'lives in Valletta, Malta'. "
         "'CTO' not 'recently promoted to CTO at Acme'.\n"
         "4. When the user corrects a fact, store the new value under the SAME "
-        "canonical key — the system will supersede the old one automatically.\n\n"
+        "canonical key — the system will supersede the old one automatically.\n"
+        "5. Store on FIRST mention. Don't wait for a second confirmation. "
+        "If the user says 'My favorite food is pasta', store it now — don't "
+        "wait to see if they repeat it.\n\n"
         "CANONICAL KEYS (kind=user_specific):\n"
         "  Immutable (set once, never change): birth_date, birth_place, "
         "biological_parents\n"
@@ -56,8 +62,11 @@ TOOL_SCHEMA = {
         "relationships, education, health, food_and_drink, entertainment, "
         "sports, style, skills_and_interests, contact_info, tech_setup, "
         "personality, life_events, goals_and_projects, routines_and_habits\n\n"
-        "If a fact truly doesn't fit any canonical key, store it under your "
-        "best short identifier — the system will record the miss for review."
+        "NICHE FACTS WITHOUT A CANONICAL KEY: still store them. Pick the "
+        "shortest descriptive snake_case key (e.g. 'dryer_streak' for 'my "
+        "dryer streak is 47 loads', 'coffee_order' for 'I always get oat "
+        "milk lattes'). The system records the miss for later LUT curation. "
+        "Never skip a fact just because no canonical key fits."
     ),
     "input_schema": {
         "type": "object",
