@@ -274,9 +274,7 @@ class TestDMNServiceDeliveryZSetTTL:
         store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store), \
-             patch("services.database_service.get_shared_db_service"), \
-             patch("services.interaction_log_service.InteractionLogService.__init__",
-                   return_value=None):
+             patch("services.database_service.get_shared_db_service"):
             from services.dmn_service import DMNService, _DELIVERY_ZSET
             svc = DMNService.__new__(DMNService)
             svc._store = store

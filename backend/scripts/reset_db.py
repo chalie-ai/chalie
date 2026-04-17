@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 DATA_TABLES = [
     'episodes',
     'knowledge',
-    'interaction_log',
     'transcript',
     'scheduled_items',
     'lists',

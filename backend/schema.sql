@@ -57,26 +57,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 -- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
 
--- ────────────────────────────────────────────────────────────────
--- INTERACTION LOG — append-only audit trail
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS interaction_log (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    channel TEXT,
-    exchange_id TEXT,
-    session_id TEXT,
-    source TEXT,
-    payload TEXT NOT NULL DEFAULT '{}',       -- JSONB
-    metadata TEXT DEFAULT '{}',              -- JSONB
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_interaction_log_channel_created ON interaction_log(channel, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction_log(event_type, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_exchange ON interaction_log(exchange_id);
-
+-- interaction_log removed — append-only audit trail retired with DomainConfidenceService.
 -- procedural_memory removed — replaced by unified knowledge table.
 
 -- ────────────────────────────────────────────────────────────────

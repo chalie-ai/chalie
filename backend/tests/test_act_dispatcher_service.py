@@ -19,8 +19,6 @@ def _auto_execute_gate():
         'consequence_tier': 0,
         'consequence_name': 'observe',
         'domain': 'test',
-        'domain_confidence': 1.0,
-        'threshold': 0.0,
         'reasoning': 'test override',
     }
     with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
@@ -207,8 +205,6 @@ class TestExecutionGate:
             'consequence_tier': 3,
             'consequence_name': 'commit',
             'domain': 'general',
-            'domain_confidence': 0.0,
-            'threshold': float('inf'),
             'reasoning': 'Tier 3 (commit) — irreversible; always requires explicit user approval.',
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
@@ -235,8 +231,6 @@ class TestExecutionGate:
             'consequence_tier': 2,
             'consequence_name': 'act',
             'domain': 'general',
-            'domain_confidence': 0.0,
-            'threshold': 0.75,
             'reasoning': 'Would block.',
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',

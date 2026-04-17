@@ -266,15 +266,9 @@ def _tool_summary(tool_name: str) -> str:
 def _scope_reasoning_state() -> str:
     parts = []
 
-    # Upcoming reminders
     reminder_line = _reasoning_upcoming_reminders()
     if reminder_line:
         parts.append(reminder_line)
-
-    # Recent autonomous actions
-    action_line = _reasoning_recent_actions()
-    if action_line:
-        parts.append(action_line)
 
     if not parts:
         return 'No active reasoning state.'
@@ -310,62 +304,12 @@ def _reasoning_upcoming_reminders() -> str:
         return ''
 
 
-def _reasoning_recent_actions() -> str:
-    RELEVANT_TYPES = ('proactive_sent', 'plan_proposed')
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f'SELECT event_type, payload, created_at '
-                f'FROM interaction_log '
-                f'WHERE event_type IN ({placeholders}) '
-                f'ORDER BY created_at DESC LIMIT 3',
-                RELEVANT_TYPES
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return ''
-
-        summaries = []
-        for row in rows:
-            event_type = row[0] or ''
-            created_at = row[2] or ''
-            when = _relative_time(created_at) if created_at else 'recently'
-            label = _action_label(event_type)
-            summaries.append(f'{label} {when}')
-
-        return 'Recent: ' + ', '.join(summaries) + '.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_recent_actions failed: {e}')
-        return ''
-
-
-def _action_label(event_type: str) -> str:
-    labels = {
-        'proactive_sent': 'sent proactive message',
-        'plan_proposed': 'proposed plan',
-    }
-    return labels.get(event_type, event_type.replace('_', ' '))
-
-
 # ── Scope 4: Identity Snapshot ───────────────────────────────────
 
 
 def _scope_identity_snapshot() -> str:
     parts = []
 
-    # Relationship depth from interaction count
-    interaction_label = _identity_relationship_depth()
-    if interaction_label:
-        parts.append(interaction_label)
-
-    # Communication style
     style_line = _identity_communication_style()
     if style_line:
         parts.append(style_line)
@@ -373,34 +317,6 @@ def _scope_identity_snapshot() -> str:
     if not parts:
         return 'Identity data unavailable.'
     return ' '.join(parts)
-
-
-def _identity_relationship_depth() -> str:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM interaction_log')
-            row = cursor.fetchone()
-            cursor.close()
-
-        count = row[0] if row else 0
-
-        if count < 50:
-            depth = 'new'
-        elif count < 500:
-            depth = 'developing'
-        elif count < 2000:
-            depth = 'established'
-        else:
-            depth = 'deep'
-
-        return f'Relationship: {depth} (~{count:,} interactions).'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_relationship_depth failed: {e}')
-        return ''
 
 
 def _identity_communication_style() -> str:

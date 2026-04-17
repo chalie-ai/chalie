@@ -100,7 +100,6 @@ class TestDataSummary:
             'episodes', 'knowledge', 'transcript',
             'scheduled_items',
             'lists', 'place_fingerprints',
-            'interaction_log',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in data_summary query list"

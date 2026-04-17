@@ -128,10 +128,6 @@ class ActDispatcherService:
                 'notes': '',
             }
 
-        # Pre-execution gate — evaluates consequence tier and domain confidence.
-        # Only applies for autonomous/background execution (execution_gate=True).
-        # User-initiated ACT loops skip this — the user already asked for it.
-        # Safe innate skills always bypass the gate regardless.
         from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
         if self.execution_gate and action_type not in _SAFE_ACTIONS:
             try:
@@ -147,7 +143,6 @@ class ActDispatcherService:
                     logging.info(
                         f"[ACT DISPATCH] Blocked by execution gate: "
                         f"tier={gate_result['consequence_tier']}, "
-                        f"confidence={gate_result['domain_confidence']:.2f}, "
                         f"action={action_description!r:.100}"
                     )
                     return {
@@ -162,14 +157,8 @@ class ActDispatcherService:
                         'notes': gate_result['reasoning'],
                         'gate_decision': gate_result,
                     }
-                if gate_result['consequence_tier'] >= 2:
-                    _commit_warning = (
-                        f"Action classified as tier {gate_result['consequence_tier']} "
-                        f"({gate_result['consequence_name']}), auto-executed with "
-                        f"domain confidence {gate_result['domain_confidence']:.2f}."
-                    )
             except Exception:
-                pass  # Gate unavailable — proceed with execution
+                pass
 
         # Determine effective timeout: tool metadata can override the default.
         # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.

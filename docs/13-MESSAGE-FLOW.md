@@ -335,7 +335,6 @@ Table                      When Written                      When Read
 transcript                 store() → append_atomic_turn()    getPreviousMessages()
 tool_calls                 store() → append_atomic_turn()    getPreviousMessages() (ephemeral=0 only)
 compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
-interaction_log            non-turn events only              observability endpoints
 episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
 data_graph                 DataGraphService.store()           memory_skill, data_graph callers
 memory_recall_log          recall_episodes() chokepoint      meta-harness tuning

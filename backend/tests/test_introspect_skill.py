@@ -54,17 +54,6 @@ def _seed_scheduled_item(db, message, due_at, status='pending', item_id=None):
     db.commit()
 
 
-def _seed_interaction(db, event_type='message_received', n=1):
-    """Insert n interaction_log rows."""
-    import uuid
-    for _ in range(n):
-        db.execute(
-            "INSERT INTO interaction_log (id, event_type, payload) VALUES (?, ?, '{}')",
-            (str(uuid.uuid4()), event_type),
-        )
-    db.commit()
-
-
 # ── Tests: top-level output structure ────────────────────────────────────────
 
 @pytest.mark.unit
@@ -347,46 +336,6 @@ class TestReasoningStateScope:
 
 @pytest.mark.unit
 class TestIdentityScope:
-
-    def test_identity_shows_relationship_depth_new(self, db):
-        _seed_interaction(db, n=10)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'new' in result
-
-    def test_identity_shows_relationship_depth_developing(self, db):
-        _seed_interaction(db, n=200)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'developing' in result
-
-    def test_identity_shows_relationship_depth_established(self, db):
-        _seed_interaction(db, n=1000)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'established' in result
-
-    def test_identity_shows_relationship_depth_deep(self, db):
-        _seed_interaction(db, n=5000)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'deep' in result
-
-    def test_identity_shows_interaction_count(self, db):
-        _seed_interaction(db, n=342)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert '342' in result
 
     @patch('services.data_graph_service.get_data_graph_service')
     def test_identity_communication_style_verbosity(self, mock_dgs_fn, db):

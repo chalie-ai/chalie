@@ -143,30 +143,6 @@ class TestSchemaValidation:
 
         schema_db.rollback()
 
-    # ── Scenario 230 ─────────────────────────────────────────────────────────
-
-    def test_interaction_log_event_type_column(self, schema_db):
-        """Absorbs scenario 230: interaction_log has event_type column.
-
-        event_type is NOT NULL and indexed; it is the primary discriminator
-        for filtering audit trail entries (e.g. 'action_gate_rejected').
-        """
-        tables = _get_tables(schema_db)
-        assert 'interaction_log' in tables, (
-            "interaction_log table missing from schema"
-        )
-
-        columns = _get_columns(schema_db, 'interaction_log')
-        assert 'event_type' in columns, (
-            "event_type column missing from interaction_log"
-        )
-
-        # Verify the index that makes filtering efficient also exists
-        indexes = _get_indexes(schema_db, 'interaction_log')
-        assert 'idx_interaction_log_event_type_created' in indexes, (
-            "idx_interaction_log_event_type_created index missing"
-        )
-
     # ── Scenario 231 ─────────────────────────────────────────────────────────
 
     def test_knowledge_table_supports_procedures(self, schema_db):
