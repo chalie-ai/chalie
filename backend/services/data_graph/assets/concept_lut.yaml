@@ -464,3 +464,25 @@ concepts:
       - bedtime_routine
       - schedule_of_day
       - typical_day
+
+  - canonical_key: pets
+    rule: coexist
+    aliases:
+      - pet
+      - pet_name
+      - pets_owned
+      - dog
+      - dog_name
+      - cat
+      - cat_name
+      - puppy
+      - kitten
+      - hamster
+      - rabbit
+      - bird
+      - fish
+      - reptile
+      - animal_companion
+      - companion_animal
+      - pet_species
+      - pet_breed

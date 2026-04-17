@@ -443,7 +443,7 @@ class TestExtractorSingleObjectResponse:
 
     def test_llm_returns_single_object_not_array_returns_empty(self):
         """LLM that returns a single JSON object (not array) must be rejected."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         svc = _make_extractor(json.dumps(episode))  # object, not [object]
         entries = [_make_entry(1)]
 
@@ -453,7 +453,7 @@ class TestExtractorSingleObjectResponse:
 
     def test_llm_returns_object_wrapped_in_markdown_returns_empty(self):
         """Single object in a markdown code block is also rejected."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         response = f"```json\n{json.dumps(episode)}\n```"
         svc = _make_extractor(response)
         entries = [_make_entry(1)]
@@ -468,7 +468,7 @@ class TestExtractorEntriesWithoutId:
     def test_entries_missing_id_field_transcript_ids_empty_skips(self):
         """When no entries in the range have an 'id' key, the episode is skipped."""
         entry_without_id = {'role': 'user', 'content': 'hello', 'created_at': 'now'}
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         svc = _make_extractor(json.dumps([episode]))
 
         result = svc.extract([entry_without_id], 'test')
@@ -476,11 +476,11 @@ class TestExtractorEntriesWithoutId:
         assert result == []
 
     def test_mixed_entries_only_those_with_id_in_range(self):
-        """entry_range maps to positional slots; only entries with 'id' contribute transcript_ids."""
+        """entry_range is a transcript-ID range; only entries with 'id' in that range contribute."""
         entry_no_id = {'role': 'user', 'content': 'hello', 'created_at': 'now'}
         entry_with_id = _make_entry(42)
-        # range [0, 1] covers both; but entry at index 0 has no id, index 1 has id=42
-        episode = _make_valid_ep([0, 1])
+        # range [1, 42] — the id-less entry is ignored, the entry with id=42 matches
+        episode = _make_valid_ep([1, 42])
         svc = _make_extractor(json.dumps([episode]))
 
         result = svc.extract([entry_no_id, entry_with_id], 'test')
@@ -493,7 +493,7 @@ class TestTraitValidation:
     def test_trait_missing_key_field_still_returned(self):
         """A trait dict missing required keys is still passed through — the extractor
         does not validate trait field completeness, that is the caller's concern."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['traits'] = [{'value': 'Dylan', 'kind': 'trait'}]  # no 'key'
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -506,7 +506,7 @@ class TestTraitValidation:
 
     def test_empty_traits_list_preserved(self):
         """An explicit empty traits list is preserved as-is."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['traits'] = []
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -517,7 +517,7 @@ class TestTraitValidation:
 
     def test_traits_as_dict_instead_of_list_replaced_with_empty(self):
         """A traits value that is a dict (not a list) is normalised to []."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['traits'] = {'key': 'name', 'value': 'Alice'}  # dict not list
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -531,7 +531,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_nan_string_valence_clamped_to_none(self):
         """A non-numeric string for valence becomes None (can't float() a word)."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_valence'] = 'positive'  # string, not numeric
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -543,7 +543,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_nan_string_arousal_clamped_to_none(self):
         """A non-numeric string for arousal becomes None."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_arousal'] = 'high'
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -554,7 +554,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_positive_valence_clamped_to_one(self):
         """A very large positive valence is clamped to 1.0."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_valence'] = 1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -565,7 +565,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_negative_valence_clamped_to_minus_one(self):
         """A very large negative valence is clamped to -1.0."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_valence'] = -1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -576,7 +576,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_extremely_large_arousal_clamped_to_one(self):
         """A very large arousal value is clamped to 1.0."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_arousal'] = 1e9
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -587,7 +587,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_numeric_string_valence_is_cast_and_clamped(self):
         """A numeric string like '0.5' is cast to float and preserved in range."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_valence'] = '0.5'  # valid numeric string
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -598,7 +598,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_zero_valence_preserved(self):
         """Zero is a valid valence value and must not become None."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_valence'] = 0.0
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -609,7 +609,7 @@ class TestEmotionalClampingEdgeCases:
 
     def test_zero_arousal_preserved(self):
         """Zero is the minimum valid arousal value and must not be dropped."""
-        episode = _make_valid_ep([0, 0])
+        episode = _make_valid_ep([1, 1])
         episode['emotional_arousal'] = 0.0
         svc = _make_extractor(json.dumps([episode]))
         entries = [_make_entry(1)]

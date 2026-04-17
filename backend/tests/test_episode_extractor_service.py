@@ -71,7 +71,9 @@ def _make_svc(llm_response_text: str):
 class TestExtractReturnsCorrectStructure:
 
     def test_returns_list(self):
-        episode = _make_valid_episode([0, 2])
+        # entry_range values are transcript IDs (what the LLM sees in [id] brackets),
+        # not 0-based positions.
+        episode = _make_valid_episode([10, 30])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(i) for i in [10, 20, 30]]
 
@@ -80,7 +82,7 @@ class TestExtractReturnsCorrectStructure:
         assert isinstance(result, list)
 
     def test_single_episode_has_required_keys(self):
-        episode = _make_valid_episode([0, 2])
+        episode = _make_valid_episode([10, 30])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(i) for i in [10, 20, 30]]
 
@@ -94,8 +96,8 @@ class TestExtractReturnsCorrectStructure:
             assert key in ep, f"Missing key: {key}"
 
     def test_multiple_episodes_returned(self):
-        ep1 = _make_valid_episode([0, 1])
-        ep2 = _make_valid_episode([2, 3])
+        ep1 = _make_valid_episode([10, 20])
+        ep2 = _make_valid_episode([30, 40])
         svc = _make_svc(json.dumps([ep1, ep2]))
         entries = [_make_entry(i) for i in [10, 20, 30, 40]]
 
@@ -141,8 +143,9 @@ class TestExtractEmptyAndTrivialWindows:
 class TestTranscriptIdComputation:
 
     def test_entry_range_maps_to_transcript_ids(self):
-        # entries have ids 101, 102, 103; entry_range [0, 2] means all three
-        episode = _make_valid_episode([0, 2])
+        # entries have ids 101, 102, 103; entry_range [101, 103] (inclusive ID
+        # range as returned by the LLM) covers all three.
+        episode = _make_valid_episode([101, 103])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(101), _make_entry(102), _make_entry(103)]
 
@@ -151,7 +154,7 @@ class TestTranscriptIdComputation:
         assert result[0]['transcript_ids'] == [101, 102, 103]
 
     def test_partial_entry_range_maps_correctly(self):
-        episode = _make_valid_episode([1, 2])
+        episode = _make_valid_episode([20, 30])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(10), _make_entry(20), _make_entry(30)]
 
@@ -160,19 +163,21 @@ class TestTranscriptIdComputation:
         assert result[0]['transcript_ids'] == [20, 30]
 
     def test_transcript_id_start_end_derived_from_entry_range(self):
-        episode = _make_valid_episode([0, 2])
+        # range [3, 10] spans all three entries regardless of iteration order
+        episode = _make_valid_episode([3, 10])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(5), _make_entry(10), _make_entry(3)]
 
         result = svc.extract(entries, 'test')
 
         ep = result[0]
-        # transcript_ids = [5, 10, 3]; start = min, end = max
+        # transcript_ids = window_ids filtered to [3..10] = [5, 10, 3]
         assert ep['transcript_id_start'] == 3
         assert ep['transcript_id_end'] == 10
 
     def test_episode_with_invalid_entry_range_is_skipped(self):
-        episode = _make_valid_episode([5, 99])  # out of bounds for 3-entry window
+        # ids 500-999 don't exist in the 3-entry window; no overlap → skip
+        episode = _make_valid_episode([500, 999])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1), _make_entry(2), _make_entry(3)]
 
@@ -181,7 +186,7 @@ class TestTranscriptIdComputation:
         assert result == []
 
     def test_episode_with_non_list_entry_range_is_skipped(self):
-        episode = _make_valid_episode([0, 2])
+        episode = _make_valid_episode([1, 3])
         episode['entry_range'] = 'invalid'
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1), _make_entry(2), _make_entry(3)]
@@ -191,8 +196,8 @@ class TestTranscriptIdComputation:
         assert result == []
 
     def test_single_entry_range_is_skipped(self):
-        episode = _make_valid_episode([0, 2])
-        episode['entry_range'] = [0]  # must be exactly 2 elements
+        episode = _make_valid_episode([1, 3])
+        episode['entry_range'] = [1]  # must be exactly 2 elements
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1), _make_entry(2), _make_entry(3)]
 
@@ -201,8 +206,8 @@ class TestTranscriptIdComputation:
         assert result == []
 
     def test_single_entry_range_point(self):
-        # [0, 0] is a valid range covering one entry
-        episode = _make_valid_episode([0, 0])
+        # [42, 42] is a valid range covering one entry with id 42
+        episode = _make_valid_episode([42, 42])
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(42)]
 
@@ -216,7 +221,7 @@ class TestTranscriptIdComputation:
 class TestTraitStructure:
 
     def test_traits_have_required_keys(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['traits'] = [
             {'key': 'name', 'value': 'Dylan', 'kind': 'trait', 'decay_class': 'permanent'}
         ]
@@ -234,7 +239,7 @@ class TestTraitStructure:
         assert trait['decay_class'] == 'permanent'
 
     def test_missing_traits_field_defaults_to_empty_list(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         del episode['traits']
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -244,7 +249,7 @@ class TestTraitStructure:
         assert result[0]['traits'] == []
 
     def test_non_list_traits_replaced_with_empty_list(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['traits'] = 'not a list'
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -257,7 +262,7 @@ class TestTraitStructure:
 class TestEmotionalRanges:
 
     def test_emotional_valence_clamped_to_minus_one_to_one(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_valence'] = 5.0  # out of range
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -267,7 +272,7 @@ class TestEmotionalRanges:
         assert result[0]['emotional_valence'] == pytest.approx(1.0)
 
     def test_emotional_valence_negative_clamped(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_valence'] = -3.0
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -277,7 +282,7 @@ class TestEmotionalRanges:
         assert result[0]['emotional_valence'] == pytest.approx(-1.0)
 
     def test_emotional_arousal_clamped_to_zero_to_one(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_arousal'] = -0.5  # below zero
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -287,7 +292,7 @@ class TestEmotionalRanges:
         assert result[0]['emotional_arousal'] == pytest.approx(0.0)
 
     def test_emotional_arousal_above_one_clamped(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_arousal'] = 2.0
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -297,7 +302,7 @@ class TestEmotionalRanges:
         assert result[0]['emotional_arousal'] == pytest.approx(1.0)
 
     def test_none_emotional_values_stay_none(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_valence'] = None
         episode['emotional_arousal'] = None
         svc = _make_svc(json.dumps([episode]))
@@ -309,7 +314,7 @@ class TestEmotionalRanges:
         assert result[0]['emotional_arousal'] is None
 
     def test_valid_range_values_preserved(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         episode['emotional_valence'] = -0.3
         episode['emotional_arousal'] = 0.7
         svc = _make_svc(json.dumps([episode]))
@@ -324,7 +329,7 @@ class TestEmotionalRanges:
 class TestEpisodesSkippedForMissingFields:
 
     def test_episode_missing_required_field_is_skipped(self):
-        episode = _make_valid_episode([0, 0])
+        episode = _make_valid_episode([1, 1])
         del episode['gist']  # remove required field
         svc = _make_svc(json.dumps([episode]))
         entries = [_make_entry(1)]
@@ -334,7 +339,7 @@ class TestEpisodesSkippedForMissingFields:
         assert result == []
 
     def test_valid_episode_mixed_with_invalid_only_returns_valid(self):
-        valid = _make_valid_episode([0, 0])
+        valid = _make_valid_episode([1, 1])
         invalid = {'intent': {'type': 'exploration'}}  # missing most fields
         svc = _make_svc(json.dumps([valid, invalid]))
         entries = [_make_entry(1)]

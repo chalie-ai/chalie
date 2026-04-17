@@ -335,7 +335,9 @@ Table                      When Written                      When Read
 transcript                 store() → append_atomic_turn()    getPreviousMessages()
 tool_calls                 store() → append_atomic_turn()    getPreviousMessages() (ephemeral=0 only)
 compactions                _run_full_compaction() (UPSERT)   _wrap_with_checkpoint(), getPreviousMessages()
-episodes                   transcript trigger (id%25 async)  _run_memory_seed() / memory_skill
+episodes                   transcript trigger (per-channel)  _run_memory_seed() / memory_skill
+                           first at 25 inserts, then +20;
+                           window = 25 (20 new + 5 overlap)
 data_graph                 DataGraphService.store()           memory_skill, data_graph callers
 memory_recall_log          recall_episodes() chokepoint      meta-harness tuning
 ```
@@ -355,7 +357,7 @@ MessageProcessor tool compact    same as JOB   TOOL_COMPACTION_PROMPT   ~200ms  
 DMNMessageProcessor              primary       DMNSystemMessagePrompt   ~500ms-2s DMN idle / cadence trigger
 GoalPursuitProcessor             primary       GoalPursuitSystemMsgPr.  ~500ms-2s Per-goal daemon thread
 ScheduledMessageProcessor        primary       ScheduledSystemMsgPrompt ~500ms-2s Scheduler service (60s poll)
-episodic extraction              lightweight   (inline trigger)         ~200ms    id%25 rolling trigger (async)
+episodic extraction              frontal-ctx   episode-extraction.md    ~500ms-2s rolling per-channel trigger (async, first at 25, then +20)
 ```
 
 **Deterministic paths (zero LLM):**

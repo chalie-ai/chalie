@@ -28,10 +28,18 @@ _EMBED_TOKEN_THRESHOLD = 50
 # Default TTL for pruning (90 days in seconds)
 _PRUNE_TTL_DAYS = 90
 
-# Per-channel insert counters for rolling episode extraction
+# Per-channel insert counters for rolling episode extraction.
+# First extraction fires when a channel has accumulated FIRST_EXTRACTION
+# inserts (25). Subsequent extractions fire every EXTRACTION_INTERVAL (20).
+# Each window covers 25 entries (20 new + 5 overlap with the prior window)
+# so consecutive windows share 5 entries of context.
 _channel_insert_counts: dict[str, int] = {}
+_channel_first_fired: dict[str, bool] = {}
 _channel_insert_lock = threading.Lock()
+_FIRST_EXTRACTION = 25
 _EXTRACTION_INTERVAL = 20
+_EXTRACTION_WINDOW = 25
+_EXTRACTION_OVERLAP = 5
 
 
 def append(
@@ -468,8 +476,12 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
     with _channel_insert_lock:
         count = _channel_insert_counts.get(channel, 0) + 1
         _channel_insert_counts[channel] = count
-        if count >= _EXTRACTION_INTERVAL:
+        first_fired = _channel_first_fired.get(channel, False)
+        # First fire at FIRST_EXTRACTION, subsequent every EXTRACTION_INTERVAL
+        threshold = _EXTRACTION_INTERVAL if first_fired else _FIRST_EXTRACTION
+        if count >= threshold:
             _channel_insert_counts[channel] = 0
+            _channel_first_fired[channel] = True
             trigger = True
         else:
             trigger = False
@@ -480,9 +492,11 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     """Fire-and-forget episode extraction for the window ending at rowid.
 
-    Queries the 35 transcript entries up to and including rowid for the given
-    channel, runs episode extraction, computes embeddings, calculates salience,
-    and stores episodes + traits. Never raises — any failure is logged only.
+    Queries the last _EXTRACTION_WINDOW (25) transcript entries up to and
+    including rowid for the given channel — 20 new entries plus a
+    5-entry overlap with the prior window. Runs episode extraction, computes
+    embeddings, calculates salience, stores episodes + traits. Never raises —
+    any failure is logged only.
     """
     def _run():
         try:
@@ -505,9 +519,9 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     FROM transcript
                     WHERE channel = ? AND id <= ?
                     ORDER BY id DESC
-                    LIMIT 35
+                    LIMIT ?
                     """,
-                    (channel, rowid),
+                    (channel, rowid, _EXTRACTION_WINDOW),
                 )
                 rows = cursor.fetchall()
                 cursor.close()

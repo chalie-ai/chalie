@@ -46,10 +46,10 @@ _CONCEPT_LUT_PATH = os.path.join(
     os.path.dirname(__file__), 'data_graph', 'assets', 'concept_lut.sqlite'
 )
 
-# Cosine threshold for LUT canonical match. Flagged for benchmark calibration.
+# Cosine threshold for LUT canonical match.
 _CONCEPT_LUT_THRESHOLD = 0.80
 
-# Cosine threshold for system_specific key deduplication. Flagged for benchmark calibration.
+# Cosine threshold for system_specific key deduplication.
 _SYSTEM_KEY_THRESHOLD = 0.80
 
 # KNN depth for LUT lookups — k=1 sufficient for single canonical match.
