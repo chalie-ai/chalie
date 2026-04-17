@@ -325,7 +325,7 @@ class MessageProcessor:
 
         # Batch-load durable tool_calls for all transcript rows.
         # `include_ephemeral=False` enforces the north star rule: Previous
-        # Messages must only surface ephemeral=0 rows (tool_synthesis,
+        # Messages must only surface ephemeral=0 rows (narration,
         # user_steer, tool_compaction, act_restart, and batched LLM tool
         # results are audit-only and never replay in future context).
         all_ids = [e['id'] for e in entries if e.get('id')]
@@ -638,11 +638,11 @@ class MessageProcessor:
                 # narration in its response ahead of the tool_use block, so
                 # the stored timeline must reflect that semantic order. The
                 # transcript-timeline example in the north star § Storage
-                # Model shows tool_synthesis preceding the tool_call DTOs
+                # Model shows the narration DTO preceding the tool_call DTOs
                 # for the same iteration.
                 if llm_response.text:
                     rendered = ToolRenderAndRecordService(
-                        tool_name='tool_synthesis',
+                        tool_name='narration',
                         params={},
                         result=llm_response.text,
                         ephemeral=True,
@@ -676,7 +676,7 @@ class MessageProcessor:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
                 # Cap exit — no clean terminating text. The last iteration's
-                # narration is already captured as a tool_synthesis DTO; we
+                # narration is already captured as a narration DTO; we
                 # must NOT re-use it as the assistant row.
                 logger.warning(
                     "[MessageProcessor.send] ACT loop hit safety cap "
