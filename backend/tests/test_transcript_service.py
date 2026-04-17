@@ -245,8 +245,8 @@ class TestPerChannelExtractionCounter:
     """
 
     def test_each_channel_has_independent_counter(self):
-        """Inserting 34 times on channel-A then once on channel-B should NOT
-        trigger extraction on channel-B (its count is only 1, not 35)."""
+        """Inserting (interval-1) times on channel-A then once on channel-B
+        must NOT trigger extraction on channel-B (its count is only 1)."""
         import services.transcript_service as ts
 
         fired_channels = []
@@ -256,28 +256,29 @@ class TestPerChannelExtractionCounter:
 
         original_counts = ts._channel_insert_counts.copy()
         ts._channel_insert_counts.clear()
+        interval = ts._EXTRACTION_INTERVAL
 
         try:
             with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
-                # Push channel-A to the threshold (EXTRACTION_INTERVAL - 1 = 34)
-                for i in range(34):
+                # Push channel-A to just below the threshold
+                for i in range(interval - 1):
                     ts._maybe_trigger_extraction('channel-A', i)
 
-                # channel-A has not fired yet (count is 34, threshold is 35)
+                # channel-A has not fired yet
                 assert 'channel-A' not in fired_channels
 
                 # One insert on channel-B — must NOT fire (its count is 1)
                 ts._maybe_trigger_extraction('channel-B', 99)
                 assert 'channel-B' not in fired_channels
 
-                # The 35th insert on channel-A now fires
-                ts._maybe_trigger_extraction('channel-A', 35)
+                # The threshold-th insert on channel-A now fires
+                ts._maybe_trigger_extraction('channel-A', interval)
                 assert fired_channels == ['channel-A']
 
-                # channel-A counter has reset; next 34 inserts must not fire again
+                # channel-A counter has reset; next (interval-1) inserts must not fire again
                 fired_channels.clear()
-                for i in range(34):
-                    ts._maybe_trigger_extraction('channel-A', i + 36)
+                for i in range(interval - 1):
+                    ts._maybe_trigger_extraction('channel-A', i + interval + 1)
                 assert fired_channels == []
 
         finally:

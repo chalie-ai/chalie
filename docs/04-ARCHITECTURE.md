@@ -95,7 +95,7 @@ frontend/
 - **`providers.py`** — Thin singleton gateway wrapping provider resolution and LLM send. Resolves the correct LLM provider for a given job (e.g. `frontal-cortex-unified`), sends messages, returns a raw `LLMResponse`. No response parsing.
 
 #### Memory System
-- **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning; fires per-channel rolling episode extraction trigger every 35 inserts per channel (thread-safe counter)
+- **`transcript_service.py`** — Persistent, channel-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning; fires per-channel rolling episode extraction trigger every 20 inserts per channel (thread-safe counter)
 - **`compaction_service.py`** — Incremental LLM-powered summarization. Primary interactive path runs through `context_window_service`. `get_compaction()` returns the stored record including `overflow_content`.
 - **`episodic_service.py`** — Unified episodic service: SQLite CRUD, hybrid vector + FTS5 retrieval (`retrieve_episodes(query_text, radius, query_embedding, return_telemetry)`), power-law `retrieval_weight` decay, `format_for_prompt()`. All episodic recall (seed + LLM) is routed through `memory_skill.recall_episodes()` to ensure uniform telemetry via `memory_recall_log`.
 - **`data_graph_service.py`** — Unified knowledge graph (`data_graph` table + `data_graph_edges` typed join table); 3 LLM-visible kinds (`user_specific`, `system`, `misc`) + 1 internal (`moment`); dual embeddings (`data_graph_key_vec` + `data_graph_value_vec` weighted 2:1); ACT-R base-level activation scoring; split strength model (`storage_strength` monotonic ↑ + `retrieval_weight` decays); three clocks (`first_seen_at`, `last_confirmed_at`, `last_accessed_at`); 1-hop graph expansion with Granovetter cross-kind bonus + hub dampening; power-law decay per kind policy
@@ -165,7 +165,7 @@ Built-in cognitive skills always available to the LLM:
 ## Worker Processes (`backend/workers/`)
 
 ### Workers (Daemon Threads)
-- **Episodic Memory Worker** — Utility functions for goal emergence detection; episode extraction itself runs inline via the per-channel rolling transcript trigger (every 35 inserts per channel).
+- **Episodic Memory Worker** — Utility functions for goal emergence detection; episode extraction itself runs inline via the per-channel rolling transcript trigger (every 20 inserts per channel).
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081

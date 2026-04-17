@@ -31,7 +31,7 @@ _PRUNE_TTL_DAYS = 90
 # Per-channel insert counters for rolling episode extraction
 _channel_insert_counts: dict[str, int] = {}
 _channel_insert_lock = threading.Lock()
-_EXTRACTION_INTERVAL = 35
+_EXTRACTION_INTERVAL = 20
 
 
 def append(
