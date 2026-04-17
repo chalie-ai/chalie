@@ -54,7 +54,7 @@ def _mock_providers_assigned():
         {"is_active": True, "platform": "anthropic"},
     ]
     mock_provider.get_all_job_assignments.return_value = [
-        {"job_name": "frontal-cortex", "provider_id": 1},
+        {"job_name": "frontal-cortex-unified", "provider_id": 1},
         {"job_name": "cognitive-triage", "provider_id": 1},
     ]
     return mock_provider
