@@ -7,7 +7,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ## [Unreleased]
 
 ### In Progress
-- **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService` and `ContradictionClassifierService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`.
+- **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`. Note: `ContradictionClassifierService` (ONNX 5-way classifier) replaced by deterministic 27-concept LUT engine in `data_graph_service`.
 
 ---
 

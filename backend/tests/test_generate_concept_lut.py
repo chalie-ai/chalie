@@ -45,8 +45,8 @@ def _open_lut(db_path: str) -> sqlite3.Connection:
 
 class TestGenerateConceptLut:
 
-    def test_produces_159_concepts(self, tmp_path):
-        """Generator embeds all 159 canonical keys from the YAML."""
+    def test_produces_27_concepts(self, tmp_path):
+        """Generator embeds all 27 canonical keys from the v3 YAML."""
         if not _YAML_PATH.exists():
             pytest.skip(f"YAML not found at {_YAML_PATH}")
 
@@ -59,7 +59,7 @@ class TestGenerateConceptLut:
         finally:
             conn.close()
 
-        assert count == 159, f"Expected 159 concepts, got {count}"
+        assert count == 27, f"Expected 27 concepts (v3 LUT), got {count}"
 
     def test_embeddings_count_matches_concepts(self, tmp_path):
         """One embedding row per concept — no orphan or missing embeddings."""
@@ -79,7 +79,7 @@ class TestGenerateConceptLut:
         assert n_embeddings == n_concepts
 
     def test_idempotent_second_run_replaces_cleanly(self, tmp_path):
-        """Running the generator twice produces the same 159-row result."""
+        """Running the generator twice produces the same 27-row result — no duplicates."""
         if not _YAML_PATH.exists():
             pytest.skip(f"YAML not found at {_YAML_PATH}")
 
@@ -93,7 +93,7 @@ class TestGenerateConceptLut:
         finally:
             conn.close()
 
-        assert count == 159, f"After 2 runs: expected 159, got {count}"
+        assert count == 27, f"After 2 runs: expected 27, got {count}"
 
     def test_rules_are_valid_values(self, tmp_path):
         """Every rule column value must be one of: temporal, coexist, immutable."""

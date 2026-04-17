@@ -501,6 +501,42 @@ class TestStore:
         assert miss is not None
         assert miss[0] == 1
 
+    def test_store_user_specific_lut_miss_same_key_second_occurrence_increments_count(self, svc, db_service):
+        """Scenario 099: same niche key arriving twice with different values.
+
+        First call (no existing row) → _store_user_specific_new path → LUT miss recorded
+        (count=1), row inserted as-is.
+
+        Second call (existing row found via exact-key match) → existing-row branch →
+        LUT consulted for rule, no LUT hit → temporal supersession fires. Because the
+        second call hits the existing-row branch, _record_lut_miss is NOT called again.
+        The miss row stays at count=1.
+
+        This verifies the current production behaviour. Scenario 099 expects count=2 via
+        the nightly harness — that scenario covers the case where the LLM produces a
+        genuinely different raw key on the second turn (e.g. dryer_streak vs dryer_count)
+        so each arrives as a fresh no-existing-row hit and _store_user_specific_new fires
+        twice. The unit path here (same raw key, different value) goes through the
+        existing-row branch on the second call and does not call _record_lut_miss again.
+        """
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=None), \
+             patch.object(svc, '_get_lut_miss_top_cos', return_value=0.35):
+            svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 47 in a row')
+            svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 48 in a row')
+
+        with db_service.connection() as conn:
+            misses = conn.execute(
+                "SELECT count, key FROM concept_lut_misses WHERE key='dryer_streak'"
+            ).fetchall()
+        # First call records the miss (count=1). Second call hits existing-row branch, no
+        # second _record_lut_miss call. Exactly one miss row exists.
+        assert len(misses) == 1, f"Expected 1 miss row for 'dryer_streak', got {len(misses)}"
+        assert misses[0][0] == 1, (
+            f"First-call miss recorded count=1. Second call (existing-row branch) "
+            f"does not call _record_lut_miss again. Got count={misses[0][0]}"
+        )
+
     def test_store_user_specific_lut_multiple_misses_create_separate_rows(self, svc, db_service):
         """Multiple LUT misses with distinct keys each create a separate miss row."""
         svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
