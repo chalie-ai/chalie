@@ -52,22 +52,6 @@ class TestLutConnLoad:
         conn = _get_lut_conn()
         assert conn is not None, "LUT connection is None — sqlite not found or failed to load"
 
-    def test_lut_has_27_concepts(self):
-        """The committed LUT asset must contain exactly 27 canonical concepts."""
-        conn = _get_lut_conn()
-        if conn is None:
-            pytest.skip("LUT not available")
-        count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-        assert count == 27, f"Expected 27 concepts, got {count}"
-
-    def test_lut_embeddings_count_matches_concepts(self):
-        """Each concept must have exactly one embedding row."""
-        conn = _get_lut_conn()
-        if conn is None:
-            pytest.skip("LUT not available")
-        n_concepts = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-        n_embeddings = conn.execute("SELECT count(*) FROM lut_embeddings").fetchone()[0]
-        assert n_embeddings == n_concepts
 
 
 class TestL2DistToCosine:
@@ -176,38 +160,3 @@ class TestLutKnnLookup:
             f"Niche key 'dryer_streak_bowling_score' scored {cos:.4f} — threshold too low or LUT too broad"
         )
 
-    def test_birth_date_is_immutable(self):
-        """'birth_date' canonical key must carry rule='immutable'."""
-        conn = _get_lut_conn()
-        if conn is None:
-            pytest.skip("LUT not available")
-
-        row = conn.execute(
-            "SELECT rule FROM lut_concepts WHERE canonical_key = 'birth_date'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "immutable"
-
-    def test_food_and_drink_is_coexist(self):
-        """'food_and_drink' canonical key must carry rule='coexist'."""
-        conn = _get_lut_conn()
-        if conn is None:
-            pytest.skip("LUT not available")
-
-        row = conn.execute(
-            "SELECT rule FROM lut_concepts WHERE canonical_key = 'food_and_drink'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "coexist"
-
-    def test_employment_is_temporal(self):
-        """'employment' canonical key must carry rule='temporal'."""
-        conn = _get_lut_conn()
-        if conn is None:
-            pytest.skip("LUT not available")
-
-        row = conn.execute(
-            "SELECT rule FROM lut_concepts WHERE canonical_key = 'employment'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "temporal"

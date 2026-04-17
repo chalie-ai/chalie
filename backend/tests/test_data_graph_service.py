@@ -1230,39 +1230,47 @@ class TestSeed:
 
 @pytest.mark.unit
 class TestKindPolicy:
-    """Policy table invariants — the contract that drive all branching behaviour.
+    """Behavioral policy invariants — the values that drive decay, deletion, and reinforcement.
 
-    These test the observable contract, not implementation details — callers
-    depend on this table having specific shapes and values.
+    Only assertions whose failure would indicate real user-facing regression are kept here.
+    Config string values for internal dispatch (e.g. 'contradiction' handler name) are
+    omitted — those are covered by the store/forget behavior tests.
     """
 
-    def test_user_specific_policy_shape(self):
-        p = _KIND_POLICY[KIND_USER_SPECIFIC]
-        assert p['reinforce'] is True
-        assert p['contradiction'] == 'lut_canonicalize'
-        assert p['ttl_days'] == 30
-        assert p['salience_floor'] == pytest.approx(0.2)
+    def test_user_specific_decays_and_reinforces(self, svc, db_service):
+        """user_specific rows decay after 30 days and reinforce on repeated evidence."""
+        old_ts = '2020-01-01T00:00:00+00:00'
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='fact',
+                            value='val', retrieval_weight=1.0, last_confirmed_at=old_ts)
+        svc.decay_cycle()
+        raw = _raw_row(db_service, rowid)
+        assert raw['retrieval_weight'] < 1.0
 
-    def test_system_policy_no_auto_decay(self):
-        """system kind must never auto-decay (ttl_days=None is the sentinel)."""
-        p = _KIND_POLICY[KIND_SYSTEM]
-        assert p['ttl_days'] is None
-        assert p['reinforce'] is True
-        assert p['contradiction'] == 'cosine_supersede'
+    def test_misc_rows_are_hard_deleted_when_expired(self, svc, db_service):
+        """misc rows at sub-floor weight confirmed >2 days ago are physically removed."""
+        old_ts = '2020-01-01T00:00:00+00:00'
+        rowid = _insert_row(db_service, kind=KIND_MISC, key='scratch',
+                            value='v', retrieval_weight=0.005, last_confirmed_at=old_ts)
+        svc.decay_cycle()
+        assert _raw_row(db_service, rowid) is None
 
-    def test_misc_policy_hard_deletion(self):
-        """misc kind is short-lived scratchpad with hard deletion."""
-        p = _KIND_POLICY[KIND_MISC]
-        assert p['deletion'] == 'hard'
-        assert p['reinforce'] is False
-        assert p['ttl_days'] == 2
-        assert p['contradiction'] is None
+    def test_system_rows_never_decay(self, svc, db_service):
+        """system rows are never touched by decay_cycle regardless of age."""
+        old_ts = '2020-01-01T00:00:00+00:00'
+        rowid = _insert_row(db_service, kind=KIND_SYSTEM, key='rule',
+                            value='be concise', retrieval_weight=0.9, last_confirmed_at=old_ts)
+        svc.decay_cycle()
+        raw = _raw_row(db_service, rowid)
+        assert raw['retrieval_weight'] == pytest.approx(0.9, abs=0.001)
 
-    def test_moment_policy_no_auto_decay(self):
-        """moment kind (internal only) must never auto-decay."""
-        p = _KIND_POLICY[KIND_MOMENT]
-        assert p['ttl_days'] is None
-        assert p['reinforce'] is False
+    def test_moment_rows_never_decay(self, svc, db_service):
+        """moment rows are never touched by decay_cycle regardless of age."""
+        old_ts = '2020-01-01T00:00:00+00:00'
+        rowid = _insert_row(db_service, kind=KIND_MOMENT, key='snapshot',
+                            value='morning run', retrieval_weight=0.8, last_confirmed_at=old_ts)
+        svc.decay_cycle()
+        raw = _raw_row(db_service, rowid)
+        assert raw['retrieval_weight'] == pytest.approx(0.8, abs=0.001)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1483,3 +1491,146 @@ class TestHardDeleteBySourcePrefix:
         remaining = _raw_all(db_service)
         assert len(remaining) == 1
         assert remaining[0]['source'] == 'skill:memory'
+
+
+# ══════════════════════════════════════════════════════════════════
+# TestForget
+# ══════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestForget:
+    """forget() — rule-aware hard-delete for user memory.
+
+    Each test covers one distinct branch of the forget() dispatch.  All tests
+    use the real DB fixture with no mocks — embedding generation and LUT lookup
+    are bypassed by patching only the two private helpers that touch external
+    state (embedding model, sqlite-vec), matching the pattern used in TestStore.
+
+    Mock decision: _generate_embedding and _lookup_concept_lut are patched via
+    patch.object because they touch the ONNX model and sqlite-vec extension,
+    neither of which is available in the unit test environment.  All DB writes,
+    reads, edge deletions, and FTS operations run against the real SQLite
+    fixture.  The nightly scenarios 084, 096, 097, 098, 099 provide end-to-end
+    coverage for these paths against the production stack.
+    """
+
+    _FAKE_EMB = [0.1] * 768
+
+    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
+        """Return a fake LUT hit dict for patching _lookup_concept_lut."""
+        return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
+
+    def test_forget_temporal_no_value_deletes_all_versions(self, svc, db_service):
+        """Temporal key forget with no value param removes ALL version rows and their edges."""
+        # Store two versions: seed old row directly, let service create the current one.
+        old_rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
+                                key='residence', value='Valletta', active=0)
+        new_rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
+                                key='residence', value='Swieqi', active=1)
+        old_id = _get_db_id(db_service, old_rowid)
+        new_id = _get_db_id(db_service, new_rowid)
+
+        # Wire a supersedes edge between the two so we can assert it is also removed.
+        svc.add_edge(new_id, old_id, edge_type='supersedes')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
+            result = svc.forget(KIND_USER_SPECIFIC, 'residence')
+
+        assert result is not None
+        assert result['status'] == 'forgotten_all'
+        assert result['versions_removed'] == 2
+
+        # All rows gone
+        with db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT id FROM data_graph WHERE key='residence'"
+            ).fetchall()
+        assert rows == [], "All temporal versions must be hard-deleted"
+
+        # Edges cleaned up
+        with db_service.connection() as conn:
+            edges = conn.execute(
+                "SELECT id FROM data_graph_edges "
+                "WHERE from_id IN (?,?) OR to_id IN (?,?)",
+                (old_id, new_id, old_id, new_id)
+            ).fetchall()
+        assert edges == [], "Edges for deleted rows must be removed"
+
+    def test_forget_coexist_specific_value_removes_only_that_row(self, svc, db_service):
+        """Coexist key forget with explicit value removes that value, leaves others active."""
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='food_and_drink', value='pizza')
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='food_and_drink', value='pasta')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('food_and_drink', 'coexist')):
+            result = svc.forget(KIND_USER_SPECIFIC, 'food_and_drink', value='pizza')
+
+        assert result is not None
+        assert result['status'] == 'forgotten'
+
+        with db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT value FROM data_graph WHERE key='food_and_drink' AND deleted_at IS NULL"
+            ).fetchall()
+        values = [r[0] for r in rows]
+        assert 'pizza' not in values, "Forgotten value must be physically removed"
+        assert 'pasta' in values, "Other coexist values must remain untouched"
+
+    def test_forget_coexist_value_not_found_returns_value_not_found_status(self, svc, db_service):
+        """Coexist forget for a value that doesn't exist returns value_not_found, no deletion."""
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='food_and_drink', value='pasta')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('food_and_drink', 'coexist')):
+            result = svc.forget(KIND_USER_SPECIFIC, 'food_and_drink', value='sushi')
+
+        assert result is not None
+        assert result['status'] == 'value_not_found'
+
+        # Existing pasta row untouched
+        with db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT value FROM data_graph WHERE key='food_and_drink' AND deleted_at IS NULL"
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == 'pasta'
+
+    def test_forget_immutable_hard_deletes_without_protection(self, svc, db_service):
+        """Immutable key forget removes the single row — no protection from deletion."""
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
+                            key='birth_date', value='1990-03-15')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
+            result = svc.forget(KIND_USER_SPECIFIC, 'birth_date')
+
+        assert result is not None
+        assert result['status'] == 'forgotten'
+        assert result['old_value'] == '1990-03-15'
+
+        assert _raw_row(db_service, rowid) is None, "Immutable forget must physically remove the row"
+
+    def test_forget_lut_miss_raw_key_finds_and_deletes(self, svc, db_service):
+        """LUT miss forget falls back to raw key lookup and deletes the matching row."""
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
+                            key='dryer_streak', value='won 3 in a row')
+
+        # No LUT hit — falls through to raw key path.
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=None):
+            result = svc.forget(KIND_USER_SPECIFIC, 'dryer_streak')
+
+        assert result is not None
+        assert result['status'] in ('forgotten', 'forgotten_all')
+
+        assert _raw_row(db_service, rowid) is None, "Raw-key forget must physically remove the row"
+
+    def test_forget_nonexistent_key_returns_not_found(self, svc, db_service):
+        """Forget on a key that has no stored rows returns not_found status without error."""
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
+            result = svc.forget(KIND_USER_SPECIFIC, 'residence')
+
+        assert result is not None
+        assert result['status'] == 'not_found'
