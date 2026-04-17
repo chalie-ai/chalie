@@ -36,7 +36,28 @@ TOOL_SCHEMA = {
     "description": (
         "Store, recall, or forget knowledge about the user. Store personal facts "
         "the moment they're disclosed. Recall before recommending anything. "
-        "Use forget to remove a specific memory when asked."
+        "Use forget to remove a specific memory when asked.\n\n"
+        "STORE RULES — read carefully:\n"
+        "1. One fact per call. Never summarize multiple facts into one value. "
+        "If the user mentions pasta AND pizza, call store twice.\n"
+        "2. Use the canonical key from the list below when the fact fits. "
+        "Don't invent variants like 'favorite_food', 'current_role', "
+        "'home_city' — pick the canonical key.\n"
+        "3. Atomic values only. 'Valletta' not 'lives in Valletta, Malta'. "
+        "'CTO' not 'recently promoted to CTO at Acme'.\n"
+        "4. When the user corrects a fact, store the new value under the SAME "
+        "canonical key — the system will supersede the old one automatically.\n\n"
+        "CANONICAL KEYS (kind=user_specific):\n"
+        "  Immutable (set once, never change): birth_date, birth_place, "
+        "biological_parents\n"
+        "  Temporal (latest replaces previous): residence, gender, religion, "
+        "timezone, partner, employment, financial_status\n"
+        "  Coexist (multiple values accumulate): name, heritage, family, "
+        "relationships, education, health, food_and_drink, entertainment, "
+        "sports, style, skills_and_interests, contact_info, tech_setup, "
+        "personality, life_events, goals_and_projects, routines_and_habits\n\n"
+        "If a fact truly doesn't fit any canonical key, store it under your "
+        "best short identifier — the system will record the miss for review."
     ),
     "input_schema": {
         "type": "object",
@@ -62,13 +83,21 @@ TOOL_SCHEMA = {
             },
             "key": {
                 "type": "string",
-                "description": "For store/forget: short identifier (e.g. 'residence', 'food_and_drink').",
+                "description": (
+                    "For store/forget: the canonical key from the list in the "
+                    "tool description (e.g. 'residence', 'food_and_drink', "
+                    "'employment'). Use the exact canonical key when the fact "
+                    "fits one of the 27 concepts."
+                ),
             },
             "value": {
                 "type": "string",
                 "description": (
-                    "For store: the fact itself. "
-                    "For forget: required when removing one value from a multi-value key."
+                    "For store: the fact itself, atomic — a single value. "
+                    "'Valletta' (not 'lives in Valletta'). 'pasta' (not "
+                    "'loves pasta and pizza'). "
+                    "For forget: required when removing one value from a "
+                    "multi-value key."
                 ),
             },
             "query": {
