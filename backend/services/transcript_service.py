@@ -545,9 +545,17 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
             for ep in episodes:
                 try:
-                    salience_factors = ep.get('salience_factors', {})
-                    salience = salience_svc.calculate_salience(salience_factors)
-                    ep['salience'] = salience
+                    factors = ep.get('salience_factors', {}) or {}
+                    # Map prompt-side keys to SalienceService-side keys
+                    mapped_factors = {
+                        'novelty': factors.get('novelty', 0),
+                        'emotional': factors.get('emotional_weight', factors.get('emotional', 0)),
+                        'commitment': factors.get('goal_relevance', factors.get('commitment', 0)),
+                        'unresolved': factors.get('open_loop_created', factors.get('unresolved', False)),
+                    }
+                    salience_f = salience_svc.calculate_salience(mapped_factors)  # 0.1..1.0
+                    # DB requires INTEGER 1..10
+                    ep['salience'] = max(1, min(10, int(round(salience_f * 10))))
                     ep['channel'] = channel
 
                     gist = ep.get('gist', '')

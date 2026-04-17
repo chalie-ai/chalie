@@ -121,17 +121,25 @@ class EpisodeExtractorService:
                 logger.warning("[EXTRACTOR] Episode has invalid entry_range — skipping")
                 continue
 
-            start, end = int(entry_range[0]), int(entry_range[1])
-            if start < 0 or end < start or end >= len(entries):
-                logger.warning(
-                    f"[EXTRACTOR] entry_range [{start}, {end}] out of bounds "
-                    f"for window of {len(entries)} entries — skipping"
-                )
+            try:
+                start, end = int(entry_range[0]), int(entry_range[1])
+            except (TypeError, ValueError):
+                logger.warning(f"[EXTRACTOR] entry_range {entry_range} not numeric — skipping")
                 continue
 
-            transcript_ids = [entries[i]['id'] for i in range(start, end + 1) if 'id' in entries[i]]
+            if end < start:
+                start, end = end, start
+
+            # entry_range refers to transcript row IDs (what the window prints as [id]).
+            # Select all transcript rows within the window whose id falls in [start, end].
+            window_ids = [entry['id'] for entry in entries if 'id' in entry]
+            transcript_ids = [tid for tid in window_ids if start <= tid <= end]
+
             if not transcript_ids:
-                logger.warning("[EXTRACTOR] entry_range maps to entries with no id — skipping")
+                logger.warning(
+                    f"[EXTRACTOR] entry_range [{start}, {end}] matched no ids in window "
+                    f"(window ids: {window_ids[0] if window_ids else '-'}..{window_ids[-1] if window_ids else '-'}) — skipping"
+                )
                 continue
 
             ep['transcript_ids'] = transcript_ids

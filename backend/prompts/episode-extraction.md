@@ -5,7 +5,7 @@ You are an episodic memory encoder. Your job is to read a transcript window and 
 
 ## Transcript Window
 Each line is formatted as: [id] (timestamp) role [channel]: content
-The `id` is the transcript entry's integer ID. Use the 0-based position index of each entry (not the `id` value) in `entry_range`.
+The `id` is the transcript entry's integer ID. Use the `id` values (the numbers in square brackets at the start of each line) in `entry_range`.
 
 {{transcript_window}}
 
@@ -67,7 +67,7 @@ Read the transcript and identify distinct episodes. An episode is a coherent seg
 
 ### Field guidance:
 
-**entry_range** — a two-element array `[start_index, end_index]` (inclusive, 0-based) indicating which entries in the window this episode covers. Entry 0 is the first line, entry 1 is the second, and so on. Each entry can belong to at most one episode.
+**entry_range** — a two-element array `[start_id, end_id]` (inclusive) indicating which transcript entries this episode covers. Use the `id` shown in square brackets at the start of each line. The range is inclusive on both ends. Each entry can belong to at most one episode.
 
 **salience_factors** — integer scores 0–3:
 - `novelty`: how new or surprising this was (0 = routine, 3 = completely new)
