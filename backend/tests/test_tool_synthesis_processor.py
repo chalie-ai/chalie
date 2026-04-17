@@ -458,7 +458,7 @@ class TestProcessorClass:
         tools = p.getTools()
         props = tools[0]['input_schema']['properties']
         assert 'action' in props
-        assert set(props['action']['enum']) == {'store', 'recall', 'reflect'}
+        assert set(props['action']['enum']) == {'store', 'recall', 'reflect', 'forget'}
 
     def test_get_tools_no_find_tools_present(self):
         from services.tool_schema_service import clear_cache

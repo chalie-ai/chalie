@@ -38,9 +38,6 @@ pytest -m integration
 # A specific test file
 pytest tests/test_classifier_features.py
 
-# A single test
-pytest tests/test_classifier_features.py::TestContradictionClassifier::test_contradicting_locations_detected
-
 # Verbose output
 pytest -m unit -v
 ```
@@ -74,29 +71,29 @@ def onnx_svc():
     return OnnxInferenceService(_MODELS_DIR)
 
 
-class TestContradictionClassifier:
+class TestThinkingLevelClassifier:
 
-    def test_contradicting_locations_detected(self, onnx_svc):
-        """Valletta vs Swieqi — relocation → temporal_change."""
-        from services.contradiction_classifier_service import ContradictionClassifierService
+    def test_architecture_question_routes_to_high(self, onnx_svc):
+        """Complex distributed systems question → 'high' deliberation level."""
+        import numpy as np
 
-        svc = ContradictionClassifierService()
-        payload = svc._build_onnx_input(
-            text_a="I live in Valletta",
-            text_b="I live in Swieqi",
-            meta_a={"type": "incoming", "established": False},
-            meta_b={"type": "trait", "reinforcement_count": 5},
+        onehot = np.zeros((1, 4), dtype=np.float32)
+        onehot[0, 0] = 1.0  # none → index 0
+
+        label, confidence = onnx_svc.predict(
+            "thinking_level",
+            "Design a fault-tolerant multi-region distributed system for a "
+            "high-traffic e-commerce platform.",
+            extra_features=onehot,
         )
 
-        label, confidence = onnx_svc.predict("contradiction", payload)
-
-        assert label in ("temporal_change", "true_contradiction")
+        assert label == "high"
         assert confidence > 0.4
 ```
 
 What this test does:
 - Loads the **real** 596 MB `gte-modernbert-base` encoder
-- Loads the **real** contradiction MLP head from disk (`.npz`)
+- Loads the **real** thinking-level MLP head from disk (`.npz`)
 - Feeds **real** text
 - Asserts a **real** classification
 
@@ -104,7 +101,6 @@ What it does not do:
 - Mock the ONNX service
 - Assert the output dict has fields `{"label", "confidence"}` (that is a contract test)
 - Assert the version pin is right (a real feature test catches misconfig faster)
-- Assert it calls `_build_onnx_input` with argument X (wiring theater)
 
 ## Naming
 
@@ -116,9 +112,9 @@ Names describe the **real-world scenario**, not the code path.
 
 ```python
 # Good — describes what the feature does
-def test_contradicting_locations_detected(self):
 def test_simple_factual_lookup_routes_to_low(self):
 def test_architecture_question_routes_to_high(self):
+def test_lut_temporal_rule_supersedes_old_value(self):
 
 # Bad — describes the plumbing
 def test_build_onnx_input_returns_dict(self):
@@ -129,21 +125,21 @@ def test_all_valid_labels_pass_through(self):
 ## Structure — Arrange / Act / Assert
 
 ```python
-def test_contradicting_locations_detected(self, onnx_svc):
-    # Arrange — build real input, load real service
-    svc = ContradictionClassifierService()
-    payload = svc._build_onnx_input(
-        text_a="I live in Valletta",
-        text_b="I live in Swieqi",
-        meta_a={"type": "incoming"},
-        meta_b={"type": "trait", "reinforcement_count": 5},
+def test_architecture_question_routes_to_high(self, onnx_svc):
+    # Arrange — real user turn, no mocks
+    import numpy as np
+    onehot = np.zeros((1, 4), dtype=np.float32)
+    onehot[0, 0] = 1.0  # none
+
+    # Act — run the real thinking-level classifier
+    label, confidence = onnx_svc.predict(
+        "thinking_level",
+        "Design a fault-tolerant multi-region distributed system.",
+        extra_features=onehot,
     )
 
-    # Act — run the real classifier
-    label, confidence = onnx_svc.predict("contradiction", payload)
-
     # Assert — observable output
-    assert label in ("temporal_change", "true_contradiction")
+    assert label == "high"
     assert confidence > 0.4
 ```
 
@@ -164,6 +160,18 @@ The black-box YAML scenarios at `/Volumes/llm/chalie-nightly-test/scenarios/` ar
 Python-level feature tests are a **fast-feedback supplement** for behaviours you want to catch before running a full nightly. They do not replace the nightly scenarios.
 
 See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
+
+### LUT Canonicalization Scenarios (096–100)
+
+These five scenarios cover the deterministic 27-concept LUT engine shipped in `data_graph_service`:
+
+| File | What it tests |
+|---|---|
+| `096-lut-canonicalize-residence-temporal.yaml` | Non-canonical key (`residency`) → LUT hit → `residence` canonical → temporal supersession; asserts supersedes edge present and `[CONTRADICTION] MLP classification` log line absent |
+| `097-lut-coexist-favorite-foods.yaml` | `food_and_drink` coexist rule — two foods in two turns both remain active; no supersedes edge |
+| `098-job-title-temporal-supersedes.yaml` | `employment` temporal rule — CEO → CTO supersession across 3 recall angles; all return CTO |
+| `099-lut-miss-recorded.yaml` | Key not in LUT stored as-is; `concept_lut_misses` row created with `count=1`; repeat increments to `count=2` |
+| `100-contradiction-classifier-removed.yaml` | Structural check: `pending_contradictions` table absent from `sqlite_master`; `concept_lut_misses` present; `concept_lut.sqlite` path logged on boot |
 
 ## What If a Service Cannot Be Tested Without Mocks?
 
@@ -194,21 +202,21 @@ Feature tests are expensive (they load real models and DBs). The cap is not a su
 The one exception to "feature tests only" — pure functions may have unit tests:
 
 ```python
-# backend/tests/test_classifier_pure_functions.py
+# backend/tests/test_concept_lut_lookup.py
 
 import pytest
 pytestmark = pytest.mark.unit
 
-from services.contradiction_classifier_service import _cosine_similarity
+from services.data_graph.lut_engine import _cosine_sim
 
 
-class TestCosineSimilarity:
+class TestCosineSim:
 
     def test_identical_vectors_return_one(self):
-        assert _cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+        assert _cosine_sim([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
 
     def test_orthogonal_vectors_return_zero(self):
-        assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+        assert _cosine_sim([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 ```
 
 Criteria for a legitimate unit test:
@@ -236,7 +244,7 @@ pytest -m integration -n 4
 
 ## Examples in the Codebase
 
-- `backend/tests/test_classifier_features.py` — reference feature test file (real encoder, real heads, zero mocks)
-- `backend/tests/test_classifier_pure_functions.py` — reference pure-function file
+- `backend/tests/test_classifier_features.py` — reference feature test file (real encoder, real thinking-level head, zero mocks)
+- `backend/tests/test_concept_lut_lookup.py` — reference pure-function file (LUT KNN, threshold gates)
 
 Study these before writing a new test file. Match the pattern.
