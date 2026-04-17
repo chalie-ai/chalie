@@ -44,7 +44,7 @@ This document is the single authoritative visual map of how a user message trave
                             │    getTools()        — innate skills + discovered  │
                             │    Providers.send_messages()  🧠 LLM              │
                             │    handleTool() per tool_call → ActDispatcher     │
-                            │    tool_synthesis DTO, user_steer drain           │
+                            │    narration DTO, user_steer drain                │
                             │    repeat until text-only response or cap hit     │
                             │                                                   │
                             │  store()  — append_atomic_turn() ONE transaction  │
@@ -129,7 +129,7 @@ Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProces
 │  │  No tool_calls → loop_exited_cleanly = True → break         │   │
 │  │                                                              │   │
 │  │  If LLM returned narration text alongside tool_calls:       │   │
-│  │    tool_synthesis DTO appended (ephemeral=1)                 │   │
+│  │    narration DTO appended (ephemeral=1)                      │   │
 │  │    _emit_narration() → on_narration callback → SSE           │   │
 │  │                                                              │   │
 │  │  For each tool_call: handleTool()        ⚡ DET + varies     │   │
