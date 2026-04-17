@@ -945,7 +945,7 @@ class DataGraphService:
                             ORDER BY distance
                         """, (query_blob, k))
                         for rowid, dist in cursor.fetchall():
-                            cos = 1.0 - (dist ** 2 / 2.0)
+                            cos = _l2_dist_to_cosine(dist)
                             if rowid not in candidates:
                                 candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
                             candidates[rowid]['key_cos'] = max(candidates[rowid]['key_cos'], cos)
@@ -962,7 +962,7 @@ class DataGraphService:
                             ORDER BY distance
                         """, (query_blob, k))
                         for rowid, dist in cursor.fetchall():
-                            cos = 1.0 - (dist ** 2 / 2.0)
+                            cos = _l2_dist_to_cosine(dist)
                             if rowid not in candidates:
                                 candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
                             candidates[rowid]['value_cos'] = max(candidates[rowid]['value_cos'], cos)
