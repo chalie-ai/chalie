@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import threading
+from dataclasses import dataclass
 from typing import Optional
 
 from services.database_service import get_shared_db_service
@@ -19,6 +20,17 @@ KIND_MISC = 'misc'
 KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
+
+
+@dataclass
+class _StoreRequest:
+    """Groups the four store-time write parameters to satisfy the 5-param ceiling."""
+
+    kind: str
+    key: str
+    value: str
+    source: Optional[str]
+
 
 _KIND_POLICY = {
     KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
@@ -46,6 +58,9 @@ _LUT_K = 1
 # KNN depth for system key cosine deduplication.
 _SYSTEM_KEY_K = 3
 
+# Minimum cosine score for a recall candidate to pass the relevance floor.
+_RECALL_COSINE_FLOOR = 0.42
+
 # Module-level LUT connection, loaded once on first use.
 _lut_conn: Optional[sqlite3.Connection] = None
 _lut_lock = threading.Lock()
@@ -65,7 +80,7 @@ def _get_lut_conn() -> Optional[sqlite3.Connection]:
             _lut_loaded = True
             return None
         try:
-            conn = sqlite3.connect(_CONCEPT_LUT_PATH, check_same_thread=False)
+            conn = sqlite3.connect(f"file:{_CONCEPT_LUT_PATH}?mode=ro", uri=True, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             conn.enable_load_extension(True)
             try:
@@ -476,7 +491,7 @@ class DataGraphService:
             pass
         return 0.0
 
-    def _apply_temporal_supersession(self, conn, existing_dict: dict, kind: str, key: str, value: str, source: Optional[str], now_iso: str) -> tuple[dict, Optional[tuple], Optional[tuple]]:
+    def _apply_temporal_supersession(self, conn, existing_dict: dict, req: '_StoreRequest', now_iso: str) -> tuple[dict, Optional[tuple], Optional[tuple]]:
         """Demote old row, insert new, add supersedes/superseded_by edges.
 
         Returns (new_row_dict, schedule_emb_args, schedule_d2q_args).
@@ -490,14 +505,14 @@ class DataGraphService:
         conn.execute(
             "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, key, value, source, now_iso, now_iso),
+            (req.kind, req.key, req.value, req.source, now_iso, now_iso),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         self._add_edge_with_conn(conn, new_id, row_id, 'supersedes')
         self._add_edge_with_conn(conn, row_id, new_id, 'superseded_by')
-        self._sync_fts(conn, new_id, key, value, kind)
-        logger.info("[DATA GRAPH] temporal supersede: demoted %s, inserted %s for key='%s'", row_id, new_id, key)
-        return self._fetch_row_by_id(conn, new_id), (new_id, key, value), (new_id, key, value)
+        self._sync_fts(conn, new_id, req.key, req.value, req.kind)
+        logger.info("[DATA GRAPH] temporal supersede: demoted %s, inserted %s for key='%s'", row_id, new_id, req.key)
+        return self._fetch_row_by_id(conn, new_id), (new_id, req.key, req.value), (new_id, req.key, req.value)
 
     def _find_system_key_match(self, conn, key_embedding, kind: str) -> Optional[dict]:
         """KNN on data_graph_key_vec for system_specific kind; returns best matching row or None."""
@@ -574,6 +589,7 @@ class DataGraphService:
                         )
                     else:
                         contradiction_mode = policy.get('contradiction')
+                        existing_req = _StoreRequest(kind, key, value, source)
 
                         if contradiction_mode == 'lut_canonicalize':
                             # Exact-key match: existing row found → apply rule based on LUT lookup.
@@ -584,7 +600,7 @@ class DataGraphService:
 
                             if lut_hit and rule == 'temporal':
                                 row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
-                                    conn, existing_dict, kind, key, value, source, now_iso
+                                    conn, existing_dict, existing_req, now_iso
                                 )
                                 result = self._make_store_result(
                                     "superseded", key, key, rule, value, old_value,
@@ -592,16 +608,9 @@ class DataGraphService:
                                 )
                             elif lut_hit and rule == 'coexist':
                                 # Coexist with existing same key — insert additive (different value)
-                                conn.execute(
-                                    "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
-                                    "VALUES (?, ?, ?, ?, ?, ?)",
-                                    (kind, key, value, source, now_iso, now_iso),
+                                row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                                    conn, existing_req, now_iso
                                 )
-                                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                                self._sync_fts(conn, new_id, key, value, kind)
-                                _schedule_emb_args = (new_id, key, value)
-                                _schedule_d2q_args = (new_id, key, value)
-                                row = self._fetch_row_by_id(conn, new_id)
                                 all_vals = self._fetch_coexist_values(conn, kind, key)
                                 result = self._make_store_result(
                                     "appended", key, key, rule, value, None,
@@ -614,9 +623,10 @@ class DataGraphService:
                                 )
                                 self._log_immutable_conflict(key, old_value, value)
                             else:
-                                # No LUT hit for this key or embedding unavailable — temporal default
+                                # No LUT hit for this key or embedding unavailable — temporal default.
+                                # Miss was already recorded on the first write (new-row path).
                                 row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
-                                    conn, existing_dict, kind, key, value, source, now_iso
+                                    conn, existing_dict, existing_req, now_iso
                                 )
                                 result = self._make_store_result(
                                     "superseded", key, key, rule, value, old_value,
@@ -626,7 +636,7 @@ class DataGraphService:
                         elif contradiction_mode == 'cosine_supersede':
                             # System kind: exact-key match with different value → temporal supersession
                             row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
-                                conn, existing_dict, kind, key, value, source, now_iso
+                                conn, existing_dict, existing_req, now_iso
                             )
                             result = self._make_store_result(
                                 "superseded", key, key, None, value, old_value,
@@ -635,16 +645,9 @@ class DataGraphService:
 
                         else:
                             # None policy — insert directly (additive)
-                            conn.execute(
-                                "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?)",
-                                (kind, key, value, source, now_iso, now_iso),
+                            row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                                conn, existing_req, now_iso
                             )
-                            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                            self._sync_fts(conn, new_id, key, value, kind)
-                            _schedule_emb_args = (new_id, key, value)
-                            _schedule_d2q_args = (new_id, key, value)
-                            row = self._fetch_row_by_id(conn, new_id)
                             result = self._make_store_result(
                                 "created", key, key, None, value, None,
                                 None, None, row,
@@ -652,30 +655,22 @@ class DataGraphService:
                 else:
                     # No existing row with this exact key — run canonicalization paths
                     contradiction_mode = policy.get('contradiction')
+                    store_req = _StoreRequest(kind, key, value, source)
 
                     if contradiction_mode == 'lut_canonicalize':
                         result, _schedule_emb_args, _schedule_d2q_args = self._store_user_specific_new(
-                            conn, kind, key, value, source, now_iso
+                            conn, store_req, now_iso
                         )
 
                     elif contradiction_mode == 'cosine_supersede':
                         result, _schedule_emb_args, _schedule_d2q_args = self._store_system_new(
-                            conn, kind, key, value, source, now_iso
+                            conn, store_req, now_iso
                         )
 
                     else:
-                        conn.execute(
-                            "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (kind, key, value, source, now_iso, now_iso),
+                        row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                            conn, store_req, now_iso
                         )
-                        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                        self._sync_fts(conn, new_id, key, value, kind)
-                        _schedule_emb_args = (new_id, key, value)
-                        _schedule_d2q_args = (new_id, key, value)
-                        row = self._fetch_row_by_id(conn, new_id)
-                        logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)",
-                                    kind, key, (value or '')[:60], source)
                         result = self._make_store_result(
                             "created", key, key, None, value, None, None, None, row,
                         )
@@ -742,7 +737,7 @@ class DataGraphService:
             key, old_value, new_value,
         )
 
-    def _store_user_specific_new(self, conn, kind: str, key: str, value: str, source: Optional[str], now_iso: str) -> tuple:
+    def _store_user_specific_new(self, conn, req: '_StoreRequest', now_iso: str) -> tuple:
         """Handle store() for user_specific kind with no existing row at the given key.
 
         Embeds the key, checks the concept LUT for a canonical form, then applies
@@ -750,45 +745,15 @@ class DataGraphService:
         Falls back to plain insert on LUT miss or embedding failure.
         Returns (structured_result_dict, emb_args, d2q_args).
         """
-        key_emb = self._generate_embedding(key)
+        key_emb = self._generate_embedding(req.key)
         lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
 
         if lut_hit is None:
             top_cos = self._get_lut_miss_top_cos(key_emb) if key_emb else 0.0
-            self._record_lut_miss(conn, kind, key, value, top_cos, now_iso)
-            # Check for existing row under same raw key (same-key lut-miss repeat)
-            existing_same = conn.execute(
-                "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
-                (kind, key),
-            ).fetchone()
-            if existing_same:
-                existing_dict = self._row_to_dict(existing_same)
-                old_val = existing_dict.get('value') or ''
-                existing_date = (
-                    existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
-                )[:10] or None
-                if value.lower().strip() == old_val.lower().strip():
-                    self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
-                    row = self._fetch_row_by_id(conn, existing_dict['id'])
-                    return self._make_store_result(
-                        "lut_miss_reinforced", key, key, None, value, None, None, existing_date, row,
-                    ), None, None
-                # Different value — coexist behavior for miss keys
-                conn.execute(
-                    "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (kind, key, value, source, now_iso, now_iso),
-                )
-                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                self._sync_fts(conn, new_id, key, value, kind)
-                row = self._fetch_row_by_id(conn, new_id)
-                all_vals = self._fetch_coexist_values(conn, kind, key)
-                return self._make_store_result(
-                    "lut_miss_appended", key, key, None, value, None, all_vals, existing_date, row,
-                ), (new_id, key, value), (new_id, key, value)
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, key, value, source, now_iso)
+            self._record_lut_miss(conn, req.kind, req.key, req.value, top_cos, now_iso)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
             return self._make_store_result(
-                "lut_miss_created", key, key, None, value, None, None, None, raw_row,
+                "lut_miss_created", req.key, req.key, None, req.value, None, None, None, raw_row,
             ), emb_args, d2q_args
 
         canonical_key = lut_hit['canonical_key']
@@ -797,7 +762,7 @@ class DataGraphService:
         if rule == 'temporal':
             existing_canon = conn.execute(
                 "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
-                (kind, canonical_key),
+                (req.kind, canonical_key),
             ).fetchone()
             if existing_canon is not None:
                 existing_dict = self._row_to_dict(existing_canon)
@@ -805,29 +770,31 @@ class DataGraphService:
                 existing_date = (
                     existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
                 )[:10] or None
-                if value.lower().strip() == old_val.lower().strip():
+                if req.value.lower().strip() == old_val.lower().strip():
                     self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
                     row = self._fetch_row_by_id(conn, existing_dict['id'])
                     return self._make_store_result(
-                        "reinforced", key, canonical_key, rule, value, None, None, existing_date, row,
+                        "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
                     ), None, None
+                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
                 row, emb_args, d2q_args = self._apply_temporal_supersession(
-                    conn, existing_dict, kind, canonical_key, value, source, now_iso
+                    conn, existing_dict, canon_req, now_iso
                 )
                 return self._make_store_result(
-                    "superseded", key, canonical_key, rule, value, old_val, None, existing_date, row,
+                    "superseded", req.key, canonical_key, rule, req.value, old_val, None, existing_date, row,
                 ), emb_args, d2q_args
             # No existing canonical row — insert new with canonical key
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, canonical_key, value, source, now_iso)
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
             return self._make_store_result(
-                "created", key, canonical_key, rule, value, None, None, None, raw_row,
+                "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
             ), emb_args, d2q_args
 
         if rule == 'coexist':
             existing_exact = conn.execute(
                 "SELECT * FROM data_graph "
                 "WHERE kind=? AND key=? AND active=1 AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
-                (kind, canonical_key, value),
+                (req.kind, canonical_key, req.value),
             ).fetchone()
             if existing_exact is not None:
                 existing_dict = self._row_to_dict(existing_exact)
@@ -837,34 +804,36 @@ class DataGraphService:
                 self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
                 row = self._fetch_row_by_id(conn, existing_dict['id'])
                 return self._make_store_result(
-                    "reinforced", key, canonical_key, rule, value, None, None, existing_date, row,
+                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
                 ), None, None
             # Check if any value exists at all (for date on append)
             any_existing = conn.execute(
                 "SELECT last_confirmed_at, first_seen_at FROM data_graph "
                 "WHERE kind=? AND key=? AND active=1 LIMIT 1",
-                (kind, canonical_key),
+                (req.kind, canonical_key),
             ).fetchone()
             existing_date = None
             if any_existing:
                 existing_date = (any_existing[0] or any_existing[1] or "")[:10] or None
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, canonical_key, value, source, now_iso)
-            all_vals = self._fetch_coexist_values(conn, kind, canonical_key)
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+            all_vals = self._fetch_coexist_values(conn, req.kind, canonical_key)
             status = "appended" if any_existing else "created"
             return self._make_store_result(
-                status, key, canonical_key, rule, value, None, all_vals, existing_date, raw_row,
+                status, req.key, canonical_key, rule, req.value, None, all_vals, existing_date, raw_row,
             ), emb_args, d2q_args
 
         if rule == 'immutable':
             existing_canon = conn.execute(
                 "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
-                (kind, canonical_key),
+                (req.kind, canonical_key),
             ).fetchone()
 
             if existing_canon is None:
-                raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, canonical_key, value, source, now_iso)
+                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+                raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
                 return self._make_store_result(
-                    "created", key, canonical_key, rule, value, None, None, None, raw_row,
+                    "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
                 ), emb_args, d2q_args
 
             existing_dict = self._row_to_dict(existing_canon)
@@ -873,71 +842,73 @@ class DataGraphService:
                 existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
             )[:10] or None
 
-            if value.lower().strip() == old_val.lower().strip():
+            if req.value.lower().strip() == old_val.lower().strip():
                 self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
                 row = self._fetch_row_by_id(conn, existing_dict['id'])
                 return self._make_store_result(
-                    "reinforced", key, canonical_key, rule, value, None, None, existing_date, row,
+                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
                 ), None, None
 
-            self._log_immutable_conflict(canonical_key, old_val, value)
+            self._log_immutable_conflict(canonical_key, old_val, req.value)
             return self._make_store_result(
-                "conflict", key, canonical_key, rule, value, old_val, None, existing_date, existing_dict,
+                "conflict", req.key, canonical_key, rule, req.value, old_val, None, existing_date, existing_dict,
             ), None, None
 
         # Unknown rule — insert as-is
-        raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, canonical_key, value, source, now_iso)
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+        raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
         return self._make_store_result(
-            "created", key, canonical_key, rule, value, None, None, None, raw_row,
+            "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
         ), emb_args, d2q_args
 
-    def _store_system_new(self, conn, kind: str, key: str, value: str, source: Optional[str], now_iso: str) -> tuple:
+    def _store_system_new(self, conn, req: _StoreRequest, now_iso: str) -> tuple:
         """Handle store() for system_specific kind with no existing row at the given key.
 
         Embeds the key and runs KNN against data_graph_key_vec to find a semantically
         close existing system key. Above threshold → temporal supersession. Below → plain insert.
         Returns (structured_result_dict, emb_args, d2q_args).
         """
-        key_emb = self._generate_embedding(key)
-        match = self._find_system_key_match(conn, key_emb, kind)
+        key_emb = self._generate_embedding(req.key)
+        match = self._find_system_key_match(conn, key_emb, req.kind)
 
         if match is None:
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, kind, key, value, source, now_iso)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
             return self._make_store_result(
-                "created", key, key, None, value, None, None, None, raw_row,
+                "created", req.key, req.key, None, req.value, None, None, None, raw_row,
             ), emb_args, d2q_args
 
-        canonical_key = match.get('key', key)
+        canonical_key = match.get('key', req.key)
         old_value = match.get('value') or ''
         existing_date = (
             match.get("last_confirmed_at") or match.get("first_seen_at") or ""
         )[:10] or None
 
-        if value.lower().strip() == old_value.lower().strip():
+        if req.value.lower().strip() == old_value.lower().strip():
             self._reinforce_row(conn, match['id'], match, now_iso)
             refreshed = self._fetch_row_by_id(conn, match['id'])
             return self._make_store_result(
-                "reinforced", key, canonical_key, None, value, None, None, existing_date, refreshed,
+                "reinforced", req.key, canonical_key, None, req.value, None, None, existing_date, refreshed,
             ), None, None
 
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
         row, emb_args, d2q_args = self._apply_temporal_supersession(
-            conn, match, kind, canonical_key, value, source, now_iso
+            conn, match, canon_req, now_iso
         )
         return self._make_store_result(
-            "superseded", key, canonical_key, None, value, old_value, None, existing_date, row,
+            "superseded", req.key, canonical_key, None, req.value, old_value, None, existing_date, row,
         ), emb_args, d2q_args
 
-    def _insert_new_row(self, conn, kind: str, key: str, value: str, source: Optional[str], now_iso: str) -> tuple:
+    def _insert_new_row(self, conn, req: _StoreRequest, now_iso: str) -> tuple:
         """Insert a brand-new data_graph row; sync FTS; return (row_dict, emb_args, d2q_args)."""
         conn.execute(
             "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (kind, key, value, source, now_iso, now_iso),
+            (req.kind, req.key, req.value, req.source, now_iso, now_iso),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        self._sync_fts(conn, new_id, key, value, kind)
-        logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)", kind, key, (value or '')[:60], source)
-        return self._fetch_row_by_id(conn, new_id), (new_id, key, value), (new_id, key, value)
+        self._sync_fts(conn, new_id, req.key, req.value, req.kind)
+        logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)", req.kind, req.key, (req.value or '')[:60], req.source)
+        return self._fetch_row_by_id(conn, new_id), (new_id, req.key, req.value), (new_id, req.key, req.value)
 
     # ── recall() ─────────────────────────────────────────────────────
 
@@ -1023,11 +994,10 @@ class DataGraphService:
                     logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
 
                 # ── Relevance floor — drop candidates with no strong signal ──
-                _COSINE_FLOOR = 0.42
                 candidates = {
                     rid: sigs for rid, sigs in candidates.items()
-                    if sigs['key_cos'] >= _COSINE_FLOOR
-                    or sigs['value_cos'] >= _COSINE_FLOOR
+                    if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
+                    or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
                     or sigs['fts_bonus'] > 0
                 }
 
@@ -1405,6 +1375,52 @@ class DataGraphService:
         except Exception as e:
             logger.warning("[DATA GRAPH] set_active failed for rowid=%s: %s", row_id, e)
 
+    def _make_forget_result(
+        self,
+        status: str,
+        provided_key: str,
+        canonical_key: str,
+        rule: Optional[str],
+        value: Optional[str],
+        *,
+        old_value: Optional[str] = None,
+        remaining_values: Optional[list] = None,
+        versions_removed: Optional[int] = None,
+        date: Optional[str] = None,
+    ) -> dict:
+        """Construct the structured forget result dict with explicit parameters; no closure captures."""
+        base = {
+            "action": "forget",
+            "status": status,
+            "canonical_key": canonical_key,
+            "provided_key": provided_key,
+            "rule": rule,
+            "value": value,
+            "old_value": old_value,
+            "remaining_values": remaining_values,
+            "versions_removed": versions_removed,
+            "date": date,
+        }
+        return base
+
+    def _hard_delete_row(self, conn, row_id: int) -> None:
+        """Hard-delete a data_graph row and all associated index/edge entries.
+
+        Removes FTS, main row, edges, and both vec tables. Vec table failures
+        are non-fatal and logged at debug level.
+        """
+        self._remove_fts(conn, row_id)
+        conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
+        conn.execute("DELETE FROM data_graph_edges WHERE from_id=? OR to_id=?", (row_id, row_id))
+        try:
+            conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
+        except Exception as e:
+            logger.debug("vec table delete failed for id=%s: %s", row_id, e)
+        try:
+            conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
+        except Exception as e:
+            logger.debug("vec table delete failed for id=%s: %s", row_id, e)
+
     # ── forget() ──────────────────────────────────────────────────────
 
     def forget(self, kind: str, key: str, value: str = None, *, source: str = None) -> Optional[dict]:
@@ -1433,47 +1449,18 @@ class DataGraphService:
                         canonical_key = lut_hit['canonical_key']
                         rule = lut_hit['rule']
 
-                def _make_forget_result(status, **kwargs):
-                    base = {
-                        "action": "forget",
-                        "status": status,
-                        "canonical_key": canonical_key,
-                        "provided_key": provided_key,
-                        "rule": rule,
-                        "value": value,
-                        "old_value": None,
-                        "remaining_values": None,
-                        "versions_removed": None,
-                        "date": None,
-                    }
-                    base.update(kwargs)
-                    return base
-
-                def _hard_delete_row(conn, row_id: int):
-                    self._remove_fts(conn, row_id)
-                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
-                    conn.execute("DELETE FROM data_graph_edges WHERE from_id=? OR to_id=?", (row_id, row_id))
-                    try:
-                        conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
-                    except Exception:
-                        pass
-                    try:
-                        conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
-                    except Exception:
-                        pass
-
                 if rule == 'immutable':
                     row = conn.execute(
                         "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL LIMIT 1",
                         (kind, canonical_key),
                     ).fetchone()
                     if row is None:
-                        return _make_forget_result("not_found")
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
                     d = self._row_to_dict(row)
                     old_val = d.get('value')
                     date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    _hard_delete_row(conn, d['id'])
-                    return _make_forget_result("forgotten", old_value=old_val, date=date)
+                    self._hard_delete_row(conn, d['id'])
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=old_val, date=date)
 
                 if rule == 'temporal':
                     rows = conn.execute(
@@ -1481,11 +1468,11 @@ class DataGraphService:
                         (kind, canonical_key),
                     ).fetchall()
                     if not rows:
-                        return _make_forget_result("not_found")
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
                     count = len(rows)
                     for r in rows:
-                        _hard_delete_row(conn, self._row_to_dict(r)['id'])
-                    return _make_forget_result("forgotten_all", versions_removed=count)
+                        self._hard_delete_row(conn, self._row_to_dict(r)['id'])
+                    return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
 
                 if rule == 'coexist':
                     if value is None:
@@ -1502,14 +1489,14 @@ class DataGraphService:
                     ).fetchone()
                     if exact is None:
                         remaining = self._fetch_coexist_values(conn, kind, canonical_key)
-                        return _make_forget_result("value_not_found", remaining_values=remaining)
+                        return self._make_forget_result("value_not_found", provided_key, canonical_key, rule, value, remaining_values=remaining)
                     d = self._row_to_dict(exact)
                     date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    _hard_delete_row(conn, d['id'])
+                    self._hard_delete_row(conn, d['id'])
                     remaining = self._fetch_coexist_values(conn, kind, canonical_key)
                     if not remaining:
-                        return _make_forget_result("forgotten_empty", date=date)
-                    return _make_forget_result("forgotten", date=date, remaining_values=remaining)
+                        return self._make_forget_result("forgotten_empty", provided_key, canonical_key, rule, value, date=date)
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, date=date, remaining_values=remaining)
 
                 # LUT miss or no rule (misc/moment/document/system without cosine match) — raw key lookup
                 rows = conn.execute(
@@ -1517,7 +1504,7 @@ class DataGraphService:
                     (kind, canonical_key),
                 ).fetchall()
                 if not rows:
-                    return _make_forget_result("not_found")
+                    return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
                 if value is not None:
                     # Value-specific delete
                     exact = conn.execute(
@@ -1527,21 +1514,21 @@ class DataGraphService:
                         (kind, canonical_key, value),
                     ).fetchone()
                     if exact is None:
-                        return _make_forget_result("not_found")
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
                     d = self._row_to_dict(exact)
                     date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    _hard_delete_row(conn, d['id'])
-                    return _make_forget_result("forgotten", old_value=d.get('value'), date=date)
+                    self._hard_delete_row(conn, d['id'])
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
                 # No value param — delete all rows for this key
                 count = len(rows)
                 for r in rows:
                     rd = self._row_to_dict(r)
-                    _hard_delete_row(conn, rd['id'])
+                    self._hard_delete_row(conn, rd['id'])
                 if count == 1:
                     d = self._row_to_dict(rows[0])
                     date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    return _make_forget_result("forgotten", old_value=d.get('value'), date=date)
-                return _make_forget_result("forgotten_all", versions_removed=count)
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
+                return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
 
         except Exception as e:
             logger.error("[DATA GRAPH] forget failed for kind=%s key='%s': %s", kind, key, e)

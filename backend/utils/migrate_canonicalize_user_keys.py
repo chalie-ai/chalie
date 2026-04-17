@@ -90,8 +90,8 @@ def _update_fts(conn, rowid: int, old_key: str, old_value: str, old_kind: str,
             "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) VALUES (?, ?, ?, ?, ?)",
             (rowid, new_key, old_value or '', old_kind, old_sq or ''),
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  WARN: FTS insert failed for rowid={rowid}: {e}")
 
 
 def main() -> None:
