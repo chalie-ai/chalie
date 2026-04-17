@@ -67,7 +67,7 @@ Read the transcript and identify distinct episodes. An episode is a coherent seg
 
 ### Field guidance:
 
-**entry_range** — a two-element array `[start_id, end_id]` (inclusive) indicating which transcript entries this episode covers. Use the `id` shown in square brackets at the start of each line. The range is inclusive on both ends. Each entry can belong to at most one episode.
+**entry_range** — a two-element array `[start_id, end_id]` (inclusive) indicating which transcript entries this episode covers. Use the `id` shown in square brackets at the start of each line. The range is inclusive on both ends. Episodes MAY overlap — a single transcript entry can belong to multiple episodes when it genuinely participates in more than one coherent thread (e.g. a message that both resolves an emotional arc and introduces a new decision).
 
 **salience_factors** — integer scores 0–3:
 - `novelty`: how new or surprising this was (0 = routine, 3 = completely new)
