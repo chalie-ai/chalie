@@ -469,6 +469,46 @@ def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
     return RefreshableLLMService(agent_name)
 
 
+_ANTHROPIC_THINKING_BUDGETS = {'medium': 4096, 'high': 16384}
+
+
+def _anthropic_raise_rate_limit(exc) -> None:
+    """Parse a Retry-After header from an Anthropic RateLimitError and raise RateLimitError."""
+    retry_after = None
+    if hasattr(exc, 'response') and exc.response is not None:
+        ra = exc.response.headers.get('retry-after')
+        if ra:
+            try:
+                retry_after = float(ra)
+            except (ValueError, TypeError) as parse_err:
+                logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {parse_err}")
+    raise RateLimitError(str(exc), retry_after=retry_after, provider='anthropic') from exc
+
+
+def _anthropic_build_thinking_kwargs(thinking_mode: str, model: str) -> dict:
+    """Return extra kwargs for the thinking flag, or an empty dict."""
+    if thinking_mode not in _ANTHROPIC_THINKING_BUDGETS:
+        return {}
+    budget = _ANTHROPIC_THINKING_BUDGETS[thinking_mode]
+    logger.info(f"[THINKING] native flag passed: provider=anthropic mode={thinking_mode} model={model}")
+    return {'thinking': {'type': 'enabled', 'budget_tokens': budget}}
+
+
+def _anthropic_parse_content_blocks(content) -> tuple:
+    """Extract (text, tool_calls) from an Anthropic response content list."""
+    text_parts = []
+    tool_calls = []
+    for block in (content or []):
+        block_type = getattr(block, 'type', None)
+        if block_type == 'tool_use':
+            tool_calls.append({'id': block.id, 'name': block.name, 'input': block.input})
+        elif block_type == 'thinking':
+            logger.debug("[AnthropicService] thinking block present; usage deferred to caller")
+        elif hasattr(block, 'text') and block.text:
+            text_parts.append(block.text)
+    return '\n'.join(text_parts), tool_calls or None
+
+
 class AnthropicService:
     """Anthropic Claude API client."""
 
@@ -529,15 +569,7 @@ class AnthropicService:
                     messages=[{"role": "user", "content": user_message}],
                 )
             except anthropic.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
-                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+                _anthropic_raise_rate_limit(e)
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -571,83 +603,38 @@ class AnthropicService:
             else system_prompt
         )
 
-        # Convert normalized messages to Anthropic format (handle tool_calls + tool results)
-        api_messages = _anthropic_convert_messages(messages)
-
+        # Anthropic: input_schema must be valid JSON Schema. Standard types only
+        # (string, number, integer, boolean, array, object, null). Custom types rejected.
+        # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf at top level.
+        # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
         create_kwargs = {
             'model': self.model,
             'max_tokens': self._MAX_TOKENS,
             'system': system,
-            'messages': api_messages,
+            'messages': _anthropic_convert_messages(messages),
+            **({'tools': tools} if tools else {}),
+            **_anthropic_build_thinking_kwargs(thinking_mode, self.model),
         }
-        if tools:
-            # Anthropic: input_schema must be valid JSON Schema. Standard types only
-            # (string, number, integer, boolean, array, object, null). Custom types rejected.
-            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf at top level.
-            # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
-            create_kwargs['tools'] = tools  # Anthropic format matches our schema directly
-
-        _thinking_budgets = {'medium': 4096, 'high': 16384}
-        if thinking_mode in _thinking_budgets:
-            create_kwargs['thinking'] = {
-                'type': 'enabled',
-                'budget_tokens': _thinking_budgets[thinking_mode],
-            }
-            logger.info(
-                f"[THINKING] native flag passed: provider=anthropic mode={thinking_mode} model={self.model}"
-            )
 
         def _call():
             try:
                 return client.messages.create(**create_kwargs)
             except anthropic.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
-                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+                _anthropic_raise_rate_limit(e)
             except (anthropic.BadRequestError, anthropic.APIError) as e:
                 if 'thinking' in str(e).lower() and 'thinking' in create_kwargs:
                     logger.info(
                         f"[THINKING] native flag rejected by provider=anthropic model={self.model} — retried without"
                     )
-                    fallback_kwargs = {k: v for k, v in create_kwargs.items() if k != 'thinking'}
-                    return client.messages.create(**fallback_kwargs)
+                    return client.messages.create(**{k: v for k, v in create_kwargs.items() if k != 'thinking'})
                 raise
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text + tool_calls from response content blocks.
-        # Thinking blocks (extended thinking) are intentionally NOT surfaced
-        # in `text` — they are internal reasoning, not user-visible output.
-        # Their token cost is already folded into response.usage.output_tokens
-        # (Anthropic API docs: "Thinking tokens are counted as output tokens").
-        text_parts = []
-        tool_calls = []
-        for block in (response.content or []):
-            block_type = getattr(block, 'type', None)
-            if block_type == 'tool_use':
-                tool_calls.append({
-                    'id': block.id,
-                    'name': block.name,
-                    'input': block.input,
-                })
-            elif block_type == 'thinking':
-                # Log usage on the first thinking-block we see so future turns
-                # can be audited if Anthropic ever splits the accounting.
-                logger.debug(
-                    f"[AnthropicService] thinking block present; "
-                    f"usage={getattr(response, 'usage', None)}"
-                )
-            elif hasattr(block, 'text') and block.text:
-                text_parts.append(block.text)
-
-        text = '\n'.join(text_parts)
+        # Thinking blocks are intentionally NOT surfaced in `text` — internal reasoning only.
+        # Token cost is folded into response.usage.output_tokens per Anthropic API docs.
+        text, tool_calls = _anthropic_parse_content_blocks(response.content)
         stop_reason = response.stop_reason  # 'end_turn', 'tool_use', 'max_tokens'
 
         logger.info(
@@ -666,7 +653,7 @@ class AnthropicService:
             tokens_cache_read=getattr(response.usage, 'cache_read_input_tokens', None),
             tokens_cache_create=getattr(response.usage, 'cache_creation_input_tokens', None),
             latency_ms=latency_ms,
-            tool_calls=tool_calls if tool_calls else None,
+            tool_calls=tool_calls,
             stop_reason=stop_reason,
         )
 
