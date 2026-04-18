@@ -238,6 +238,8 @@ def _handle_action(ws, store, msg):
         _send_json(ws, {"type": "error", "message": "Missing 'skill' in action payload"})
         return
 
+    action_start = time.time()
+
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
@@ -251,7 +253,6 @@ def _handle_action(ws, store, msg):
             _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
             return
 
-        import time
         start = time.time()
         result = handler('action_button', payload)
 
@@ -277,6 +278,11 @@ def _handle_action(ws, store, msg):
             "confidence": 0.95,
             "exchange_id": "",
             "seq": seq,
+            "metrics": {
+                "tokens_total": 0,
+                "tools": {},
+                "response_time_s": round(time.time() - action_start, 3),
+            },
         }
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
@@ -335,9 +341,15 @@ def _handle_chat(ws, store, msg, active_request=None):
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
+    # Measure wall-clock from before thread creation so thread startup overhead
+    # doesn't inflate response_time_s beyond what the user experiences.
+    turn_start = time.time()
+
     # Track background thread completion
     bg_error = {}
     bg_done = threading.Event()
+    # Shared dict for partial metrics — background thread writes, error path reads.
+    partial_metrics: dict = {}
 
     def _handle_chat_background():
         """Background thread: process user message via UserMessageProcessor and publish response."""
@@ -378,7 +390,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 metadata=metadata,
                 on_narration=_on_narration,
             )
+            proc.set_turn_start(turn_start)
             response = proc.send(request_id=request_id)
+
+            metrics = proc._metrics.snapshot()
+            partial_metrics.update(metrics)
 
             output_svc = OutputService()
             output_svc.enqueue_text(
@@ -388,6 +404,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 confidence=1.0,
                 generation_time=0.0,
                 original_metadata=metadata,
+                metrics=metrics,
             )
 
             # Store result at output:{request_id} so the fallback path can
@@ -401,6 +418,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                         "mode": "UNIFIED",
                         "confidence": 1.0,
                         "metadata": metadata,
+                        "metrics": metrics,
                     },
                 }
                 store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
@@ -441,6 +459,8 @@ def _handle_chat(ws, store, msg, active_request=None):
                 if 'error' in parsed:
                     seq = _next_seq()
                     evt = {"type": "error", "message": parsed['error'], "recoverable": True, "seq": seq}
+                    if partial_metrics:
+                        evt["metrics"] = partial_metrics
                     _buffer_event(evt)
                     _send_json(ws, evt)
                     seq = _next_seq()
@@ -489,6 +509,9 @@ def _handle_chat(ws, store, msg, active_request=None):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                _msg_metrics = metadata.get("metrics")
+                if _msg_metrics is not None:
+                    message_evt["metrics"] = _msg_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -522,6 +545,9 @@ def _handle_chat(ws, store, msg, active_request=None):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                _fallback_metrics = metadata.get("metrics")
+                if _fallback_metrics is not None:
+                    message_evt["metrics"] = _fallback_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:

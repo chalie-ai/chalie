@@ -35,6 +35,7 @@ class OutputService:
         original_metadata: dict = None,
         reply_actions: list = None,
         channel: str = None,
+        metrics: dict = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
@@ -65,6 +66,8 @@ class OutputService:
         }
         if reply_actions:
             metadata_dict["reply_actions"] = reply_actions
+        if metrics is not None:
+            metadata_dict["metrics"] = metrics
 
         # Convert response to blocks — the sole output format for all clients
         blocks = _blocks_svc.from_markdown(response)
@@ -109,6 +112,8 @@ class OutputService:
             'confidence': confidence,
             'generated_at': output['created_at'],
         }
+        if metrics is not None:
+            event_payload_dict['metrics'] = metrics
 
         event_payload = json.dumps(event_payload_dict)
 
