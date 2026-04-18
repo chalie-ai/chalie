@@ -236,6 +236,19 @@ def _build_service(config: dict):
                 "Gemini provider requires 'api_key' field"
             )
         return GeminiService(config)
+    elif platform == 'openai_compatible':
+        api_key = config.get('api_key')
+        host = config.get('host')
+        if not api_key:
+            raise ValueError(
+                "openai_compatible provider requires 'api_key' field"
+            )
+        if not host:
+            raise ValueError(
+                "openai_compatible provider requires 'host' field "
+                "(base URL, e.g. 'https://api.minimax.io/v1')"
+            )
+        return OpenAIService(config)
     raise ValueError(f"Unknown platform: {platform}")
 
 
@@ -696,7 +709,11 @@ class OpenAIService:
     def _get_client(self):
         from openai import OpenAI
         api_key = _resolve_api_key(self._config)
-        return OpenAI(api_key=api_key, timeout=self.timeout)
+        kwargs = {'api_key': api_key, 'timeout': self.timeout}
+        base_url = self._config.get('host')
+        if base_url:
+            kwargs['base_url'] = base_url
+        return OpenAI(**kwargs)
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message to the OpenAI Chat Completions API.

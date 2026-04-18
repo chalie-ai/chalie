@@ -64,6 +64,13 @@ const PLATFORM_CONFIG = {
         modelPlaceholder: 'e.g. gemini-2.5-flash',
         models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'],
     },
+    openai_compatible: {
+        desc: 'Any OpenAI-compatible API — MiniMax, Groq, DeepSeek, Together, OpenRouter, LM Studio, vLLM. Supply the provider\'s base URL and API key.',
+        hasHost: true,
+        hasApiKey: true,
+        modelPlaceholder: 'e.g. MiniMax-M2',
+        models: [],
+    },
 };
 
 // ==========================================
@@ -234,6 +241,21 @@ function selectPlatform(platform, context) {
 
     // Show/hide host field
     document.getElementById('editHostGroup').style.display = config.hasHost ? '' : 'none';
+
+    // Host field label + connection-test button are Ollama-specific helpers;
+    // for other OpenAI-compatible endpoints we expose a plain "Base URL" field
+    const hostLabel = document.querySelector('#editHostGroup label');
+    const hostInput = document.getElementById('editHost');
+    const ollamaTestBtn = document.getElementById('editTestConnectionBtn');
+    if (platform === 'ollama') {
+        if (hostLabel) hostLabel.textContent = 'Host';
+        hostInput.placeholder = 'http://localhost:11434';
+        ollamaTestBtn.style.display = '';
+    } else {
+        if (hostLabel) hostLabel.textContent = 'Base URL';
+        hostInput.placeholder = 'https://api.minimax.io/v1';
+        ollamaTestBtn.style.display = 'none';
+    }
 
     // Show/hide api key field
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
@@ -534,7 +556,10 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
     };
 
     if (id) body.provider_id = id;
-    if (config.hasHost) body.host = document.getElementById('editHost').value.trim() || 'http://localhost:11434';
+    if (config.hasHost) {
+        const hostVal = document.getElementById('editHost').value.trim();
+        body.host = hostVal || (platform === 'ollama' ? 'http://localhost:11434' : '');
+    }
     if (config.hasApiKey) {
         const key = document.getElementById('editApiKey').value.trim();
         if (key) body.api_key = key;
@@ -592,7 +617,8 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     };
 
     if (config.hasHost) {
-        body.host = document.getElementById('editHost').value.trim() || 'http://localhost:11434';
+        const hostVal = document.getElementById('editHost').value.trim();
+        body.host = hostVal || (platform === 'ollama' ? 'http://localhost:11434' : '');
     }
     if (config.hasApiKey) {
         const key = document.getElementById('editApiKey').value.trim();

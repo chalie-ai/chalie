@@ -283,6 +283,18 @@ class ProviderDbService:
         else:
             raise ValueError("Either 'model' or 'models' is required")
 
+        platform = data.get("platform", "")
+        if platform == "openai_compatible":
+            if not data.get("host"):
+                raise ValueError(
+                    "openai_compatible provider requires 'host' field "
+                    "(base URL, e.g. 'https://api.minimax.io/v1')"
+                )
+            if not data.get("api_key"):
+                raise ValueError(
+                    "openai_compatible provider requires 'api_key' field"
+                )
+
         api_key_val = data.get("api_key")
         encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
 
