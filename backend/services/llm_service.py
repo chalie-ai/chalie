@@ -166,6 +166,26 @@ def _call_with_retry(fn, max_retries=2, backoff=1.0):
             attempt += 1
 
 
+def _parse_retry_after(exc) -> Optional[float]:
+    """Extract the Retry-After header value from an HTTP exception, or return None."""
+    if hasattr(exc, 'response') and exc.response is not None:
+        ra = exc.response.headers.get('retry-after')
+        if ra:
+            try:
+                return float(ra)
+            except (ValueError, TypeError) as parse_err:
+                logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {parse_err}")
+    return None
+
+
+def _is_thinking_rejection(exc, create_kwargs: dict) -> bool:
+    """Return True when the provider rejected a reasoning_effort parameter."""
+    if 'reasoning_effort' not in create_kwargs:
+        return False
+    err = str(exc).lower()
+    return 'reasoning_effort' in err or 'unsupported' in err
+
+
 class FallbackLLMService:
     """Wraps a primary + fallback service. On primary failure, invokes fallback."""
 
@@ -842,42 +862,29 @@ class OpenAIService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
-        import openai as openai_mod
-        import json as _json
+    @staticmethod
+    def _build_openai_tools(tools: list) -> list:
+        """Convert normalized tool schemas to the OpenAI function-calling format.
 
-        client = self._get_client()
-        start_time = time.time()
+        OpenAI: parameters must be valid JSON Schema. Standard types only.
+        strict=true enforces exact compliance; best-effort without it.
+        Enums: {"type": "string", "enum": [...]}. Custom types rejected.
+        Ref: https://platform.openai.com/docs/guides/function-calling
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t['name'],
+                    "description": t.get('description', ''),
+                    "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
+                },
+            }
+            for t in tools
+        ]
 
-        # Convert normalized messages to OpenAI format
-        api_messages = _openai_convert_messages(messages)
-
-        create_kwargs = {
-            'model': self.model,
-            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
-        }
-        if tools:
-            # OpenAI: parameters must be valid JSON Schema. Standard types only.
-            # strict=true enforces exact compliance; best-effort without it.
-            # Enums: {"type": "string", "enum": [...]}. Custom types rejected.
-            # Ref: https://platform.openai.com/docs/guides/function-calling
-            # Convert to OpenAI function calling format
-            create_kwargs['tools'] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t['name'],
-                        "description": t.get('description', ''),
-                        "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
-                    },
-                }
-                for t in tools
-            ]
-        # Note: send_messages is the native-tool-calling / multi-turn path.
-        # Never set response_format: json_object here — the prompt may not
-        # mention "json" (OpenAI requires it), and tool calling uses its own
-        # structured output protocol. Legacy JSON output lives in send_message.
-
+    def _apply_reasoning_effort(self, create_kwargs: dict, thinking_mode: Optional[str]) -> None:
+        """Inject reasoning_effort into create_kwargs when thinking_mode is set."""
         _reasoning_efforts = {'medium': 'medium', 'high': 'high'}
         if thinking_mode in _reasoning_efforts:
             create_kwargs['reasoning_effort'] = _reasoning_efforts[thinking_mode]
@@ -885,23 +892,18 @@ class OpenAIService:
                 f"[THINKING] native flag passed: provider=openai mode={thinking_mode} model={self.model}"
             )
 
+    def _call_completions(self, client, create_kwargs: dict):
+        """Execute the completions API call with rate-limit and thinking-fallback handling."""
+        import openai as openai_mod
+
         def _call():
             try:
                 return client.chat.completions.create(**create_kwargs)
             except openai_mod.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
+                retry_after = _parse_retry_after(e)
                 raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
             except (openai_mod.BadRequestError, openai_mod.APIError) as e:
-                if 'reasoning_effort' in create_kwargs and (
-                    'reasoning_effort' in str(e).lower() or 'unsupported' in str(e).lower()
-                ):
+                if _is_thinking_rejection(e, create_kwargs):
                     logger.info(
                         f"[THINKING] native flag rejected by provider=openai model={self.model} — retried without"
                     )
@@ -909,27 +911,54 @@ class OpenAIService:
                     return client.chat.completions.create(**fallback_kwargs)
                 raise
 
-        response = _call_with_retry(_call)
+        return _call_with_retry(_call)
+
+    @staticmethod
+    def _parse_openai_tool_calls(msg) -> Optional[list]:
+        """Parse tool calls from an OpenAI response message. Returns None if absent."""
+        import json as _json
+
+        if not msg.tool_calls:
+            return None
+        tool_calls = []
+        for tc in msg.tool_calls:
+            try:
+                parsed_args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
+            except _json.JSONDecodeError:
+                parsed_args = {}
+            tool_calls.append({
+                'id': tc.id,
+                'name': tc.function.name,
+                'input': parsed_args,
+            })
+        return tool_calls
+
+    def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        # Note: _cache_prefix is accepted for interface uniformity but OpenAI's
+        # completions API has no prefix-caching mechanism — it is intentionally unused.
+        # Note: send_messages is the native-tool-calling / multi-turn path.
+        # Never set response_format: json_object here — the prompt may not
+        # mention "json" (OpenAI requires it), and tool calling uses its own
+        # structured output protocol. Legacy JSON output lives in send_message.
+        client = self._get_client()
+        start_time = time.time()
+
+        api_messages = _openai_convert_messages(messages)
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
+        }
+        if tools:
+            create_kwargs['tools'] = self._build_openai_tools(tools)
+        self._apply_reasoning_effort(create_kwargs, thinking_mode)
+
+        response = self._call_completions(client, create_kwargs)
         latency_ms = int((time.time() - start_time) * 1000)
 
         msg = response.choices[0].message
         text = _strip_think_blocks(msg.content or "")
         finish_reason = response.choices[0].finish_reason
-
-        # Extract tool calls
-        tool_calls = None
-        if msg.tool_calls:
-            tool_calls = []
-            for tc in msg.tool_calls:
-                try:
-                    parsed_args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
-                except _json.JSONDecodeError:
-                    parsed_args = {}
-                tool_calls.append({
-                    'id': tc.id,
-                    'name': tc.function.name,
-                    'input': parsed_args,
-                })
+        tool_calls = self._parse_openai_tool_calls(msg)
 
         log_level = logger.info if (text and text.strip()) or tool_calls else logger.warning
         log_level(
