@@ -160,9 +160,8 @@ class TestSystemAPI:
         # Seed episodes
         for i in range(42):
             db.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, channel) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
+                "INSERT INTO episodes (id, gist, salience, channel) "
+                "VALUES (?, 'g', 5, 't')",
                 (f'ep-{i}',),
             )
         # Seed user_specific data_graph entries — these count as both concepts AND traits
@@ -346,9 +345,8 @@ class TestSystemAPI:
         # Seed episodes
         for i in range(10):
             db.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, channel) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
+                "INSERT INTO episodes (id, gist, salience, channel) "
+                "VALUES (?, 'g', 5, 't')",
                 (f'ep-flat-{i}',),
             )
         # Seed concepts

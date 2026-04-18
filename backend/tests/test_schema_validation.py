@@ -131,10 +131,8 @@ class TestSchemaValidation:
         # episodes
         ep_id = str(uuid.uuid4())
         schema_db.execute(
-            "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ep_id, '{}', '{}', 'test', '{}', 'test', 'test gist', 5, 'test-topic')
+            "INSERT INTO episodes (id, gist, salience, channel) VALUES (?, ?, ?, ?)",
+            (ep_id, 'test gist', 5, 'test-topic')
         )
         row = schema_db.execute(
             "SELECT id FROM episodes WHERE id = ?", (ep_id,)

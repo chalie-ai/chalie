@@ -178,6 +178,7 @@ def main():
     except Exception:
         pass
 
+
     # Encryption key initialisation and capability reconnection are deferred to
     # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
     # requires an interactive password to unseal, so neither step can run at
