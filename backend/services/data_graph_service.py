@@ -21,6 +21,10 @@ KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
 
+_SELECT_ACTIVE_BY_KIND_KEY_SQL = (
+    "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
+)
+
 
 @dataclass
 class _StoreRequest:
@@ -560,7 +564,7 @@ class DataGraphService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
+                    _SELECT_ACTIVE_BY_KIND_KEY_SQL,
                     (kind, key)
                 )
                 existing = cursor.fetchone()
@@ -758,7 +762,7 @@ class DataGraphService:
 
         if rule == 'temporal':
             existing_canon = conn.execute(
-                "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
+                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
                 (req.kind, canonical_key),
             ).fetchone()
             if existing_canon is not None:
@@ -822,7 +826,7 @@ class DataGraphService:
 
         if rule == 'immutable':
             existing_canon = conn.execute(
-                "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
+                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
                 (req.kind, canonical_key),
             ).fetchone()
 
