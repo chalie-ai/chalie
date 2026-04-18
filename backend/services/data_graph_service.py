@@ -732,10 +732,7 @@ class DataGraphService:
             return []
 
     def _log_immutable_conflict(self, key: str, old_value: str, new_value: str) -> None:
-        logger.info(
-            "[DATA GRAPH] IMMUTABLE conflict on '%s': existing='%s' new='%s'",
-            key, old_value, new_value,
-        )
+        logger.info("[DATA GRAPH] IMMUTABLE conflict on '%s'", key)
 
     def _store_user_specific_new(self, conn, req: '_StoreRequest', now_iso: str) -> tuple:
         """Handle store() for user_specific kind with no existing row at the given key.
