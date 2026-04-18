@@ -471,7 +471,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     """
     def _run():
         try:
-            import json as _json
             from services.database_service import get_shared_db_service
             from services.episode_encoder_processor import EpisodeEncoderProcessor
             from services.episodic_service import (
@@ -635,7 +634,6 @@ def _fetch_referenced_episodes(entries: list, db) -> list:
     LLM-invoked recall (also dispatched as tool_name='memory').
     """
     import re as _re
-    import json as _json
 
     t_ids = [e['id'] for e in entries if e.get('id')]
     if not t_ids:
@@ -705,18 +703,31 @@ def _format_episodes_for_prompt(episodes: list) -> str:
     return "\n".join(lines)
 
 
+def _strip_code_fence(text: str) -> str:
+    """Remove a single markdown code fence wrapper (```[lang]...```) from text."""
+    open_end = text.find("```")
+    if open_end == -1:
+        return text
+    # Skip the opening fence line (```json or ```)
+    newline = text.find("\n", open_end)
+    if newline == -1:
+        return text
+    close_start = text.rfind("```", newline)
+    if close_start <= newline:
+        return text
+    return text[newline + 1 : close_start].strip()
+
+
 def _safe_json_load(text: str) -> list:
     """Parse a JSON array from LLM response text. Returns [] on any failure."""
     import json as _json
-    import re as _re
 
     if not text:
         return []
     text = text.strip()
     # Strip markdown code fences if present
-    match = _re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if match:
-        text = match.group(1).strip()
+    if text.startswith("```"):
+        text = _strip_code_fence(text)
     try:
         parsed = _json.loads(text)
         if isinstance(parsed, list):
@@ -939,14 +950,13 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
 def _safe_json_load_object(text: str) -> dict:
     """Parse a JSON object from LLM response text. Returns {} on any failure."""
     import json as _json
-    import re as _re
 
     if not text:
         return {}
     text = text.strip()
-    match = _re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if match:
-        text = match.group(1).strip()
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        text = _strip_code_fence(text)
     try:
         parsed = _json.loads(text)
         if isinstance(parsed, dict):
