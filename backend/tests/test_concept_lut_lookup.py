@@ -6,7 +6,6 @@ Marked as integration because they require the sqlite-vec extension.
 """
 
 import os
-import sqlite3
 
 import pytest
 
@@ -63,7 +62,7 @@ class TestL2DistToCosine:
 
     def test_large_distance_clamps_to_zero(self):
         """Distances that would produce negative similarity are clamped to 0."""
-        assert _l2_dist_to_cosine(10.0) == 0.0
+        assert _l2_dist_to_cosine(10.0) == pytest.approx(0.0, abs=1e-9)
 
     def test_midpoint_distance(self):
         """sqrt(2) L2 distance → cosine = 0.0 for orthogonal unit vectors."""
