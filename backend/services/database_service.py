@@ -562,6 +562,9 @@ class DatabaseService:
                 ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
                 ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
                 ("goals", "derived_from", "TEXT DEFAULT '[]'", None),
+                # vault_config.reinitialized_at — tracks auto-init on first login
+                # (column absent on DBs initialised before schema.sql was updated)
+                ("vault_config", "reinitialized_at", "TEXT", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

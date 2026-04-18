@@ -276,6 +276,39 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 
 -- ────────────────────────────────────────────────────────────────
+-- VAULT — envelope-encryption key store
+-- vault_config: singleton row (id MUST equal 1)
+--   Holds all KDF parameters and the KEK-wrapped DEK used by
+--   VaultService for AES-256-GCM envelope encryption.
+-- vault_secrets: optional centralised secret store (reserved for
+--   future use; not required by Phase 1).
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vault_config (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    kdf_salt        BLOB    NOT NULL,
+    kdf_algorithm   TEXT    NOT NULL DEFAULT 'pbkdf2_sha256',
+    kdf_iterations  INTEGER NOT NULL DEFAULT 600000,
+    wrapped_dek     BLOB    NOT NULL,
+    dek_nonce       BLOB    NOT NULL,
+    created_at      TEXT,
+    updated_at      TEXT,
+    reinitialized_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS vault_secrets (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope                 TEXT    NOT NULL,
+    scope_ref             TEXT    NOT NULL,
+    encrypted_value       BLOB    NOT NULL,
+    nonce                 BLOB    NOT NULL,
+    migrated_from_fernet  INTEGER DEFAULT 0,
+    created_at            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_secrets_scope     ON vault_secrets(scope);
+CREATE INDEX IF NOT EXISTS idx_vault_secrets_scope_ref ON vault_secrets(scope, scope_ref);
+
+-- ────────────────────────────────────────────────────────────────
 -- TOOL CONFIGS — per-tool key-value configuration
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_configs (

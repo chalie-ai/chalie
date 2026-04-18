@@ -517,6 +517,7 @@ body::before {
 .provider-info { flex: 1; min-width: 0; }
 .provider-name { font-weight: 600; font-size: 15px; }
 .provider-meta { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+.provider-warn { margin-left: 6px; color: #f0a020; cursor: help; }
 
 .provider-platform-badge {
     display: inline-block;

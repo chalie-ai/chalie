@@ -109,35 +109,13 @@ class ProviderDbService:
 
     @staticmethod
     def _unseal_api_key(encrypted_val) -> Optional[str]:
-        """Reveal an API key previously protected by :meth:`_seal_api_key`.
-
-        Handles both the current base64-encoded AES-256-GCM format and the
-        legacy raw-bytes BLOB format produced by the one-time Fernet migration
-        in :meth:`~services.vault_service.VaultService._run_legacy_migration`.
-
-        When the vault is locked (e.g. the server just started and no user has
-        logged in yet), returns ``None`` instead of raising so that provider
-        list endpoints remain functional.
-
-        Args:
-            encrypted_val: Raw value from the database column — may be a
-                base64 string, raw ``bytes``, or a ``memoryview`` BLOB.
-
-        Returns:
-            Decrypted plaintext API-key string, or ``None`` when the vault is
-            locked or the column value is ``None`` / empty.
-        """
+        """Stored value is always a base64-encoded AES-256-GCM blob (TEXT column)."""
         if not encrypted_val:
             return None
         import base64
         from services.vault_service import get_vault_service, VaultLockedError
         try:
-            vault = get_vault_service()
-            # Raw-bytes / memoryview → migrated BLOB; pass directly to vault.
-            if isinstance(encrypted_val, (bytes, memoryview)):
-                return vault.decrypt_str(bytes(encrypted_val))
-            # String → base64-encoded new format; decode before passing.
-            return vault.decrypt_str(base64.b64decode(encrypted_val))
+            return get_vault_service().decrypt_str(base64.b64decode(encrypted_val))
         except VaultLockedError:
             return None
 
@@ -160,38 +138,53 @@ class ProviderDbService:
             ``None`` when the vault is sealed).
         """
         if isinstance(row, dict):
-            raw_key = row.get('api_key')
-            api_key = self._unseal_api_key(raw_key) if raw_key else None
             default_model = row['model']
-            return {
+            result = {
                 "id": row['id'],
                 "name": row['name'],
                 "platform": row['platform'],
                 "model": default_model,
                 "models": _parse_models(row.get('models'), default_model),
                 "host": row['host'],
-                "api_key": api_key,
+                "api_key": None,
                 "dimensions": row['dimensions'],
                 "timeout": row['timeout'],
                 "is_active": bool(row['is_active']),
                 "supports_vision": bool(row.get('supports_vision', 0)),
             }
+            if row.get('api_key'):
+                try:
+                    result["api_key"] = self._unseal_api_key(row['api_key'])
+                except Exception:
+                    logger.warning(
+                        "[Provider] Decrypt failed for provider id=%s", row['id'],
+                    )
+                    result["decrypt_failed"] = True
+            return result
         # Positional access (tuple row)
-        api_key = self._unseal_api_key(row[6]) if row[6] else None
         default_model = row[3]
-        return {
+        result = {
             "id": row[0],
             "name": row[1],
             "platform": row[2],
             "model": default_model,
             "models": _parse_models(row[4], default_model),
             "host": row[5],
-            "api_key": api_key,
+            "api_key": None,
             "dimensions": row[7],
             "timeout": row[8],
             "is_active": bool(row[9]),
             "supports_vision": bool(row[10]) if len(row) > 10 else False,
         }
+        if row[6]:
+            try:
+                result["api_key"] = self._unseal_api_key(row[6])
+            except Exception:
+                logger.warning(
+                    "[Provider] Decrypt failed for provider id=%s", row[0],
+                )
+                result["decrypt_failed"] = True
+        return result
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
         """Get all active providers."""
