@@ -617,7 +617,7 @@ class DataGraphService:
                                     "conflict", key, key, rule, value, old_value,
                                     None, existing_date, existing_dict,
                                 )
-                                self._log_immutable_conflict(key, old_value, value)
+                                self._log_immutable_conflict(key)
                             else:
                                 # No LUT hit for this key or embedding unavailable — temporal default.
                                 # Miss was already recorded on the first write (new-row path).
@@ -727,15 +727,15 @@ class DataGraphService:
         except Exception:
             return []
 
-    def _log_immutable_conflict(self, key: str, old_value: str, new_value: str) -> None:
+    def _log_immutable_conflict(self, key: str) -> None:
         logger.info("[DATA GRAPH] IMMUTABLE conflict on '%s'", key)
 
     def _store_user_specific_new(self, conn, req: '_StoreRequest', now_iso: str) -> tuple:
         """Handle store() for user_specific kind with no existing row at the given key.
 
-        Embeds the key, checks the concept LUT for a canonical form, then applies
-        the rule (temporal/coexist/immutable) against the canonical key's existing rows.
-        Falls back to plain insert on LUT miss or embedding failure.
+        Embeds the key, checks the concept LUT for a canonical form, then dispatches
+        to a rule-specific helper (temporal/coexist/immutable). Falls back to plain
+        insert on LUT miss or unknown rule.
         Returns (structured_result_dict, emb_args, d2q_args).
         """
         key_emb = self._generate_embedding(req.key)
@@ -753,99 +753,11 @@ class DataGraphService:
         rule = lut_hit['rule']
 
         if rule == 'temporal':
-            existing_canon = conn.execute(
-                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
-                (req.kind, canonical_key),
-            ).fetchone()
-            if existing_canon is not None:
-                existing_dict = self._row_to_dict(existing_canon)
-                old_val = existing_dict.get('value') or ''
-                existing_date = (
-                    existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
-                )[:10] or None
-                if req.value.lower().strip() == old_val.lower().strip():
-                    self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
-                    row = self._fetch_row_by_id(conn, existing_dict['id'])
-                    return self._make_store_result(
-                        "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
-                    ), None, None
-                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
-                row, emb_args, d2q_args = self._apply_temporal_supersession(
-                    conn, existing_dict, canon_req, now_iso
-                )
-                return self._make_store_result(
-                    "superseded", req.key, canonical_key, rule, req.value, old_val, None, existing_date, row,
-                ), emb_args, d2q_args
-            # No existing canonical row — insert new with canonical key
-            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
-            return self._make_store_result(
-                "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
-            ), emb_args, d2q_args
-
+            return self._store_user_specific_temporal(conn, req, canonical_key, rule, now_iso)
         if rule == 'coexist':
-            existing_exact = conn.execute(
-                "SELECT * FROM data_graph "
-                "WHERE kind=? AND key=? AND active=1 AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
-                (req.kind, canonical_key, req.value),
-            ).fetchone()
-            if existing_exact is not None:
-                existing_dict = self._row_to_dict(existing_exact)
-                existing_date = (
-                    existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
-                )[:10] or None
-                self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
-                row = self._fetch_row_by_id(conn, existing_dict['id'])
-                return self._make_store_result(
-                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
-                ), None, None
-            # Check if any value exists at all (for date on append)
-            any_existing = conn.execute(
-                "SELECT last_confirmed_at, first_seen_at FROM data_graph "
-                "WHERE kind=? AND key=? AND active=1 LIMIT 1",
-                (req.kind, canonical_key),
-            ).fetchone()
-            existing_date = None
-            if any_existing:
-                existing_date = (any_existing[0] or any_existing[1] or "")[:10] or None
-            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
-            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
-            all_vals = self._fetch_coexist_values(conn, req.kind, canonical_key)
-            status = "appended" if any_existing else "created"
-            return self._make_store_result(
-                status, req.key, canonical_key, rule, req.value, None, all_vals, existing_date, raw_row,
-            ), emb_args, d2q_args
-
+            return self._store_user_specific_coexist(conn, req, canonical_key, rule, now_iso)
         if rule == 'immutable':
-            existing_canon = conn.execute(
-                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
-                (req.kind, canonical_key),
-            ).fetchone()
-
-            if existing_canon is None:
-                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
-                raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
-                return self._make_store_result(
-                    "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
-                ), emb_args, d2q_args
-
-            existing_dict = self._row_to_dict(existing_canon)
-            old_val = existing_dict.get('value') or ''
-            existing_date = (
-                existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
-            )[:10] or None
-
-            if req.value.lower().strip() == old_val.lower().strip():
-                self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
-                row = self._fetch_row_by_id(conn, existing_dict['id'])
-                return self._make_store_result(
-                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
-                ), None, None
-
-            self._log_immutable_conflict(canonical_key, old_val, req.value)
-            return self._make_store_result(
-                "conflict", req.key, canonical_key, rule, req.value, old_val, None, existing_date, existing_dict,
-            ), None, None
+            return self._store_user_specific_immutable(conn, req, canonical_key, rule, now_iso)
 
         # Unknown rule — insert as-is
         canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
@@ -853,6 +765,98 @@ class DataGraphService:
         return self._make_store_result(
             "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
         ), emb_args, d2q_args
+
+    def _store_user_specific_temporal(self, conn, req, canonical_key, rule, now_iso) -> tuple:
+        existing_canon = conn.execute(
+            _SELECT_ACTIVE_BY_KIND_KEY_SQL,
+            (req.kind, canonical_key),
+        ).fetchone()
+        if existing_canon is None:
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+            return self._make_store_result(
+                "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
+            ), emb_args, d2q_args
+
+        existing_dict = self._row_to_dict(existing_canon)
+        old_val = existing_dict.get('value') or ''
+        existing_date = (
+            existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+        )[:10] or None
+        if req.value.lower().strip() == old_val.lower().strip():
+            self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+            row = self._fetch_row_by_id(conn, existing_dict['id'])
+            return self._make_store_result(
+                "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+            ), None, None
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+        row, emb_args, d2q_args = self._apply_temporal_supersession(
+            conn, existing_dict, canon_req, now_iso
+        )
+        return self._make_store_result(
+            "superseded", req.key, canonical_key, rule, req.value, old_val, None, existing_date, row,
+        ), emb_args, d2q_args
+
+    def _store_user_specific_coexist(self, conn, req, canonical_key, rule, now_iso) -> tuple:
+        existing_exact = conn.execute(
+            "SELECT * FROM data_graph "
+            "WHERE kind=? AND key=? AND active=1 AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+            (req.kind, canonical_key, req.value),
+        ).fetchone()
+        if existing_exact is not None:
+            existing_dict = self._row_to_dict(existing_exact)
+            existing_date = (
+                existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+            )[:10] or None
+            self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+            row = self._fetch_row_by_id(conn, existing_dict['id'])
+            return self._make_store_result(
+                "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+            ), None, None
+        any_existing = conn.execute(
+            "SELECT last_confirmed_at, first_seen_at FROM data_graph "
+            "WHERE kind=? AND key=? AND active=1 LIMIT 1",
+            (req.kind, canonical_key),
+        ).fetchone()
+        existing_date = (any_existing[0] or any_existing[1] or "")[:10] or None if any_existing else None
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+        raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+        all_vals = self._fetch_coexist_values(conn, req.kind, canonical_key)
+        status = "appended" if any_existing else "created"
+        return self._make_store_result(
+            status, req.key, canonical_key, rule, req.value, None, all_vals, existing_date, raw_row,
+        ), emb_args, d2q_args
+
+    def _store_user_specific_immutable(self, conn, req, canonical_key, rule, now_iso) -> tuple:
+        existing_canon = conn.execute(
+            _SELECT_ACTIVE_BY_KIND_KEY_SQL,
+            (req.kind, canonical_key),
+        ).fetchone()
+
+        if existing_canon is None:
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+            return self._make_store_result(
+                "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
+            ), emb_args, d2q_args
+
+        existing_dict = self._row_to_dict(existing_canon)
+        old_val = existing_dict.get('value') or ''
+        existing_date = (
+            existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+        )[:10] or None
+
+        if req.value.lower().strip() == old_val.lower().strip():
+            self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+            row = self._fetch_row_by_id(conn, existing_dict['id'])
+            return self._make_store_result(
+                "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+            ), None, None
+
+        self._log_immutable_conflict(canonical_key)
+        return self._make_store_result(
+            "conflict", req.key, canonical_key, rule, req.value, old_val, None, existing_date, existing_dict,
+        ), None, None
 
     def _store_system_new(self, conn, req: _StoreRequest, now_iso: str) -> tuple:
         """Handle store() for system_specific kind with no existing row at the given key.

@@ -387,13 +387,13 @@
                     <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
                 </div>
                 <div class="form-group" id="ollamaModelListGroup" style="display:none;">
-                    <label>Available models <span class="label-hint">(click to select)</span></label>
+                    <label for="ollamaModelList">Available models <span class="label-hint">(click to select)</span></label>
                     <div class="ollama-model-list" id="ollamaModelList">
                         <span class="ollama-model-empty">Click &ldquo;Refresh models&rdquo; to load the list from your Ollama host.</span>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Selected models</label>
+                    <label for="editModelTags">Selected models</label>
                     <div class="model-tags-container" id="editModelTags"></div>
                     <div class="model-input-row">
                         <input type="text" id="editModelInput" placeholder="e.g. claude-opus-4" list="editModelSuggestions">

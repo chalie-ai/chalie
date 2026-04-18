@@ -133,7 +133,7 @@ def handle_memory(channel: str, params: dict) -> str:
         elif action == "reflect":
             return _handle_reflect(channel, params)
         elif action == "forget":
-            return _handle_forget(channel, params)
+            return _handle_forget(params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
@@ -222,7 +222,7 @@ def _format_store_response(result: dict) -> str:
 # ── Forget ───────────────────────────────────────────────────────────
 
 
-def _handle_forget(channel: str, params: dict) -> str:
+def _handle_forget(params: dict) -> str:
     key = params.get("key")
     value = params.get("value")
     kind = params.get("kind", "user_specific")

@@ -121,6 +121,7 @@ class TestLutKnnLookup:
         assert emb is not None
         blob = pack_embedding(emb)
 
+        assert conn is not None
         hits = conn.execute(
             "SELECT rowid, distance FROM lut_embeddings WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
             (blob,),

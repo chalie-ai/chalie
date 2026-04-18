@@ -40,13 +40,13 @@ def _build_schema(conn: sqlite3.Connection) -> None:
         pass
 
     if vec_available:
-        conn.executescript(sql)
+        conn.executescript(sql)  # NOSONAR S3649 — sql is bundled schema.sql, not user input
     else:
         filtered = ';'.join(
             s for s in (stmt.strip() for stmt in sql.split(';'))
             if s and 'vec0' not in s.lower()
         )
-        conn.executescript(filtered)
+        conn.executescript(filtered)  # NOSONAR S3649 — filtered from bundled schema.sql
 
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────

@@ -148,59 +148,60 @@ function selectPlatform(platform) {
     currentPlatform = platform;
     const config = PLATFORM_CONFIG[platform];
 
-    // Update active tab
     document.querySelectorAll('.platform-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.platform === platform);
     });
 
-    // Update description
     document.getElementById('platformDesc').innerHTML = config.desc;
-
-    // Show/hide host field
     document.getElementById('setupHostGroup').style.display = config.hasHost ? '' : 'none';
-
-    // Show/hide api key field
     document.getElementById('setupApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
-    // Ollama: show model picker panel, hide free-text model group and test-connection row
+    toggleOllamaModelUI(platform === 'ollama', config);
+
+    if (platform === 'anthropic') {
+        wireAnthropicModelFetch();
+    }
+}
+
+function toggleOllamaModelUI(isOllama, config) {
     const ollamaGroup = document.getElementById('ollamaModelGroup');
     const textModelGroup = document.getElementById('setupModelGroup');
     const testConnRow = document.getElementById('testConnectionRow');
-    if (platform === 'ollama') {
+    if (isOllama) {
         if (ollamaGroup) ollamaGroup.style.display = '';
         if (textModelGroup) textModelGroup.style.display = 'none';
         if (testConnRow) testConnRow.style.display = 'none';
-        // Reset selection state when switching to Ollama
         ollamaSelectedModel = null;
-    } else {
-        if (ollamaGroup) ollamaGroup.style.display = 'none';
-        if (textModelGroup) textModelGroup.style.display = '';
-        if (testConnRow) testConnRow.style.display = '';
+        return;
+    }
+    if (ollamaGroup) ollamaGroup.style.display = 'none';
+    if (textModelGroup) textModelGroup.style.display = '';
+    if (testConnRow) testConnRow.style.display = '';
 
-        // Update model input placeholder and datalist for non-Ollama platforms
-        const modelInput = document.getElementById('setupModel');
-        if (modelInput) modelInput.placeholder = config.modelPlaceholder;
+    const modelInput = document.getElementById('setupModel');
+    if (modelInput) modelInput.placeholder = config.modelPlaceholder;
 
-        const datalist = document.getElementById('modelSuggestions');
-        if (datalist) {
-            datalist.innerHTML = '';
-            config.models.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m;
-                datalist.appendChild(opt);
-            });
+    populateModelDatalist('modelSuggestions', config.models);
+}
+
+function populateModelDatalist(datalistId, models) {
+    const datalist = document.getElementById(datalistId);
+    if (!datalist) return;
+    datalist.innerHTML = '';
+    (models || []).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        datalist.appendChild(opt);
+    });
+}
+
+function wireAnthropicModelFetch() {
+    const apiKeyInput = document.getElementById('setupApiKey');
+    apiKeyInput.oninput = debounce(() => {
+        if (apiKeyInput.value.length > 20) {
+            fetchAnthropicModels(apiKeyInput.value, 'modelSuggestions');
         }
-    }
-
-    // For Anthropic: fetch models when api key is entered
-    if (platform === 'anthropic') {
-        const apiKeyInput = document.getElementById('setupApiKey');
-        apiKeyInput.oninput = debounce(() => {
-            if (apiKeyInput.value.length > 20) {
-                fetchAnthropicModels(apiKeyInput.value, 'modelSuggestions');
-            }
-        }, 500);
-    }
+    }, 500);
 }
 
 function debounce(fn, delay) {
@@ -246,7 +247,7 @@ async function refreshOllamaModels() {
         statusEl.className = '';
     }
 
-    const host = (document.getElementById('setupHost') || {}).value || 'http://localhost:11434';
+    const host = document.getElementById('setupHost')?.value || 'http://localhost:11434';
 
     try {
         const res = await apiFetch(`/providers/ollama/models?host=${encodeURIComponent(host.trim() || 'http://localhost:11434')}`);
@@ -293,7 +294,7 @@ function renderOllamaModelPicker(names) {
 
     container.innerHTML = names.map(n => {
         const sel = n === ollamaSelectedModel;
-        return `<button type="button" class="ollama-model-chip${sel ? ' selected' : ''}" data-model="${n.replace(/"/g, '&quot;')}">${n.replace(/</g, '&lt;')}</button>`;
+        return `<button type="button" class="ollama-model-chip${sel ? ' selected' : ''}" data-model="${n.replaceAll('"', '&quot;')}">${n.replaceAll('<', '&lt;')}</button>`;
     }).join('');
 
     container.querySelectorAll('.ollama-model-chip').forEach(chip => {

@@ -2550,7 +2550,7 @@ const ACRONYMS = {
 function humanizeSlug(str) {
     if (!str) return '';
     return String(str)
-        .replace(/[_-]+/g, ' ')
+        .replaceAll(/[_-]+/g, ' ')
         .split(' ')
         .filter(Boolean)
         .map(w => ACRONYMS[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))

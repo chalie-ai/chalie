@@ -1259,22 +1259,12 @@ class GeminiService:
 
     def _gemini_parse_response(self, response) -> tuple:
         """Extract (text, tool_calls, finish_reason) from a Gemini response object."""
-        text_parts = []
-        tool_calls = []
-        if response.candidates:
-            for part in (response.candidates[0].content.parts or []):
-                if hasattr(part, 'text') and part.text:
-                    text_parts.append(part.text)
-                if hasattr(part, 'function_call') and part.function_call:
-                    fc = part.function_call
-                    tool_calls.append({
-                        'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
-                        'name': fc.name,
-                        'input': dict(fc.args) if fc.args else {},
-                    })
-        finish_reason = None
-        if response.candidates and response.candidates[0].finish_reason:
-            finish_reason = str(response.candidates[0].finish_reason)
+        text_parts, tool_calls = [], []
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is not None:
+            for part in (candidate.content.parts or []):
+                _gemini_accumulate_part(part, text_parts, tool_calls)
+        finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls, finish_reason
 
     def get_context_limit(self) -> int:
@@ -1311,6 +1301,19 @@ class GeminiService:
             logger.debug(f"[GeminiService] count_tokens API failed, using estimate: {e}")
             parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
             return estimate_tokens(' '.join(parts))
+
+
+def _gemini_accumulate_part(part, text_parts: list, tool_calls: list) -> None:
+    """Append text or a tool-call dict from a single Gemini response part."""
+    if getattr(part, 'text', None):
+        text_parts.append(part.text)
+    fc = getattr(part, 'function_call', None)
+    if fc:
+        tool_calls.append({
+            'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
+            'name': fc.name,
+            'input': dict(fc.args) if fc.args else {},
+        })
 
 
 def _gemini_convert_messages(messages: list) -> list:

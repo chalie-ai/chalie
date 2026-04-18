@@ -748,6 +748,19 @@ def _is_delete_only(ep: dict) -> bool:
     return not any(ep.get(f) for f in meaningful)
 
 
+def _parse_transcript_ids_field(raw) -> list:
+    """Normalize an episode.transcript_ids field (JSON string or list) to a list."""
+    import json as _json
+    if isinstance(raw, str):
+        try:
+            return _json.loads(raw)
+        except Exception:
+            return []
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
 def _collect_transcript_ids(episodes: list[dict]) -> set[int]:
     """Return the union of all transcript IDs referenced by *episodes*.
 
@@ -755,26 +768,15 @@ def _collect_transcript_ids(episodes: list[dict]) -> set[int]:
     and also expands the ``transcript_id_start``–``transcript_id_end`` range so
     that overlap rows are always included.
     """
-    import json as _json
-
     ids: set[int] = set()
     for ep in episodes:
-        raw = ep.get('transcript_ids')
-        if isinstance(raw, str):
+        for tid in _parse_transcript_ids_field(ep.get('transcript_ids')):
+            if tid is None:
+                continue
             try:
-                parsed = _json.loads(raw)
-            except Exception:
-                parsed = []
-        elif isinstance(raw, list):
-            parsed = raw
-        else:
-            parsed = []
-        for tid in parsed:
-            if tid is not None:
-                try:
-                    ids.add(int(tid))
-                except (TypeError, ValueError):
-                    pass
+                ids.add(int(tid))
+            except (TypeError, ValueError):
+                pass
 
     starts = [ep['transcript_id_start'] for ep in episodes if ep.get('transcript_id_start') is not None]
     ends = [ep['transcript_id_end'] for ep in episodes if ep.get('transcript_id_end') is not None]
@@ -869,63 +871,60 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
 
     for cluster_ids in clusters:
         try:
-            sources = []
-            for eid in cluster_ids:
-                ep = episodic_svc.get_episode_by_id(eid)
-                if ep:
-                    sources.append(ep)
-
-            if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
-                continue
-
-            transcript_spans = _fetch_transcript_spans(sources, db)
-
-            response = SuperEpisodeEncoderProcessor(sources, transcript_spans).send()
-            if not response:
-                logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response for cluster {cluster_ids}")
-                continue
-
-            super_ep = _safe_json_load_object(response)
-            if not super_ep or not super_ep.get('gist'):
-                logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty gist for cluster {cluster_ids}")
-                continue
-
-            super_ep['channel'] = channel
-
-            # Union of all source transcript_ids.
-            unique_t_ids = sorted(_collect_transcript_ids(sources))
-            super_ep['transcript_ids'] = unique_t_ids
-            super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
-            super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
-            super_ep['consolidated_from'] = [ep['id'] for ep in sources]
-
-            gist = super_ep.get('gist', '')
-            embedding = emb_svc.generate_embedding(gist) if gist else None
-
-            novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-            super_ep['salience'] = compute_salience(
-                valence=float(super_ep.get('emotional_valence') or 0.0),
-                arousal=float(super_ep.get('emotional_arousal') or 0.0),
-                has_open_loop=bool(super_ep.get('has_open_loop', False)),
-                novelty=novelty,
+            _process_super_cluster(
+                cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
+                SuperEpisodeEncoderProcessor, compute_novelty, compute_salience,
+                SUPER_EPISODE_MIN_CLUSTER,
             )
-
-            # Pop transient field not persisted.
-            super_ep.pop('has_open_loop', None)
-
-            new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-
-            for src_id in cluster_ids:
-                episodic_svc.set_consolidated_into(src_id, new_id)
-
-            logger.info(
-                f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}"
-            )
-
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} Super-episode creation failed for cluster {cluster_ids}: {exc}"
             )
+
+
+def _process_super_cluster(
+    cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
+    SuperEpisodeEncoderProcessor, compute_novelty, compute_salience, min_cluster,
+) -> None:
+    """Assemble sources, invoke encoder, compute salience, and persist one super-episode."""
+    sources = [ep for ep in (episodic_svc.get_episode_by_id(eid) for eid in cluster_ids) if ep]
+    if len(sources) < min_cluster:
+        return
+
+    transcript_spans = _fetch_transcript_spans(sources, db)
+    response = SuperEpisodeEncoderProcessor(sources, transcript_spans).send()
+    if not response:
+        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response for cluster {cluster_ids}")
+        return
+
+    super_ep = _safe_json_load_object(response)
+    if not super_ep or not super_ep.get('gist'):
+        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty gist for cluster {cluster_ids}")
+        return
+
+    super_ep['channel'] = channel
+    unique_t_ids = sorted(_collect_transcript_ids(sources))
+    super_ep['transcript_ids'] = unique_t_ids
+    super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
+    super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
+    super_ep['consolidated_from'] = [ep['id'] for ep in sources]
+
+    gist = super_ep.get('gist', '')
+    embedding = emb_svc.generate_embedding(gist) if gist else None
+    novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+    super_ep['salience'] = compute_salience(
+        valence=float(super_ep.get('emotional_valence') or 0.0),
+        arousal=float(super_ep.get('emotional_arousal') or 0.0),
+        has_open_loop=bool(super_ep.get('has_open_loop', False)),
+        novelty=novelty,
+    )
+    super_ep.pop('has_open_loop', None)
+
+    new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+    for src_id in cluster_ids:
+        episodic_svc.set_consolidated_into(src_id, new_id)
+
+    logger.info(f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}")
 
 
 def _safe_json_load_object(text: str) -> dict:
