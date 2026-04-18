@@ -280,6 +280,7 @@ def _handle_action(ws, store, msg):
             "seq": seq,
             "metrics": {
                 "tokens_total": 0,
+                "tokens_total_complete": False,
                 "tools": {},
                 "response_time_s": round(time.time() - action_start, 3),
             },
@@ -295,7 +296,18 @@ def _handle_action(ws, store, msg):
     except Exception as e:
         logger.error(f"[WS] Action handler error: {e}", exc_info=True)
         seq = _next_seq()
-        _send_json(ws, {"type": "error", "message": str(e), "recoverable": True, "seq": seq})
+        _send_json(ws, {
+            "type": "error",
+            "message": str(e),
+            "recoverable": True,
+            "seq": seq,
+            "metrics": {
+                "tokens_total": 0,
+                "tokens_total_complete": False,
+                "tools": {},
+                "response_time_s": round(time.time() - action_start, 3),
+            },
+        })
         seq = _next_seq()
         _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
 
@@ -427,6 +439,16 @@ def _handle_chat(ws, store, msg, active_request=None):
         except Exception as e:
             logger.error(f"[WS] UserMessageProcessor error for {request_id}: {e}", exc_info=True)
             bg_error['message'] = str(e)
+            # Capture any metrics accumulated before the failure so the
+            # error frame can surface them (spec contract #3).
+            try:
+                if 'proc' in locals() and getattr(proc, '_metrics', None) is not None:
+                    partial_snap = proc._metrics.snapshot()
+                    # Mark as incomplete — we failed mid-turn.
+                    partial_snap['tokens_total_complete'] = False
+                    partial_metrics.update(partial_snap)
+            except Exception as m_err:
+                logger.debug(f"[WS] Partial metrics snapshot failed: {m_err}")
             try:
                 store.publish(sse_channel, json.dumps({"error": str(e)}))
             except Exception as e2:
@@ -511,6 +533,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                 }
                 _msg_metrics = metadata.get("metrics")
                 if _msg_metrics is not None:
+                    # Stamp response_time_s at the actual dispatch moment so
+                    # the metric reflects user-perceived latency (spec contract).
+                    try:
+                        _msg_metrics = dict(_msg_metrics)
+                        _msg_metrics['response_time_s'] = round(time.time() - turn_start, 3)
+                    except Exception:
+                        pass
                     message_evt["metrics"] = _msg_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
@@ -547,6 +576,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 }
                 _fallback_metrics = metadata.get("metrics")
                 if _fallback_metrics is not None:
+                    try:
+                        _fallback_metrics = dict(_fallback_metrics)
+                        _fallback_metrics['response_time_s'] = round(time.time() - turn_start, 3)
+                    except Exception:
+                        pass
                     message_evt["metrics"] = _fallback_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
