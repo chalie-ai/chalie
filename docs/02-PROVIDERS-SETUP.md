@@ -4,7 +4,7 @@ After deploying the application, you can configure LLM providers through the web
 
 ## Overview
 
-Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) are available to the system. All provider configuration is stored in the SQLite database.
+Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, OpenAI-compatible third parties, etc.) are available to the system. All provider configuration is stored in the SQLite database.
 
 ## Quick Start
 
@@ -46,6 +46,7 @@ Each provider needs a **name** (any label you want), the **platform**, a **model
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com) | Any Claude model ID |
 | **OpenAI** | [platform.openai.com](https://platform.openai.com) | Any GPT model ID |
 | **Google Gemini** | [ai.google.dev](https://ai.google.dev) | Any Gemini model ID |
+| **OpenAI-Compatible** | Your provider's dashboard (MiniMax, Groq, DeepSeek, Together, OpenRouter, LM Studio, vLLM, etc.) | Any model ID supported by that endpoint |
 
 Use the exact model ID from your provider's documentation — model names change frequently.
 
@@ -61,6 +62,7 @@ After entering provider details, click **Save** or **Test Connection** to verify
 | **Anthropic** | No | Yes | Claude API from Anthropic |
 | **OpenAI** | No | Yes | GPT models from OpenAI |
 | **Google Gemini** | No | Yes | Gemini models from Google |
+| **OpenAI-Compatible** | Either | Yes | Generic endpoint — bring your own base URL + API key. Use for MiniMax, Groq, DeepSeek, Together, OpenRouter, LM Studio, vLLM, or any other provider that speaks the OpenAI Chat Completions wire format. |
 
 ## Troubleshooting
 
