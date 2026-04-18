@@ -408,6 +408,32 @@ class TestFindSuperCandidates:
         # Only leaf1 and super_id are apex; 2 items < SUPER_EPISODE_MIN_CLUSTER=3 → no cluster
         assert clusters == []
 
+    def test_transitive_chain_forms_one_component(self, mem_db_vec):
+        """A-B edge + B-C edge (but NO A-C edge) still forms one component.
+
+        This is the whole point of connected-components clustering: when
+        min_cluster > 2, requiring every pairwise edge above threshold
+        compounds against itself and rarely produces clusters on real
+        embedding distributions. Transitive neighbourhoods capture chains
+        of related episodes as a single memory group.
+        """
+        conn, vec = mem_db_vec
+        if not vec:
+            pytest.skip("sqlite-vec not available")
+
+        # A–B cosine ≈ 0.966 (15° apart) → above 0.90
+        # B–C cosine ≈ 0.966 (B at 15°, C at 30°)
+        # A–C cosine ≈ 0.866 (30° apart) → BELOW 0.90
+        a = self._insert_apex(conn, _sim_vec(angle_deg=0.0), gist="a")
+        b = self._insert_apex(conn, _sim_vec(angle_deg=15.0), gist="b")
+        c = self._insert_apex(conn, _sim_vec(angle_deg=30.0), gist="c")
+
+        clusters = self._find(conn, "ch1")
+        # Connected components via A–B and B–C edges → single cluster of 3.
+        # Under strict all-pairs-tight rules this would NOT form (A–C too far).
+        assert len(clusters) == 1
+        assert sorted(clusters[0]) == sorted([a, b, c])
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Retrieval apex-promotion

@@ -368,22 +368,28 @@ def _cosine_sim_blobs(blob_a: bytes, blob_b: bytes) -> float:
 
 
 def find_super_candidates(channel: str) -> list[list[str]]:
-    """Return lists of episode IDs that form tight semantic clusters.
+    """Return lists of episode IDs that form semantic clusters via connected components.
 
     A cluster qualifies when:
       - it contains at least SUPER_EPISODE_MIN_CLUSTER episodes,
-      - every pairwise cosine similarity across all members >= SUPER_EPISODE_THRESHOLD.
+      - every member is connected (directly or transitively) to every other
+        member via edges where cosine >= SUPER_EPISODE_THRESHOLD.
 
-    Algorithm: greedy pairwise scan over the apex pool (consolidated_into IS NULL,
-    deleted_at IS NULL).  First-found wins; episodes already claimed by an emitted
-    cluster are not re-evaluated.
+    Algorithm: build an undirected graph where nodes are apex episodes and
+    edges are pairs whose cosine >= SUPER_EPISODE_THRESHOLD. Emit each
+    connected component of size >= SUPER_EPISODE_MIN_CLUSTER as a cluster.
+    Clique-tightness is NOT required — a chain of related episodes counts as
+    one cluster even if the endpoints aren't direct neighbours. This matches
+    how humans group related memories and prevents the pair-threshold bar
+    from compounding against itself when min_cluster > 2.
 
     Args:
         channel: The episode channel to cluster.
 
     Returns:
-        List of ID-lists (strings), each list being one tight cluster.
-        Clusters are non-overlapping and deterministic (sorted IDs within each list).
+        List of ID-lists (strings), each list being one connected component.
+        Components are non-overlapping and deterministic (sorted IDs within
+        each list; outer list sorted by first ID).
     """
     from services.database_service import get_shared_db_service
     from services.episodic_constants import SUPER_EPISODE_THRESHOLD, SUPER_EPISODE_MIN_CLUSTER
@@ -420,54 +426,45 @@ def find_super_candidates(channel: str) -> list[list[str]]:
     ep_embs: list[bytes] = [r[1] for r in rows]
     n = len(ep_ids)
 
-    # Pre-compute all pairwise cosine similarities (upper triangle only).
-    # For typical apex pools (<200 episodes) this is fast (~40k ops @ 256-d).
-    sims: dict[tuple[int, int], float] = {}
+    # Build adjacency list over edges whose cosine >= threshold.
+    adj: list[list[int]] = [[] for _ in range(n)]
     for i in range(n):
         for j in range(i + 1, n):
-            sims[(i, j)] = _cosine_sim_blobs(ep_embs[i], ep_embs[j])
+            if _cosine_sim_blobs(ep_embs[i], ep_embs[j]) >= SUPER_EPISODE_THRESHOLD:
+                adj[i].append(j)
+                adj[j].append(i)
 
-    def _pair_sim(i: int, j: int) -> float:
-        return sims[(i, j)] if i < j else sims[(j, i)]
-
-    claimed: set[int] = set()
+    # Union-Find connected components (iterative BFS — no recursion depth risk).
+    visited: set[int] = set()
     clusters: list[list[str]] = []
 
-    for i in range(n):
-        if i in claimed:
+    for start in range(n):
+        if start in visited:
+            continue
+        component: list[int] = []
+        queue: list[int] = [start]
+        visited.add(start)
+        while queue:
+            node = queue.pop()
+            component.append(node)
+            for neighbour in adj[node]:
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    queue.append(neighbour)
+
+        if len(component) < SUPER_EPISODE_MIN_CLUSTER:
             continue
 
-        # Candidates: all unclaimed j where cosine(i, j) >= threshold.
-        candidates = [
-            j for j in range(n)
-            if j != i and j not in claimed and _pair_sim(i, j) >= SUPER_EPISODE_THRESHOLD
-        ]
-
-        if len(candidates) < SUPER_EPISODE_MIN_CLUSTER - 1:
-            # Not enough neighbours even before the all-pairs check.
-            continue
-
-        # Verify the cluster is fully tight — all pairs within {i} ∪ candidates
-        # must also exceed the threshold.
-        members = [i] + candidates
-        tight = True
-        for a in range(len(members)):
-            if not tight:
-                break
-            for b in range(a + 1, len(members)):
-                if _pair_sim(members[a], members[b]) < SUPER_EPISODE_THRESHOLD:
-                    tight = False
-                    break
-
-        if not tight or len(members) < SUPER_EPISODE_MIN_CLUSTER:
-            continue
-
-        # Emit cluster with sorted IDs for determinism.
-        cluster_ids = sorted(ep_ids[m] for m in members)
+        cluster_ids = sorted(ep_ids[m] for m in component)
         clusters.append(cluster_ids)
-        for m in members:
-            claimed.add(m)
 
+    # Sort outer list for deterministic ordering across runs.
+    clusters.sort(key=lambda c: c[0] if c else "")
+    if clusters:
+        logging.info(
+            f"[SUPER_CLUSTER] {len(clusters)} component(s) found "
+            f"(sizes={[len(c) for c in clusters]}, channel={channel})"
+        )
     return clusters
 
 
