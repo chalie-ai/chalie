@@ -31,7 +31,7 @@ class MetricsAccumulator:
         for attr in ('tokens_input', 'tokens_output', 'tokens_thinking',
                      'tokens_cache_read', 'tokens_cache_create'):
             v = getattr(response, attr, None)
-            if v:
+            if v is not None:
                 setattr(self, attr, getattr(self, attr) + int(v))
 
     def record_tool(self, tool_name: str) -> None:
