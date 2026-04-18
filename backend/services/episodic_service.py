@@ -20,7 +20,7 @@ import json
 import logging
 import struct
 import uuid
-from typing import Optional, List
+from typing import Optional
 
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
@@ -367,6 +367,40 @@ def _cosine_sim_blobs(blob_a: bytes, blob_b: bytes) -> float:
         return 0.0
 
 
+def _build_adjacency(ep_embs: list[bytes], threshold: float) -> list[list[int]]:
+    """Return an undirected adjacency list for episodes whose cosine >= threshold."""
+    n = len(ep_embs)
+    adj: list[list[int]] = [[] for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _cosine_sim_blobs(ep_embs[i], ep_embs[j]) >= threshold:
+                adj[i].append(j)
+                adj[j].append(i)
+    return adj
+
+
+def _bfs_components(adj: list[list[int]], n: int, min_cluster: int) -> list[list[int]]:
+    """Return connected components of size >= min_cluster via iterative BFS."""
+    visited: set[int] = set()
+    components: list[list[int]] = []
+    for start in range(n):
+        if start in visited:
+            continue
+        component: list[int] = []
+        queue: list[int] = [start]
+        visited.add(start)
+        while queue:
+            node = queue.pop()
+            component.append(node)
+            for neighbour in adj[node]:
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    queue.append(neighbour)
+        if len(component) >= min_cluster:
+            components.append(component)
+    return components
+
+
 def find_super_candidates(channel: str) -> list[list[str]]:
     """Return lists of episode IDs that form semantic clusters via connected components.
 
@@ -398,7 +432,6 @@ def find_super_candidates(channel: str) -> list[list[str]]:
         db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
-            # Fetch apex episodes with their embeddings.
             cursor.execute(
                 """
                 SELECT e.id, ev.embedding
@@ -421,45 +454,16 @@ def find_super_candidates(channel: str) -> list[list[str]]:
     if not rows:
         return []
 
-    # Build parallel id/embedding lists.
     ep_ids: list[str] = [str(r[0]) for r in rows]
     ep_embs: list[bytes] = [r[1] for r in rows]
-    n = len(ep_ids)
 
-    # Build adjacency list over edges whose cosine >= threshold.
-    adj: list[list[int]] = [[] for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if _cosine_sim_blobs(ep_embs[i], ep_embs[j]) >= SUPER_EPISODE_THRESHOLD:
-                adj[i].append(j)
-                adj[j].append(i)
+    adj = _build_adjacency(ep_embs, SUPER_EPISODE_THRESHOLD)
+    raw_components = _bfs_components(adj, len(ep_ids), SUPER_EPISODE_MIN_CLUSTER)
 
-    # Union-Find connected components (iterative BFS — no recursion depth risk).
-    visited: set[int] = set()
-    clusters: list[list[str]] = []
-
-    for start in range(n):
-        if start in visited:
-            continue
-        component: list[int] = []
-        queue: list[int] = [start]
-        visited.add(start)
-        while queue:
-            node = queue.pop()
-            component.append(node)
-            for neighbour in adj[node]:
-                if neighbour not in visited:
-                    visited.add(neighbour)
-                    queue.append(neighbour)
-
-        if len(component) < SUPER_EPISODE_MIN_CLUSTER:
-            continue
-
-        cluster_ids = sorted(ep_ids[m] for m in component)
-        clusters.append(cluster_ids)
-
-    # Sort outer list for deterministic ordering across runs.
-    clusters.sort(key=lambda c: c[0] if c else "")
+    clusters = sorted(
+        [sorted(ep_ids[m] for m in comp) for comp in raw_components],
+        key=lambda c: c[0],
+    )
     if clusters:
         logging.info(
             f"[SUPER_CLUSTER] {len(clusters)} component(s) found "
