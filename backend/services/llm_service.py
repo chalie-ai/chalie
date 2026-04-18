@@ -90,7 +90,12 @@ class LLMResponse:
             reported by the provider.
         tokens_thinking: CoT/reasoning tokens charged separately by the
             provider (OpenAI reasoning_tokens, Gemini thoughts_token_count).
-            Anthropic bundles thinking into output_tokens, so this stays None.
+            Anthropic: extended thinking tokens are INCLUDED in
+            ``output_tokens`` per the Anthropic API docs — the SDK does not
+            report a separate field, so ``tokens_thinking`` stays ``None``
+            and thinking cost is reflected in ``tokens_output``. If a future
+            SDK version exposes it separately, extract here and subtract
+            from ``tokens_output`` to avoid double-counting.
         tokens_cache_read: Prompt-cache read tokens (Anthropic only).
         tokens_cache_create: Prompt-cache write tokens (Anthropic only).
         latency_ms: End-to-end round-trip latency in milliseconds from
@@ -591,7 +596,11 @@ class AnthropicService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text + tool_calls from response content blocks
+        # Extract text + tool_calls from response content blocks.
+        # Thinking blocks (extended thinking) are intentionally NOT surfaced
+        # in `text` — they are internal reasoning, not user-visible output.
+        # Their token cost is already folded into response.usage.output_tokens
+        # (Anthropic API docs: "Thinking tokens are counted as output tokens").
         text_parts = []
         tool_calls = []
         for block in (response.content or []):
@@ -602,6 +611,13 @@ class AnthropicService:
                     'name': block.name,
                     'input': block.input,
                 })
+            elif block_type == 'thinking':
+                # Log usage on the first thinking-block we see so future turns
+                # can be audited if Anthropic ever splits the accounting.
+                logger.debug(
+                    f"[AnthropicService] thinking block present; "
+                    f"usage={getattr(response, 'usage', None)}"
+                )
             elif hasattr(block, 'text') and block.text:
                 text_parts.append(block.text)
 
