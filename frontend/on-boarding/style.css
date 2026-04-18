@@ -258,6 +258,90 @@ body::before {
     color: var(--error);
 }
 
+/* Host input row (host field + Refresh button side-by-side) */
+.host-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.host-input-row input {
+    flex: 1;
+}
+
+/* Refresh status line below the host row */
+#ollamaRefreshStatus {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+#ollamaRefreshStatus.status-ok  { color: var(--success); }
+#ollamaRefreshStatus.status-err { color: var(--error); }
+
+/* Ollama model picker */
+.ollama-model-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px;
+    min-height: 44px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.ollama-model-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+.ollama-model-chip:hover {
+    border-color: rgba(138, 92, 255, 0.4);
+    color: var(--text-primary);
+}
+.ollama-model-chip.selected {
+    background: rgba(138, 92, 255, 0.15);
+    border-color: rgba(138, 92, 255, 0.55);
+    color: var(--accent-primary);
+}
+
+.ollama-empty-state {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 4px 2px;
+    line-height: 1.5;
+}
+.ollama-empty-state strong { color: var(--text-primary); }
+
+.btn-retry {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent-primary);
+    transition: border-color 150ms ease;
+}
+.btn-retry:hover { border-color: rgba(138, 92, 255, 0.45); }
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     .card { padding: 24px; }

@@ -238,6 +238,12 @@ function selectPlatform(platform, context) {
     // Show/hide api key field
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
+    // Show/hide Ollama model list panel
+    const ollamaListGroup = document.getElementById('ollamaModelListGroup');
+    if (ollamaListGroup) {
+        ollamaListGroup.style.display = platform === 'ollama' ? '' : 'none';
+    }
+
     // Update model input
     const modelInput = document.getElementById('editModelInput');
     modelInput.placeholder = config.modelPlaceholder;
@@ -274,48 +280,47 @@ function debounce(fn, delay) {
 
 async function fetchAnthropicModels(key, datalistId) {
     try {
-        const res = await fetch('https://api.anthropic.com/v1/models', {
-            headers: {
-                'x-api-key': key,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true',
-            }
+        const res = await apiFetch('/providers/anthropic/models', {
+            method: 'POST',
+            body: JSON.stringify({ api_key: key }),
         });
         if (res.ok) {
             const data = await res.json();
             const datalist = document.getElementById(datalistId);
             datalist.innerHTML = '';
-            (data.data || []).forEach(m => {
+            (data.models || []).forEach(id => {
                 const opt = document.createElement('option');
-                opt.value = m.id;
+                opt.value = id;
                 datalist.appendChild(opt);
             });
+        } else {
+            console.warn('[providers] Anthropic model fetch failed:', res.status);
         }
     } catch (e) {
-        // Ignore
+        console.warn('[providers] Anthropic model fetch error:', e);
     }
 }
 
-async function testOllamaConnection(hostInputId, statusId) {
-    const host = document.getElementById(hostInputId).value.trim() || 'http://localhost:11434';
+async function fetchOllamaModels(host, statusId) {
     const statusEl = document.getElementById(statusId);
-    statusEl.textContent = 'Testing...';
+    statusEl.textContent = 'Fetching models…';
     statusEl.className = '';
 
     try {
-        const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(5000) });
+        const res = await apiFetch(`/providers/ollama/models?host=${encodeURIComponent(host || 'http://localhost:11434')}`);
         if (res.ok) {
             const data = await res.json();
-            statusEl.textContent = '✓ Connected';
+            const names = data.models || [];
+            statusEl.textContent = names.length > 0 ? `✓ ${names.length} model(s) found` : '✓ Connected (no models installed)';
             statusEl.className = 'status-ok';
-            return data.models || [];
-        } else {
-            statusEl.textContent = '✗ Connection failed';
-            statusEl.className = 'status-err';
-            return [];
+            return names;
         }
+        const err = await res.json().catch(() => ({}));
+        statusEl.textContent = `✗ ${err.error || 'Connection failed'}`;
+        statusEl.className = 'status-err';
+        return [];
     } catch (e) {
-        statusEl.textContent = '✗ Cannot reach Ollama';
+        statusEl.textContent = '✗ Cannot reach backend';
         statusEl.className = 'status-err';
         return [];
     }
@@ -436,6 +441,13 @@ function openEditModal(id) {
 
     selectPlatform(editPlatform, 'edit');
     modal.classList.remove('hidden');
+
+    // Auto-load model list when editing an Ollama provider so the panel isn't
+    // empty until the user clicks Refresh. New-provider flow stays manual —
+    // the host field still has the default value and no key is needed.
+    if (id && editPlatform === 'ollama') {
+        refreshOllamaModels();
+    }
 }
 
 function renderModelTags() {
@@ -498,17 +510,68 @@ document.getElementById('editModelInput').addEventListener('keydown', (e) => {
     }
 });
 
-// Edit test connection (Ollama host quick-check)
-document.getElementById('editTestConnectionBtn').addEventListener('click', async () => {
-    const models = await testOllamaConnection('editHost', 'editConnectionStatus');
-    if (models.length > 0) {
-        const datalist = document.getElementById('editModelSuggestions');
+// Ollama refresh models — single code path used by button click and host blur.
+// Guarded so clicking the Refresh button (which blurs the host input) doesn't
+// fire two simultaneous requests.
+let _ollamaRefreshInFlight = false;
+async function refreshOllamaModels() {
+    if (_ollamaRefreshInFlight) return;
+    _ollamaRefreshInFlight = true;
+    try {
+        const host = document.getElementById('editHost').value.trim();
+        const names = await fetchOllamaModels(host, 'editConnectionStatus');
+        renderOllamaModelList(names);
+    } finally {
+        _ollamaRefreshInFlight = false;
+    }
+}
+
+function renderOllamaModelList(names) {
+    const container = document.getElementById('ollamaModelList');
+    if (!container) return;
+
+    // Also keep datalist in sync so the text input autocomplete still works
+    const datalist = document.getElementById('editModelSuggestions');
+    if (datalist) {
         datalist.innerHTML = '';
-        models.forEach(m => {
+        names.forEach(n => {
             const opt = document.createElement('option');
-            opt.value = m.name || m.model || m;
+            opt.value = n;
             datalist.appendChild(opt);
         });
+    }
+
+    if (names.length === 0) {
+        container.innerHTML = '<span class="ollama-model-empty">No models found — is Ollama running?</span>';
+        return;
+    }
+
+    container.innerHTML = names.map(n => {
+        const selected = editModels.includes(n);
+        return `<button type="button" class="ollama-model-chip${selected ? ' selected' : ''}" data-model="${escapeHtml(n)}">${escapeHtml(n)}</button>`;
+    }).join('');
+
+    container.querySelectorAll('.ollama-model-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const m = chip.dataset.model;
+            if (editModels.includes(m)) {
+                editModels = editModels.filter(x => x !== m);
+            } else {
+                editModels.push(m);
+            }
+            chip.classList.toggle('selected', editModels.includes(m));
+            renderModelTags();
+        });
+    });
+}
+
+// Refresh button click
+document.getElementById('editTestConnectionBtn').addEventListener('click', refreshOllamaModels);
+
+// Host blur → programmatically trigger the same refresh
+document.getElementById('editHost').addEventListener('blur', () => {
+    if (editPlatform === 'ollama') {
+        document.getElementById('editTestConnectionBtn').click();
     }
 });
 
