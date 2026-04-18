@@ -567,7 +567,7 @@ def main():
         print("  1. Start Chalie normally — it will rebuild its context window from the")
         print("     clean transcript on the first user message.")
         print("  2. Compaction will re-run automatically when context reaches 80%.")
-        print("  3. Episodic extraction fires at id%25; new exchanges will be embedded.")
+        print("  3. Episodic extraction fires on the per-channel rolling trigger (first at 25 inserts, then every 20); new exchanges will be embedded.")
 
 
 if __name__ == "__main__":

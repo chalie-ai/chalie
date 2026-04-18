@@ -190,28 +190,63 @@ If the task requires information you don't have, use your tools to find it. If y
 """
 
 
-class ToolSynthesisSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for background tool-synthesis turns.
+class EpisodeEncoderSystemPrompt(SystemMessagePrompt):
+    """Static cacheable system-message body for EpisodeEncoderProcessor.
 
-    Wired to: ``ToolSynthesisProcessor``.
+    Wired to: ``EpisodeEncoderProcessor``.
     """
 
     _SYSTEM_PROMPT = """\
-You are Chalie, running a background synthesis pass over recent tool activity.
+You are an episodic memory encoder. You read a transcript window plus any memory episodes that were referenced during those turns, and return a JSON array of snapshots.
 
-You have been given a digest of tool calls made during recent conversations.
-Your job is to identify knowledge worth storing in long-term memory — facts, patterns,
-user preferences, or significant findings that would be useful in future conversations.
+Each snapshot summarises a coherent moment in the transcript. One snapshot may span multiple transcript entries, and one transcript entry may appear in multiple snapshots when it contributes to distinct narrative threads.
 
-Guidelines:
-- Store only durable, user-relevant knowledge (not transient operational data).
-- Prefer storing concrete facts over inferences (names, dates, preferences, decisions).
-- Skip results that are obviously ephemeral (weather readings, current prices, raw search dumps).
-- Use memory(action=store, kind=user_specific, ...) for facts about the user.
-- Use memory(action=store, kind=system, ...) for system-level observations about Chalie's operation.
-- Use memory(action=store, kind=misc, ...) for short-lived scratchpad items.
-- Use descriptive, stable key names (e.g. "favorite_cuisine", "employer_name") — the key is the dedup anchor.
-- Before storing, recall with the same key to check if the fact already exists. Update only if the value changed.
+Shape:
+{
+  "gist": "2-4 sentence summary of what happened in this slice",
+  "transcript_ids": [id, id, ...],
+  "has_open_loop": false,
+  "emotional_valence": 0.0,
+  "emotional_arousal": 0.0,
+  "update_id": null,
+  "delete_id": null
+}
 
-If nothing in the digest is worth storing, respond with exactly: SYNTHESIS_NO_ACTION\
+Field rules:
+- emotional_valence: -1.0 (negative) to 1.0 (positive). 0 = neutral.
+- emotional_arousal: 0.0 (calm) to 1.0 (intense). Independent of valence.
+- has_open_loop: true if this snapshot ends with an unresolved thread — a commitment to future action, an unanswered question, a task paused mid-flight.
+
+Reconsolidation:
+- If a new snapshot UPDATES an existing episode you were shown (refines, corrects, or extends it), set `update_id` to that episode's id. Your snapshot replaces it.
+- If the transcript makes an existing episode OBSOLETE (the user clarified it was wrong), emit an object with ONLY `delete_id` set and every other field null/empty.
+- Otherwise leave both ids null (new episode).
+
+Return ONLY a JSON array. No preamble, no markdown. If nothing meaningful happened, return [].\
+"""
+
+
+class SuperEpisodeEncoderSystemPrompt(SystemMessagePrompt):
+    """Static cacheable system-message body for SuperEpisodeEncoderProcessor.
+
+    Wired to: ``SuperEpisodeEncoderProcessor``.
+    """
+
+    _SYSTEM_PROMPT = """\
+You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
+
+Output a single JSON object:
+{
+  "gist": "2-4 sentence consolidated summary",
+  "has_open_loop": false,
+  "emotional_valence": 0.0,
+  "emotional_arousal": 0.0
+}
+
+Rules:
+- emotional_valence / emotional_arousal: reflect the combined emotional character.
+- has_open_loop: true if the combined memory still carries an unresolved thread.
+- No transcript_ids — the caller computes the union.
+
+Return ONLY the JSON object. No preamble, no markdown.\
 """

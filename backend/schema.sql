@@ -14,11 +14,6 @@
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
-    intent TEXT NOT NULL,                     -- JSONB stored as TEXT
-    context TEXT NOT NULL,                    -- JSONB stored as TEXT
-    action TEXT NOT NULL,
-    emotion TEXT NOT NULL,                    -- JSONB stored as TEXT
-    outcome TEXT NOT NULL,
     gist TEXT NOT NULL,
     salience INTEGER NOT NULL CHECK (salience BETWEEN 1 AND 10),
     channel TEXT NOT NULL,
@@ -27,99 +22,33 @@ CREATE TABLE IF NOT EXISTS episodes (
     last_accessed_at TEXT,
     access_count INTEGER DEFAULT 0,
     deleted_at TEXT,
-    salience_factors TEXT DEFAULT '{}',       -- JSONB
-    open_loops TEXT DEFAULT '[]',             -- JSONB
     transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of transcript.id values this episode covers
     transcript_id_start INTEGER,              -- lowest transcript.id in this episode's range
     transcript_id_end INTEGER,                -- highest transcript.id in this episode's range
-    entities TEXT DEFAULT '[]',               -- JSONB: people, places, orgs, products mentioned
-    goal_tags TEXT DEFAULT '[]',              -- JSONB: active goal tags detected
     emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
     emotional_arousal REAL,                   -- 0.0 (calm) to 1.0 (intense) — drives consolidation strength
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
+    consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
     storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
     retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_composite ON episodes(channel, retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_episodes_intent_type ON episodes(json_extract(intent, '$.type'));
 CREATE INDEX IF NOT EXISTS idx_episodes_transcript_range ON episodes(transcript_id_start, transcript_id_end);
 CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_weight DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_consolidated_into ON episodes(consolidated_into) WHERE consolidated_into IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL AND consolidated_into IS NULL;
 
 -- FTS5 for full-text search on episodes (replaces GIN tsvector indexes)
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, action, content='episodes', content_rowid='rowid'
+    gist, content='episodes', content_rowid='rowid'
 );
 
--- ────────────────────────────────────────────────────────────────
--- CORTEX ITERATIONS — ACT loop audit trail
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS cortex_iterations (
-    id TEXT PRIMARY KEY,
-    channel TEXT NOT NULL,
-    exchange_id TEXT,
-    session_id TEXT,
-    loop_id TEXT NOT NULL,
-    iteration_number INTEGER NOT NULL,
-    started_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT,
-    execution_time_ms REAL,
-    chosen_mode TEXT,
-    chosen_confidence REAL,
-    alternative_paths TEXT,                   -- JSONB
-    iteration_cost REAL,
-    diminishing_cost REAL,
-    uncertainty_cost REAL,
-    action_base_cost REAL,
-    total_cost REAL,
-    cumulative_cost REAL,
-    efficiency_score REAL,
-    expected_confidence_gain REAL,
-    task_value REAL,
-    future_leverage REAL,
-    effort_estimate TEXT,
-    effort_multiplier REAL,
-    iteration_penalty REAL,
-    exploration_bonus REAL,
-    net_value REAL,
-    decision_override INTEGER,               -- BOOLEAN
-    overridden_mode TEXT,
-    termination_reason TEXT,
-    actions_executed TEXT,                    -- JSONB
-    action_count INTEGER,
-    action_success_count INTEGER,
-    frontal_cortex_response TEXT,             -- JSONB
-    config_snapshot TEXT,                     -- JSONB
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_loop ON cortex_iterations(loop_id, iteration_number);
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_channel ON cortex_iterations(channel, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(exchange_id);
+-- cortex_iterations removed — CortexIterationService not wired into runtime.
 
 -- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
-
--- ────────────────────────────────────────────────────────────────
--- INTERACTION LOG — append-only audit trail
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS interaction_log (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    channel TEXT,
-    exchange_id TEXT,
-    session_id TEXT,
-    source TEXT,
-    payload TEXT NOT NULL DEFAULT '{}',       -- JSONB
-    metadata TEXT DEFAULT '{}',              -- JSONB
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_interaction_log_channel_created ON interaction_log(channel, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction_log(event_type, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_interaction_log_exchange ON interaction_log(exchange_id);
 
 -- procedural_memory removed — replaced by unified knowledge table.
 
@@ -455,19 +384,11 @@ CREATE TABLE IF NOT EXISTS place_fingerprints (
 
 CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
 
--- persistent_tasks table removed — replaced by goal_pursuit skill + GoalPursuitProcessor.
-DROP TABLE IF EXISTS persistent_tasks;
-DROP TABLE IF EXISTS persistent_tasks_vec;
-
--- cognitive_reflexes table removed — CognitiveReflexService removed.
-DROP TABLE IF EXISTS cognitive_reflexes;
-DROP TABLE IF EXISTS cognitive_reflexes_vec;
--- triage_calibration_events table removed — TriageCalibrationService removed.
-DROP TABLE IF EXISTS triage_calibration_events;
--- document_chunks tables removed — replaced by data_graph artifacts.
-DROP TABLE IF EXISTS document_chunks_vec;
-DROP TABLE IF EXISTS document_chunks_fts;
-DROP TABLE IF EXISTS document_chunks;
+-- Note: tables that disappear from this schema are dropped automatically by
+-- SchemaConvergenceService on the next boot.  No explicit DROP statements
+-- needed here.  Past examples: cortex_iterations, persistent_tasks,
+-- cognitive_reflexes, triage_calibration_events, document_chunks,
+-- knowledge_vec, scheduled_items_vec, lists_vec, goals_vec.
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -549,30 +470,27 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- ────────────────────────────────────────────────────────────────
--- SCHEMA MIGRATIONS TRACKING
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT UNIQUE NOT NULL,
-    applied_at TEXT DEFAULT (datetime('now'))
-);
-
--- uncertainties table removed — dropped by migration 025, replaced by
--- pending_contradictions. Migration 009 is now a no-op so this table
--- no longer needs to exist in schema.sql for the migration chain.
+-- schema_migrations table removed — SchemaConvergenceService is now the
+-- single source of truth.  schema.sql declares the desired shape and the
+-- service converges the live DB to match.  Numbered migration files are
+-- gone; legacy schema_migrations rows are auto-dropped on the next boot.
 
 -- ────────────────────────────────────────────────────────────────
--- PENDING CONTRADICTIONS — trait contradictions awaiting user resolution
+-- CONCEPT LUT MISSES — keys that didn't match the concept LUT
+-- Rows accumulate as the LUT is encountered at runtime; used to
+-- identify canonical key candidates for future LUT expansion.
 -- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS pending_contradictions (
-    id TEXT PRIMARY KEY,
-    trait_a_id INTEGER NOT NULL,
-    trait_b_id INTEGER NOT NULL,
-    question TEXT NOT NULL,
-    surfaced_at TEXT NOT NULL,
-    source TEXT NOT NULL  -- 'chat' | 'ambient'
+CREATE TABLE IF NOT EXISTS concept_lut_misses (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value_preview TEXT,
+    count      INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT NOT NULL,
+    last_seen  TEXT NOT NULL,
+    UNIQUE(kind, key)
 );
+CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)
@@ -720,6 +638,7 @@ CREATE TABLE IF NOT EXISTS transcript (
     tool_call_id TEXT,
     tool_name   TEXT,
     internal    INTEGER DEFAULT 0,
+    thinking_level TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

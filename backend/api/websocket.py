@@ -238,6 +238,8 @@ def _handle_action(ws, store, msg):
         _send_json(ws, {"type": "error", "message": "Missing 'skill' in action payload"})
         return
 
+    action_start = time.time()
+
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
@@ -251,7 +253,6 @@ def _handle_action(ws, store, msg):
             _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
             return
 
-        import time
         start = time.time()
         result = handler('action_button', payload)
 
@@ -277,6 +278,12 @@ def _handle_action(ws, store, msg):
             "confidence": 0.95,
             "exchange_id": "",
             "seq": seq,
+            "metrics": {
+                "tokens_total": 0,
+                "tokens_total_complete": False,
+                "tools": {},
+                "response_time_s": round(time.time() - action_start, 3),
+            },
         }
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
@@ -289,7 +296,18 @@ def _handle_action(ws, store, msg):
     except Exception as e:
         logger.error(f"[WS] Action handler error: {e}", exc_info=True)
         seq = _next_seq()
-        _send_json(ws, {"type": "error", "message": str(e), "recoverable": True, "seq": seq})
+        _send_json(ws, {
+            "type": "error",
+            "message": str(e),
+            "recoverable": True,
+            "seq": seq,
+            "metrics": {
+                "tokens_total": 0,
+                "tokens_total_complete": False,
+                "tools": {},
+                "response_time_s": round(time.time() - action_start, 3),
+            },
+        })
         seq = _next_seq()
         _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
 
@@ -335,9 +353,15 @@ def _handle_chat(ws, store, msg, active_request=None):
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
+    # Measure wall-clock from before thread creation so thread startup overhead
+    # doesn't inflate response_time_s beyond what the user experiences.
+    turn_start = time.time()
+
     # Track background thread completion
     bg_error = {}
     bg_done = threading.Event()
+    # Shared dict for partial metrics — background thread writes, error path reads.
+    partial_metrics: dict = {}
 
     def _handle_chat_background():
         """Background thread: process user message via UserMessageProcessor and publish response."""
@@ -378,7 +402,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 metadata=metadata,
                 on_narration=_on_narration,
             )
+            proc.set_turn_start(turn_start)
             response = proc.send(request_id=request_id)
+
+            metrics = proc._metrics.snapshot()
+            partial_metrics.update(metrics)
 
             output_svc = OutputService()
             output_svc.enqueue_text(
@@ -388,6 +416,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 confidence=1.0,
                 generation_time=0.0,
                 original_metadata=metadata,
+                metrics=metrics,
             )
 
             # Store result at output:{request_id} so the fallback path can
@@ -401,6 +430,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                         "mode": "UNIFIED",
                         "confidence": 1.0,
                         "metadata": metadata,
+                        "metrics": metrics,
                     },
                 }
                 store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
@@ -409,6 +439,16 @@ def _handle_chat(ws, store, msg, active_request=None):
         except Exception as e:
             logger.error(f"[WS] UserMessageProcessor error for {request_id}: {e}", exc_info=True)
             bg_error['message'] = str(e)
+            # Capture any metrics accumulated before the failure so the
+            # error frame can surface them (spec contract #3).
+            try:
+                if 'proc' in locals() and getattr(proc, '_metrics', None) is not None:
+                    partial_snap = proc._metrics.snapshot()
+                    # Mark as incomplete — we failed mid-turn.
+                    partial_snap['tokens_total_complete'] = False
+                    partial_metrics.update(partial_snap)
+            except Exception as m_err:
+                logger.debug(f"[WS] Partial metrics snapshot failed: {m_err}")
             try:
                 store.publish(sse_channel, json.dumps({"error": str(e)}))
             except Exception as e2:
@@ -441,6 +481,8 @@ def _handle_chat(ws, store, msg, active_request=None):
                 if 'error' in parsed:
                     seq = _next_seq()
                     evt = {"type": "error", "message": parsed['error'], "recoverable": True, "seq": seq}
+                    if partial_metrics:
+                        evt["metrics"] = partial_metrics
                     _buffer_event(evt)
                     _send_json(ws, evt)
                     seq = _next_seq()
@@ -489,6 +531,16 @@ def _handle_chat(ws, store, msg, active_request=None):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                _msg_metrics = metadata.get("metrics")
+                if _msg_metrics is not None:
+                    # Stamp response_time_s at the actual dispatch moment so
+                    # the metric reflects user-perceived latency (spec contract).
+                    try:
+                        _msg_metrics = dict(_msg_metrics)
+                        _msg_metrics['response_time_s'] = round(time.time() - turn_start, 3)
+                    except Exception:
+                        pass
+                    message_evt["metrics"] = _msg_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -522,16 +574,28 @@ def _handle_chat(ws, store, msg, active_request=None):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                _fallback_metrics = metadata.get("metrics")
+                if _fallback_metrics is not None:
+                    try:
+                        _fallback_metrics = dict(_fallback_metrics)
+                        _fallback_metrics['response_time_s'] = round(time.time() - turn_start, 3)
+                    except Exception:
+                        pass
+                    message_evt["metrics"] = _fallback_metrics
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:
                 seq = _next_seq()
                 err = {"type": "error", "message": bg_error.get('message', 'Processing failed'), "recoverable": False, "seq": seq}
+                if partial_metrics:
+                    err["metrics"] = partial_metrics
                 _buffer_event(err)
                 _send_json(ws, err)
             else:
                 seq = _next_seq()
                 err = {"type": "error", "message": "No response received", "recoverable": True, "seq": seq}
+                if partial_metrics:
+                    err["metrics"] = partial_metrics
                 _buffer_event(err)
                 _send_json(ws, err)
 
@@ -544,6 +608,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         # Timeout
         seq = _next_seq()
         err = {"type": "error", "message": "Request timed out", "recoverable": True, "seq": seq}
+        if partial_metrics:
+            err["metrics"] = partial_metrics
         _buffer_event(err)
         _send_json(ws, err)
         seq = _next_seq()

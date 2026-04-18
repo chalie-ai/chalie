@@ -47,22 +47,21 @@ class TestMemoryAPI:
         assert "q" in data["error"].lower()
 
     def test_search_returns_results(self, client):
-        """GET /memory/search with q returns results array."""
+        """GET /memory/search with q returns results array from episodic + data graph."""
         mock_dgs = MagicMock()
         mock_dgs.recall.return_value = [
             {"id": 1, "key": "coffee", "value": "a beverage",
              "retrieval_weight": 0.8, "evidence_count": 1, "composite_score": 0.8},
         ]
 
-        with patch('services.episodic_service.EpisodicService') as mock_er_cls, \
-             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs), \
-             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
+        # api/memory.py calls episodic_retrieval_service.retrieve() directly —
+        # not EpisodicService.retrieve_episodes().  Patch the module-level function.
+        with patch('services.episodic_retrieval_service.retrieve') as mock_retrieve, \
+             patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
 
-            mock_er = MagicMock()
-            mock_er.retrieve_episodes.return_value = [
+            mock_retrieve.return_value = [
                 {"gist": "user likes coffee", "composite_score": 0.9, "created_at": "2026-01-01"},
             ]
-            mock_er_cls.return_value = mock_er
 
             response = client.get('/memory/search?q=coffee')
 

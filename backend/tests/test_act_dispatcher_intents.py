@@ -26,8 +26,6 @@ def _auto_execute_gate():
         'consequence_tier': 0,
         'consequence_name': 'observe',
         'domain': 'test',
-        'domain_confidence': 1.0,
-        'threshold': 0.0,
         'reasoning': 'test override',
     }
     with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',

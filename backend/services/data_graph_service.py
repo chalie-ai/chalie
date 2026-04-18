@@ -1,8 +1,11 @@
 import json
 import logging
 import math
+import os
 import re
+import sqlite3
 import threading
+from dataclasses import dataclass
 from typing import Optional
 
 from services.database_service import get_shared_db_service
@@ -18,13 +21,85 @@ KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
 
+_SELECT_ACTIVE_BY_KIND_KEY_SQL = (
+    "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
+)
+
+
+@dataclass
+class _StoreRequest:
+    """Groups the four store-time write parameters to satisfy the 5-param ceiling."""
+
+    kind: str
+    key: str
+    value: str
+    source: Optional[str]
+
+
 _KIND_POLICY = {
-    KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'classify',     'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
-    KIND_SYSTEM:        {'ttl_days': None,  'reinforce': True,  'contradiction': 'newest_wins',  'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
-    KIND_MISC:          {'ttl_days': 2,     'reinforce': False, 'contradiction': None,           'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
-    KIND_MOMENT:        {'ttl_days': None,  'reinforce': False, 'contradiction': None,           'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
-    KIND_DOCUMENT:      {'ttl_days': None,  'reinforce': False, 'contradiction': None,           'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
+    KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
+    KIND_SYSTEM:        {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
+    KIND_MISC:          {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
+    KIND_MOMENT:        {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
+    KIND_DOCUMENT:      {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
 }
+
+# Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).
+# Regenerate with: cd backend && python -m utils.generate_concept_lut
+_CONCEPT_LUT_PATH = os.path.join(
+    os.path.dirname(__file__), 'data_graph', 'assets', 'concept_lut.sqlite'
+)
+
+# Cosine threshold for LUT canonical match.
+_CONCEPT_LUT_THRESHOLD = 0.80
+
+# Cosine threshold for system_specific key deduplication.
+_SYSTEM_KEY_THRESHOLD = 0.80
+
+# KNN depth for LUT lookups — k=1 sufficient for single canonical match.
+_LUT_K = 1
+
+# KNN depth for system key cosine deduplication.
+_SYSTEM_KEY_K = 3
+
+# Minimum cosine score for a recall candidate to pass the relevance floor.
+_RECALL_COSINE_FLOOR = 0.42
+
+# Module-level LUT connection, loaded once on first use.
+_lut_conn: Optional[sqlite3.Connection] = None
+_lut_lock = threading.Lock()
+_lut_loaded = False
+
+
+def _get_lut_conn() -> Optional[sqlite3.Connection]:
+    """Return a read-only sqlite connection to the concept LUT, loading it once."""
+    global _lut_conn, _lut_loaded
+    if _lut_loaded:
+        return _lut_conn
+    with _lut_lock:
+        if _lut_loaded:
+            return _lut_conn
+        if not os.path.exists(_CONCEPT_LUT_PATH):
+            logger.warning("[DATA GRAPH] concept_lut.sqlite not found at %s", _CONCEPT_LUT_PATH)
+            _lut_loaded = True
+            return None
+        try:
+            conn = sqlite3.connect(f"file:{_CONCEPT_LUT_PATH}?mode=ro", uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.enable_load_extension(True)
+            try:
+                import sqlite_vec
+                sqlite_vec.load(conn)
+            except Exception:
+                conn.load_extension('vec0')
+            count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+            logger.info("[DATA GRAPH] LUT loaded: %s (concepts=%d)", _CONCEPT_LUT_PATH, count)
+            _lut_conn = conn
+        except Exception as e:
+            logger.warning("[DATA GRAPH] Failed to open concept LUT: %s", e)
+            _lut_conn = None
+        _lut_loaded = True
+        return _lut_conn
 
 _EDGE_TYPE_MULTIPLIER = {
     'causes':        2.0,
@@ -61,6 +136,15 @@ def _get_stop_words() -> frozenset:
 
 def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x))
+
+
+def _l2_dist_to_cosine(distance: float) -> float:
+    """Convert L2 distance from sqlite-vec to cosine similarity.
+
+    sqlite-vec returns the squared L2 distance for normalized vectors.
+    For unit-norm vectors: cos = 1 - dist^2/2.
+    """
+    return max(0.0, 1.0 - (distance ** 2 / 2.0))
 
 
 # ── Singleton management ──────────────────────────────────────────────
@@ -341,6 +425,129 @@ class DataGraphService:
         cursor.close()
         return self._row_to_dict(row)
 
+    # ── LUT helpers ───────────────────────────────────────────────────
+
+    def _lookup_concept_lut(self, key_embedding) -> Optional[dict]:
+        """KNN against concept LUT; returns {canonical_key, rule} or None if below threshold.
+
+        Uses the pre-built concept_lut.sqlite (lut_embeddings vec0 table).
+        Relies on _get_lut_conn() for lazy open and extension load.
+        """
+        lut = _get_lut_conn()
+        if lut is None:
+            return None
+        blob = pack_embedding(key_embedding)
+        if blob is None:
+            return None
+        try:
+            hits = lut.execute(
+                "SELECT rowid, distance FROM lut_embeddings "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (blob, _LUT_K),
+            ).fetchall()
+        except Exception as e:
+            logger.debug("[DATA GRAPH] LUT KNN failed: %s", e)
+            return None
+        if not hits:
+            return None
+        rowid, distance = hits[0]
+        cos = _l2_dist_to_cosine(distance)
+        if cos < _CONCEPT_LUT_THRESHOLD:
+            return None
+        row = lut.execute(
+            "SELECT canonical_key, rule FROM lut_concepts WHERE id = ?", (rowid,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {"canonical_key": row[0], "rule": row[1], "cos": cos}
+
+    def _record_lut_miss(self, conn, kind: str, key: str, value: str, top_cos: float, now_iso: str) -> None:
+        """Log a LUT miss and upsert a row into concept_lut_misses for monitoring."""
+        logger.info("[DATA GRAPH] LUT miss: kind=%s key='%s' top_cos=%.4f", kind, key, top_cos)
+        value_preview = (value or '')[:100]
+        try:
+            conn.execute(
+                "INSERT INTO concept_lut_misses(kind, key, value_preview, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(kind, key) DO UPDATE SET count=count+1, last_seen=excluded.last_seen",
+                (kind, key, value_preview, now_iso, now_iso),
+            )
+        except Exception as e:
+            logger.debug("[DATA GRAPH] concept_lut_misses upsert failed: %s", e)
+
+    def _get_lut_miss_top_cos(self, key_embedding) -> float:
+        """Return the top cosine from LUT KNN even when below threshold, for miss logging."""
+        lut = _get_lut_conn()
+        if lut is None or key_embedding is None:
+            return 0.0
+        blob = pack_embedding(key_embedding)
+        if blob is None:
+            return 0.0
+        try:
+            hits = lut.execute(
+                "SELECT rowid, distance FROM lut_embeddings "
+                "WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
+                (blob,),
+            ).fetchall()
+            if hits:
+                return _l2_dist_to_cosine(hits[0][1])
+        except Exception:
+            pass
+        return 0.0
+
+    def _apply_temporal_supersession(self, conn, existing_dict: dict, req: '_StoreRequest', now_iso: str) -> tuple[dict, Optional[tuple], Optional[tuple]]:
+        """Demote old row, insert new, add supersedes/superseded_by edges.
+
+        Returns (new_row_dict, schedule_emb_args, schedule_d2q_args).
+        """
+        row_id = existing_dict['id']
+        old_rw = existing_dict.get('retrieval_weight', 1.0)
+        conn.execute(
+            "UPDATE data_graph SET active=0, retrieval_weight=? WHERE rowid=?",
+            (old_rw * 0.5, row_id),
+        )
+        conn.execute(
+            "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (req.kind, req.key, req.value, req.source, now_iso, now_iso),
+        )
+        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._add_edge_with_conn(conn, new_id, row_id, 'supersedes')
+        self._add_edge_with_conn(conn, row_id, new_id, 'superseded_by')
+        self._sync_fts(conn, new_id, req.key, req.value, req.kind)
+        logger.info("[DATA GRAPH] temporal supersede: demoted %s, inserted %s for key='%s'", row_id, new_id, req.key)
+        return self._fetch_row_by_id(conn, new_id), (new_id, req.key, req.value), (new_id, req.key, req.value)
+
+    def _find_system_key_match(self, conn, key_embedding, kind: str) -> Optional[dict]:
+        """KNN on data_graph_key_vec for system_specific kind; returns best matching row or None."""
+        if key_embedding is None:
+            return None
+        blob = pack_embedding(key_embedding)
+        if blob is None:
+            return None
+        try:
+            hits = conn.execute(
+                "SELECT rowid, distance FROM data_graph_key_vec "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (blob, _SYSTEM_KEY_K),
+            ).fetchall()
+        except Exception as e:
+            logger.debug("[DATA GRAPH] system key_vec KNN failed: %s", e)
+            return None
+
+        for rowid, distance in hits:
+            cos = _l2_dist_to_cosine(distance)
+            if cos < _SYSTEM_KEY_THRESHOLD:
+                break
+            row = conn.execute(
+                "SELECT * FROM data_graph "
+                "WHERE id=? AND kind=? AND active=1 AND deleted_at IS NULL LIMIT 1",
+                (rowid, kind),
+            ).fetchone()
+            if row:
+                return self._row_to_dict(row)
+        return None
+
     # ── store() ───────────────────────────────────────────────────────
 
     def store(self, kind: str, key: str, value: str, *, source=None) -> Optional[dict]:
@@ -357,7 +564,7 @@ class DataGraphService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
+                    _SELECT_ACTIVE_BY_KIND_KEY_SQL,
                     (kind, key)
                 )
                 existing = cursor.fetchone()
@@ -370,101 +577,99 @@ class DataGraphService:
                     row_id = existing_dict['id']
                     old_value = existing_dict.get('value') or ''
                     new_value = value or ''
+                    existing_date = (
+                        existing_dict.get("last_confirmed_at")
+                        or existing_dict.get("first_seen_at")
+                        or ""
+                    )[:10] or None
 
                     if new_value.lower().strip() == old_value.lower().strip():
                         if policy['reinforce']:
                             self._reinforce_row(conn, row_id, existing_dict, now_iso)
-                        result = self._fetch_row_by_id(conn, row_id)
+                        row = self._fetch_row_by_id(conn, row_id)
+                        result = self._make_store_result(
+                            "reinforced", key, key, None, value, None,
+                            None, existing_date, row,
+                        )
                     else:
                         contradiction_mode = policy.get('contradiction')
+                        existing_req = _StoreRequest(kind, key, value, source)
 
-                        if contradiction_mode == 'classify':
-                            from services.contradiction_classifier_service import ContradictionClassifierService
-                            cls_result = ContradictionClassifierService().check_new_trait(
-                                new_value, old_value, source='chat'
-                            )
-                            if cls_result is None:
-                                # compatible — reinforce
-                                self._reinforce_row(conn, row_id, existing_dict, now_iso)
-                                result = self._fetch_row_by_id(conn, row_id)
-                            elif cls_result['classification'] == 'temporal_change':
-                                # Demote old, insert new
-                                old_rw = existing_dict.get('retrieval_weight', 1.0)
-                                conn.execute("""
-                                    UPDATE data_graph
-                                    SET active=0, retrieval_weight=?
-                                    WHERE rowid=?
-                                """, (old_rw * 0.5, row_id))
-                                conn.execute("""
-                                    INSERT INTO data_graph
-                                        (kind, key, value, source, first_seen_at, last_confirmed_at)
-                                    VALUES (?, ?, ?, ?, ?, ?)
-                                """, (kind, key, value, source, now_iso, now_iso))
-                                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                                self._add_edge_with_conn(conn, new_id, row_id, 'supersedes')
-                                self._add_edge_with_conn(conn, row_id, new_id, 'superseded_by')
-                                self._sync_fts(conn, new_id, key, value, kind)
-                                _schedule_emb_args = (new_id, key, value)
-                                _schedule_d2q_args = (new_id, key, value)
-                                result = self._fetch_row_by_id(conn, new_id)
-                                logger.info("[DATA GRAPH] temporal_change: demoted %s, inserted %s for key='%s'", row_id, new_id, key)
+                        if contradiction_mode == 'lut_canonicalize':
+                            # Exact-key match: existing row found → apply rule based on LUT lookup.
+                            # LUT only consulted to determine the rule for this key.
+                            key_emb = self._generate_embedding(key)
+                            lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
+                            rule = lut_hit['rule'] if lut_hit else None
+
+                            if lut_hit and rule == 'coexist':
+                                # Coexist with existing same key — insert additive (different value)
+                                row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                                    conn, existing_req, now_iso
+                                )
+                                all_vals = self._fetch_coexist_values(conn, kind, key)
+                                result = self._make_store_result(
+                                    "appended", key, key, rule, value, None,
+                                    all_vals, existing_date, row,
+                                )
+                            elif lut_hit and rule == 'immutable':
+                                result = self._make_store_result(
+                                    "conflict", key, key, rule, value, old_value,
+                                    None, existing_date, existing_dict,
+                                )
+                                self._log_immutable_conflict(key, old_value, value)
                             else:
-                                # true_contradiction or ambiguous — don't store
-                                result = {
-                                    'conflict': True,
-                                    'classification': cls_result['classification'],
-                                    'existing': existing_dict,
-                                    'proposed_key': key,
-                                    'proposed_value': value,
-                                    'reasoning': cls_result.get('reasoning', ''),
-                                }
+                                # No LUT hit for this key or embedding unavailable — temporal default.
+                                # Miss was already recorded on the first write (new-row path).
+                                row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
+                                    conn, existing_dict, existing_req, now_iso
+                                )
+                                result = self._make_store_result(
+                                    "superseded", key, key, rule, value, old_value,
+                                    None, existing_date, row,
+                                )
 
-                        elif contradiction_mode == 'newest_wins':
-                            old_rw = existing_dict.get('retrieval_weight', 1.0)
-                            conn.execute("""
-                                UPDATE data_graph
-                                SET active=0, retrieval_weight=?
-                                WHERE rowid=?
-                            """, (old_rw * 0.5, row_id))
-                            conn.execute("""
-                                INSERT INTO data_graph
-                                    (kind, key, value, source, first_seen_at, last_confirmed_at)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            """, (kind, key, value, source, now_iso, now_iso))
-                            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                            self._add_edge_with_conn(conn, new_id, row_id, 'supersedes')
-                            self._add_edge_with_conn(conn, row_id, new_id, 'superseded_by')
-                            self._sync_fts(conn, new_id, key, value, kind)
-                            _schedule_emb_args = (new_id, key, value)
-                            _schedule_d2q_args = (new_id, key, value)
-                            result = self._fetch_row_by_id(conn, new_id)
+                        elif contradiction_mode == 'cosine_supersede':
+                            # System kind: exact-key match with different value → temporal supersession
+                            row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
+                                conn, existing_dict, existing_req, now_iso
+                            )
+                            result = self._make_store_result(
+                                "superseded", key, key, None, value, old_value,
+                                None, existing_date, row,
+                            )
 
                         else:
-                            # None policy — insert directly
-                            conn.execute("""
-                                INSERT INTO data_graph
-                                    (kind, key, value, source, first_seen_at, last_confirmed_at)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            """, (kind, key, value, source, now_iso, now_iso))
-                            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                            self._sync_fts(conn, new_id, key, value, kind)
-                            _schedule_emb_args = (new_id, key, value)
-                            _schedule_d2q_args = (new_id, key, value)
-                            result = self._fetch_row_by_id(conn, new_id)
+                            # None policy — insert directly (additive)
+                            row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                                conn, existing_req, now_iso
+                            )
+                            result = self._make_store_result(
+                                "created", key, key, None, value, None,
+                                None, None, row,
+                            )
                 else:
-                    # No existing row — insert new
-                    conn.execute("""
-                        INSERT INTO data_graph
-                            (kind, key, value, source, first_seen_at, last_confirmed_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (kind, key, value, source, now_iso, now_iso))
-                    new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                    self._sync_fts(conn, new_id, key, value, kind)
-                    _schedule_emb_args = (new_id, key, value)
-                    _schedule_d2q_args = (new_id, key, value)
-                    result = self._fetch_row_by_id(conn, new_id)
-                    logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)",
-                                kind, key, (value or '')[:60], source)
+                    # No existing row with this exact key — run canonicalization paths
+                    contradiction_mode = policy.get('contradiction')
+                    store_req = _StoreRequest(kind, key, value, source)
+
+                    if contradiction_mode == 'lut_canonicalize':
+                        result, _schedule_emb_args, _schedule_d2q_args = self._store_user_specific_new(
+                            conn, store_req, now_iso
+                        )
+
+                    elif contradiction_mode == 'cosine_supersede':
+                        result, _schedule_emb_args, _schedule_d2q_args = self._store_system_new(
+                            conn, store_req, now_iso
+                        )
+
+                    else:
+                        row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                            conn, store_req, now_iso
+                        )
+                        result = self._make_store_result(
+                            "created", key, key, None, value, None, None, None, row,
+                        )
 
             if _schedule_emb_args:
                 self._schedule_embeddings(*_schedule_emb_args)
@@ -476,6 +681,227 @@ class DataGraphService:
         except Exception as e:
             logger.error("[DATA GRAPH] store failed for kind=%s key='%s': %s", kind, key, e)
             return None
+
+    def _make_store_result(
+        self,
+        status: str,
+        provided_key: str,
+        canonical_key: str,
+        rule: Optional[str],
+        value: str,
+        old_value: Optional[str],
+        all_values: Optional[list],
+        date: Optional[str],
+        row: Optional[dict],
+    ) -> dict:
+        """Construct the structured store result dict.
+
+        Merges row fields at the base so callers can access row-level fields
+        (id, kind, evidence_count, etc.) directly. Structured fields overlay.
+        """
+        result = {}
+        if row and isinstance(row, dict):
+            result.update(row)
+        result.update({
+            "action": "store",
+            "status": status,
+            "canonical_key": canonical_key,
+            "provided_key": provided_key,
+            "rule": rule,
+            "value": value,
+            "old_value": old_value,
+            "all_values": all_values,
+            "date": date,
+            "row": row,
+        })
+        return result
+
+    def _fetch_coexist_values(self, conn, kind: str, key: str) -> list:
+        """Return all active values for a coexist key."""
+        try:
+            rows = conn.execute(
+                "SELECT value FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL",
+                (kind, key),
+            ).fetchall()
+            return [r[0] for r in rows]
+        except Exception:
+            return []
+
+    def _log_immutable_conflict(self, key: str, old_value: str, new_value: str) -> None:
+        logger.info("[DATA GRAPH] IMMUTABLE conflict on '%s'", key)
+
+    def _store_user_specific_new(self, conn, req: '_StoreRequest', now_iso: str) -> tuple:
+        """Handle store() for user_specific kind with no existing row at the given key.
+
+        Embeds the key, checks the concept LUT for a canonical form, then applies
+        the rule (temporal/coexist/immutable) against the canonical key's existing rows.
+        Falls back to plain insert on LUT miss or embedding failure.
+        Returns (structured_result_dict, emb_args, d2q_args).
+        """
+        key_emb = self._generate_embedding(req.key)
+        lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
+
+        if lut_hit is None:
+            top_cos = self._get_lut_miss_top_cos(key_emb) if key_emb else 0.0
+            self._record_lut_miss(conn, req.kind, req.key, req.value, top_cos, now_iso)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
+            return self._make_store_result(
+                "lut_miss_created", req.key, req.key, None, req.value, None, None, None, raw_row,
+            ), emb_args, d2q_args
+
+        canonical_key = lut_hit['canonical_key']
+        rule = lut_hit['rule']
+
+        if rule == 'temporal':
+            existing_canon = conn.execute(
+                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
+                (req.kind, canonical_key),
+            ).fetchone()
+            if existing_canon is not None:
+                existing_dict = self._row_to_dict(existing_canon)
+                old_val = existing_dict.get('value') or ''
+                existing_date = (
+                    existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+                )[:10] or None
+                if req.value.lower().strip() == old_val.lower().strip():
+                    self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+                    row = self._fetch_row_by_id(conn, existing_dict['id'])
+                    return self._make_store_result(
+                        "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+                    ), None, None
+                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+                row, emb_args, d2q_args = self._apply_temporal_supersession(
+                    conn, existing_dict, canon_req, now_iso
+                )
+                return self._make_store_result(
+                    "superseded", req.key, canonical_key, rule, req.value, old_val, None, existing_date, row,
+                ), emb_args, d2q_args
+            # No existing canonical row — insert new with canonical key
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+            return self._make_store_result(
+                "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
+            ), emb_args, d2q_args
+
+        if rule == 'coexist':
+            existing_exact = conn.execute(
+                "SELECT * FROM data_graph "
+                "WHERE kind=? AND key=? AND active=1 AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+                (req.kind, canonical_key, req.value),
+            ).fetchone()
+            if existing_exact is not None:
+                existing_dict = self._row_to_dict(existing_exact)
+                existing_date = (
+                    existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+                )[:10] or None
+                self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+                row = self._fetch_row_by_id(conn, existing_dict['id'])
+                return self._make_store_result(
+                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+                ), None, None
+            # Check if any value exists at all (for date on append)
+            any_existing = conn.execute(
+                "SELECT last_confirmed_at, first_seen_at FROM data_graph "
+                "WHERE kind=? AND key=? AND active=1 LIMIT 1",
+                (req.kind, canonical_key),
+            ).fetchone()
+            existing_date = None
+            if any_existing:
+                existing_date = (any_existing[0] or any_existing[1] or "")[:10] or None
+            canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+            all_vals = self._fetch_coexist_values(conn, req.kind, canonical_key)
+            status = "appended" if any_existing else "created"
+            return self._make_store_result(
+                status, req.key, canonical_key, rule, req.value, None, all_vals, existing_date, raw_row,
+            ), emb_args, d2q_args
+
+        if rule == 'immutable':
+            existing_canon = conn.execute(
+                _SELECT_ACTIVE_BY_KIND_KEY_SQL,
+                (req.kind, canonical_key),
+            ).fetchone()
+
+            if existing_canon is None:
+                canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+                raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+                return self._make_store_result(
+                    "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
+                ), emb_args, d2q_args
+
+            existing_dict = self._row_to_dict(existing_canon)
+            old_val = existing_dict.get('value') or ''
+            existing_date = (
+                existing_dict.get("last_confirmed_at") or existing_dict.get("first_seen_at") or ""
+            )[:10] or None
+
+            if req.value.lower().strip() == old_val.lower().strip():
+                self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+                row = self._fetch_row_by_id(conn, existing_dict['id'])
+                return self._make_store_result(
+                    "reinforced", req.key, canonical_key, rule, req.value, None, None, existing_date, row,
+                ), None, None
+
+            self._log_immutable_conflict(canonical_key, old_val, req.value)
+            return self._make_store_result(
+                "conflict", req.key, canonical_key, rule, req.value, old_val, None, existing_date, existing_dict,
+            ), None, None
+
+        # Unknown rule — insert as-is
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+        raw_row, emb_args, d2q_args = self._insert_new_row(conn, canon_req, now_iso)
+        return self._make_store_result(
+            "created", req.key, canonical_key, rule, req.value, None, None, None, raw_row,
+        ), emb_args, d2q_args
+
+    def _store_system_new(self, conn, req: _StoreRequest, now_iso: str) -> tuple:
+        """Handle store() for system_specific kind with no existing row at the given key.
+
+        Embeds the key and runs KNN against data_graph_key_vec to find a semantically
+        close existing system key. Above threshold → temporal supersession. Below → plain insert.
+        Returns (structured_result_dict, emb_args, d2q_args).
+        """
+        key_emb = self._generate_embedding(req.key)
+        match = self._find_system_key_match(conn, key_emb, req.kind)
+
+        if match is None:
+            raw_row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
+            return self._make_store_result(
+                "created", req.key, req.key, None, req.value, None, None, None, raw_row,
+            ), emb_args, d2q_args
+
+        canonical_key = match.get('key', req.key)
+        old_value = match.get('value') or ''
+        existing_date = (
+            match.get("last_confirmed_at") or match.get("first_seen_at") or ""
+        )[:10] or None
+
+        if req.value.lower().strip() == old_value.lower().strip():
+            self._reinforce_row(conn, match['id'], match, now_iso)
+            refreshed = self._fetch_row_by_id(conn, match['id'])
+            return self._make_store_result(
+                "reinforced", req.key, canonical_key, None, req.value, None, None, existing_date, refreshed,
+            ), None, None
+
+        canon_req = _StoreRequest(req.kind, canonical_key, req.value, req.source)
+        row, emb_args, d2q_args = self._apply_temporal_supersession(
+            conn, match, canon_req, now_iso
+        )
+        return self._make_store_result(
+            "superseded", req.key, canonical_key, None, req.value, old_value, None, existing_date, row,
+        ), emb_args, d2q_args
+
+    def _insert_new_row(self, conn, req: _StoreRequest, now_iso: str) -> tuple:
+        """Insert a brand-new data_graph row; sync FTS; return (row_dict, emb_args, d2q_args)."""
+        conn.execute(
+            "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (req.kind, req.key, req.value, req.source, now_iso, now_iso),
+        )
+        new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        self._sync_fts(conn, new_id, req.key, req.value, req.kind)
+        logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)", req.kind, req.key, (req.value or '')[:60], req.source)
+        return self._fetch_row_by_id(conn, new_id), (new_id, req.key, req.value), (new_id, req.key, req.value)
 
     # ── recall() ─────────────────────────────────────────────────────
 
@@ -512,7 +938,7 @@ class DataGraphService:
                             ORDER BY distance
                         """, (query_blob, k))
                         for rowid, dist in cursor.fetchall():
-                            cos = 1.0 - (dist ** 2 / 2.0)
+                            cos = _l2_dist_to_cosine(dist)
                             if rowid not in candidates:
                                 candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
                             candidates[rowid]['key_cos'] = max(candidates[rowid]['key_cos'], cos)
@@ -529,7 +955,7 @@ class DataGraphService:
                             ORDER BY distance
                         """, (query_blob, k))
                         for rowid, dist in cursor.fetchall():
-                            cos = 1.0 - (dist ** 2 / 2.0)
+                            cos = _l2_dist_to_cosine(dist)
                             if rowid not in candidates:
                                 candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
                             candidates[rowid]['value_cos'] = max(candidates[rowid]['value_cos'], cos)
@@ -561,11 +987,10 @@ class DataGraphService:
                     logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
 
                 # ── Relevance floor — drop candidates with no strong signal ──
-                _COSINE_FLOOR = 0.42
                 candidates = {
                     rid: sigs for rid, sigs in candidates.items()
-                    if sigs['key_cos'] >= _COSINE_FLOOR
-                    or sigs['value_cos'] >= _COSINE_FLOOR
+                    if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
+                    or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
                     or sigs['fts_bonus'] > 0
                 }
 
@@ -942,6 +1367,165 @@ class DataGraphService:
                 )
         except Exception as e:
             logger.warning("[DATA GRAPH] set_active failed for rowid=%s: %s", row_id, e)
+
+    def _make_forget_result(
+        self,
+        status: str,
+        provided_key: str,
+        canonical_key: str,
+        rule: Optional[str],
+        value: Optional[str],
+        *,
+        old_value: Optional[str] = None,
+        remaining_values: Optional[list] = None,
+        versions_removed: Optional[int] = None,
+        date: Optional[str] = None,
+    ) -> dict:
+        """Construct the structured forget result dict with explicit parameters; no closure captures."""
+        base = {
+            "action": "forget",
+            "status": status,
+            "canonical_key": canonical_key,
+            "provided_key": provided_key,
+            "rule": rule,
+            "value": value,
+            "old_value": old_value,
+            "remaining_values": remaining_values,
+            "versions_removed": versions_removed,
+            "date": date,
+        }
+        return base
+
+    def _hard_delete_row(self, conn, row_id: int) -> None:
+        """Hard-delete a data_graph row and all associated index/edge entries.
+
+        Removes FTS, main row, edges, and both vec tables. Vec table failures
+        are non-fatal and logged at debug level.
+        """
+        self._remove_fts(conn, row_id)
+        conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
+        conn.execute("DELETE FROM data_graph_edges WHERE from_id=? OR to_id=?", (row_id, row_id))
+        try:
+            conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
+        except Exception as e:
+            logger.debug("vec table delete failed for id=%s: %s", row_id, e)
+        try:
+            conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
+        except Exception as e:
+            logger.debug("vec table delete failed for id=%s: %s", row_id, e)
+
+    # ── forget() ──────────────────────────────────────────────────────
+
+    def forget(self, kind: str, key: str, value: str = None, *, source: str = None) -> Optional[dict]:
+        """Hard-delete memory rows by key (and optionally value).
+
+        Rule-aware: temporal deletes all versions, coexist deletes the specific
+        value row (value param required), immutable hard-deletes the single row.
+        LUT miss path falls back to raw key lookup.
+        """
+        if kind not in VALID_KINDS:
+            logger.warning("[DATA GRAPH] forget: invalid kind '%s'", kind)
+            return None
+
+        try:
+            with self.db.connection() as conn:
+                # Resolve canonical key via LUT
+                provided_key = key
+                canonical_key = key
+                rule = None
+
+                policy = _KIND_POLICY[kind]
+                if policy.get('contradiction') == 'lut_canonicalize':
+                    key_emb = self._generate_embedding(key)
+                    lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
+                    if lut_hit:
+                        canonical_key = lut_hit['canonical_key']
+                        rule = lut_hit['rule']
+
+                if rule == 'immutable':
+                    row = conn.execute(
+                        "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL LIMIT 1",
+                        (kind, canonical_key),
+                    ).fetchone()
+                    if row is None:
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+                    d = self._row_to_dict(row)
+                    old_val = d.get('value')
+                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
+                    self._hard_delete_row(conn, d['id'])
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=old_val, date=date)
+
+                if rule == 'temporal':
+                    rows = conn.execute(
+                        "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
+                        (kind, canonical_key),
+                    ).fetchall()
+                    if not rows:
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+                    count = len(rows)
+                    for r in rows:
+                        self._hard_delete_row(conn, self._row_to_dict(r)['id'])
+                    return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
+
+                if rule == 'coexist':
+                    if value is None:
+                        return {
+                            "action": "forget",
+                            "status": "error",
+                            "message": "value required for coexist key",
+                        }
+                    exact = conn.execute(
+                        "SELECT * FROM data_graph "
+                        "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
+                        "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+                        (kind, canonical_key, value),
+                    ).fetchone()
+                    if exact is None:
+                        remaining = self._fetch_coexist_values(conn, kind, canonical_key)
+                        return self._make_forget_result("value_not_found", provided_key, canonical_key, rule, value, remaining_values=remaining)
+                    d = self._row_to_dict(exact)
+                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
+                    self._hard_delete_row(conn, d['id'])
+                    remaining = self._fetch_coexist_values(conn, kind, canonical_key)
+                    if not remaining:
+                        return self._make_forget_result("forgotten_empty", provided_key, canonical_key, rule, value, date=date)
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, date=date, remaining_values=remaining)
+
+                # LUT miss or no rule (misc/moment/document/system without cosine match) — raw key lookup
+                rows = conn.execute(
+                    "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
+                    (kind, canonical_key),
+                ).fetchall()
+                if not rows:
+                    return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+                if value is not None:
+                    # Value-specific delete
+                    exact = conn.execute(
+                        "SELECT * FROM data_graph "
+                        "WHERE kind=? AND key=? AND deleted_at IS NULL "
+                        "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+                        (kind, canonical_key, value),
+                    ).fetchone()
+                    if exact is None:
+                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+                    d = self._row_to_dict(exact)
+                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
+                    self._hard_delete_row(conn, d['id'])
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
+                # No value param — delete all rows for this key
+                count = len(rows)
+                for r in rows:
+                    rd = self._row_to_dict(r)
+                    self._hard_delete_row(conn, rd['id'])
+                if count == 1:
+                    d = self._row_to_dict(rows[0])
+                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
+                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
+                return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
+
+        except Exception as e:
+            logger.error("[DATA GRAPH] forget failed for kind=%s key='%s': %s", kind, key, e)
+            return None
 
     # ── Decay cycle ───────────────────────────────────────────────────
 

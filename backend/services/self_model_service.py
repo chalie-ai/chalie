@@ -30,7 +30,7 @@ REFRESH_INTERVAL = 30  # background thread cycle
 
 # Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
 CRITICAL_JOBS = frozenset({
-    'frontal-cortex', 'cognitive-triage',
+    'frontal-cortex-unified', 'cognitive-triage',
 })
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
@@ -502,28 +502,6 @@ class SelfModelService:
                         })
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
-
-                # 4. Proactive rejection rate: >95% in last 24h
-                try:
-                    candidates = conn.execute("""
-                        SELECT COUNT(*) FROM interaction_log
-                        WHERE event_type = 'proactive_candidate'
-                          AND created_at > datetime('now', '-24 hours')
-                    """).fetchone()[0]
-                    rejected = conn.execute("""
-                        SELECT COUNT(*) FROM interaction_log
-                        WHERE event_type = 'action_gate_rejected'
-                          AND created_at > datetime('now', '-24 hours')
-                    """).fetchone()[0]
-                    if candidates >= 10:
-                        rate = (rejected / candidates) * 100 if candidates > 0 else 0
-                        if rate > 95:
-                            checks.append({
-                                'signal': f"Proactive {rate:.0f}% rejection rate ({rejected}/{candidates} in 24h)",
-                                'severity': 0.4,
-                            })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Proactive rejection rate check failed: {e}", exc_info=True)
 
                 # Orphaned episodes check removed — topics table dropped in migration 035
 

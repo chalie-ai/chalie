@@ -46,10 +46,10 @@ def _get_world_state_service():
     return WorldStateService
 
 
-def _get_episodic_service():
-    """Return EpisodicService class (lazy, fail-open)."""
-    from services.episodic_service import EpisodicService
-    return EpisodicService
+def _get_retrieval_module():
+    """Return the episodic retrieval module (lazy, fail-open)."""
+    from services import episodic_retrieval_service
+    return episodic_retrieval_service
 
 
 def _get_memory_client():
@@ -153,7 +153,7 @@ def _slice_situation() -> dict:
 def _slice_relevance(query: str) -> dict:
     """Score relevance of a text snippet against the current cognitive context.
 
-    Uses EpisodicService for semantic similarity and the cached
+    Uses episodic_retrieval_service for semantic similarity and the cached
     world model for goal/task matching.
 
     Args:
@@ -177,10 +177,7 @@ def _slice_relevance(query: str) -> dict:
 
     # Semantic similarity via episodic retrieval
     try:
-        EpisodicSvc = _get_episodic_service()
-        db = _get_db_service()
-        svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query)
+        episodes = _get_retrieval_module().retrieve(query_text=query, channel=None)
 
         if episodes:
             top = episodes[0]
@@ -272,10 +269,9 @@ def _slice_memory(query: str, k: int) -> dict:
         return {"results": []}
 
     try:
-        EpisodicSvc = _get_episodic_service()
-        db = _get_db_service()
-        svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query, radius=0.5)
+        episodes = _get_retrieval_module().retrieve(
+            query_text=query, channel=None, radius=0.5
+        )
 
         results = []
         for ep in episodes:

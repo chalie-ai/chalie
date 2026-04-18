@@ -137,7 +137,7 @@ Remembers context and priorities, understands recurring patterns, avoids requiri
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
 
-*Codebase: reasoning loop service (event-driven continuous reasoning, replaces timer-based DMN), curiosity thread service, introspect skill, reflect skill (on-demand + automatic post-loop), ACT orchestrator auto-reflection trigger.*
+*Codebase: reasoning loop service (event-driven continuous reasoning, replaces timer-based DMN), curiosity thread service, introspect skill (wired but currently broken — being fixed), reflect skill (on-demand + automatic post-loop), ACT orchestrator auto-reflection trigger.*
 
 ---
 

@@ -27,7 +27,7 @@ def _stub_providers(monkeypatch, response):
     from services import providers as prov_mod
 
     class _FakeProvider:
-        def send_messages(self, system_prompt, messages, cache_prefix=True, tools=None):
+        def send_messages(self, system_prompt, messages, cache_prefix=True, tools=None, thinking_mode=None):
             return response
 
     monkeypatch.setattr(prov_mod.Providers, '_resolve', lambda self, job: _FakeProvider())

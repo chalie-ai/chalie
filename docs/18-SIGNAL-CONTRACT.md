@@ -44,7 +44,7 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 **Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, GoalInference, SelfModel
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, LUTCanonicalization, IdleConsolidation, GrowthPattern, AutobiographySynthesis, GoalInference, SelfModel
 
 **Embodiment services:**
 AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, EpisodicMemoryObserver, ThreadExpiry
@@ -90,7 +90,7 @@ class ReasoningSignal:
 |---|---|---|---|
 | `memory_pressure` | Knowledge is fading or contradicted | decay_engine, semantic_consolidation | 0.5–0.7 |
 | `new_knowledge` | New concept formed from experience | semantic_consolidation | 0.6 |
-| `novel_observation` | Surprising tool output stored to data_graph | tool_synthesis | 0.6 |
+| `novel_observation` | Surprising tool output stored to data_graph | — | 0.6 |
 | `ambient_context` | Environment changed (place, attention, energy) | event_bridge | From confidence |
 | `idle_discovery` | Nothing happened, engine self-seeds | reasoning_loop (internal) | 0.4–0.5 |
 | `episode_created` | New narrative episode consolidated | episodic_memory_worker | 0.5 |
@@ -219,7 +219,6 @@ def run_signal_loop(self):
 |---|---|---|---|
 | **DecayEngineService** | `memory_pressure` | 30min | 966 |
 | **SemanticConsolidationService** | `new_knowledge`, `memory_pressure` | Queue-driven | 967 |
-| **ToolSynthesisProcessor** | `novel_observation` | 60min interval | — |
 | **EventBridgeService** | `ambient_context` | Event-driven | 968 |
 | **EpisodicMemoryWorker** | `episode_created` | Queue-driven | 971 |
 | **KnowledgeService** | `trait_changed` | Request-driven | 972 |

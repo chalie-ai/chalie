@@ -81,11 +81,34 @@ def main():
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
             svc.ensure_models()
-            # Base model (~473MB ONNX → ~2GB RSS) is lazy-loaded on first
-            # predict() call.  Loading it here alongside the embedding model
-            # (already ~2.2GB) exceeds the Docker VM limit and triggers OOM.
+            # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
+            # fire before any user request arrives. The encoder session is already
+            # warm (loaded by embedding preload above), so registration is fast.
+            # _get_head() calls _register_task() which emits the boot marker and
+            # validates the sha256 pin — any mismatch raises RuntimeError here.
+            from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
+            _failures: list[tuple[str, str]] = []
+            for _task, _ in _CLASSIFIER_REGISTRY:
+                try:
+                    svc._get_head(_task)
+                except RuntimeError as _reg_err:
+                    # sha256 gate refused this task. Surface this loudly — silent
+                    # fallback in production would defeat the boot-pin invariant.
+                    logger.error(
+                        f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
+                        f"reason={_reg_err}"
+                    )
+                    _failures.append((_task, str(_reg_err)))
+            svc._failed_registrations = _failures
             svc._ready = True
-            logger.info("[System] ONNX models verified (base model deferred to first use)")
+            if _failures:
+                logger.error(
+                    f"[System] ONNX classifier DEGRADED — {len(_failures)} task(s) "
+                    f"failed registration: {[t for t, _ in _failures]} — health "
+                    f"endpoint will report not-ready until resolved"
+                )
+            else:
+                logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
@@ -155,6 +178,7 @@ def main():
     except Exception:
         pass
 
+
     # Encryption key initialisation and capability reconnection are deferred to
     # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
     # requires an interactive password to unseal, so neither step can run at
@@ -193,7 +217,6 @@ def main():
     # Import worker functions
     from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
-    from services.tool_synthesis_processor import tool_synthesis_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
@@ -204,7 +227,6 @@ def main():
     # Register service workers
     manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
-    manager.register_service("tool-synthesis-service", tool_synthesis_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
@@ -338,23 +360,23 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
-    # Hourly cleanup for stale pending contradictions
-    def _pending_contradiction_cleanup_loop():
-        import time
-        from services.pending_contradiction_service import PendingContradictionService
-        from services.database_service import get_shared_db_service
-        while True:
-            try:
-                db = get_shared_db_service()
-                svc = PendingContradictionService(db)
-                count = svc.cleanup_stale()
-                if count > 0:
-                    logging.info(f"[PENDING_CONTRADICTION] Cleanup: processed {count} stale records")
-            except Exception as e:
-                logging.warning(f"[PENDING_CONTRADICTION] Cleanup error: {e}")
-            time.sleep(3600)
-
-    threading.Thread(target=_pending_contradiction_cleanup_loop, daemon=True, name="pending-contradiction-cleanup").start()
+    # Verify concept LUT is present and has embeddings
+    try:
+        _lut_db = _os.path.join(
+            _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
+        )
+        if _os.path.exists(_lut_db):
+            _c = _sql.connect(_lut_db)
+            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            _c.close()
+            if "lut_embeddings" in _tables:
+                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
+            else:
+                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
+        else:
+            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
+    except Exception as e:
+        logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):

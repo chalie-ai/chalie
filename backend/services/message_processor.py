@@ -26,7 +26,9 @@ import contextlib
 import contextvars
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import parse_utc, utc_now
 
@@ -97,7 +99,8 @@ class MessageProcessor:
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
     NATIVE_TOOLS: list[str] = []
     MAX_ITERATIONS: int = 30
-    MAX_TIMEOUT: int = 900  # seconds
+    MAX_TIMEOUT: int = 900    # seconds — ACT loop only
+    THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
     COMPACTION_PROMPT: str = (
         "Summarize the following conversation context into a compact, actionable summary.\n"
         "\n"
@@ -146,6 +149,12 @@ class MessageProcessor:
     CHANNEL: str = ''   # e.g. 'user', 'dmn', 'goal_pursuit', 'scheduled'
     ROLE: str = ''      # e.g. 'user', 'proactive_thought', 'goal_pursuit'
 
+    # When True, send() skips write_input_row() and store() skips the
+    # assistant row — self._uid stays None for the entire turn.
+    # Set this on internal processors (EpisodeEncoderProcessor,
+    # SuperEpisodeEncoderProcessor) that must not pollute the transcript.
+    SKIP_TRANSCRIPT_WRITE: bool = False
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self, raw_input: str, metadata: dict | None = None):
@@ -162,6 +171,18 @@ class MessageProcessor:
         self._act_trail: list[str] = []
         self._discovered_tools: list[dict] = []
         self._uid: int | None = None
+        # Default is 'low' — classifier must explicitly set medium/high.
+        # A 'medium' default would silently apply deliberation pressure to every
+        # turn where the gate wasn't run (non-user channels) or crashed —
+        # regressing benchmark behaviour on simple recall/chit-chat.
+        self._thinking_level: str = 'low'
+        self._thinking_exploration: str | None = None
+        # Accumulator starts immediately so exploration + compaction tokens count.
+        self._metrics: MetricsAccumulator = MetricsAccumulator()
+
+    def set_turn_start(self, ts: float) -> None:
+        """Override the accumulator start time (called from _handle_chat before thread spawn)."""
+        self._metrics.start_time = ts
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
@@ -317,7 +338,7 @@ class MessageProcessor:
 
         # Batch-load durable tool_calls for all transcript rows.
         # `include_ephemeral=False` enforces the north star rule: Previous
-        # Messages must only surface ephemeral=0 rows (tool_synthesis,
+        # Messages must only surface ephemeral=0 rows (narration,
         # user_steer, tool_compaction, act_restart, and batched LLM tool
         # results are audit-only and never replay in future context).
         all_ids = [e['id'] for e in entries if e.get('id')]
@@ -378,6 +399,8 @@ class MessageProcessor:
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
+
+        self._metrics.record_tool(tool_name)
 
         result_text = ''
         try:
@@ -480,6 +503,9 @@ class MessageProcessor:
           ``user_steer`` and ephemeral=0) into a single ``act_restart``
           DTO, clears the trail + discovered tools, and resets
           ``iteration`` to 0 for a clean loop restart.
+        - ``loop_start`` is anchored AFTER ``_run_thinking_gate()`` completes.
+          The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
+          (independent budget). MAX_TIMEOUT covers only ACT loop iterations.
         - ``loop_start`` is intentionally NOT reset on Stage 2 restart —
           the MAX_TIMEOUT wall-clock guard keeps ticking so runaway turns
           eventually hit the cap.
@@ -520,7 +546,10 @@ class MessageProcessor:
         with bind_current_processor(self):
             # Write input row BEFORE the loop so transcript_id is available
             # for ToolRenderAndRecordService during tool dispatch.
-            self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
+            # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
+            # they leave no trace in the transcript table.
+            if not self.SKIP_TRANSCRIPT_WRITE:
+                self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
             # Single dispatcher for the entire turn. Tools discovered
             # mid-turn via find_tools are registered as handlers on this
@@ -528,6 +557,20 @@ class MessageProcessor:
             self._dispatcher = ActDispatcherService(execution_gate=False)
 
             self._run_memory_seed()
+            self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
+
+            # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
+            # runs under its own THINKING_TIMEOUT envelope (independent budget),
+            # so MAX_TIMEOUT covers only ACT loop iterations.
+            loop_start = time.time()
+
+            # Log exploration injection once per turn — at this single point,
+            # not inside the ACT loop.
+            if self._thinking_exploration:
+                logger.info(
+                    "[THINKING] Chain of Thought injected into user body (chars=%d)",
+                    len(self._thinking_exploration),
+                )
 
             raw_limit = Providers.instance().get_context_limit(job=self.JOB)
             context_limit: int = (
@@ -536,7 +579,6 @@ class MessageProcessor:
                 else 32_000
             )
 
-            loop_start = time.time()
             iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -546,6 +588,7 @@ class MessageProcessor:
                 and time.time() - loop_start < self.MAX_TIMEOUT
             ):
                 user_body = self.getUserPrompt()
+                user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                 user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
 
                 # Two-stage mid-ACT compaction: triggered when the rendered
@@ -566,6 +609,7 @@ class MessageProcessor:
                     self._run_stage1_tool_compaction()
                     # Re-render after Stage 1 trim and re-check threshold.
                     user_body = self.getUserPrompt()
+                    user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                     user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
                     if self._check_threshold(user_body, context_limit):
                         logger.warning(
@@ -600,8 +644,10 @@ class MessageProcessor:
                 # Provider errors propagate here. store() is not called if
                 # this raises — the turn leaves no trace in the DB.
                 llm_response = Providers.instance().send_messages(
-                    system_prompt, messages, job=self.JOB, tools=tools
+                    system_prompt, messages, job=self.JOB, tools=tools,
+                    thinking_mode=self._get_thinking_mode_for_send(),
                 )
+                self._metrics.accumulate(llm_response)
 
                 if not llm_response.tool_calls:
                     loop_exited_cleanly = True
@@ -611,11 +657,11 @@ class MessageProcessor:
                 # narration in its response ahead of the tool_use block, so
                 # the stored timeline must reflect that semantic order. The
                 # transcript-timeline example in the north star § Storage
-                # Model shows tool_synthesis preceding the tool_call DTOs
+                # Model shows the narration DTO preceding the tool_call DTOs
                 # for the same iteration.
                 if llm_response.text:
                     rendered = ToolRenderAndRecordService(
-                        tool_name='tool_synthesis',
+                        tool_name='narration',
                         params={},
                         result=llm_response.text,
                         ephemeral=True,
@@ -649,7 +695,7 @@ class MessageProcessor:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
                 # Cap exit — no clean terminating text. The last iteration's
-                # narration is already captured as a tool_synthesis DTO; we
+                # narration is already captured as a narration DTO; we
                 # must NOT re-use it as the assistant row.
                 logger.warning(
                     "[MessageProcessor.send] ACT loop hit safety cap "
@@ -799,6 +845,7 @@ class MessageProcessor:
                 job=self.JOB,
                 tools=None,
             )
+            self._metrics.accumulate(response)
             compacted_text = (response.text or '').strip()
         except Exception as exc:
             logger.error(
@@ -893,6 +940,7 @@ class MessageProcessor:
                 job=self.JOB,
                 tools=None,
             )
+            self._metrics.accumulate(response)
             summary_text = (response.text or '').strip()
         except Exception as exc:
             logger.warning(
@@ -951,7 +999,13 @@ class MessageProcessor:
         """Write the assistant transcript row. Input row was already written
         at the top of send(). Tool calls were recorded inline via
         ToolRenderAndRecordService during the ACT loop.
+
+        When SKIP_TRANSCRIPT_WRITE is True (internal processors), this is a
+        no-op — no rows are written and self._uid remains None.
         """
+        if self.SKIP_TRANSCRIPT_WRITE:
+            self._uid = None
+            return
         from services.transcript_service import write_assistant_row
         write_assistant_row(self.CHANNEL, llm_response)
 
@@ -966,11 +1020,225 @@ class MessageProcessor:
         """
         pass
 
+    # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
+
+    def _run_thinking_gate(self) -> None:
+        """Classify deliberation depth for this turn; persist on the input row.
+
+        No-op for non-user channels (classifier is OOD for autonomous flows).
+        All exceptions trapped — gate failure must never kill the turn.
+        Result stored on self._thinking_level and, for high-mode turns,
+        self._thinking_exploration (persisted to tool_calls as ephemeral=0).
+        written to transcript.thinking_level for self._uid so future turns
+        can read it as prev_level.
+        """
+        if self.CHANNEL != 'user':
+            return
+
+        try:
+            from services.thinking_level_classifier_service import (
+                ThinkingLevelClassifierService,
+            )
+
+            prev_level = self._read_prev_thinking_level()
+            result = ThinkingLevelClassifierService().classify(
+                self._raw_input, prev_level=prev_level,
+            )
+            # Capture RAW classifier output. Persisted to the input row so the
+            # next turn's sticky-fallback sees what the classifier said, not a
+            # downstream failure. Prevents silent cascades across turns.
+            raw_level = result.get('level', 'low')
+            self._thinking_level = raw_level
+
+            if self._thinking_level == 'high':
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as _pool:
+                        _future = _pool.submit(self._run_thinking_exploration)
+                        try:
+                            self._thinking_exploration = _future.result(
+                                timeout=self.THINKING_TIMEOUT
+                            )
+                        except FuturesTimeoutError:
+                            logger.warning(
+                                "[THINKING] exploration exceeded THINKING_TIMEOUT=%ds"
+                                " — proceeding without exploration",
+                                self.THINKING_TIMEOUT,
+                            )
+                            self._thinking_exploration = None
+                except Exception as exc:
+                    logger.info(
+                        "[THINKING] exploration failed (%s) — high turn proceeds "
+                        "without exploration", exc,
+                    )
+                    self._thinking_exploration = None
+                if self._thinking_exploration is not None:
+                    self._persist_exploration_to_tool_calls(self._uid)
+            else:
+                self._thinking_exploration = None
+
+            self._persist_thinking_level_on_input_row(raw_level)
+
+        except Exception as exc:
+            # Gate failure MUST default to 'low' — a no-op — not 'medium'.
+            logger.info(
+                "[THINKING] gate failed (%s) — defaulting to low (no-op)", exc
+            )
+            self._thinking_level = 'low'
+            self._thinking_exploration = None
+
+    def _read_prev_thinking_level(self) -> str:
+        """Read the most recent user-row thinking_level for this channel.
+
+        Returns 'none' on first turn or when nothing classified yet.
+        """
+        from services.database_service import get_shared_db_service
+
+        try:
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT thinking_level FROM transcript "
+                    "WHERE channel = ? AND role = 'user' "
+                    "AND thinking_level IS NOT NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (self.CHANNEL,),
+                ).fetchone()
+            if row and row[0] in ('low', 'medium', 'high'):
+                return row[0]
+        except Exception as exc:
+            logger.debug("[THINKING] prev-level read failed: %s", exc)
+        return 'none'
+
+    def _persist_thinking_level_on_input_row(self, level: str) -> None:
+        """Update transcript row self._uid with the given classifier level.
+
+        ``level`` is the RAW classifier prediction. The caller passes it
+        explicitly so that next-turn sticky-fallback reads the classifier's
+        intent, not a runtime-degraded value.
+        """
+        if self._uid is None:
+            return
+        from services.database_service import get_shared_db_service
+        try:
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE transcript SET thinking_level = ? WHERE id = ?",
+                    (level, self._uid),
+                )
+        except Exception as exc:
+            logger.debug("[THINKING] persist failed: %s", exc)
+
+    def _run_thinking_exploration(self) -> 'str | None':
+        """One same-job exploration pass for high-mode turns.
+
+        Asks the model to think out loud about the user's request: assess
+        gaps in its knowledge, evaluate which tools would help, and flag
+        non-obvious aspects. Output is Chain-of-Thought that gets
+        re-injected into the ACT loop via _wrap_with_exploration so the
+        model can act on its own reasoning.
+
+        Tools schema is sent so the model can reason about available
+        capabilities, but the prompt instructs it not to invoke them.
+        Any tool_calls in the response are discarded (single-pass only).
+
+        The model may output 'NOTHING' if the request is straightforward,
+        in which case None is returned and no exploration is injected.
+
+        Returns None on any failure (network, provider rejection, etc).
+        Logged at INFO. NEVER raises.
+        """
+        from services.providers import Providers
+
+        _EXPLORATION_PREFIX = (
+            "Think out loud about the user's request before responding.\n\n"
+            "Consider:\n"
+            "- What does the ideal response look like? What would make it genuinely useful?\n"
+            "- Do you already know enough to answer well, or are there gaps?\n"
+            "- Would any of your available tools fill those gaps? Which ones, in what order?\n"
+            "- Is there anything non-obvious about this request you might miss on a first read?\n\n"
+            "Whatever you output here will be shown to you as Chain of Thought on the next "
+            "pass — write to your future self. Be specific: name the tools you plan to use, "
+            "flag uncertainties, note key facts you want to remember to include.\n\n"
+            "If the request is straightforward and you have nothing useful to say to yourself, "
+            "output exactly: NOTHING\n\n"
+            "DO NOT INVOKE TOOLS — they are disabled in this phase. Think only."
+            "\n\n---\n\n"
+        )
+
+        try:
+            user_body = self.getUserPrompt()
+            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+            system_prompt = self.getSystemPrompt()
+            tools = self.getTools()
+
+            response = Providers.instance().send_messages(
+                system_prompt,
+                [{'role': 'user', 'content': _EXPLORATION_PREFIX + user_body}],
+                job=self.JOB,
+                tools=tools,
+                thinking_mode='high',
+            )
+            self._metrics.accumulate(response)
+
+            if response.tool_calls:
+                logger.debug(
+                    "[THINKING] exploration model attempted %d tool call(s) — discarded",
+                    len(response.tool_calls),
+                )
+
+            text = (response.text or '').strip()
+            if text.upper() == 'NOTHING':
+                return None
+            return text if text else None
+
+        except Exception as exc:
+            logger.info("[THINKING] exploration failed (%s)", exc)
+            return None
+
+    def _get_thinking_mode_for_send(self) -> 'str | None':
+        """Map self._thinking_level → provider thinking_mode kwarg.
+
+        Only fires on the user channel — non-user channels (DMN, scheduler,
+        cron, goal-pursuit, internal flows) get None so background work
+        stays cheap.
+        """
+        if self.CHANNEL != 'user':
+            return None
+        if self._thinking_level == 'high':
+            return 'high'
+        if self._thinking_level == 'medium':
+            return 'medium'
+        return None
+
+    def _persist_exploration_to_tool_calls(self, transcript_id: 'int | None') -> None:
+        """Insert the exploration text as a durable tool_calls row.
+
+        Stored with tool_name='thinking', ephemeral=0 so it survives
+        compaction and surfaces as part of the durable audit trail.
+        Persistence failure logs INFO and does NOT abort the turn.
+        """
+        if transcript_id is None or self._thinking_exploration is None:
+            return
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        try:
+            ToolRenderAndRecordService(
+                tool_name='thinking',
+                params={},
+                result=self._thinking_exploration,
+                ephemeral=False,
+                transcript_id=transcript_id,
+            ).renderAndRecord()
+        except Exception as exc:
+            logger.info(
+                "[THINKING] failed to persist exploration to tool_calls (%s)", exc
+            )
+
     def postTurn(self) -> None:
         """Per-channel post-turn service fan-out.
 
         Base is a no-op. UserMessageProcessor overrides in Commit 8 with the
-        eight-service fan-out (contradiction detection via memory skill, phase
+        eight-service fan-out (LUT canonicalization via memory skill, phase
         updates, etc.). Each subclass is the sole orchestrator of its own tail.
         """
         pass
@@ -986,21 +1254,24 @@ _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 
 
 #: Durable tool_call names that **must never** surface in Previous Messages.
-#: Only ``compaction`` needs this suppression: it is stored ``ephemeral=0``
-#: for audit purposes, but its content is already replayed to the LLM through
-#: the ``### Checkpoint`` envelope built by ``_wrap_with_checkpoint``. Letting
-#: it also render in Previous Messages would duplicate the summary on every
-#: subsequent turn.
+#:
+#: ``compaction`` — stored ``ephemeral=0`` for audit purposes, but its content
+#: is already replayed to the LLM through the ``### Checkpoint`` envelope built
+#: by ``_wrap_with_checkpoint``. Letting it also render in Previous Messages
+#: would duplicate the summary on every subsequent turn. (Decision 4B —
+#: resolved 2026-04-10.)
+#:
+#: ``thinking`` — the pre-turn exploration block is stored ``ephemeral=0`` as
+#: an audit row via ``_persist_exploration_to_tool_calls``, but is prepended
+#: live into the ACT-loop user body via ``_wrap_with_exploration`` on every
+#: iteration (cheap string-prefix, single LLM call before the loop). Rendering
+#: it again in Previous Messages would double-inject the exploration text and
+#: pollute the transcript for the LLM.
 #:
 #: ``tool_compaction`` and ``act_restart`` do NOT need to be listed here —
 #: both are stored ``ephemeral=1`` and are already filtered out of Previous
 #: Messages by the durable-only query in ``getPreviousMessages``.
-#:
-#: Decision 4B — resolved by the user on 2026-04-10: "compaction tool should
-#: NEVER make it to Previous Messages". Filtered at the ``getPreviousMessages``
-#: call site, immediately after ``get_by_transcript_ids`` returns, so the
-#: filter is loud and visible rather than buried in a service parameter.
-_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction'})
+_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction', 'thinking'})
 
 
 def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
@@ -1029,6 +1300,45 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
         "---\n"
         "### Current State - What's happening in the current turn\n"
         f"{user_body}"
+    )
+
+
+def _wrap_with_exploration(channel: str, user_body: str) -> str:
+    """Prepend the thinking exploration block to the user-message body.
+
+    Channel-gated: returns ``user_body`` unchanged for any non-user channel so
+    background flows (DMN, goal-pursuit, scheduled) are never affected.
+
+    Reads ``_thinking_exploration`` from the active processor via
+    ``current_processor()``. Returns ``user_body`` unchanged when:
+    - ``channel != 'user'``
+    - no active processor is bound (called outside a turn)
+    - ``_thinking_exploration`` is falsy (None, empty string)
+
+    The exploration LLM call runs ONCE per turn (inside _run_thinking_gate).
+    This helper is called on each ACT iteration to keep the already-computed
+    exploration text in the user body. The INFO log for the injection is
+    emitted once pre-loop inside send() — not here.
+
+    Apply this wrapper BEFORE ``_wrap_with_checkpoint`` so the exploration block
+    sits at the top of ``### Current State`` when a compaction exists.
+    """
+    if channel != 'user':
+        return user_body
+    proc = current_processor()
+    if proc is None:
+        return user_body
+    exploration_text = getattr(proc, '_thinking_exploration', None)
+    if not exploration_text:
+        return user_body
+    return (
+        "## Chain of Thought\n"
+        "Below is your initial reaction to this prompt, played back. "
+        "Use it as grounding but pivot as needed based on the conversation.\n\n"
+        "---\n\n"
+        f"{exploration_text}\n\n"
+        "---\n\n"
+        + user_body
     )
 
 
