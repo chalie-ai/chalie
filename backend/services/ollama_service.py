@@ -97,7 +97,7 @@ class OllamaService:
             except requests.exceptions.HTTPError as e:
                 self._handle_http_error(e, attempt, payload)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
         del cache_prefix  # interface parity with Anthropic; Ollama has no prefix-cache.
         url = f"{self.host}/api/chat"
 
@@ -155,10 +155,10 @@ class OllamaService:
     def _handle_network_error(self, e: Exception, attempt: int) -> None:
         if attempt < self.max_retries:
             backoff = 2 * (2 ** attempt)
-            logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
+            logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__} — backoff {backoff}s")
             time.sleep(backoff)
         else:
-            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
+            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed ({type(e).__name__})")
             raise e
 
     def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int, payload: dict) -> None:
@@ -171,7 +171,7 @@ class OllamaService:
                 logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {status} — backoff {backoff}s")
                 time.sleep(backoff)
                 return
-            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
+            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed (HTTP {status})")
             raise e
         # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
         # can diagnose — raise_for_status() otherwise discards it.
@@ -181,9 +181,12 @@ class OllamaService:
         except Exception:
             pass
         logging.error(
-            f"[OllamaService] HTTP {status if status is not None else '?'} "
-            f"model={self.model} think={payload.get('think', False)} "
-            f"tools={len(payload.get('tools', []))} body={body!r}"
+            "[OllamaService] HTTP %s model=%s think=%s tools=%d body=%r",
+            status if status is not None else '?',
+            self.model,
+            payload.get('think', False),
+            len(payload.get('tools', [])),
+            body,
         )
         raise e
 

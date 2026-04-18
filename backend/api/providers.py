@@ -82,7 +82,8 @@ def _fetch_ollama_models(host: str):
     except req.exceptions.Timeout:
         return None, f"Connection to {safe_host} timed out"
     except Exception as e:
-        return None, str(e)
+        logger.warning(f"[REST API] Ollama model list failed: {type(e).__name__}: {e}")
+        return None, "Failed to fetch Ollama models"
 
 
 def get_provider_service():
@@ -297,8 +298,8 @@ def list_anthropic_models():
     except req.exceptions.Timeout:
         return jsonify({"error": "Anthropic API request timed out"}), 502
     except Exception as e:
-        logger.error(f"[REST API] Anthropic model list failed: {e}")
-        return jsonify({"error": str(e)}), 502
+        logger.error(f"[REST API] Anthropic model list failed: {type(e).__name__}: {e}")
+        return jsonify({"error": "Anthropic API request failed"}), 502
 
 
 @providers_bp.route('/test', methods=['POST'])

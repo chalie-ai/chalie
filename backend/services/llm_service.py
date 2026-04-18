@@ -933,7 +933,7 @@ class OpenAIService:
             })
         return tool_calls
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
         del cache_prefix  # interface parity with Anthropic; OpenAI has no prefix-cache.
         # Note: send_messages is the native-tool-calling / multi-turn path.
         # Never set response_format: json_object here — the prompt may not
@@ -1151,7 +1151,7 @@ class GeminiService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
         del cache_prefix  # interface parity with Anthropic; Gemini has no prefix-cache.
         try:
             from google import genai

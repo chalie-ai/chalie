@@ -157,8 +157,10 @@ class TestOpenAICompatibleProvider:
         client = service._get_client()
 
         # openai.OpenAI stores base_url as httpx.URL (trailing slash normalised)
-        assert 'api.minimax.io' in str(client.base_url)
-        assert '/v1' in str(client.base_url)
+        from urllib.parse import urlparse
+        parsed = urlparse(str(client.base_url))
+        assert parsed.hostname == 'api.minimax.io'
+        assert parsed.path.startswith('/v1')
 
     def test_standard_openai_platform_uses_default_base_url(self):
         """OpenAIService for platform='openai' (no host) uses the default
@@ -174,7 +176,8 @@ class TestOpenAICompatibleProvider:
         service = OpenAIService(config)
         client = service._get_client()
 
-        assert 'api.openai.com' in str(client.base_url)
+        from urllib.parse import urlparse
+        assert urlparse(str(client.base_url)).hostname == 'api.openai.com'
 
     # ------------------------------------------------------------------
     # 5. Missing host → 4xx on POST
