@@ -406,6 +406,39 @@ def _process_row(
     return 'merged-temporal'
 
 
+_OUTCOME_COUNTERS = {
+    'updated': 'updated',
+    'merged-temporal': 'tx',
+    'merged-coexist': 'cx',
+    'merged-immutable': 'ix',
+}
+
+
+def _run_row(
+    db,
+    lut_conn: sqlite3.Connection,
+    emb_service: EmbeddingService,
+    row: tuple,
+    emb,
+    dry_run: bool,
+) -> str:
+    """Embed, validate, and process a single row. Returns an outcome string."""
+    row_id, key, value, search_queries = row[0], row[1], row[2], row[3]
+    blob = pack_embedding(emb)
+    if blob is None:
+        return 'skipped'
+    try:
+        with db.connection() as conn:
+            return _process_row(
+                conn, lut_conn, emb_service,
+                row_id, key, value or '', search_queries or '',
+                blob, dry_run,
+            )
+    except Exception as e:
+        print(f"  ERROR: row id={row_id} key='{key}' failed: {e}")
+        return 'skipped'
+
+
 def main() -> None:
     """Entry point for the canonicalization migration."""
     parser = argparse.ArgumentParser(
@@ -437,55 +470,24 @@ def main() -> None:
 
     print(f"Found {len(rows)} active user_specific rows to inspect")
 
-    updated = 0
-    skipped = 0
-    tx = 0      # merged-temporal
-    cx = 0      # merged-coexist
-    ix = 0      # merged-immutable / conflict-immutable
+    counts: dict[str, int] = {'updated': 0, 'skipped': 0, 'tx': 0, 'cx': 0, 'ix': 0}
 
     for i in range(0, len(rows), _BATCH_SIZE):
         batch = rows[i:i + _BATCH_SIZE]
-        keys = [r[1] for r in batch]
-        embeddings = emb_service.generate_embeddings_batch(keys)
+        embeddings = emb_service.generate_embeddings_batch([r[1] for r in batch])
 
         for row, emb in zip(batch, embeddings):
-            row_id, key, value, search_queries = row[0], row[1], row[2], row[3]
-
-            blob = pack_embedding(emb)
-            if blob is None:
-                skipped += 1
-                continue
-
-            try:
-                with db.connection() as conn:
-                    outcome = _process_row(
-                        conn, lut_conn, emb_service,
-                        row_id, key, value or '', search_queries or '',
-                        blob, dry_run,
-                    )
-            except Exception as e:
-                print(f"  ERROR: row id={row_id} key='{key}' failed: {e}")
-                skipped += 1
-                continue
-
-            if outcome == 'updated':
-                updated += 1
-            elif outcome == 'merged-temporal':
-                tx += 1
-            elif outcome == 'merged-coexist':
-                cx += 1
-            elif outcome == 'merged-immutable':
-                ix += 1
-            else:
-                skipped += 1
+            outcome = _run_row(db, lut_conn, emb_service, row, emb, dry_run)
+            counts[_OUTCOME_COUNTERS.get(outcome, 'skipped')] += 1
 
         print(f"  Processed {min(i + _BATCH_SIZE, len(rows))}/{len(rows)}...")
 
     lut_conn.close()
     print(
         f"\nMigration complete. "
-        f"Updated: {updated}, Skipped: {skipped}, "
-        f"Merged-temporal: {tx}, Merged-coexist: {cx}, Conflict-immutable: {ix}"
+        f"Updated: {counts['updated']}, Skipped: {counts['skipped']}, "
+        f"Merged-temporal: {counts['tx']}, Merged-coexist: {counts['cx']}, "
+        f"Conflict-immutable: {counts['ix']}"
     )
 
 
