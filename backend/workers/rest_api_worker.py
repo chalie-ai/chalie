@@ -32,14 +32,6 @@ def rest_api_worker(shared_state=None):
 
         logger.info(f"[REST API] Starting Flask server on {host}:{port}")
 
-        # Ensure migrations are run before starting the server
-        from services.database_service import get_shared_db_service
-        try:
-            db = get_shared_db_service()
-            db.run_pending_migrations()
-        except Exception as e:
-            logger.warning(f"[REST API] Migration warning: {e}")
-
         # Create Flask app from api package (avoids pickling issues)
         from api import create_app
         app = create_app()

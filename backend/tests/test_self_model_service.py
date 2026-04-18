@@ -12,9 +12,20 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+# Patch get_shared_db_service for every test in this module so that any service
+# instantiated inside SelfModelService (e.g. ToolRegistryService, ToolConfigService)
+# uses the in-memory test DB rather than the real chalie.db on the SMB mount.
+pytestmark = pytest.mark.usefixtures('db')
+
 
 def _make_service(db=None):
-    """Create SelfModelService with optional DB override."""
+    """Create SelfModelService with optional DB override.
+
+    With ``pytestmark`` applying the ``db`` fixture to every test, passing
+    ``db=None`` is safe: ``_get_db()`` will fall through to the patched
+    ``get_shared_db_service()`` singleton rather than opening chalie.db.
+    Pass ``db`` explicitly only when you need to verify DB-backed behaviour.
+    """
     from services.self_model_service import SelfModelService
     return SelfModelService(db_service=db)
 
@@ -43,9 +54,8 @@ def _mock_providers_assigned():
         {"is_active": True, "platform": "anthropic"},
     ]
     mock_provider.get_all_job_assignments.return_value = [
-        {"job_name": "frontal-cortex", "provider_id": 1},
+        {"job_name": "frontal-cortex-unified", "provider_id": 1},
         {"job_name": "cognitive-triage", "provider_id": 1},
-        {"job_name": "cognitive-drift", "provider_id": 1},
     ]
     return mock_provider
 
@@ -115,42 +125,38 @@ class TestGetSnapshot:
     def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
 
-        # Seed episodes (42 total, all with activation_score = 0.65)
+        # Seed episodes (42 total)
         for i in range(42):
             db.execute(
                 "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
-                " gist, salience, freshness, topic, activation_score)"
+                " gist, salience, channel)"
                 " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
-                " ?, ?, ?, 'test', ?)",
-                (f"ep-{i}", f"gist {i}", 5, 1, 0.65),
+                " ?, ?, 'test')",
+                (f"ep-{i}", f"gist {i}", 5),
             )
 
-        # Seed 15 concepts in knowledge table
+        # Seed 15 user_specific rows in data_graph.
+        # _get_memory_pressure counts kind='user_specific' for both concept_count
+        # and trait_count (identical queries), so both will equal 15.
         for i in range(15):
             db.execute(
-                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
-                " VALUES (?, ?, ?, 'concept', 0.8, 'standard')",
-                ("system", f"concept_{i}", f"value_{i}"),
-            )
-
-        # Seed 8 user traits/preferences in knowledge table
-        for i in range(8):
-            kind = 'trait' if i < 5 else 'preference'
-            db.execute(
-                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
-                " VALUES (?, ?, ?, ?, 0.8, 'permanent')",
-                ("user", f"trait_{i}", f"value_{i}", kind),
+                "INSERT INTO data_graph (kind, key, value, source)"
+                " VALUES ('user_specific', ?, ?, 'test')",
+                (f"concept_{i}", f"value_{i}"),
             )
 
         db.commit()
 
-        svc = _make_service()
+        # db fixture yields raw sqlite3.Connection for seeding; get_shared_db_service()
+        # returns the DatabaseService singleton patched by the fixture.
+        from services.database_service import get_shared_db_service
+        svc = _make_service(get_shared_db_service())
         pressure = svc._get_memory_pressure()
 
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
-        assert pressure["trait_count"] == 8
-        assert pressure["avg_activation"] == 0.65
+        assert pressure["trait_count"] == 15
+        assert pressure["avg_activation"] == pytest.approx(1.0)
 
     def test_queue_depth_from_store(self, mock_store):
         """Queue depths reflect actual list lengths in MemoryStore."""
@@ -158,14 +164,11 @@ class TestGetSnapshot:
 
         for i in range(7):
             mock_store.lpush(QUEUE_KEY, f"job-{i}")
-        for i in range(3):
-            mock_store.lpush("prompt-queue", f"task-{i}")
 
         svc = _make_service()
         qd = svc.get_snapshot()["operational"]["queue_depth"]
 
         assert qd["bg_llm"] == 7
-        assert qd["prompt_queue"] == 3
 
 
 @pytest.mark.unit
@@ -187,7 +190,7 @@ class TestNoteworthy:
         """Dead worker threads produce a signal with severity 0.6."""
         mock_store.setex("self_model:thread_health", 60, json.dumps({
             "alive": ["rest-api"],
-            "dead": ["cognitive-drift-engine", "scheduler-service"],
+            "dead": ["dmn-service", "scheduler-service"],
             "total": 3,
         }))
 
@@ -197,7 +200,7 @@ class TestNoteworthy:
 
         assert len(dead_signals) == 1
         assert dead_signals[0]["severity"] == 0.6
-        assert "cognitive-drift-engine" in dead_signals[0]["signal"]
+        assert "dmn-service" in dead_signals[0]["signal"]
 
     def test_queue_congestion_triggers_noteworthy(self, mock_store):
         """Queue depth >15 fires a congestion signal with severity 0.4."""

@@ -139,10 +139,9 @@ class TestOllamaMultiTurn:
     def _make_svc(self):
         from services.ollama_service import OllamaService
         svc = OllamaService.__new__(OllamaService)
-        svc.model = "qwen3:4b"
+        svc.model = "gemma4:31b"
         svc.host = "http://localhost:11434"
         svc.keep_alive = "0"
-        svc.temperature = 0.5
         svc.timeout = 60
         svc.format = "text"
         svc.max_retries = 2
@@ -155,7 +154,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "4"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 10,
             "eval_count": 1,
         }
@@ -179,7 +178,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "result"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 5,
             "eval_count": 2,
         }
@@ -199,7 +198,7 @@ class TestOllamaMultiTurn:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "message": {"content": "42"},
-            "model": "qwen3:4b",
+            "model": "gemma4:31b",
             "prompt_eval_count": 8,
             "eval_count": 3,
         }
@@ -224,7 +223,7 @@ class TestFallbackMultiTurn:
         primary.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False, tools=None)
+        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False, tools=None, thinking_mode=None)
         fallback.send_messages.assert_not_called()
         assert result is expected
 
@@ -239,7 +238,7 @@ class TestFallbackMultiTurn:
         fallback.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
-        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
+        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None, thinking_mode=None)
         assert result is expected
 
     def test_rate_limit_triggers_fallback(self):
@@ -269,8 +268,9 @@ class TestRefreshableMultiTurn:
         expected = LLMResponse(text="ok", model="test", provider="anthropic")
         inner.send_messages.return_value = expected
 
-        with patch.object(svc, '_ensure_fresh'):
+        with patch.object(svc, '_ensure_fresh'), \
+             patch('services.llm_service._log_llm_call'):
             result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
 
-        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
+        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None, thinking_mode=None)
         assert result is expected

@@ -86,7 +86,7 @@ STAMP="$_STAMP_DIR/.deps-installed"
 
 if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
   echo "→ Syncing dependencies from requirements.txt …"
-  "$PIP" install --quiet -r "$REQ"
+  "$PIP" install -r "$REQ"
   touch "$STAMP"
 fi
 
@@ -95,7 +95,7 @@ if [[ "$_VOICE" == "true" ]]; then
   VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
   if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
     echo "→ Syncing voice dependencies …"
-    "$PIP" install --quiet -r "$VOICE_REQ" 2>/dev/null \
+    "$PIP" install -r "$VOICE_REQ" 2>/dev/null \
       || echo "  ⚠ Voice dep install failed — voice will be unavailable"
     touch "$VOICE_STAMP"
   fi
@@ -113,7 +113,7 @@ while true; do
   echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
   if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
     echo "→ Syncing dependencies from requirements.txt …"
-    "$PIP" install --quiet -r "$REQ"
+    "$PIP" install -r "$REQ"
     touch "$STAMP"
   fi
 done

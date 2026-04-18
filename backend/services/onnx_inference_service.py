@@ -7,37 +7,40 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-ONNX Inference Service — shared-base + swappable-head classifier inference.
+ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 
 Architecture:
-    1 shared ONNX base model (Qwen2.5-0.5B transformer) → last hidden state
-    N tiny classifier heads (.npz numpy weights) → class logits
+    1 shared ONNX encoder (gte-modernbert-base, already loaded by embedding_service)
+    N 2-layer MLP heads loaded from per-task .npz files → class logits
 
-The base model (~473MB) is downloaded once and loaded into a single ONNX
-session. Each classifier head is a linear projection (~7-50KB) loaded as
-numpy weight matrices. Inference runs the shared base, then applies the
-appropriate head via numpy matmul.
+Release tag: resolved dynamically from GitHub's "latest release" API at boot
+(see ``_get_release_tag``). Hardcoding the tag caused a silent outage when
+the assets-only repo was retagged and every container 404'd on curl.
 
-Supports two classification modes:
-  - ``single_label``: N-class softmax classification
-  - ``multi_label``: K independent sigmoid outputs with per-label thresholds
+The encoder session and tokenizer are borrowed from embedding_service's module-level
+singletons so the 596 MB model is loaded exactly once per process. Each classifier
+head is a tiny numpy MLP (~800 KB) loaded at task registration time.
 
-Falls back to legacy monolithic ONNX models if ``split: true`` is absent
-from the classifier metadata (backward compatible with v0.3.0 releases).
+Boot-time sha256 pin:
+    Computed once (streaming) against backend/data/models/gte-modernbert-base/onnx/model.onnx.
+    Must match classifier_meta.json::base_encoder_sha256 for every registered task.
+    On mismatch: RuntimeError raised, task not registered.
 
 Thread-safe — multiple workers can call predict() concurrently.
 """
 
+import hashlib
 import json
 import logging
 import os
 import shutil
+import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -48,845 +51,595 @@ LOG_PREFIX = "[ONNX]"
 # Default GitHub repo for model releases
 DEFAULT_MODELS_REPO = "chalie-ai/models"
 
-# Models that should be auto-downloaded on boot.
-# Each entry: (subdirectory_name, github_repo_or_None_for_default, release_asset_prefix)
+# Release tag is resolved dynamically from GitHub's "latest release" API at first
+# use, then cached for the life of the process. Hardcoding a tag caused a silent
+# outage when the assets-only repo was retagged from v0.9.0 → v0.9.1 and every
+# container boot 404'd on curl. Auto-latest eliminates the drift by construction.
+_release_tag_cache: Optional[str] = None
+_release_tag_lock = threading.Lock()
+_RELEASE_TAG_API_TIMEOUT = 10  # seconds
+
+
+def _get_release_tag() -> str:
+    """Return the latest release tag on the models repo, cached per process.
+
+    On first call: GET https://api.github.com/repos/<repo>/releases/latest
+    and cache the tag_name. Subsequent calls return the cached value.
+
+    If the API is unreachable, scans backend/data/models/*/classifier_meta.json
+    for a previously installed version and falls back to it — better to run
+    with a slightly stale model than no model at all. If no prior install
+    exists either, raises RuntimeError so the caller logs and skips.
+    """
+    global _release_tag_cache
+    if _release_tag_cache is not None:
+        return _release_tag_cache
+
+    with _release_tag_lock:
+        if _release_tag_cache is not None:
+            return _release_tag_cache
+
+        api_url = f"https://api.github.com/repos/{DEFAULT_MODELS_REPO}/releases/latest"
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "chalie-onnx-service"},
+            )
+            with urllib.request.urlopen(req, timeout=_RELEASE_TAG_API_TIMEOUT) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            tag = payload.get("tag_name")
+            if not tag or not isinstance(tag, str):
+                raise RuntimeError(f"release payload missing tag_name: {payload!r}")
+            _release_tag_cache = tag
+            logger.info(f"{LOG_PREFIX} latest release resolved: {tag}")
+            return tag
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as e:
+            logger.warning(
+                f"{LOG_PREFIX} latest-release API unreachable ({type(e).__name__}: {e}) — "
+                f"falling back to locally installed version if present"
+            )
+            fallback = _find_local_release_tag()
+            if fallback:
+                _release_tag_cache = fallback
+                logger.info(f"{LOG_PREFIX} using locally cached release tag: {fallback}")
+                return fallback
+            raise RuntimeError(
+                "cannot resolve release tag: GitHub API unreachable and no local install"
+            ) from e
+
+
+def _find_local_release_tag() -> Optional[str]:
+    """Scan backend/data/models/*/classifier_meta.json for a prior install version.
+
+    Returns the first non-empty ``version`` field found, or None if no task has
+    a local meta. Used as fallback when the GitHub API is unreachable.
+    """
+    try:
+        models_dir = Path(os.environ.get("CHALIE_MODELS_DIR", "backend/data/models"))
+        if not models_dir.exists():
+            return None
+        for task_dir in models_dir.iterdir():
+            if not task_dir.is_dir():
+                continue
+            meta_path = task_dir / _CLASSIFIER_META_FILENAME
+            if not meta_path.exists():
+                continue
+            try:
+                with open(meta_path) as f:
+                    version = json.load(f).get("version")
+                if version and isinstance(version, str):
+                    return version
+            except (json.JSONDecodeError, OSError):
+                continue
+    except Exception:
+        return None
+    return None
+
+# Tasks to auto-download and register on boot.
+# Each entry: (task_name, asset_name_prefix)
+# - meta asset: <prefix>-classifier_meta.json → models/<task>/classifier_meta.json
+# - head asset: <prefix>_head.npz             → models/<task>/<head_asset from meta>
+# (note the mixed separator: hyphen before "classifier", underscore before "head")
 MODEL_REGISTRY = [
-    ("mode-tiebreaker", None, "mode-tiebreaker"),
-    ("contradiction", None, "contradiction"),
-    ("trait-detector", None, "trait-detector"),
+    ("thinking_level", "thinking-level"),
 ]
 
-# Shared base model config
-BASE_MODEL_NAME = "qwen2.5-0.5b_base"
-BASE_MODEL_HF = "Qwen/Qwen2.5-0.5B"
+# Asset filename constants
+_CLASSIFIER_META_FILENAME = "classifier_meta.json"
+_CLASSIFIER_META_STAGING_FILENAME = "classifier_meta_dl.json"
+
+# sha256 of the shared encoder ONNX — computed once, cached here
+_encoder_sha256_cache: Optional[str] = None
+_encoder_sha256_lock = threading.Lock()
+
+
+def _compute_encoder_sha256(onnx_path: Path) -> str:
+    """Compute sha256 of the encoder ONNX file via streaming (no full-file load)."""
+    h = hashlib.sha256()
+    with open(onnx_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_encoder_sha256(onnx_path: Path) -> str:
+    """Return cached sha256 of the shared encoder, computing it once per process."""
+    global _encoder_sha256_cache
+    if _encoder_sha256_cache is not None:
+        return _encoder_sha256_cache
+
+    with _encoder_sha256_lock:
+        if _encoder_sha256_cache is not None:
+            return _encoder_sha256_cache
+        _encoder_sha256_cache = _compute_encoder_sha256(onnx_path)
+        return _encoder_sha256_cache
+
+
+def _gelu(x: np.ndarray) -> np.ndarray:
+    """GELU activation (approximation matching PyTorch's default)."""
+    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3)))
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax along the last axis."""
+    shifted = logits - logits.max(axis=-1, keepdims=True)
+    exp_l = np.exp(shifted)
+    return exp_l / exp_l.sum(axis=-1, keepdims=True)
 
 
 class _ClassifierHead:
-    """A tiny classifier head: numpy weight matrix + optional bias."""
+    """2-layer MLP head loaded from a .npz file.
 
-    __slots__ = ("weight", "bias", "labels", "model_type", "thresholds",
-                 "pruned", "version")
+    Weight convention: torch nn.Linear stores weights as (out_features, in_features),
+    so W1.shape == (hidden_dim, input_dim) and W2.shape == (num_classes, hidden_dim).
+    Forward uses the transpose: features @ W1.T.
+    """
 
-    def __init__(self, weight: np.ndarray, bias: Optional[np.ndarray],
-                 labels: List[str], model_type: str = "single_label",
-                 thresholds: Optional[Dict[str, float]] = None,
-                 pruned: bool = True, version: str = "unknown"):
-        self.weight = weight          # (num_classes, hidden_dim)
-        self.bias = bias              # (num_classes,) or None
+    __slots__ = ("W1", "b1", "W2", "b2", "labels", "activation",
+                 "input_dim", "hidden_dim", "num_classes")
+
+    def __init__(
+        self,
+        W1: np.ndarray,
+        b1: np.ndarray,
+        W2: np.ndarray,
+        b2: np.ndarray,
+        labels: List[str],
+        activation: str = "gelu",
+    ):
+        self.W1 = W1.astype(np.float32)    # (hidden_dim, input_dim)
+        self.b1 = b1.astype(np.float32)    # (hidden_dim,)
+        self.W2 = W2.astype(np.float32)    # (num_classes, hidden_dim)
+        self.b2 = b2.astype(np.float32)    # (num_classes,)
         self.labels = labels
-        self.model_type = model_type
-        self.thresholds = thresholds or {}
-        self.pruned = pruned
-        self.version = version
+        self.activation = activation
+        self.hidden_dim, self.input_dim = W1.shape
+        self.num_classes = W2.shape[0]
 
-    def forward(self, hidden_state: np.ndarray) -> np.ndarray:
-        """Apply linear projection: (batch, hidden_dim) → (batch, num_classes)."""
-        logits = hidden_state @ self.weight.T
-        if self.bias is not None:
-            logits = logits + self.bias
-        return logits
+    def forward(self, features: np.ndarray) -> np.ndarray:
+        """Apply the 2-layer MLP.
 
+        Args:
+            features: (batch, input_dim) float32
 
-class _LegacyModel:
-    """Holds a monolithic ONNX session for backward compatibility with v0.3.0."""
-
-    __slots__ = ("session", "tokenizer", "labels", "label_token_ids", "version",
-                 "pruned", "model_type", "thresholds", "_extra_inputs")
-
-    def __init__(self, session, tokenizer, labels: List[str],
-                 label_token_ids: List[int], version: str,
-                 pruned: bool = False, model_type: str = "single_label",
-                 thresholds: Optional[Dict[str, float]] = None):
-        self.session = session
-        self.tokenizer = tokenizer
-        self.labels = labels
-        self.label_token_ids = label_token_ids
-        self.version = version
-        self.pruned = pruned
-        self.model_type = model_type
-        self.thresholds = thresholds or {}
-        known = {"input_ids", "attention_mask"}
-        self._extra_inputs = [
-            inp for inp in session.get_inputs() if inp.name not in known
-        ]
-
-    def build_feed(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> dict:
-        feed = {"input_ids": input_ids, "attention_mask": attention_mask}
-        for inp in self._extra_inputs:
-            shape = [s if isinstance(s, int) else input_ids.shape[0]
-                     for s in inp.shape]
-            dtype = np.float32 if "float" in inp.type else np.int64
-            feed[inp.name] = np.zeros(shape, dtype=dtype)
-        return feed
-
-
-# Shared tokenizer cache: base_model_name → tokenizer instance
-_tokenizer_cache: Dict[str, object] = {}
-_tokenizer_lock = threading.Lock()
-
-
-def _get_shared_tokenizer(base_model: str, model_dir: Optional[Path] = None):
-    """Load tokenizer from HuggingFace, sharing across models with same base."""
-    if base_model in _tokenizer_cache:
-        return _tokenizer_cache[base_model]
-
-    with _tokenizer_lock:
-        if base_model in _tokenizer_cache:
-            return _tokenizer_cache[base_model]
-
-        from transformers import AutoTokenizer
-
-        if model_dir and (model_dir / "tokenizer.json").exists():
-            tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-            logger.info(f"{LOG_PREFIX} Loaded tokenizer from {model_dir}")
+        Returns:
+            logits: (batch, num_classes) float32
+        """
+        # fc1: (batch, input_dim) @ (input_dim, hidden_dim) = (batch, hidden_dim)
+        h = features @ self.W1.T + self.b1
+        if self.activation == "gelu":
+            h = _gelu(h)
         else:
-            tokenizer = AutoTokenizer.from_pretrained(base_model)
-            logger.info(f"{LOG_PREFIX} Loaded tokenizer from HuggingFace: {base_model}")
+            h = np.maximum(0.0, h)  # relu fallback
+        # fc2: (batch, hidden_dim) @ (hidden_dim, num_classes) = (batch, num_classes)
+        return h @ self.W2.T + self.b2
 
-        _tokenizer_cache[base_model] = tokenizer
-        return tokenizer
+
+def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+    """Masked mean pool over token dimension."""
+    mask = attention_mask[..., np.newaxis].astype(np.float32)
+    sum_emb = (last_hidden_state * mask).sum(axis=1)
+    sum_mask = mask.sum(axis=1).clip(min=1e-9)
+    return sum_emb / sum_mask
+
+
+def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
+    """L2-normalize along the last axis."""
+    norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
+    return embeddings / norms
+
+
+def _download_with_curl(url: str, dest: Path) -> None:
+    """Download a URL to dest, following redirects (GitHub 302s)."""
+    result = subprocess.run(
+        ["curl", "-sL", "--fail", "-o", str(dest), url],
+        capture_output=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")
+        raise OSError(f"curl failed (exit {result.returncode}): {stderr[:200]}")
 
 
 class OnnxInferenceService:
     """
-    Shared-base ONNX inference with swappable classifier heads.
+    Shared gte-modernbert encoder + swappable 2-layer MLP classifier heads.
 
     Usage:
         svc = OnnxInferenceService("/models")
         svc.ensure_models()
-        label, confidence = svc.predict("mode-tiebreaker", input_text)
+        label, confidence = svc.predict("thinking_level", input_text)
     """
 
     def __init__(self, models_dir: str):
         self._models_dir = Path(models_dir)
         self._models_dir.mkdir(parents=True, exist_ok=True)
 
-        # Shared base model (ONNX session + tokenizer)
-        self._base_session = None
-        self._base_extra_inputs = []
-        self._base_tokenizer = None
-        self._base_lock = threading.Lock()
-
-        # Classifier heads (model_name → _ClassifierHead or _LegacyModel)
-        self._heads: Dict[str, object] = {}
+        # Registered classifier heads (task_name → _ClassifierHead)
+        self._heads: Dict[str, _ClassifierHead] = {}
         self._heads_lock = threading.Lock()
 
-        # Boot readiness — set to True after ensure_models() + warmup complete
+        # Boot readiness — set to True after registration attempt completes
         self._ready = False
+        # Tasks whose boot-time registration failed (e.g. sha256 gate refused).
+        # If non-empty, the service is in a degraded state — predict() returns
+        # (None, 0.0) silently for those tasks. Health endpoint surfaces this.
+        # List of (task_name, error_message) tuples.
+        self._failed_registrations: list[tuple[str, str]] = []
 
     @property
     def ready(self) -> bool:
-        """True after ensure_models() + warmup inference have completed."""
-        return self._ready
+        """True only after registration attempt completed AND every task registered.
 
-    # ── Download & Version Check ──────────────────────────────
+        A degraded service (one or more tasks failed sha256 gate) reports NOT
+        ready so /api/system can fail-fast for monitoring. Use `degraded` to
+        distinguish "still loading" from "loaded but some tasks refused".
+        """
+        return self._ready and not self._failed_registrations
+
+    @property
+    def degraded(self) -> bool:
+        """True if registration finished but at least one task failed.
+
+        Inspect `failed_registrations` for the per-task error messages.
+        """
+        return self._ready and bool(self._failed_registrations)
+
+    @property
+    def failed_registrations(self) -> list[tuple[str, str]]:
+        """Snapshot of (task_name, error) for tasks whose registration failed."""
+        return list(self._failed_registrations)
+
+    # ── Encoder access (borrowed from embedding_service) ──────────────────────
+
+    def _get_encoder(self):
+        """Return (session, tokenizer, output_names, input_names) from embedding_service."""
+        from services import embedding_service as _emb_mod
+        session, tokenizer = _emb_mod._get_session_and_tokenizer()
+        return session, tokenizer, _emb_mod._output_names, _emb_mod._input_names
+
+    def _encoder_onnx_path(self) -> Path:
+        """Canonical path to the shared encoder ONNX."""
+        return self._models_dir / "gte-modernbert-base" / "onnx" / "model.onnx"
+
+    def _embed(self, text: str) -> np.ndarray:
+        """Tokenize + encode one text → (1, 768) float32 L2-normalised.
+
+        Uses max_length=256 to match training. Shares the embedding_service session
+        so the model is loaded only once per process.
+        """
+        session, tokenizer, output_names, input_names = self._get_encoder()
+
+        encoded = tokenizer(
+            [text],
+            return_tensors="np",
+            padding=True,
+            truncation=True,
+            max_length=256,
+        )
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+
+        feed = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if "token_type_ids" in input_names:
+            feed["token_type_ids"] = np.zeros_like(input_ids)
+
+        outputs = session.run(None, feed)
+
+        if "sentence_embedding" in output_names:
+            pooled = outputs[output_names.index("sentence_embedding")]
+        else:
+            last_hidden = outputs[output_names.index("last_hidden_state")]
+            pooled = _mean_pool(last_hidden, attention_mask)
+
+        return _l2_normalize(pooled).astype(np.float32)  # (1, 768)
+
+    # ── Download / update ─────────────────────────────────────────────────────
 
     def ensure_models(self):
-        """Download missing models and update stale ones from GitHub releases."""
-        # First ensure the shared base model
-        try:
-            self._ensure_base_model()
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to ensure base model: {e}")
+        """Download missing or stale model assets from the latest GitHub release.
 
-        # Then ensure each classifier head
-        for model_name, repo, asset_prefix in MODEL_REGISTRY:
+        Release tag is resolved once at first use via the GitHub API (see
+        ``_get_release_tag``). Individual task assets may be absent from the
+        latest release — those failures are logged and isolated; they do not
+        stop other tasks from being installed.
+        """
+        try:
+            release_tag = _get_release_tag()
+        except RuntimeError as e:
+            logger.warning(f"{LOG_PREFIX} ensure_models skipped: {e}")
+            return
+        for task_name, asset_prefix in MODEL_REGISTRY:
             try:
-                self._ensure_head(model_name, repo or DEFAULT_MODELS_REPO, asset_prefix)
+                self._ensure_task(task_name, asset_prefix, release_tag)
             except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Failed to ensure {model_name}: {e}")
+                logger.warning(f"{LOG_PREFIX} Failed to ensure {task_name}: {e}")
 
-    def _ensure_base_model(self):
-        """Download the shared base ONNX model if missing or outdated."""
-        base_dir = self._models_dir / BASE_MODEL_NAME
-        onnx_path = base_dir / "model.onnx"
+    def _ensure_task(self, task_name: str, asset_prefix: str, release_tag: str):
+        """Download classifier_meta.json and head .npz for one task if missing/stale."""
+        task_dir = self._models_dir / task_name
+        meta_path = task_dir / _CLASSIFIER_META_FILENAME
 
-        if onnx_path.exists():
-            size_mb = onnx_path.stat().st_size / (1024 * 1024)
-            logger.info(f"{LOG_PREFIX} Base model present: {onnx_path} ({size_mb:.0f}MB)")
-            return
-
-        # Download from release — look for qwen2.5-0.5b_base*.onnx asset
-        api_url = f"https://api.github.com/repos/{DEFAULT_MODELS_REPO}/releases/latest"
-        req = Request(api_url, headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Chalie/1.0",
-        })
-
-        try:
-            with urlopen(req, timeout=5) as resp:
-                release = json.loads(resp.read())
-        except (URLError, OSError) as e:
-            logger.warning(f"{LOG_PREFIX} Cannot fetch release for base model: {e}")
-            return
-
-        assets = release.get("assets", [])
-        base_url = None
-        for asset in assets:
-            name = asset.get("name", "")
-            if name.startswith("qwen2.5-0.5b_base") and name.endswith(".onnx"):
-                if "quantized" in name:
-                    base_url = asset["browser_download_url"]
-                    break
-                elif base_url is None:
-                    base_url = asset["browser_download_url"]
-
-        if not base_url:
-            logger.warning(f"{LOG_PREFIX} No base model asset found in release")
-            return
-
-        staging = self._models_dir / f".{BASE_MODEL_NAME}_installing"
-        try:
-            if staging.exists():
-                shutil.rmtree(staging)
-            staging.mkdir(parents=True)
-
-            logger.info(f"{LOG_PREFIX} Downloading shared base model...")
-            req = Request(base_url, headers={"User-Agent": "Chalie/1.0"})
-            with urlopen(req, timeout=600) as resp:
-                (staging / "model.onnx").write_bytes(resp.read())
-
-            size_mb = (staging / "model.onnx").stat().st_size / (1024 * 1024)
-            logger.info(f"{LOG_PREFIX} Base model downloaded ({size_mb:.0f}MB)")
-
-            # Save version info
-            tag = release.get("tag_name", "unknown")
-            with open(staging / "version.json", "w") as f:
-                json.dump({"version": tag, "base_model": BASE_MODEL_HF}, f)
-
-            if base_dir.exists():
-                shutil.rmtree(base_dir)
-            staging.rename(base_dir)
-
-            # Invalidate cached session
-            with self._base_lock:
-                self._base_session = None
-
-            logger.info(f"{LOG_PREFIX} Installed base model ({tag})")
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Base model download failed: {e}")
-            if staging.exists():
-                shutil.rmtree(staging, ignore_errors=True)
-
-    def _ensure_head(self, model_name: str, repo: str, asset_prefix: str):
-        """Download or update a classifier head from GitHub release assets."""
-        model_dir = self._models_dir / model_name
-        meta_path = model_dir / "classifier_meta.json"
-
+        # Check local version
         local_version = None
         if meta_path.exists():
             try:
                 with open(meta_path) as f:
                     local_version = json.load(f).get("version")
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"{LOG_PREFIX} Could not read local version for {model_name}: {e}")
+            except (json.JSONDecodeError, OSError):
+                pass
 
-        api_url = f"https://api.github.com/repos/{repo}/releases/latest"
-        req = Request(api_url, headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Chalie/1.0",
-        })
-        try:
-            with urlopen(req, timeout=5) as resp:
-                release = json.loads(resp.read())
-        except (URLError, OSError) as e:
-            if local_version:
-                logger.info(f"{LOG_PREFIX} {model_name}: network unavailable, keeping {local_version}")
-            else:
-                logger.warning(f"{LOG_PREFIX} {model_name}: no local model, network unavailable ({e})")
-            return
-
-        remote_tag = release.get("tag_name")
-        if not remote_tag:
-            return
-
-        if local_version and local_version == remote_tag:
-            logger.info(f"{LOG_PREFIX} {model_name}: up to date ({local_version})")
-            return
-
-        assets = release.get("assets", [])
-        norm_prefix = asset_prefix.replace("-", "_")
-
-        meta_url = None
-        head_url = None
-        onnx_url = None
-        onnx_full_url = None
-
-        for asset in assets:
-            name = asset.get("name", "")
-            norm_name = name.replace("-", "_")
-            url = asset.get("browser_download_url")
-
-            if norm_name == f"{norm_prefix}.json":
-                meta_url = url
-            elif norm_name == f"{norm_prefix}_head.npz":
-                head_url = url
-            elif norm_name.startswith(norm_prefix) and name.endswith(".onnx"):
-                if "quantized" in name:
-                    onnx_url = url
-                else:
-                    onnx_full_url = url
-
-        onnx_url = onnx_url or onnx_full_url
-
-        if not meta_url:
-            logger.warning(f"{LOG_PREFIX} {model_name}: no meta JSON in release {remote_tag}")
-            return
-
-        # Need either head .npz (split format) or full .onnx (legacy)
-        if not head_url and not onnx_url:
-            logger.warning(f"{LOG_PREFIX} {model_name}: no head or ONNX asset in release {remote_tag}")
+        if local_version == release_tag:
+            logger.info(f"{LOG_PREFIX} {task_name}: up to date ({release_tag})")
             return
 
         action = "Updating" if local_version else "Downloading"
-        logger.info(f"{LOG_PREFIX} {action} {model_name}: {local_version or '(none)'} → {remote_tag}")
+        logger.info(f"{LOG_PREFIX} {action} {task_name}: {local_version or '(none)'} → {release_tag}")
 
-        staging = self._models_dir / f".{model_name}_installing"
+        base_url = f"https://github.com/{DEFAULT_MODELS_REPO}/releases/download/{release_tag}"
+        # Asset naming convention: `<prefix>-classifier_meta.json` and `<prefix>_head.npz`
+        # (hyphen before "classifier", underscore before "head" — confirmed against
+        # the release manifest; do NOT collapse these separators).
+        meta_url = f"{base_url}/{asset_prefix}-classifier_meta.json"
+        head_url = f"{base_url}/{asset_prefix}_head.npz"
+
+        staging = self._models_dir / f".{task_name}_installing"
         try:
             if staging.exists():
                 shutil.rmtree(staging)
             staging.mkdir(parents=True)
 
             # Download meta JSON
-            req = Request(meta_url, headers={"User-Agent": "Chalie/1.0"})
-            with urlopen(req, timeout=10) as resp:
-                raw_meta = resp.read()
-            meta = json.loads(raw_meta)
-            meta["version"] = remote_tag
-            meta.setdefault("repo", repo)
-            with open(staging / "classifier_meta.json", "w") as f:
+            _download_with_curl(meta_url, staging / _CLASSIFIER_META_STAGING_FILENAME)
+            with open(staging / _CLASSIFIER_META_STAGING_FILENAME) as f:
+                meta = json.load(f)
+            meta["version"] = release_tag
+            with open(staging / _CLASSIFIER_META_FILENAME, "w") as f:
                 json.dump(meta, f, indent=2)
+            (staging / _CLASSIFIER_META_STAGING_FILENAME).unlink()
 
-            is_split = meta.get("split", False)
-
-            if is_split and head_url:
-                # Download tiny head .npz
-                logger.info(f"{LOG_PREFIX} Downloading head for {model_name}...")
-                req = Request(head_url, headers={"User-Agent": "Chalie/1.0"})
-                with urlopen(req, timeout=30) as resp:
-                    (staging / "head.npz").write_bytes(resp.read())
-                size_kb = (staging / "head.npz").stat().st_size / 1024
-                logger.info(f"{LOG_PREFIX} Head downloaded ({size_kb:.1f}KB)")
-            elif onnx_url:
-                # Legacy: download full ONNX
-                logger.info(f"{LOG_PREFIX} Downloading ONNX weights for {model_name}...")
-                req = Request(onnx_url, headers={"User-Agent": "Chalie/1.0"})
-                with urlopen(req, timeout=300) as resp:
-                    (staging / "model.onnx").write_bytes(resp.read())
-                size_mb = (staging / "model.onnx").stat().st_size / (1024 * 1024)
-                logger.info(f"{LOG_PREFIX} ONNX downloaded ({size_mb:.0f}MB)")
+            # Download head .npz
+            head_asset = meta.get("head_asset", f"{asset_prefix}_head.npz")
+            logger.info(f"{LOG_PREFIX} Downloading head for {task_name}...")
+            _download_with_curl(head_url, staging / head_asset)
+            size_kb = (staging / head_asset).stat().st_size / 1024
+            logger.info(f"{LOG_PREFIX} Head downloaded ({size_kb:.1f}KB)")
 
             # Atomic swap
-            if model_dir.exists():
-                shutil.rmtree(model_dir)
-            staging.rename(model_dir)
+            if task_dir.exists():
+                shutil.rmtree(task_dir)
+            staging.rename(task_dir)
 
+            # Evict cached head so next call re-registers from fresh files
             with self._heads_lock:
-                self._heads.pop(model_name, None)
+                self._heads.pop(task_name, None)
 
-            logger.info(f"{LOG_PREFIX} Installed {model_name} ({remote_tag})")
+            logger.info(f"{LOG_PREFIX} Installed {task_name} ({release_tag})")
 
-        except (URLError, OSError) as e:
-            logger.warning(f"{LOG_PREFIX} Download failed for {model_name}: {e}")
-            if staging.exists():
-                shutil.rmtree(staging, ignore_errors=True)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Unexpected error installing {model_name}: {e}")
+            logger.warning(f"{LOG_PREFIX} Download failed for {task_name}: {e}")
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
 
-    # ── Base Model Loading ────────────────────────────────────
+    # ── Task registration ─────────────────────────────────────────────────────
 
-    def _get_base_session(self):
-        """Lazy-load the shared ONNX base session."""
-        if self._base_session is not None:
-            return self._base_session
+    def _register_task(self, task_name: str) -> Optional[_ClassifierHead]:
+        """Load meta + head for one task, perform sha256 pin check, emit boot marker.
 
-        with self._base_lock:
-            if self._base_session is not None:
-                return self._base_session
+        Returns the head on success. Raises RuntimeError on sha256 mismatch.
+        Returns None if the task directory or meta is missing.
+        """
+        task_dir = self._models_dir / task_name
+        meta_path = task_dir / _CLASSIFIER_META_FILENAME
 
-            base_dir = self._models_dir / BASE_MODEL_NAME
-            onnx_path = base_dir / "model.onnx"
-
-            if not onnx_path.exists():
-                logger.warning(f"{LOG_PREFIX} Shared base model not found: {onnx_path}")
-                return None
-
-            try:
-                import onnxruntime as ort
-
-                opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 1
-                opts.inter_op_num_threads = 1
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-                session = ort.InferenceSession(
-                    str(onnx_path), sess_options=opts,
-                    providers=["CPUExecutionProvider"],
-                )
-
-                self._base_session = session
-
-                # Cache extra inputs
-                known = {"input_ids", "attention_mask"}
-                self._base_extra_inputs = [
-                    inp for inp in session.get_inputs() if inp.name not in known
-                ]
-
-                # Load tokenizer
-                self._base_tokenizer = _get_shared_tokenizer(BASE_MODEL_HF)
-
-                size_mb = onnx_path.stat().st_size / (1024 * 1024)
-                logger.info(f"{LOG_PREFIX} Loaded shared base model ({size_mb:.0f}MB)")
-                return session
-
-            except ImportError:
-                logger.warning(f"{LOG_PREFIX} onnxruntime not installed")
-                return None
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Failed to load base model: {e}")
-                return None
-
-    def _run_base(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> Optional[np.ndarray]:
-        """Run the shared base model → last hidden state (batch, hidden_dim)."""
-        session = self._get_base_session()
-        if session is None:
-            return None
-
-        feed = {"input_ids": input_ids, "attention_mask": attention_mask}
-        for inp in self._base_extra_inputs:
-            shape = [s if isinstance(s, int) else input_ids.shape[0]
-                     for s in inp.shape]
-            dtype = np.float32 if "float" in inp.type else np.int64
-            feed[inp.name] = np.zeros(shape, dtype=dtype)
-
-        outputs = session.run(None, feed)
-        return outputs[0]  # (batch, hidden_dim)
-
-    # ── Head Loading ──────────────────────────────────────────
-
-    def _get_head(self, model_name: str):
-        """Lazy-load a classifier head. Returns _ClassifierHead or _LegacyModel."""
-        if model_name in self._heads:
-            return self._heads[model_name]
-
-        with self._heads_lock:
-            if model_name in self._heads:
-                return self._heads[model_name]
-
-            head = self._load_head(model_name)
-            self._heads[model_name] = head
-            return head
-
-    def _load_head(self, model_name: str):
-        """Load a classifier head from disk."""
-        model_dir = self._models_dir / model_name
-
-        if not model_dir.is_dir():
-            logger.warning(f"{LOG_PREFIX} Model directory not found: {model_dir}")
-            return None
-
-        meta_path = model_dir / "classifier_meta.json"
         if not meta_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing classifier_meta.json in {model_dir}")
+            logger.warning(f"{LOG_PREFIX} Missing {_CLASSIFIER_META_FILENAME} for task '{task_name}'")
             return None
 
         try:
             with open(meta_path) as f:
                 meta = json.load(f)
-            labels = meta["labels"]
-            version = meta.get("version", "unknown")
-            model_type = meta.get("model_type", "single_label")
-            thresholds = meta.get("thresholds") or meta.get("confidence_thresholds", {})
-            is_split = meta.get("split", False)
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"{LOG_PREFIX} Invalid classifier_meta.json: {e}")
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"{LOG_PREFIX} Cannot read meta for '{task_name}': {e}")
             return None
 
-        if is_split:
-            return self._load_split_head(
-                model_name, model_dir, labels, version, model_type, thresholds,
-            )
-        else:
-            return self._load_legacy_model(
-                model_name, model_dir, meta, labels, version, model_type, thresholds,
+        # sha256 pin check — computed once per process, not per task
+        expected_sha = meta.get("base_encoder_sha256", "").lower()
+        onnx_path = self._encoder_onnx_path()
+        if not onnx_path.exists():
+            logger.warning(f"{LOG_PREFIX} Encoder ONNX not found at {onnx_path}")
+            return None
+
+        actual_sha = _get_encoder_sha256(onnx_path)
+        if actual_sha.lower() != expected_sha:
+            raise RuntimeError(
+                f"[CLASSIFIER BOOT] sha256 mismatch: task={task_name} "
+                f"expected={expected_sha} got={actual_sha}"
             )
 
-    def _load_split_head(self, model_name, model_dir, labels, version,
-                         model_type, thresholds):
-        """Load a split-format head (.npz weights)."""
-        npz_path = model_dir / "head.npz"
+        # Load head .npz
+        head_asset = meta.get("head_asset")
+        if not head_asset:
+            logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
+            return None
+
+        npz_path = task_dir / head_asset
         if not npz_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing head.npz in {model_dir}")
+            logger.warning(f"{LOG_PREFIX} Head file not found: {npz_path}")
             return None
 
         try:
-            data = np.load(str(npz_path))
-            weight = data["weight"]
-            bias = data.get("bias")
+            with np.load(str(npz_path)) as f:
+                W1 = f["W1"].astype(np.float32)
+                b1 = f["b1"].astype(np.float32)
+                W2 = f["W2"].astype(np.float32)
+                b2 = f["b2"].astype(np.float32)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load head.npz: {e}")
+            logger.warning(f"{LOG_PREFIX} Failed to load head for '{task_name}': {e}")
             return None
 
-        size_kb = npz_path.stat().st_size / 1024
+        labels = meta.get("labels", [])
+        activation = meta.get("activation", meta.get("mlp_activation", "gelu"))
+        input_dim = meta.get("input_dim", W1.shape[1])
+        hidden_dim = meta.get("hidden_dim", W1.shape[0])
+        num_classes = meta.get("num_classes", W2.shape[0])
+
+        head = _ClassifierHead(W1=W1, b1=b1, W2=W2, b2=b2,
+                               labels=labels, activation=activation)
+
+        # Emit boot marker — format is contractual (scenarios grep exact prefix)
         logger.info(
-            f"{LOG_PREFIX} Loaded head {model_name} ({version}): "
-            f"{weight.shape}, type={model_type}, {size_kb:.1f}KB"
+            "[CLASSIFIER BOOT] %s sha256=%s input_dim=%d hidden_dim=%d "
+            "num_classes=%d activation=%s",
+            task_name, actual_sha, input_dim, hidden_dim, num_classes, activation,
         )
+        return head
 
-        return _ClassifierHead(
-            weight=weight, bias=bias, labels=labels,
-            model_type=model_type, thresholds=thresholds,
-            version=version,
-        )
+    def _get_head(self, task_name: str) -> Optional[_ClassifierHead]:
+        """Return the registered head for task_name, loading it on first call."""
+        if task_name in self._heads:
+            return self._heads[task_name]
 
-    def _load_legacy_model(self, model_name, model_dir, meta, labels,
-                           version, model_type, thresholds):
-        """Load a monolithic ONNX model (backward compat with v0.3.0)."""
-        onnx_files = list(model_dir.glob("*.onnx"))
-        if not onnx_files:
-            logger.warning(f"{LOG_PREFIX} No .onnx file in {model_dir}")
-            return None
+        with self._heads_lock:
+            if task_name in self._heads:
+                return self._heads[task_name]
 
-        onnx_path = onnx_files[0]
-        pruned = meta.get("pruned", False)
-        base_model = meta.get("base_model")
+            head = self._register_task(task_name)
+            if head is not None:
+                self._heads[task_name] = head
+            return head
 
-        try:
-            import onnxruntime as ort
+    # ── Public API ────────────────────────────────────────────────────────────
 
-            opts = ort.SessionOptions()
-            opts.intra_op_num_threads = 1
-            opts.inter_op_num_threads = 1
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    def predict(
+        self,
+        task_name: str,
+        prompt: str,
+        extra_features: Optional[np.ndarray] = None,
+    ) -> Tuple[Optional[str], float]:
+        """Run single-label MLP classification.
 
-            session = ort.InferenceSession(
-                str(onnx_path), sess_options=opts,
-                providers=["CPUExecutionProvider"],
-            )
-        except ImportError:
-            logger.warning(f"{LOG_PREFIX} onnxruntime not installed")
-            return None
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load ONNX: {e}")
-            return None
-
-        try:
-            if base_model:
-                tokenizer = _get_shared_tokenizer(base_model, model_dir)
-            elif (model_dir / "tokenizer.json").exists():
-                from transformers import AutoTokenizer
-                tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-            else:
-                logger.warning(f"{LOG_PREFIX} No tokenizer for {model_name}")
-                return None
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Tokenizer failed for {model_name}: {e}")
-            return None
-
-        label_token_ids = []
-        if not pruned:
-            for label in labels:
-                token_ids = tokenizer.encode(label, add_special_tokens=False)
-                if not token_ids:
-                    return None
-                label_token_ids.append(token_ids[0])
-
-        logger.info(
-            f"{LOG_PREFIX} Loaded legacy {model_name} ({version}): "
-            f"{onnx_path.name}, type={model_type}, pruned={pruned}"
-        )
-
-        return _LegacyModel(
-            session=session, tokenizer=tokenizer, labels=labels,
-            label_token_ids=label_token_ids, version=version,
-            pruned=pruned, model_type=model_type, thresholds=thresholds,
-        )
-
-    # ── Public API ────────────────────────────────────────────
-
-    def predict(self, model_name: str, text: str) -> Tuple[Optional[str], float]:
-        """
-        Run single-label classification (softmax → argmax).
+        Args:
+            task_name:      Registered task (e.g. 'thinking_level').
+            prompt:         Raw text to encode.
+            extra_features: Optional (1, extra_dim) float32 array to concatenate
+                            after the embedding (e.g. prev_level one-hot).
 
         Returns:
-            (label, confidence) — label is None if the model isn't available.
+            (label, confidence) — label is None if the model isn't available
+            or if the feature shape doesn't match meta.input_dim.
         """
-        head = self._get_head(model_name)
+        head = self._get_head(task_name)
         if head is None:
             return None, 0.0
 
-        if isinstance(head, _LegacyModel):
-            return self._predict_legacy(head, model_name, text)
-
-        return self._predict_split(head, model_name, text)
-
-    def predict_multi_label(
-        self, model_name: str, text: str,
-        threshold_overrides: Optional[Dict[str, float]] = None,
-    ) -> List[Tuple[str, float]]:
-        """
-        Run multi-label classification (sigmoid per output, threshold per label).
-
-        Returns:
-            List of (label, confidence) tuples above threshold, sorted descending.
-        """
-        head = self._get_head(model_name)
-        if head is None:
-            return []
-
-        if isinstance(head, _LegacyModel):
-            return self._predict_multi_label_legacy(head, model_name, text, threshold_overrides)
-
-        return self._predict_multi_label_split(head, model_name, text, threshold_overrides)
-
-    def predict_batch(self, model_name: str, texts: List[str]) -> List[Tuple[Optional[str], float]]:
-        """Run single-label classification on a batch of inputs."""
-        head = self._get_head(model_name)
-        if head is None:
-            return [(None, 0.0)] * len(texts)
-
-        if isinstance(head, _LegacyModel):
-            return self._predict_batch_legacy(head, model_name, texts)
-
-        return self._predict_batch_split(head, model_name, texts)
-
-    def is_available(self, model_name: str) -> bool:
-        """Check if a model is loaded or loadable."""
-        return self._get_head(model_name) is not None
-
-    # ── Split-format inference ────────────────────────────────
-
-    def _predict_split(self, head: _ClassifierHead, model_name: str,
-                       text: str) -> Tuple[Optional[str], float]:
         try:
             start = time.perf_counter()
 
-            tokenizer = self._base_tokenizer or _get_shared_tokenizer(BASE_MODEL_HF)
-            encoded = tokenizer(
-                text, return_tensors="np", padding=False,
-                truncation=True, max_length=256,
-            )
+            embedding = self._embed(prompt)  # (1, 768)
 
-            hidden = self._run_base(encoded["input_ids"], encoded["attention_mask"])
-            if hidden is None:
+            if extra_features is not None:
+                features = np.concatenate([embedding, extra_features], axis=-1)  # (1, input_dim)
+            else:
+                features = embedding  # (1, 768)
+
+            expected_input_dim = head.input_dim
+            if features.shape[-1] != expected_input_dim:
+                logger.warning(
+                    f"{LOG_PREFIX} {task_name}: feature dim mismatch "
+                    f"(got {features.shape[-1]}, expected {expected_input_dim})"
+                )
                 return None, 0.0
 
-            logits = head.forward(hidden)[0]  # (num_classes,)
-
-            # Softmax
-            shifted = logits - logits.max()
-            exp_l = np.exp(shifted)
-            probs = exp_l / exp_l.sum()
+            logits = head.forward(features)           # (1, num_classes)
+            probs = _softmax(logits.astype(np.float32))[0]  # (num_classes,)
 
             winner_idx = int(np.argmax(probs))
             confidence = float(probs[winner_idx])
             label = head.labels[winner_idx]
 
             elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(f"{LOG_PREFIX} {model_name}: {label} ({confidence:.3f}) in {elapsed_ms:.1f}ms")
+            logger.debug(
+                f"{LOG_PREFIX} {task_name}: {label} ({confidence:.3f}) in {elapsed_ms:.1f}ms"
+            )
             return label, confidence
 
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Inference failed for {model_name}: {e}")
+            logger.warning(f"{LOG_PREFIX} Inference failed for '{task_name}': {e}")
             return None, 0.0
 
-    def _predict_multi_label_split(
-        self, head: _ClassifierHead, model_name: str, text: str,
+    def predict_multi_label(
+        self,
+        model_name: str,
+        text: str,
         threshold_overrides: Optional[Dict[str, float]] = None,
     ) -> List[Tuple[str, float]]:
+        """Multi-label classification via sigmoid per output, threshold per label.
+
+        Used by ConsequenceClassifierService. Returns list of (label, score) tuples
+        above threshold, sorted descending by score.
+        """
+        head = self._get_head(model_name)
+        if head is None:
+            return []
+
         try:
-            start = time.perf_counter()
+            embedding = self._embed(text)  # (1, 768)
+            features = embedding
 
-            tokenizer = self._base_tokenizer or _get_shared_tokenizer(BASE_MODEL_HF)
-            encoded = tokenizer(
-                text, return_tensors="np", padding=False,
-                truncation=True, max_length=256,
-            )
-
-            hidden = self._run_base(encoded["input_ids"], encoded["attention_mask"])
-            if hidden is None:
+            if features.shape[-1] != head.input_dim:
+                logger.warning(
+                    f"{LOG_PREFIX} {model_name}: feature dim mismatch for multi_label"
+                )
                 return []
 
-            logits = head.forward(hidden)[0]  # (num_classes,)
+            logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
 
             # Sigmoid per output
-            probs = 1.0 / (1.0 + np.exp(-logits.astype(np.float64)))
+            probs = 1.0 / (1.0 + np.exp(-logits))
 
-            thresholds = threshold_overrides or head.thresholds
+            default_threshold = 0.5
             results = []
             for i, label in enumerate(head.labels):
                 if i >= len(probs):
                     break
-                t = thresholds.get(label, 0.5)
+                t = (threshold_overrides or {}).get(label, default_threshold)
                 if probs[i] >= t:
                     results.append((label, float(probs[i])))
 
             results.sort(key=lambda x: x[1], reverse=True)
-
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            active = [r[0] for r in results]
-            logger.debug(f"{LOG_PREFIX} {model_name}: {active} in {elapsed_ms:.1f}ms")
             return results
 
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Multi-label inference failed for {model_name}: {e}")
+            logger.warning(f"{LOG_PREFIX} Multi-label inference failed for '{model_name}': {e}")
             return []
 
-    def _predict_batch_split(self, head: _ClassifierHead, model_name: str,
-                             texts: List[str]) -> List[Tuple[Optional[str], float]]:
-        try:
-            tokenizer = self._base_tokenizer or _get_shared_tokenizer(BASE_MODEL_HF)
-            encoded = tokenizer(
-                texts, return_tensors="np", padding=True,
-                truncation=True, max_length=256,
-            )
-
-            hidden = self._run_base(encoded["input_ids"], encoded["attention_mask"])
-            if hidden is None:
-                return [(None, 0.0)] * len(texts)
-
-            all_logits = head.forward(hidden)  # (batch, num_classes)
-
-            results = []
-            for i in range(len(texts)):
-                logits = all_logits[i]
-                shifted = logits - logits.max()
-                exp_l = np.exp(shifted)
-                probs = exp_l / exp_l.sum()
-                winner_idx = int(np.argmax(probs))
-                results.append((head.labels[winner_idx], float(probs[winner_idx])))
-
-            return results
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Batch inference failed for {model_name}: {e}")
-            return [(None, 0.0)] * len(texts)
-
-    # ── Legacy inference (backward compat) ────────────────────
-
-    def _predict_legacy(self, model: _LegacyModel, model_name: str,
-                        text: str) -> Tuple[Optional[str], float]:
-        try:
-            start = time.perf_counter()
-
-            encoded = model.tokenizer(
-                text, return_tensors="np", padding=False,
-                truncation=True, max_length=256,
-            )
-            input_ids = encoded["input_ids"]
-            attention_mask = encoded["attention_mask"]
-
-            outputs = model.session.run(None, model.build_feed(input_ids, attention_mask))
-            logits = outputs[0]
-
-            if model.pruned:
-                label_logits = logits[0]
-            else:
-                seq_len = int(attention_mask.sum()) - 1
-                last_logits = logits[0, seq_len, :]
-                vocab_size = len(last_logits)
-                safe_ids = [tid for tid in model.label_token_ids if tid < vocab_size]
-                label_logits = np.array([last_logits[tid] for tid in safe_ids])
-
-            shifted = label_logits - label_logits.max()
-            exp_l = np.exp(shifted)
-            probs = exp_l / exp_l.sum()
-
-            winner_idx = int(np.argmax(probs))
-            confidence = float(probs[winner_idx])
-            label = model.labels[winner_idx]
-
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(f"{LOG_PREFIX} {model_name} (legacy): {label} ({confidence:.3f}) in {elapsed_ms:.1f}ms")
-            return label, confidence
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Legacy inference failed for {model_name}: {e}")
-            return None, 0.0
-
-    def _predict_multi_label_legacy(
-        self, model: _LegacyModel, model_name: str, text: str,
-        threshold_overrides: Optional[Dict[str, float]] = None,
-    ) -> List[Tuple[str, float]]:
-        try:
-            start = time.perf_counter()
-
-            encoded = model.tokenizer(
-                text, return_tensors="np", padding=False,
-                truncation=True, max_length=256,
-            )
-            input_ids = encoded["input_ids"]
-            attention_mask = encoded["attention_mask"]
-
-            outputs = model.session.run(None, model.build_feed(input_ids, attention_mask))
-            logits = outputs[0]
-
-            if model.pruned:
-                raw_logits = logits[0]
-            else:
-                seq_len = int(attention_mask.sum()) - 1
-                raw_logits = logits[0, seq_len, :]
-
-            probs = 1.0 / (1.0 + np.exp(-raw_logits.astype(np.float64)))
-
-            thresholds = threshold_overrides or model.thresholds
-            results = []
-            for i, label in enumerate(model.labels):
-                if i >= len(probs):
-                    break
-                t = thresholds.get(label, 0.5)
-                if probs[i] >= t:
-                    results.append((label, float(probs[i])))
-
-            results.sort(key=lambda x: x[1], reverse=True)
-
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.debug(f"{LOG_PREFIX} {model_name} (legacy): {[r[0] for r in results]} in {elapsed_ms:.1f}ms")
-            return results
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Legacy multi-label failed for {model_name}: {e}")
-            return []
-
-    def _predict_batch_legacy(self, model: _LegacyModel, model_name: str,
-                              texts: List[str]) -> List[Tuple[Optional[str], float]]:
-        try:
-            encoded = model.tokenizer(
-                texts, return_tensors="np", padding=True,
-                truncation=True, max_length=256,
-            )
-            input_ids = encoded["input_ids"]
-            attention_mask = encoded["attention_mask"]
-
-            outputs = model.session.run(None, model.build_feed(input_ids, attention_mask))
-            logits = outputs[0]
-
-            results = []
-            for i in range(len(texts)):
-                if model.pruned:
-                    label_logits = logits[i]
-                else:
-                    seq_len = int(attention_mask[i].sum()) - 1
-                    last_logits = logits[i, seq_len, :]
-                    label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
-
-                shifted = label_logits - label_logits.max()
-                exp_l = np.exp(shifted)
-                probs = exp_l / exp_l.sum()
-                winner_idx = int(np.argmax(probs))
-                results.append((model.labels[winner_idx], float(probs[winner_idx])))
-
-            return results
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Legacy batch failed for {model_name}: {e}")
-            return [(None, 0.0)] * len(texts)
+    def is_available(self, model_name: str) -> bool:
+        """Check if a model is loaded or loadable."""
+        return self._get_head(model_name) is not None
 
 
-# ── Singleton ─────────────────────────────────────────────────
+# ── Singleton ─────────────────────────────────────────────────────────────────
 
 _instance: Optional[OnnxInferenceService] = None
 _instance_lock = threading.Lock()

@@ -282,7 +282,7 @@ class TestToolRegistration:
         meta = get_metadata("browser")
         assert "description" in meta
         assert "documentation" in meta
-        assert "parameters" in meta
+        assert "input_schema" in meta
         assert "returns" in meta
         assert "output" in meta
         assert "tips" in meta
@@ -297,8 +297,8 @@ class TestToolRegistration:
     def test_browser_metadata_action_param(self):
         from services.tool_library_service import get_metadata
         meta = get_metadata("browser")
-        assert "action" in meta["parameters"]
-        assert meta["parameters"]["action"]["required"] is True
+        assert "action" in meta["input_schema"]["properties"]
+        assert "action" in meta["input_schema"]["required"]
 
 
 # =============================================================================

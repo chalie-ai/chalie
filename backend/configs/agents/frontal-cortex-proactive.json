@@ -1,7 +1,0 @@
-{
-  "_comment": "PROACTIVE mode: Translate drift thought into conversational outreach (1-2 sentences)",
-  "temperature": 0.6,
-  "timeout": 180,
-  "format": "json",
-  "attention_span_minutes": 30
-}

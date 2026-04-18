@@ -92,12 +92,12 @@ class ActDispatcherService:
         from services.innate_skills import register_innate_skills
         register_innate_skills(self)
 
-    def dispatch_action(self, topic: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute single action with timeout enforcement.
 
         Args:
-            topic: Current conversation topic
+            channel: Current conversation channel
             action: Action specification dict
 
         Returns:
@@ -113,11 +113,6 @@ class ActDispatcherService:
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
-            # Try tool registry — handles tools discovered via find_tools
-            tool_result = self._try_tool_registry(topic, action_type, action)
-            if tool_result:
-                return tool_result
-
             # Try wrapper intent routing before falling through to error
             wrapper_result = self._try_wrapper_intent(action_type, action)
             if wrapper_result:
@@ -133,10 +128,6 @@ class ActDispatcherService:
                 'notes': '',
             }
 
-        # Pre-execution gate — evaluates consequence tier and domain confidence.
-        # Only applies for autonomous/background execution (execution_gate=True).
-        # User-initiated ACT loops skip this — the user already asked for it.
-        # Safe innate skills always bypass the gate regardless.
         from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
         if self.execution_gate and action_type not in _SAFE_ACTIONS:
             try:
@@ -145,14 +136,13 @@ class ActDispatcherService:
                 action_description = action.get('description', action.get('params', {}).get('query', action_type))
                 gate_result = gate.evaluate(
                     str(action_description),
-                    domain=topic or 'general',
+                    domain=channel or 'general',
                 )
                 if not gate_result['auto_execute']:
                     execution_time = time.time() - start_time
                     logging.info(
                         f"[ACT DISPATCH] Blocked by execution gate: "
                         f"tier={gate_result['consequence_tier']}, "
-                        f"confidence={gate_result['domain_confidence']:.2f}, "
                         f"action={action_description!r:.100}"
                     )
                     return {
@@ -167,14 +157,8 @@ class ActDispatcherService:
                         'notes': gate_result['reasoning'],
                         'gate_decision': gate_result,
                     }
-                if gate_result['consequence_tier'] >= 2:
-                    _commit_warning = (
-                        f"Action classified as tier {gate_result['consequence_tier']} "
-                        f"({gate_result['consequence_name']}), auto-executed with "
-                        f"domain confidence {gate_result['domain_confidence']:.2f}."
-                    )
             except Exception:
-                pass  # Gate unavailable — proceed with execution
+                pass
 
         # Determine effective timeout: tool metadata can override the default.
         # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
@@ -194,7 +178,7 @@ class ActDispatcherService:
             def target():
                 """Thread target: invoke the action handler and capture the result."""
                 try:
-                    result_container['result'] = handler(topic, action)
+                    result_container['result'] = handler(channel, action)
                 except Exception as e:
                     result_container['error'] = str(e)
 
@@ -208,7 +192,7 @@ class ActDispatcherService:
 
             # Check results
             if thread.is_alive():
-                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='timeout')
+                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='timeout')
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
@@ -219,7 +203,7 @@ class ActDispatcherService:
                 }
 
             if result_container['error']:
-                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='internal')
+                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='internal')
                 return {
                     'action_type': action_type,
                     'status': 'error',
@@ -245,7 +229,7 @@ class ActDispatcherService:
             if _commit_warning:
                 notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
 
-            self._track_skill(action_type, True, elapsed_ms, topic, result=str(raw_result)[:500])
+            self._track_skill(action_type, True, elapsed_ms, channel, result=str(raw_result)[:500])
 
             dispatch_result = {
                 'action_type': action_type,
@@ -263,7 +247,7 @@ class ActDispatcherService:
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self._track_skill(action_type, False, int(execution_time * 1000), topic, failure_class='internal')
+            self._track_skill(action_type, False, int(execution_time * 1000), channel, failure_class='internal')
             logging.exception(f"[ACT DISPATCH] Unexpected error in {action_type}:")
             return {
                 'action_type': action_type,
@@ -275,7 +259,7 @@ class ActDispatcherService:
             }
 
     def _track_skill(self, action_type: str, success: bool, latency_ms: int,
-                     topic: str = '', failure_class: str | None = None, result: str = '') -> None:
+                     channel: str = '', failure_class: str | None = None, result: str = '') -> None:
         """Track innate skill invocations via the unified tracker.
 
         Tools are skipped here — they self-track inside ToolRegistryService.invoke().
@@ -290,45 +274,12 @@ class ActDispatcherService:
                 name=action_type,
                 success=success,
                 latency_ms=latency_ms,
-                topic=topic,
+                topic=channel,
                 failure_class=failure_class,
                 result=result,
             )
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
-
-    def _try_tool_registry(self, topic: str, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
-        """Route action to ToolRegistryService if it's a registered tool.
-
-        Handles tools discovered via find_tools that aren't innate skills.
-        Returns None if the tool isn't in the registry.
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            if action_type not in registry.tools:
-                return None
-
-            params = action.get('params', {})
-            start_time = time.time()
-
-            logging.info(f"[ACT DISPATCH] Routing '{action_type}' to tool registry")
-            result_text = registry.invoke(action_type, topic, params)
-            elapsed = time.time() - start_time
-
-            # Determine success from result text
-            is_error = 'Error:' in result_text or 'Unknown tool' in result_text
-            return {
-                'action_type': action_type,
-                'status': 'error' if is_error else 'success',
-                'result': result_text,
-                'execution_time': elapsed,
-                'confidence': 0.0 if is_error else 0.8,
-                'notes': f'Executed via tool registry ({elapsed:.2f}s)',
-            }
-        except Exception as e:
-            logging.error(f"[ACT DISPATCH] Tool registry dispatch failed for '{action_type}': {e}")
-            return None
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

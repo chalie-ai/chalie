@@ -40,7 +40,7 @@ const PLATFORM_CONFIG = {
         desc: 'Run locally — no API key needed. Download from <a href="https://ollama.ai" target="_blank">ollama.ai</a>',
         hasHost: true,
         hasApiKey: false,
-        modelPlaceholder: 'e.g. qwen3:8b',
+        modelPlaceholder: 'e.g. gemma4:31b',
         models: [],
     },
     anthropic: {
@@ -137,9 +137,50 @@ async function resolveApiKey() {
         }
         // Logged in — load dashboard regardless of provider state
         await loadData();
+        // Start the background session heartbeat so a vault lock (server
+        // restart, session expiry) kicks the user back to login without
+        // requiring a manual refresh.
+        startSessionHeartbeat();
     } catch (err) {
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
+}
+
+// ==========================================
+// Session heartbeat
+// ==========================================
+let _sessionHeartbeatInterval = null;
+let _sessionHeartbeatFired = false;
+
+async function checkSessionAlive() {
+    if (_sessionHeartbeatFired) return;
+    try {
+        const statusUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}/auth/status` : '/auth/status';
+        const res = await fetch(statusUrl, { credentials: 'same-origin' });
+        if (!res.ok) return; // transient — leave the user alone
+        const data = await res.json();
+        // /auth/status forces has_session=false when vault_state==='locked',
+        // so this single check handles both session expiry and vault-locked-
+        // after-restart. Only redirect if an account still exists.
+        if (data.has_master_account && !data.has_session) {
+            _sessionHeartbeatFired = true;
+            if (_sessionHeartbeatInterval) {
+                clearInterval(_sessionHeartbeatInterval);
+                _sessionHeartbeatInterval = null;
+            }
+            window.location.replace('/login/?next=/brain/');
+        }
+    } catch (_) { /* network blip — retry next beat */ }
+}
+
+function startSessionHeartbeat() {
+    if (_sessionHeartbeatInterval) return;
+    _sessionHeartbeatInterval = setInterval(checkSessionAlive, 5 * 60 * 1000);
+    // Re-check whenever the tab becomes visible again so a user returning
+    // after a long break gets bounced to login immediately.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkSessionAlive();
+    });
 }
 
 
@@ -340,7 +381,7 @@ function renderProviders() {
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}${warnIcon}</div>
                 <div class="provider-meta">
-                    <span class="provider-platform-badge badge-${p.platform}">${p.platform}</span>
+                    <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
                     ${modelsDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
@@ -532,6 +573,20 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const id = editingProviderId;
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
+
+    // Auto-commit any pending value in the model input so users don't have
+    // to remember to press Enter / click Add before saving.
+    const pendingModel = document.getElementById('editModelInput').value.trim();
+    if (pendingModel && !editModels.includes(pendingModel)) {
+        editModels.push(pendingModel);
+        document.getElementById('editModelInput').value = '';
+        renderModelTags();
+    }
+
+    if (editModels.length === 0) {
+        showToast('Add at least one model', 'error');
+        return;
+    }
 
     const body = {
         name: document.getElementById('editName').value.trim(),
@@ -771,10 +826,10 @@ function renderCognition() {
         }).join('');
 
         return `
-            <div class="group-card" data-group="${groupName}">
+            <div class="group-card" data-group="${escapeHtml(groupName)}">
                 <div class="group-card__header">
                     <div class="group-card__title">
-                        <span class="group-card__icon">${meta.icon}</span>
+                        <span class="group-card__icon">${escapeHtml(meta.icon)}</span>
                         <span class="group-card__name">${escapeHtml(meta.name)}</span>
                         <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
                     </div>
@@ -782,11 +837,11 @@ function renderCognition() {
                 </div>
                 <div class="group-card__assign">
                     <div class="group-card__selects">
-                        <select class="provider-select group-provider-select" data-group="${groupName}">
+                        <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
                             <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
                             ${providerOptions}
                         </select>
-                        <select class="provider-select group-model-select" data-group="${groupName}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
+                        <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
                             <option value="">-- Select model --</option>
                             ${modelOptions}
                         </select>
@@ -794,8 +849,8 @@ function renderCognition() {
                     ${statusText}
                 </div>
                 <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
-                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
+                    <button class="group-advanced-toggle" data-group="${escapeHtml(groupName)}">Advanced \u25B8</button>
+                    <div class="group-advanced-body" data-group="${escapeHtml(groupName)}" style="display:none">
                         ${jobRowsHtml}
                     </div>
                 </div>
@@ -2003,7 +2058,6 @@ function loadCognitionSubtab(subtab) {
     const loaders = {
         memory: loadMemoryObs,
         tools: loadToolsObs,
-        identity: loadIdentityObs,
         tasks: loadTasksObs,
         understanding: loadUnderstandingObs,
         worldstate: loadWorldStateObs,
@@ -2151,54 +2205,6 @@ async function loadToolsObs() {
     }
 }
 
-// ── Identity ──
-
-async function loadIdentityObs() {
-    const el = document.getElementById('identityContent');
-    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(200);
-
-    try {
-        const res = await apiFetch('/system/observability/identity');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-        obsData.identity = data;
-        obsLoaded.identity = true;
-        obsSetTimestamp(data.generated_at);
-
-        const vectors = data.vectors || {};
-        const names = Object.keys(vectors);
-
-        if (names.length === 0) {
-            el.innerHTML = '<p class="obs-summary">Identity vectors have not been initialized yet.</p><div class="obs-empty">Identity data will appear here after interactions begin shaping personality.</div>';
-            return;
-        }
-
-        let html = `<p class="obs-summary">Chalie's personality is expressed across ${names.length} dimensions, each shaped by interactions.</p>`;
-
-        for (const name of names) {
-            const v = vectors[name];
-            const activation = v.activation || 0;
-            const baseline = v.baseline || 0;
-            const maxVal = v.max || 1;
-            const activationPct = Math.min(100, (activation / maxVal) * 100);
-            const baselinePct = Math.min(100, (baseline / maxVal) * 100);
-
-            html += `<div class="obs-vector-row">
-                <span class="obs-vector-row__label">${escapeHtml(name)}</span>
-                <div class="obs-vector-row__track">
-                    <div class="obs-vector-row__fill" style="width:${activationPct.toFixed(1)}%"></div>
-                    <div class="obs-vector-row__baseline" style="left:${baselinePct.toFixed(1)}%"></div>
-                </div>
-                <span class="obs-vector-row__values">${activation.toFixed(2)} / ${baseline.toFixed(2)}</span>
-            </div>`;
-        }
-
-        el.innerHTML = html;
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load identity data.</div>';
-    }
-}
-
 // ── Working On (Tasks) ──
 
 async function loadTasksObs() {
@@ -2279,52 +2285,15 @@ async function loadUnderstandingObs() {
     el.innerHTML = obsSkeletonBlock(60) + obsSkeletonBlock(120) + obsSkeletonBlock(80);
 
     try {
-        const [autoRes, traitsRes] = await Promise.all([
-            apiFetch('/system/observability/autobiography'),
-            apiFetch('/system/observability/traits'),
-        ]);
+        const traitsRes = await apiFetch('/system/observability/traits');
 
-        const autoData = autoRes.ok ? await autoRes.json() : {};
         const traitsData = traitsRes.ok ? await traitsRes.json() : {};
 
-        obsData.understanding = { autobiography: autoData, traits: traitsData };
+        obsData.understanding = { traits: traitsData };
         obsLoaded.understanding = true;
-        obsSetTimestamp(autoData.generated_at || traitsData.generated_at);
+        obsSetTimestamp(traitsData.generated_at);
 
         let html = '';
-
-        // ── Autobiography section ──
-        html += '<div class="obs-section-title">Autobiography';
-        if (autoData.created_at) {
-            html += ` <span class="obs-understanding-updated">Last updated ${timeAgo(autoData.created_at)}</span>`;
-        }
-        html += '</div>';
-
-        if (autoData.narrative) {
-            const changedSections = (autoData.delta && autoData.delta.changed) || [];
-            const sections = autoData.narrative.split(/(?=^## )/m);
-
-            for (const section of sections) {
-                const trimmed = section.trim();
-                if (!trimmed) continue;
-
-                const headerMatch = trimmed.match(/^## (.+)/);
-                const title = headerMatch ? headerMatch[1] : 'Overview';
-                const body = headerMatch ? trimmed.slice(headerMatch[0].length).trim() : trimmed;
-                const isChanged = changedSections.some(c => c.toLowerCase() === title.toLowerCase());
-
-                html += `<div class="obs-understanding-section${isChanged ? ' --changed' : ''}">
-                    <button class="obs-understanding-section__header" onclick="this.parentElement.classList.toggle('--open')">
-                        <span>${escapeHtml(title)}</span>
-                        ${isChanged ? '<span class="obs-understanding-section__delta">updated</span>' : ''}
-                        <svg class="obs-understanding-section__chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </button>
-                    <div class="obs-understanding-section__body">${escapeHtml(body).replace(/\n/g, '<br>')}</div>
-                </div>`;
-            }
-        } else {
-            html += '<div class="obs-empty">No autobiography yet. Chalie needs a few more conversations to build its self-narrative.</div>';
-        }
 
         // ── Traits section ──
         html += '<div class="obs-section-title">What I\'ve Learned About You</div>';

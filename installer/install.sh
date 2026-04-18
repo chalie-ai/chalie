@@ -291,17 +291,17 @@ _setup_venv() {
   fi
 
   _info "Upgrading pip…"
-  "$venv/bin/pip" install --upgrade pip --quiet
+  "$venv/bin/pip" install --upgrade pip
 
   _info "Installing core dependencies (this may take a few minutes)…"
-  "$venv/bin/pip" install -r "$CHALIE_HOME/app/backend/requirements.txt" --quiet
+  "$venv/bin/pip" install -r "$CHALIE_HOME/app/backend/requirements.txt"
 
   # Voice dependencies (separate file, skipped if --disable-voice)
   if [[ "$_DISABLE_VOICE" != "true" ]]; then
     local voice_req="$CHALIE_HOME/app/backend/requirements-voice.txt"
     if [[ -f "$voice_req" ]]; then
       _info "Installing voice dependencies (STT/TTS)…"
-      "$venv/bin/pip" install -r "$voice_req" --quiet 2>/dev/null || {
+      "$venv/bin/pip" install -r "$voice_req" 2>/dev/null || {
         _warn "Voice dependency install failed — voice will be unavailable"
         _warn "You can retry later: $venv/bin/pip install -r $voice_req"
       }

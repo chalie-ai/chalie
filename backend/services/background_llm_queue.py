@@ -49,7 +49,7 @@ class BackgroundLLMProxy:
 
         Args:
             agent_name: Logical name of the calling background service
-                (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+                (e.g. ``"goal-strategy"``, ``"cognitive-drift"``).
                 Used for queue-depth logging and job tracking.
         """
         self.agent_name = agent_name
@@ -108,6 +108,7 @@ class BackgroundLLMProxy:
 
         try:
             self._store.rpush(QUEUE_KEY, json.dumps(job))
+            self._store.expire(QUEUE_KEY, 600)
         except Exception as e:
             logger.error("BG LLM enqueue failed: %s", e)
             return None
@@ -161,7 +162,7 @@ def create_background_llm_proxy(agent_name: str) -> BackgroundLLMProxy:
 
     Args:
         agent_name: Logical name of the calling background service
-            (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+            (e.g. ``"goal-strategy"``, ``"cognitive-drift"``).
 
     Returns:
         BackgroundLLMProxy instance ready to accept send_message() calls.

@@ -1,5 +1,5 @@
 """
-Conversation Phase Service — deterministic per-thread conversation state machine.
+Conversation Phase Service — deterministic conversation state machine.
 
 Tracks what phase a conversation is in based purely on observable message signals.
 No LLM — pure math on rolling windows maintained in MemoryStore.
@@ -15,7 +15,7 @@ Additional outputs:
     momentum  (0-1): exchange rate normalised against a 2 msg/min baseline (EMA-smoothed)
     direction : "deepening" | "sustaining" | "winding_down"
 
-State is stored in MemoryStore at ``conversation_phase:{thread_id}`` (TTL 3600s).
+State is stored in MemoryStore at ``conversation_phase`` (TTL 3600s).
 """
 
 import json
@@ -189,29 +189,25 @@ class ConversationPhaseService:
         from services.memory_client import MemoryClientService
         return MemoryClientService.create_connection()
 
-    def _key(self, thread_id: str) -> str:
-        return f"{_KEY_PREFIX}:{thread_id}"
-
-    def _load(self, thread_id: str) -> dict:
+    def _load(self) -> dict:
         try:
-            raw = self._store().get(self._key(thread_id))
+            raw = self._store().get(_KEY_PREFIX)
             if raw:
                 return json.loads(raw)
         except Exception as exc:
-            logger.debug(f"[PHASE] Load failed for {thread_id}: {exc}")
+            logger.debug(f"[PHASE] Load failed: {exc}")
         return _default_state()
 
-    def _save(self, thread_id: str, state: dict) -> None:
+    def _save(self, state: dict) -> None:
         try:
-            self._store().set(self._key(thread_id), json.dumps(state), ex=_TTL)
+            self._store().set(_KEY_PREFIX, json.dumps(state), ex=_TTL)
         except Exception as exc:
-            logger.debug(f"[PHASE] Save failed for {thread_id}: {exc}")
+            logger.debug(f"[PHASE] Save failed: {exc}")
 
     # ── Public API ─────────────────────────────────────────────────────────
 
     def update(
         self,
-        thread_id: str,
         message_text: str,
         is_user: bool,
         topic: str = None,
@@ -220,7 +216,6 @@ class ConversationPhaseService:
         Update phase state with a new message.
 
         Args:
-            thread_id:    Conversation thread identifier.
             message_text: Raw message text.
             is_user:      True for user messages, False for assistant messages.
             topic:        Current topic label (optional — use last known if absent).
@@ -228,7 +223,7 @@ class ConversationPhaseService:
         Returns:
             Dict with keys: current, momentum, direction, updated_at.
         """
-        state = self._load(thread_id)
+        state = self._load()
         now = utc_now()
         now_str = now.isoformat()
 
@@ -305,10 +300,10 @@ class ConversationPhaseService:
         state["updated_at"] = now_str
         # Remove internal pending fields before persisting
         state_to_save = {k: v for k, v in state.items()}
-        self._save(thread_id, state_to_save)
+        self._save(state_to_save)
 
         logger.debug(
-            f"[PHASE] thread={thread_id} phase={state['current']} "
+            f"[PHASE] phase={state['current']} "
             f"momentum={state['momentum']:.2f} direction={state['direction']}"
         )
 
@@ -319,16 +314,16 @@ class ConversationPhaseService:
             "updated_at": state["updated_at"],
         }
 
-    def get_phase(self, thread_id: str) -> dict:
+    def get_phase(self) -> dict:
         """
-        Return current phase for a thread.
+        Return current phase.
 
         If no state exists, returns opening defaults.
 
         Returns:
             Dict with keys: current, momentum, direction, updated_at.
         """
-        state = self._load(thread_id)
+        state = self._load()
         return {
             "current": state.get("current", "opening"),
             "momentum": state.get("momentum", 0.5),
@@ -336,13 +331,13 @@ class ConversationPhaseService:
             "updated_at": state.get("updated_at", utc_now().isoformat()),
         }
 
-    def reset(self, thread_id: str) -> None:
-        """Clear phase state for a thread (called on thread expiry)."""
+    def reset(self) -> None:
+        """Clear phase state."""
         try:
-            self._store().delete(self._key(thread_id))
-            logger.debug(f"[PHASE] Reset thread {thread_id}")
+            self._store().delete(_KEY_PREFIX)
+            logger.debug("[PHASE] Reset")
         except Exception as exc:
-            logger.debug(f"[PHASE] Reset failed for {thread_id}: {exc}")
+            logger.debug(f"[PHASE] Reset failed: {exc}")
 
     # ── Internal helpers ───────────────────────────────────────────────────
 

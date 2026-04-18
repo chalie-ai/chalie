@@ -7,11 +7,41 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ## [Unreleased]
 
 ### In Progress
-- **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService` and `ContradictionClassifierService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`.
+- **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`.
 
 ---
 
 ## Recent
+
+### LUT Canonicalization Engine + Forget Action (2026-04-17)
+- Replaced the ONNX contradiction classifier (`ContradictionClassifierService`, 5-way MLP head) with a deterministic 27-concept LUT engine inside `data_graph_service.store()`
+- LUT lives at `backend/services/data_graph/assets/concept_lut.yaml` (27 hand-curated concepts: 3 immutable, 7 temporal, 17 coexist) with pre-shipped sqlite-vec embeddings at `concept_lut.sqlite` (~490 KB, 768-dim gte-modernbert)
+- `store()` for `user_specific` writes: key embedding → KNN against `concept_lut.sqlite` (cosine threshold 0.80) → rule dispatch: `temporal` supersedes old value + creates supersedes edge; `coexist` stores additively; `immutable` blocks write and returns conflict dict
+- `store()` for `system` kind: cosine match against existing key embeddings (threshold 0.80) → uniform temporal supersession; below threshold → additive insert
+- LUT misses logged to new `concept_lut_misses` observability table (kind, key, value preview, count, first/last seen)
+- `forget()` action added to `data_graph_service`: hard-delete with rule-aware semantics — temporal removes full version chain; coexist removes single value by exact match; immutable deletes the single row
+- `memory_skill.handle_memory()` now handles `forget` action; `store` returns one of 12 structured response templates so the LLM can self-correct on canonicalization surprises
+- `memory_skill.TOOL_SCHEMA` description injects all 27 canonical keys + 5 store rules + niche-fact fallback so the LLM canonicalizes at extraction time, not only at write time
+- `pending_contradictions` table and `PendingContradictionService` deleted (no call sites outside the cleanup loop; immutable conflicts surface via the returned conflict dict)
+- `("contradiction", "contradiction")` removed from `onnx_inference_service.MODEL_REGISTRY`; contradiction `.npz` head no longer loaded or downloaded; `thinking_level` head unaffected
+- Generator script `backend/utils/generate_concept_lut.py`: reads YAML, embeds canonical keys via gte-modernbert, writes `lut_concepts` + `lut_embeddings` vec0 virtual table into `concept_lut.sqlite`; run with `python -m utils.generate_concept_lut` after YAML changes
+- One-shot migration `backend/utils/migrate_canonicalize_user_keys.py`: backfills existing `user_specific` rows to canonical keys; idempotent
+- Cosine formula: `cos = max(0.0, 1.0 - distance ** 2 / 2.0)` via `_l2_dist_to_cosine()`
+- Constants: `_CONCEPT_LUT_THRESHOLD = 0.80`, `_SYSTEM_KEY_THRESHOLD = 0.80`, `_RECALL_COSINE_FLOOR = 0.42`
+- New nightly scenarios: `096-lut-canonicalize-residence-temporal.yaml`, `097-lut-coexist-favorite-foods.yaml`, `098-job-title-temporal-supersedes.yaml`, `099-lut-miss-recorded.yaml`, `100-contradiction-classifier-removed.yaml`
+
+### DB-Backed Context Window Management (2026-04-09)
+- Eliminated in-memory message accumulation in the LLM tool-calling loop; OOM kills in Docker containers no longer occur regardless of tool loop depth
+- New `context_window_service.py` always reconstructs the messages array from the database on every LLM call — nothing accumulates in memory
+- Compaction triggers at 80% of the provider context limit; overflow handling triggers compaction before storing a tool result that would exceed 100% of the limit
+- After overflow compaction, the tool result is stored to transcript (id > watermark) and appears naturally in the next `build_messages()` call
+- Tool-triggered compaction adds a "Current Task State" section to the compaction summary so the model can continue mid-task without context loss
+- Compaction always uses the same provider job as the conversation — LLMs are never mixed within a turn
+- `MessageProcessor.send()` now tracks only transcript IDs in memory; removed `_prune_messages()`, `_resolve_token_budget()`, `_estimate_tokens()`, `MAX_RESULT_CHARS`, `_TOKEN_BUDGET_RATIO`, `_TOKEN_BUDGET_CAP`
+- `UserPromptAssemblyService.build()` no longer injects conversation history; history is handled entirely by `context_window_service.build_messages()`
+- `ToolCallService.store()` and `store_batch()` now accept `tool_call_id` (the LLM-generated call ID); new `get_by_transcript_ids()` method for efficient batch loading during context reconstruction
+- Schema: `tool_calls.tool_call_id TEXT` (migration 038), `compactions.overflow_content TEXT` (migration 039)
+- 44 integration tests in `test_context_window_service.py` using real SQLite
 
 ### Cognitive Reflex Service
 - Learned fast-path that bypasses the full triage pipeline for self-contained queries

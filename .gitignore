@@ -5,10 +5,11 @@
 backend/.env
 backend/.key
 backend/data/
+backend/*.db
+backend/*.db-journal
+backend/*.db-wal
+backend/*.db-shm
 backend/configs/generated/
-
-# Search tool embedding cache (auto-generated on first boot)
-backend/tools/search/data/providers_cache.sqlite
 
 # Python
 __pycache__/
@@ -25,6 +26,7 @@ venv/
 .DS_Store
 .claude/
 Claude.md
+CLAUDE.md
 
 
 # Frontend build artifacts (none currently, vanilla JS)
@@ -34,3 +36,18 @@ frontend/_interfaces
 docker-compose.yml
 frontend/server/data/
 .aider*
+
+# LLM request logs (verbatim, one file per request, never committed)
+/logs/
+
+# Merge/editor/run artifacts — never commit
+*.orig
+*.rej
+*.bak
+*.tmp
+*~
+# Stash-suffixed files (e.g. foo.json~abc123... commit-msg) left by partial merges
+*~*... *
+backend/.build_baseline.json
+backend/.simplify_baseline.json*
+backend/.simplify_test_results.xml*

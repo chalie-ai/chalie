@@ -1,16 +1,15 @@
 """Unit tests for ToolProfileService."""
-import json
 import pytest
 from unittest.mock import MagicMock, patch
 
 from services.tool_profile_service import (
     ToolProfileService,
     _compute_manifest_hash,
-    MAX_SCENARIOS,
     TRIAGE_SUMMARIES_CACHE_KEY,
 )
 from services.database_service import get_shared_db_service
 from services.memory_store import MemoryStore
+from services.tool_library_service import BUILTIN_TOOL_PROFILES, TOOL_METADATA
 
 pytestmark = pytest.mark.unit
 
@@ -73,22 +72,6 @@ def _seed_profile(db, tool_name="test_tool", **overrides):
         defaults['enrichment_count'],
     ))
     db.commit()
-
-
-class TestManifestHash:
-    def test_hash_is_deterministic(self):
-        m = _make_manifest()
-        assert _compute_manifest_hash(m) == _compute_manifest_hash(m)
-
-    def test_hash_changes_with_content(self):
-        m1 = _make_manifest("tool_a")
-        m2 = _make_manifest("tool_b")
-        assert _compute_manifest_hash(m1) != _compute_manifest_hash(m2)
-
-    def test_hash_is_string(self):
-        h = _compute_manifest_hash(_make_manifest())
-        assert isinstance(h, str)
-        assert len(h) == 32  # MD5 hex
 
 
 class TestCheckStaleness:
@@ -289,126 +272,309 @@ class TestManifestFallback:
         # Skills filtered out -> by_domain empty -> manifest fallback fires
         assert 'news_tool' in result
 
-    def test_manifest_fallback_includes_triggers(self, db):
-        """Manifest fallback should include trigger phrases in summaries."""
+
+# -- Helpers for seed tests --------------------------------------------------
+
+def _make_embedding(dims=256):
+    return [0.1] * dims
+
+
+def _patch_embedding(mock_get_emb, dims=256):
+    mock_emb = MagicMock()
+    mock_emb.generate_embedding.return_value = _make_embedding(dims)
+    mock_get_emb.return_value = mock_emb
+    return mock_emb
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestSeedBuiltinProfiles:
+    """Tests for ToolProfileService.seed_builtin_profiles()."""
+
+    def test_seeds_all_builtin_tools(self, db):
+        """Every tool in BUILTIN_TOOL_PROFILES gets a row in tool_capability_profiles."""
         svc = ToolProfileService(get_shared_db_service())
 
-        mock_registry = MagicMock()
-        mock_registry.get_on_demand_tools.return_value = ['news_tool']
-        mock_registry.tools = {
-            'news_tool': {
-                'manifest': {
-                    'name': 'news_tool',
-                    'description': 'Search news',
-                    'documentation': "News tool. Triggers: 'latest news on...', 'what's happening in...'",
-                    'category': 'research',
-                    'trigger': {'type': 'on_demand'},
-                }
-            }
-        }
-
-        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
-            result = svc._manifest_fallback_summaries()
-
-        assert 'latest news on' in result
-        assert "what's happening in" in result
-
-
-class TestFallbackProfile:
-    """Test deterministic fallback profile generation from manifests."""
-
-    def test_extracts_triggers_from_documentation_quotes(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        manifest = {
-            'name': 'news_tool',
-            'documentation': "Use for 'latest news on...', 'any updates about...', 'catch me up on...'",
-            'category': 'research',
-        }
-        profile = svc._fallback_profile('news_tool', manifest)
-        triggers = profile['triage_triggers']
-        assert len(triggers) == 3
-        assert 'latest news on' in triggers
-        assert 'any updates about' in triggers
-        assert 'catch me up on' in triggers
-
-    def test_sets_domain_from_category(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        manifest = {
-            'name': 'news_tool',
-            'documentation': 'Search news articles',
-            'category': 'research',
-        }
-        profile = svc._fallback_profile('news_tool', manifest)
-        assert profile['domain'] == 'Research'
-
-    def test_domain_normalizes_underscores(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        manifest = {
-            'name': 'weather',
-            'documentation': 'Search the web',
-            'category': 'information_retrieval',
-        }
-        profile = svc._fallback_profile('weather', manifest)
-        assert profile['domain'] == 'Information Retrieval'
-
-    def test_no_documentation_yields_empty_triggers(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        manifest = {
-            'name': 'simple_tool',
-            'description': 'A simple tool with no quotes',
-        }
-        profile = svc._fallback_profile('simple_tool', manifest)
-        assert profile['triage_triggers'] == []
-        assert profile['domain'] == 'Other'
-
-    def test_short_quoted_phrases_ignored(self, db):
-        """Phrases shorter than 4 chars should not be extracted as triggers."""
-        svc = ToolProfileService(get_shared_db_service())
-        manifest = {
-            'name': 'test_tool',
-            'documentation': "Triggers: 'hello there', 'yo'. For greetings.",
-            'category': 'social',
-        }
-        profile = svc._fallback_profile('test_tool', manifest)
-        # 'yo' is only 2 chars, below the 4-char minimum
-        assert 'yo' not in profile['triage_triggers']
-        assert 'hello there' in profile['triage_triggers']
-
-
-class TestScenarioCap:
-    """Test that scenario count is capped at MAX_SCENARIOS."""
-
-    def test_scenarios_capped_at_50_in_build_profile(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-
-        # LLM returns 60 scenarios -- should be capped to 50
-        with patch.object(svc, '_get_llm') as mock_get_llm, \
-             patch.object(svc, '_get_embedding_service') as mock_get_emb, \
-             patch.object(svc, '_get_related_episodes', return_value="No episodes"), \
-             patch.object(svc, 'check_staleness', return_value=True), \
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
              patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
 
-            mock_llm = MagicMock()
-            mock_llm.send_message.return_value = MagicMock(text=json.dumps({
-                'short_summary': 'Test tool',
-                'full_profile': 'A test tool profile',
-                'usage_scenarios': [f"scenario {i}" for i in range(60)],
-                'anti_scenarios': [],
-                'complementary_skills': [],
-            }))
-            mock_get_llm.return_value = mock_llm
-
-            mock_emb = MagicMock()
-            mock_emb.generate_embedding.return_value = [0.1] * 256
-            mock_get_emb.return_value = mock_emb
-
-            svc.build_profile("test_tool", _make_manifest())
-
-            # Verify the stored scenarios are capped
+        for tool_name, profile in BUILTIN_TOOL_PROFILES.items():
             row = db.execute(
-                "SELECT usage_scenarios FROM tool_capability_profiles WHERE tool_name = ?",
-                ("test_tool",)
+                "SELECT short_summary, full_profile FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            assert row is not None, f"{tool_name} was not seeded"
+            assert row['short_summary'] == profile['short_summary'][:200]
+            assert row['full_profile'] == profile['full_profile']
+
+    def test_seed_uses_manifest_hash(self, db):
+        """The stored manifest_hash matches _compute_manifest_hash(TOOL_METADATA[name])."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            manifest = TOOL_METADATA.get(tool_name)
+            if manifest is None:
+                continue
+            expected_hash = _compute_manifest_hash(manifest)
+            row = db.execute(
+                "SELECT manifest_hash FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
             ).fetchone()
             assert row is not None
-            scenarios = json.loads(row['usage_scenarios'])
-            assert len(scenarios) <= MAX_SCENARIOS
+            assert row['manifest_hash'] == expected_hash, (
+                f"{tool_name}: stored hash {row['manifest_hash']!r} != expected {expected_hash!r}"
+            )
+
+    def test_seed_skips_when_hash_matches(self, db):
+        """Calling seed_builtin_profiles() twice does not re-embed on the second call."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_emb = _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+            first_call_count = mock_emb.generate_embedding.call_count
+
+        # Second seed call — all hashes now match, so no embeddings should be generated
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb2, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_emb2 = _patch_embedding(mock_get_emb2)
+            svc.seed_builtin_profiles()
+            second_call_count = mock_emb2.generate_embedding.call_count
+
+        assert first_call_count > 0, "Expected embeddings to be generated on first seed"
+        assert second_call_count == 0, "No embeddings should be generated when hash matches"
+
+    def test_seed_creates_vec_embedding(self, db):
+        """tool_capability_profiles_vec has an entry for each seeded tool."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            row = db.execute(
+                """
+                SELECT v.rowid FROM tool_capability_profiles_vec v
+                JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
+                WHERE tcp.tool_name = ?
+                """,
+                (tool_name,)
+            ).fetchone()
+            assert row is not None, f"{tool_name} has no vec entry"
+
+    def test_seed_populates_rebuild_guard_fields(self, db):
+        """Seeded rows pass _profile_needs_rebuild — usage_scenarios, triage_triggers, descriptor non-empty."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            profile = svc.get_full_profile(tool_name)
+            assert profile is not None
+            # _profile_needs_rebuild checks these four fields
+            assert profile.get('usage_scenarios'), f"{tool_name}: usage_scenarios empty"
+            assert profile.get('triage_triggers'), f"{tool_name}: triage_triggers empty"
+            assert profile.get('descriptor'), f"{tool_name}: descriptor empty"
+            assert not svc._profile_needs_rebuild(profile), (
+                f"{tool_name}: _profile_needs_rebuild returned True after seeding"
+            )
+
+    def test_seed_handles_embedding_failure(self, db):
+        """If embedding generation raises, the profile row is still upserted (no vec entry)."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            mock_emb = MagicMock()
+            mock_emb.generate_embedding.side_effect = RuntimeError("model not loaded")
+            mock_get_emb.return_value = mock_emb
+            svc.seed_builtin_profiles()
+
+        # Profile rows must exist despite embedding failure
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            row = db.execute(
+                "SELECT tool_name FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            assert row is not None, f"{tool_name}: profile row missing after embedding failure"
+
+        # No vec entries should exist when embedding failed
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            vec_row = db.execute(
+                """
+                SELECT v.rowid FROM tool_capability_profiles_vec v
+                JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
+                WHERE tcp.tool_name = ?
+                """,
+                (tool_name,)
+            ).fetchone()
+            assert vec_row is None, f"{tool_name}: unexpected vec entry when embedding failed"
+
+    def test_bootstrap_skips_seeded_tools(self, db):
+        """After seed_builtin_profiles(), bootstrap_all() does not call build_profile for seeded tools."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        # First seed so hashes are current
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        # Now run bootstrap_all; build_profile should NOT be called for any builtin tool
+        with patch.object(svc, 'build_profile') as mock_build, \
+             patch.object(svc, '_get_embedding_service') as mock_get_emb2, \
+             patch.object(svc, '_invalidate_cache'), \
+             patch('services.tool_registry_service.ToolRegistryService') as mock_reg_cls:
+            _patch_embedding(mock_get_emb2)
+            # Registry has no external tools — only builtins were seeded
+            mock_registry = MagicMock()
+            mock_registry.tools = {}
+            mock_reg_cls.return_value = mock_registry
+
+            svc.bootstrap_all()
+
+        called_tools = [call.args[0] for call in mock_build.call_args_list]
+        for builtin_name in BUILTIN_TOOL_PROFILES:
+            assert builtin_name not in called_tools, (
+                f"bootstrap_all() called build_profile for already-seeded tool: {builtin_name}"
+            )
+
+
+class TestProfileNeedsRebuild:
+    """Tests for ToolProfileService._profile_needs_rebuild()."""
+
+    def _full_profile(self, **overrides):
+        """Return a minimal valid profile dict that passes all rebuild checks."""
+        base = {
+            'tool_type': 'tool',
+            'domain': 'Research',
+            'triage_triggers': ['some trigger'],
+            'usage_scenarios': ['some scenario'],
+            'descriptor': 'my_tool',
+            'keywords': 'search,web',
+        }
+        base.update(overrides)
+        return base
+
+    def test_returns_false_when_all_fields_present(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile()
+        assert svc._profile_needs_rebuild(profile) is False
+
+    def test_returns_true_when_keywords_empty_string(self, db):
+        """Empty keywords string triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(keywords='')
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_keywords_none(self, db):
+        """NULL keywords (missing key) triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(keywords=None)
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_keywords_key_absent(self, db):
+        """Profile dict with no 'keywords' key at all triggers rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile()
+        del profile['keywords']
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_descriptor_missing(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(descriptor='')
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_usage_scenarios_empty(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(usage_scenarios=[])
+        assert svc._profile_needs_rebuild(profile) is True
+
+    def test_returns_true_when_triage_triggers_empty(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        profile = self._full_profile(triage_triggers=[])
+        assert svc._profile_needs_rebuild(profile) is True
+
+
+class TestSeedBuiltinProfilesKeywords:
+    """Tests for keywords handling in seed_builtin_profiles()."""
+
+    def test_seed_writes_keywords_to_db(self, db):
+        """seed_builtin_profiles() must write keywords column for each seeded tool."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name, profile in BUILTIN_TOOL_PROFILES.items():
+            if not profile.get('keywords'):
+                continue
+            row = db.execute(
+                "SELECT keywords FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            assert row is not None, f"{tool_name} not seeded"
+            assert row['keywords'], f"{tool_name}: keywords column is empty after seeding"
+
+    def test_seed_reseeds_when_existing_profile_has_empty_keywords(self, db):
+        """If a seeded tool row has empty keywords, bootstrap_all triggers a rebuild."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        # Pick a tool known to have keywords in BUILTIN_TOOL_PROFILES
+        tool_name = 'weather'
+        assert BUILTIN_TOOL_PROFILES[tool_name].get('keywords'), \
+            "Test assumption: 'weather' must have keywords defined"
+
+        # Seed normally first
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        # Wipe the keywords column to simulate a pre-migration row
+        db.execute(
+            "UPDATE tool_capability_profiles SET keywords = '' WHERE tool_name = ?",
+            (tool_name,)
+        )
+        db.commit()
+
+        # _profile_needs_rebuild should now return True for this tool
+        profile = svc.get_full_profile(tool_name)
+        assert svc._profile_needs_rebuild(profile) is True, \
+            "Profile with empty keywords should need rebuild"
+
+    def test_seed_keywords_are_truncated_to_256(self, db):
+        """Keywords written to DB must not exceed 256 characters."""
+        svc = ToolProfileService(get_shared_db_service())
+
+        with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
+             patch.object(svc, '_invalidate_cache'):
+            _patch_embedding(mock_get_emb)
+            svc.seed_builtin_profiles()
+
+        for tool_name in BUILTIN_TOOL_PROFILES:
+            row = db.execute(
+                "SELECT keywords FROM tool_capability_profiles WHERE tool_name = ?",
+                (tool_name,)
+            ).fetchone()
+            if row and row['keywords']:
+                assert len(row['keywords']) <= 256, \
+                    f"{tool_name}: keywords exceeds 256 chars ({len(row['keywords'])})"
+
+

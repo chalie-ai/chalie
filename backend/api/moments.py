@@ -2,18 +2,18 @@
 Moments API — pin, list, search, and forget moments.
 
 Routes (all require session auth):
-  POST   /moments              — pin a moment
-  GET    /moments              — list all active moments
-  POST   /moments/<id>/forget  — forget a moment (reversible)
-  GET    /moments/search       — semantic search (?q=query)
+  POST   /moments                         — pin a moment (body: {transcript_id})
+  GET    /moments                         — list all active moments
+  POST   /moments/<transcript_id>/forget  — soft-delete
+  GET    /moments/search                  — semantic search (?q=query)
 """
 
 import logging
-from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from .auth import require_session
+from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -24,25 +24,57 @@ moments_bp = Blueprint("moments", __name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_moment_service():
-    from services.database_service import get_shared_db_service
-    from services.moment_service import MomentService
-    return MomentService(get_shared_db_service())
+def _get_dg():
+    if 'moments_dg' not in g:
+        from services.data_graph_service import get_data_graph_service
+        g.moments_dg = get_data_graph_service()
+    return g.moments_dg
 
 
-def _serialize_dt(val):
-    if isinstance(val, datetime):
-        return val.isoformat()
-    return val
+def _get_db():
+    if 'moments_db' not in g:
+        from services.database_service import get_shared_db_service
+        g.moments_db = get_shared_db_service()
+    return g.moments_db
 
 
-def _serialize_moment(moment: dict) -> dict:
-    """Convert datetime fields to ISO strings for JSON serialisation."""
-    out = dict(moment)
-    for field in ("pinned_at", "sealed_at", "last_enriched_at", "created_at", "updated_at"):
-        if field in out:
-            out[field] = _serialize_dt(out[field])
-    return out
+def _serialize_moment(row: dict) -> dict:
+    created_at = row.get('first_seen_at') or row.get('created_at')
+    if created_at:
+        try:
+            created_at = parse_utc(created_at).isoformat()
+        except Exception:
+            pass
+
+    key = row.get('key', '')
+    transcript_id = None
+    if key.startswith('moment_'):
+        try:
+            transcript_id = int(key[len('moment_'):])
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        'transcript_id': transcript_id,
+        'key': key,
+        'value': row.get('value') or '',
+        'created_at': created_at,
+    }
+
+
+def _fetch_transcript_row(db, transcript_id: int) -> dict | None:
+    with db.connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, role, content FROM transcript WHERE id = ?",
+            (transcript_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+
+    if row is None:
+        return None
+    return {'id': row[0], 'role': row[1], 'content': row[2]}
 
 
 # ---------------------------------------------------------------------------
@@ -52,76 +84,82 @@ def _serialize_moment(moment: dict) -> dict:
 @moments_bp.route("/moments", methods=["POST"])
 @require_session
 def create_moment():
-    """Pin a moment."""
+    """Pin an assistant transcript turn as a moment."""
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
 
     data = request.get_json()
-    message_text = (data.get("message_text") or "").strip()
-    if not message_text:
-        return jsonify({"error": "message_text is required"}), 400
-
-    if len(message_text) > 10000:
-        return jsonify({"error": "message_text must be 10000 characters or fewer"}), 400
-
-    exchange_id = (data.get("exchange_id") or "").strip() or None
-    topic = (data.get("topic") or "").strip() or None
-    thread_id = (data.get("thread_id") or "").strip() or None
-    title = (data.get("title") or "").strip() or None
+    transcript_id = data.get("transcript_id")
+    if not transcript_id:
+        return jsonify({"error": "transcript_id is required"}), 400
 
     try:
-        svc = _get_moment_service()
-        result = svc.create_moment(
-            message_text=message_text,
-            exchange_id=exchange_id,
-            topic=topic,
-            thread_id=thread_id,
-            title=title,
-        )
+        transcript_id = int(transcript_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "transcript_id must be an integer"}), 400
 
-        if not result:
-            return jsonify({"error": "Failed to create moment"}), 500
+    db = _get_db()
+    dg = _get_dg()
 
-        # Near-duplicate detected
-        if result.get("duplicate"):
-            return jsonify({
-                "item": _serialize_moment(result),
-                "duplicate": True,
-                "existing_id": result.get("existing_id"),
-            }), 200
+    turn = _fetch_transcript_row(db, transcript_id)
+    if turn is None:
+        return jsonify({"error": "Transcript row not found"}), 404
 
-        return jsonify({"item": _serialize_moment(result)}), 201
+    if turn['role'] != 'assistant':
+        return jsonify({"error": "Only assistant turns can be pinned as moments"}), 400
 
-    except Exception as e:
-        logger.error(f"[MOMENTS API] create_moment error: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+    from services.data_graph_service import KIND_MOMENT
+    key = f"moment_{transcript_id}"
+
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
+            (KIND_MOMENT, key)
+        ).fetchone()
+    already_exists = row is not None
+
+    result = dg.store(
+        kind=KIND_MOMENT,
+        key=key,
+        value=turn['content'],
+        source='pin',
+    )
+
+    if result is None:
+        return jsonify({"error": "Failed to store moment"}), 500
+
+    status = 200 if already_exists else 201
+    return jsonify({"item": _serialize_moment(result)}), status
 
 
 @moments_bp.route("/moments", methods=["GET"])
 @require_session
 def list_moments():
-    """List all active moments."""
+    """List all active kind='moment' rows ordered by first_seen_at DESC."""
     try:
-        svc = _get_moment_service()
-        moments = svc.get_all_moments()
-        return jsonify({"items": [_serialize_moment(m) for m in moments]})
-
+        from services.data_graph_service import KIND_MOMENT
+        dg = _get_dg()
+        rows = dg.fetch(kinds=[KIND_MOMENT], order_by='first_seen_at DESC')
+        return jsonify({"items": [_serialize_moment(r) for r in rows]})
     except Exception as e:
         logger.error(f"[MOMENTS API] list_moments error: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 
-@moments_bp.route("/moments/<moment_id>/forget", methods=["POST"])
+@moments_bp.route("/moments/<int:transcript_id>/forget", methods=["POST"])
 @require_session
-def forget_moment(moment_id):
-    """Forget a moment — sets status to 'forgotten', reverses salience boosts."""
+def forget_moment(transcript_id):
+    """Soft-delete a moment row."""
     try:
-        svc = _get_moment_service()
-        success = svc.forget_moment(moment_id)
-        if success:
-            return jsonify({"ok": True})
-        return jsonify({"error": "Moment not found"}), 404
-
+        from services.data_graph_service import KIND_MOMENT
+        dg = _get_dg()
+        key = f"moment_{transcript_id}"
+        rows = dg.fetch(kinds=[KIND_MOMENT])
+        match = next((r for r in rows if r.get('key') == key), None)
+        if match is None:
+            return jsonify({"error": "Moment not found"}), 404
+        dg.soft_delete_by_id(match['id'])
+        return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[MOMENTS API] forget_moment error: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
@@ -136,10 +174,10 @@ def search_moments():
         return jsonify({"error": "Query parameter 'q' is required"}), 400
 
     try:
-        svc = _get_moment_service()
-        results = svc.search_moments(query, limit=3)
-        return jsonify({"items": [_serialize_moment(m) for m in results]})
-
+        from services.data_graph_service import KIND_MOMENT
+        dg = _get_dg()
+        results = dg.recall(query, kinds=[KIND_MOMENT])
+        return jsonify({"items": [_serialize_moment(r) for r in results]})
     except Exception as e:
         logger.error(f"[MOMENTS API] search_moments error: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500

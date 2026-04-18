@@ -1,9 +1,9 @@
-"""Tests for episodic_memory_worker — JSON extraction, safe loading, session formatting, salience, backoff."""
+"""Tests for episodic_memory_worker — JSON extraction and safe loading."""
 
 import logging
 import pytest
 
-from workers.episodic_memory_worker import _extract_json, _safe_json_load, _format_session_for_llm
+from workers.episodic_memory_worker import _extract_json, _safe_json_load
 
 
 pytestmark = pytest.mark.unit
@@ -69,101 +69,6 @@ class TestSafeJsonLoad:
 
         assert result is None
         assert any("[EPISODIC] Failed to parse JSON" in msg for msg in caplog.messages)
-
-
-# ── _format_session_for_llm ──────────────────────────────────
-
-
-def _make_exchange(*, user_msg="Hello", assistant_msg="Hi there", steps=None, include_msgs=True):
-    """Helper to build a minimal exchange dict for formatting tests."""
-    exchange = {}
-    if include_msgs:
-        exchange["prompt"] = {"message": user_msg}
-        exchange["response"] = {"message": assistant_msg}
-    if steps is not None:
-        exchange["steps"] = steps
-    return exchange
-
-
-class TestFormatSessionForLlm:
-
-    def test_includes_session_duration_line(self):
-        """Output starts with 'Session Duration: <start> to <end>'."""
-        session = {
-            "start_time": "2026-01-15 10:00",
-            "end_time": "2026-01-15 10:30",
-            "exchanges": [],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "Session Duration: 2026-01-15 10:00 to 2026-01-15 10:30" in result
-
-    def test_includes_user_and_assistant_messages(self):
-        """User and assistant messages appear in the formatted output."""
-        exchange = _make_exchange(user_msg="What's the weather?", assistant_msg="Sunny today.")
-        session = {
-            "start_time": "t0", "end_time": "t1",
-            "exchanges": [exchange],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "User: What's the weather?" in result
-        assert "Assistant: Sunny today." in result
-
-    def test_includes_exchange_header(self):
-        """Each exchange gets a numbered header."""
-        exchange = _make_exchange()
-        session = {
-            "start_time": "t0", "end_time": "t1",
-            "exchanges": [exchange],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "--- Exchange 1 ---" in result
-
-    def test_skips_exchange_when_both_messages_empty(self):
-        """Exchanges with no user or assistant message are silently skipped."""
-        exchange_with = _make_exchange()
-        exchange_without = _make_exchange(include_msgs=False)
-        session = {
-            "start_time": "t0", "end_time": "t1",
-            "exchanges": [exchange_with, exchange_without],
-        }
-
-        result = _format_session_for_llm(session)
-
-        # Only one exchange header (empty exchange skipped)
-        assert result.count("--- Exchange") == 1
-
-    def test_returns_header_only_when_exchanges_empty(self):
-        """An empty exchanges list produces just the session duration and conversation header."""
-        session = {
-            "start_time": "2026-02-01 08:00",
-            "end_time": "2026-02-01 09:00",
-            "exchanges": [],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "Session Duration:" in result
-        assert "Conversation from Session" in result
-        # No exchange headers
-        assert "--- Exchange" not in result
-
-    def test_includes_steps_when_present(self):
-        """Tool steps are included in the exchange output when present."""
-        exchange = _make_exchange(steps=["searched web", "found result"])
-        session = {
-            "start_time": "t0", "end_time": "t1",
-            "exchanges": [exchange],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "Actions:" in result
 
 
 # ── Salience Normalization (inline logic) ─────────────────────

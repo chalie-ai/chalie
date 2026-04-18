@@ -7,6 +7,7 @@ Tests cover:
 - _run_compaction() LLM call and storage
 """
 
+import pytest
 from unittest.mock import patch, MagicMock
 
 
@@ -16,7 +17,7 @@ def _insert_entries(conn, topic, count, content_template='Message {}'):
     for i in range(count):
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO topic_transcript (topic, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
             (topic, 'user' if i % 2 == 0 else 'assistant', content_template.format(i)),
         )
         ids.append(cursor.lastrowid)
@@ -37,7 +38,7 @@ class TestGetCompaction:
         watermark = ids[-1]
 
         db.execute(
-            "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
+            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ('test-topic', 'Summary of conversation', watermark, 50, '2026-03-20T10:00:00+00:00'),
         )
@@ -75,14 +76,13 @@ class TestCheckAndCompact:
             # 5 short entries, well below 85% of 32000
             assert check_and_compact('test', 32000) is False
 
-    def test_absolute_threshold_fires_on_large_context_budget(self, db):
-        """Large model context budget should still trigger compaction at absolute ceiling."""
+    def test_large_budget_fraction_threshold_fires_when_exceeded(self, db):
+        """Large model context budget uses fraction-based threshold (85% of 200K = 170K)."""
         from services.compaction_service import check_and_compact
 
-        # ~30K tokens of content — above _MAX_UNCOMPACTED_TOKENS (24K) but
-        # well below 85% of 200K budget (170K)
-        long_content = 'word ' * 6000  # ~7500 tokens each
-        entries = [{'id': i, 'content': long_content} for i in range(5)]
+        # ~175K tokens of content — above 85% of 200K budget (170K)
+        long_content = 'word ' * 7000  # ~8750 tokens each
+        entries = [{'id': i, 'content': long_content} for i in range(20)]
 
         with patch('services.compaction_service.get_compaction', return_value=None), \
              patch('services.compaction_service.get_entries_since', return_value=entries), \
@@ -132,7 +132,7 @@ class TestRunCompaction:
 
         # Verify stored in database
         cursor = db.cursor()
-        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
+        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM compactions WHERE channel = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row is not None
@@ -148,7 +148,7 @@ class TestRunCompaction:
 
         # Insert initial compaction covering old entries
         db.execute(
-            "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
+            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
             ('test-topic', 'Old summary', old_ids[-1], 20, '2026-03-20T09:00:00'),
         )
@@ -168,7 +168,7 @@ class TestRunCompaction:
         assert result is True
 
         cursor = db.cursor()
-        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
+        cursor.execute("SELECT compacted_text, compacted_up_to_id FROM compactions WHERE channel = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row[0] == 'Updated summary with new info'
@@ -237,32 +237,191 @@ class TestRunCompaction:
 
 
 class TestCompactionTopicContext:
-    def test_get_compaction_accepts_topic_context(self, db):
-        """get_compaction works when a TopicContext is passed."""
-        from services.compaction_service import get_compaction
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test-topic')
-        result = get_compaction('nonexistent', _context=ctx)
-        assert result is None
-        assert ctx.failed_sections == []
-
-    def test_get_compaction_records_failure_to_context(self):
-        """When DB fails, the failure is recorded on TopicContext."""
-        from services.compaction_service import get_compaction
-        from services.topic_context import TopicContext
-
-        ctx = TopicContext(topic='test')
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
-            result = get_compaction('test', _context=ctx)
-
-        assert result is None
-        assert len(ctx.failed_sections) == 1
-        assert ctx.failed_sections[0][0] == 'compaction_read'
-        assert 'db locked' in ctx.failed_sections[0][1]
-
     def test_backward_compat_without_context(self, db):
-        """get_compaction still works without _context (backward compat)."""
+        """get_compaction still works without _context."""
         from services.compaction_service import get_compaction
         result = get_compaction('nonexistent')
         assert result is None
+
+
+@pytest.mark.unit
+class TestStripEntry:
+    """Unit tests for _strip_entry — the pure linguistic-fluff stripper."""
+
+    def test_internal_passthrough_returns_content_unchanged(self):
+        """Internal role bypasses all processing — HTML, newlines, filler all preserved."""
+        from services.compaction_service import _strip_entry
+        content = '<p>I think a lot</p>\n\n\n\nSure, just do it.'
+        assert _strip_entry(content, 'internal') == content
+
+    def test_tool_strips_html_tags(self):
+        """Tool role removes HTML tags, leaving only text content."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('<p>text</p>', 'tool') == 'text'
+
+    def test_tool_strips_nested_html(self):
+        """Nested HTML tags are all removed from tool output."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('<div><span>Result</span></div>', 'tool') == 'Result'
+
+    def test_tool_collapses_three_or_more_newlines_to_two(self):
+        """Three or more consecutive newlines collapse to exactly two."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('line1\n\n\n\nline2', 'tool') == 'line1\n\nline2'
+        assert _strip_entry('a\n\n\nb', 'tool') == 'a\n\nb'
+
+    def test_tool_preserves_two_newlines(self):
+        """Two consecutive newlines are not touched by tool processing."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('a\n\nb', 'tool') == 'a\n\nb'
+
+    def test_tool_strips_html_and_collapses_newlines_together(self):
+        """HTML stripping and newline collapsing both apply in a single pass."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('<div>Result</div>\n\n\n\n<span>More</span>', 'tool') == 'Result\n\nMore'
+
+    def test_tool_preserves_json_structured_data(self):
+        """JSON/structured data in tool output passes through intact."""
+        from services.compaction_service import _strip_entry
+        import json
+        data = json.dumps({'key': 'value', 'count': 42})
+        assert _strip_entry(data, 'tool') == data
+
+    def test_user_filler_sure_removed_at_start(self):
+        """'Sure,' at sentence start is stripped; remaining content preserved."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Sure, I will check that.', 'user') == 'I will check that.'
+
+    def test_user_filler_ill_removed_at_start(self):
+        """\"I'll\" filler at sentence start is stripped."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry("I'll do it.", 'user') == 'do it.'
+
+    def test_assistant_filler_let_me_removed_at_start(self):
+        """'Let me' filler at sentence start is stripped, articles also removed."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Let me look at the logs.', 'assistant') == 'look at logs.'
+
+    def test_assistant_filler_certainly_removed_at_start(self):
+        """'Certainly,' at start of assistant message is stripped."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Certainly, the config is broken.', 'assistant') == 'config is broken.'
+
+    def test_user_hedge_i_think_removed(self):
+        """'I think' hedge phrase is removed; article and remaining text stripped normally."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('I think the file is broken.', 'user') == 'file is broken.'
+
+    def test_user_hedge_it_seems_like_removed(self):
+        """'It seems like' hedge is removed along with trailing article."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('It seems like a problem.', 'user') == 'problem.'
+
+    def test_assistant_hedge_basically_removed(self):
+        """'basically' hedge word is removed mid-sentence."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('basically the answer is yes', 'assistant') == 'answer is yes'
+
+    def test_user_article_the_removed(self):
+        """'the' article is stripped from natural language text."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('the config file is missing', 'user') == 'config file is missing'
+
+    def test_user_articles_a_and_an_removed(self):
+        """'a' and 'an' articles are both stripped."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('open a terminal and run an update', 'user') == 'open terminal and run update'
+
+    def test_user_code_block_content_survives_stripping(self):
+        """Content inside fenced code blocks is not modified by any stripping rule."""
+        from services.compaction_service import _strip_entry
+        result = _strip_entry(
+            'Check ```python\nthe_var = a + 1\n``` for errors.',
+            'user',
+        )
+        assert result == 'Check ```python\nthe_var = a + 1\n``` for errors.'
+
+    def test_user_inline_code_content_survives_stripping(self):
+        """Content inside backtick inline code is not modified."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Call `the_method(a)` here.', 'user') == 'Call `the_method(a)` here.'
+
+    def test_user_url_survives_article_stripping(self):
+        """URLs with 'the' or 'a' in their path components are not altered."""
+        from services.compaction_service import _strip_entry
+        result = _strip_entry('See https://example.com/the/path for the docs.', 'user')
+        assert result == 'See https://example.com/the/path for docs.'
+
+    def test_user_absolute_file_path_survives_article_stripping(self):
+        """Absolute paths containing 'the' components are preserved."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Edit /etc/the/config now.', 'user') == 'Edit /etc/the/config now.'
+
+    def test_user_relative_file_path_survives_article_stripping(self):
+        """Relative paths starting with ./ are preserved."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Load ./the/settings.json file.', 'user') == 'Load ./the/settings.json file.'
+
+    def test_empty_content_user(self):
+        """Empty string input returns empty string for user role."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('', 'user') == ''
+
+    def test_empty_content_tool(self):
+        """Empty string input returns empty string for tool role."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('', 'tool') == ''
+
+    def test_empty_content_internal(self):
+        """Empty string input returns empty string for internal role."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('', 'internal') == ''
+
+    def test_content_that_is_only_a_code_block(self):
+        """A message consisting solely of a fenced code block is returned intact."""
+        from services.compaction_service import _strip_entry
+        code = '```python\nprint("hello")\n```'
+        assert _strip_entry(code, 'user') == code
+
+    def test_assistant_code_block_with_articles_inside_preserved(self):
+        """Articles inside fenced code blocks are not stripped even for assistant role."""
+        from services.compaction_service import _strip_entry
+        code_block = '```\nthe_var = a_value\n```'
+        result = _strip_entry(code_block, 'assistant')
+        assert 'the_var' in result
+        assert 'a_value' in result
+
+    def test_user_whitespace_collapsed_to_single_space(self):
+        """Multiple spaces within a line are collapsed to a single space."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('hello   world', 'user') == 'hello world'
+
+    def test_sure_thing_filler_fully_stripped(self):
+        """'Sure thing,' should be stripped as a whole phrase, not just 'Sure'."""
+        from services.compaction_service import _strip_entry
+        assert _strip_entry('Sure thing, I will handle it.', 'assistant') == 'I will handle it.'
+
+    def test_null_bytes_in_content_do_not_crash(self):
+        """Content with null bytes is sanitised before placeholder logic runs."""
+        from services.compaction_service import _strip_entry
+        result = _strip_entry('hello\x00world', 'user')
+        assert result == 'helloworld'
+
+    def test_hedge_at_line_boundary_preserves_newline(self):
+        """Hedge removal does not absorb newlines between lines."""
+        from services.compaction_service import _strip_entry
+        result = _strip_entry('I think\nline two', 'user')
+        assert '\n' in result
+        assert 'line two' in result
+
+    def test_unknown_role_returns_content_unchanged(self):
+        """Unknown roles pass through without any stripping."""
+        from services.compaction_service import _strip_entry
+        content = 'Sure, I think the answer is basically yes.'
+        assert _strip_entry(content, 'custom_role') == content
+
+    def test_please_not_stripped_from_user_directive(self):
+        """'Please' is an instruction marker and should not be removed."""
+        from services.compaction_service import _strip_entry
+        result = _strip_entry('Please use port 8080.', 'user')
+        assert 'Please' in result

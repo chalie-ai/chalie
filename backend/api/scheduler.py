@@ -155,7 +155,7 @@ def list_scheduler():
         db = get_shared_db_service()
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "topic",
+                "window_start", "window_end", "status", "channel",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
                 "source", "external_uid"]
 
@@ -223,7 +223,7 @@ def create_scheduler():
         db = get_shared_db_service()
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "topic",
+                "window_start", "window_end", "status", "channel",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
 
         with db.connection() as conn:
@@ -232,7 +232,7 @@ def create_scheduler():
                 """
                 INSERT INTO scheduled_items
                   (id, item_type, message, due_at, recurrence,
-                   window_start, window_end, status, topic,
+                   window_start, window_end, status, channel,
                    created_by_session, created_at, group_id, is_prompt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
@@ -244,7 +244,7 @@ def create_scheduler():
                     clean["recurrence"],
                     clean["window_start"],
                     clean["window_end"],
-                    data.get("topic", "general"),
+                    data.get("channel", "general"),
                     None,  # created_by_session — not available in dashboard context
                     now.isoformat(),
                     item_id,  # group_id = own id (root of a new series)
@@ -326,7 +326,7 @@ def get_scheduler_group(group_id):
         db = get_shared_db_service()
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "topic",
+                "window_start", "window_end", "status", "channel",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
 
         with db.connection() as conn:
@@ -360,7 +360,7 @@ def get_scheduler_item(item_id):
         db = get_shared_db_service()
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "topic",
+                "window_start", "window_end", "status", "channel",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
 
         with db.connection() as conn:
@@ -390,7 +390,7 @@ def update_scheduler_item(item_id):
         db = get_shared_db_service()
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "topic",
+                "window_start", "window_end", "status", "channel",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
 
         with db.connection() as conn:

@@ -98,7 +98,7 @@ TOOL_SCHEMA = {
 LOG_PREFIX = "[SCHEDULER SKILL]"
 
 
-def handle_scheduler(topic: str, params: dict) -> str:
+def handle_scheduler(channel: str, params: dict) -> str:
     """
     Dispatch scheduler actions based on params['action'].
 
@@ -109,18 +109,18 @@ def handle_scheduler(topic: str, params: dict) -> str:
     action = params.get("action", "list").lower()
 
     if action == "create":
-        result = _create(topic, params)
+        result = _create(channel, params)
     elif action == "list":
-        result = _list(topic, params)
+        result = _list(params)
     elif action == "cancel":
-        result = _cancel(topic, params)
+        result = _cancel(params)
     else:
         result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
 
     return json.dumps(result)
 
 
-def _create(topic: str, params: dict) -> dict:
+def _create(channel: str, params: dict) -> dict:
     """Create a new scheduled item."""
     try:
         from services.database_service import get_shared_db_service
@@ -231,12 +231,12 @@ def _create(topic: str, params: dict) -> dict:
             cursor.execute("""
                 INSERT INTO scheduled_items
                   (id, item_type, message, due_at, recurrence, window_start, window_end,
-                   status, topic, created_by_session, created_at, group_id, is_prompt)
+                   status, channel, created_by_session, created_at, group_id, is_prompt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?)
             """, (
                 item_id, item_type, message, due_at,
                 recurrence, window_start, window_end,
-                topic, None,
+                channel, None,
                 item_id,  # group_id = own id (root of new series)
                 is_prompt,
             ))
@@ -267,7 +267,7 @@ def _create(topic: str, params: dict) -> dict:
         return {"status": "error", "error": f"Create failed: {e}"}
 
 
-def _list(topic: str, params: dict) -> dict:
+def _list(params: dict) -> dict:
     """List pending scheduled items, optionally filtered by time_range."""
     try:
         from services.database_service import get_shared_db_service
@@ -372,7 +372,7 @@ def _resolve_time_range(time_range: str):
         return None, None, "All Scheduled Items"
 
 
-def _cancel(topic: str, params: dict) -> dict:
+def _cancel(params: dict) -> dict:
     """Cancel a scheduled item by item_id or by fuzzy message match."""
     try:
         from services.database_service import get_shared_db_service

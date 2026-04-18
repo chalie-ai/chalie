@@ -105,8 +105,14 @@ def get_external_tool_schemas(tool_names: list) -> list:
 def _manifest_to_schema(manifest: dict) -> dict | None:
     """Convert an external tool manifest to native tool schema format.
 
+    Fast path: if the manifest already has an ``input_schema`` key (first-party
+    built-in tools), return it directly without conversion.  The old
+    ``parameters`` conversion path is kept for backwards compatibility with
+    interface tools that still use the legacy format.
+
     Args:
-        manifest: Tool manifest dict with name, description, parameters.
+        manifest: Tool manifest dict with name, description, and either
+                  ``input_schema`` (preferred) or ``parameters`` (legacy).
 
     Returns:
         Schema dict or None if the manifest is missing a name.
@@ -116,6 +122,16 @@ def _manifest_to_schema(manifest: dict) -> dict | None:
         return None
 
     description = manifest.get('description', '')
+
+    # Fast path: manifest already uses input_schema (built-in tools)
+    if 'input_schema' in manifest:
+        return {
+            "name": name,
+            "description": description,
+            "input_schema": manifest['input_schema'],
+        }
+
+    # Legacy path: convert parameters dict for interface tools
     params = manifest.get('parameters', {})
 
     properties = {}

@@ -9,26 +9,6 @@ from api.tools import tools_bp
 pytestmark = pytest.mark.unit
 
 
-# ── Webhook rate limiting (MemoryStore) ──────────────────────────────
-
-class TestCheckWebhookRateLimit:
-
-    def test_allows_up_to_30(self, mock_store):
-        """First 30 requests within rate limit."""
-        for i in range(30):
-            mock_store.incr("webhook_rate:test_tool")
-        mock_store.expire("webhook_rate:test_tool", 60)
-        count = int(mock_store.get("webhook_rate:test_tool"))
-        assert count <= 30
-
-    def test_blocks_31st_request(self, mock_store):
-        """31st request exceeds rate limit."""
-        for i in range(31):
-            mock_store.incr("webhook_rate:test_tool")
-        count = int(mock_store.get("webhook_rate:test_tool"))
-        assert count > 30
-
-
 # ── Flask endpoint tests ─────────────────────────────────────────────
 #
 # tools.py uses lazy imports inside function bodies:
@@ -49,67 +29,6 @@ def client():
     with patch('services.auth_session_service.validate_session', return_value=True):
         with app.test_client() as c:
             yield c
-
-
-class TestWebhookEndpoints:
-
-    def test_webhook_unknown_tool_returns_404(self, client):
-        """POST /tools/webhook/<unknown> → 404."""
-        with patch('services.tool_registry_service.ToolRegistryService') as mock_reg:
-            mock_instance = MagicMock()
-            mock_instance.tools = {}  # No tools
-            mock_reg.return_value = mock_instance
-
-            response = client.post('/tools/webhook/nonexistent',
-                                   json={"data": "test"})
-            assert response.status_code == 404
-
-    def test_webhook_non_webhook_tool_returns_404(self, client):
-        """POST /tools/webhook/<tool> where trigger != webhook → 404."""
-        with patch('services.tool_registry_service.ToolRegistryService') as mock_reg:
-            mock_instance = MagicMock()
-            mock_instance.tools = {
-                'my_tool': {
-                    'manifest': {'trigger': {'type': 'manual'}},
-                }
-            }
-            mock_reg.return_value = mock_instance
-
-            response = client.post('/tools/webhook/my_tool',
-                                   json={"data": "test"})
-            assert response.status_code == 404
-
-    def test_webhook_bad_auth_returns_403(self, client):
-        """Webhook with invalid auth credentials → 403."""
-        with patch('services.tool_registry_service.ToolRegistryService') as mock_reg, \
-             patch('services.tool_config_service.ToolConfigService') as mock_cfg_cls, \
-             patch('services.database_service.get_shared_db_service'):
-            mock_instance = MagicMock()
-            mock_instance.tools = {
-                'hook_tool': {
-                    'manifest': {'trigger': {'type': 'webhook'}},
-                }
-            }
-            mock_reg.return_value = mock_instance
-            mock_cfg = MagicMock()
-            mock_cfg.validate_webhook_hmac.return_value = False
-            mock_cfg.validate_webhook_key.return_value = False
-            mock_cfg_cls.return_value = mock_cfg
-
-            response = client.post('/tools/webhook/hook_tool',
-                                   json={"data": "test"},
-                                   headers={"X-Chalie-Token": "bad-key"})
-            assert response.status_code == 403
-
-    def test_webhook_oversized_payload_returns_413(self, client):
-        """Webhook payload >512KB → 413 (checked before service calls)."""
-        oversized = "x" * (512 * 1024 + 1)
-        response = client.post(
-            '/tools/webhook/hook_tool',
-            data=oversized,
-            content_type='application/json',
-        )
-        assert response.status_code == 413
 
 
 class TestConfigCrud:
@@ -211,42 +130,3 @@ class TestOAuthEndpoints:
             assert response.status_code == 200
             data = response.get_json()
             assert data.get('connected') is False or data.get('status') == 'disconnected'
-
-
-class TestWebhookKeyRotation:
-
-    def test_generates_key_for_webhook_tool(self, client):
-        """POST /tools/<name>/webhook/key → returns key for webhook tool."""
-        with patch('services.tool_registry_service.ToolRegistryService') as mock_reg, \
-             patch('services.tool_config_service.ToolConfigService') as mock_cfg_cls, \
-             patch('services.database_service.get_shared_db_service'):
-            mock_instance = MagicMock()
-            mock_instance.tools = {
-                'hook_tool': {
-                    'manifest': {'trigger': {'type': 'webhook'}},
-                }
-            }
-            mock_reg.return_value = mock_instance
-            mock_cfg = MagicMock()
-            mock_cfg.generate_webhook_key.return_value = 'wk_abc123'
-            mock_cfg_cls.return_value = mock_cfg
-
-            response = client.post('/tools/hook_tool/webhook/key')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert 'webhook_key' in data
-            assert data['webhook_key'] == 'wk_abc123'
-
-    def test_rejects_non_webhook_tool(self, client):
-        """POST /tools/<name>/webhook/key for manual tool → 400."""
-        with patch('services.tool_registry_service.ToolRegistryService') as mock_reg:
-            mock_instance = MagicMock()
-            mock_instance.tools = {
-                'manual_tool': {
-                    'manifest': {'trigger': {'type': 'manual'}},
-                }
-            }
-            mock_reg.return_value = mock_instance
-
-            response = client.post('/tools/manual_tool/webhook/key')
-            assert response.status_code == 400

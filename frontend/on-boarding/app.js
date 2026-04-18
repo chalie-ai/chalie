@@ -13,7 +13,7 @@ const PLATFORM_CONFIG = {
         desc: 'Run locally — no API key needed. Download from <a href="https://ollama.ai" target="_blank">ollama.ai</a>',
         hasHost: true,
         hasApiKey: false,
-        modelPlaceholder: 'e.g. qwen3:8b',
+        modelPlaceholder: 'e.g. gemma4:31b',
         models: [],
     },
     anthropic: {

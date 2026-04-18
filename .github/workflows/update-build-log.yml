@@ -38,4 +38,6 @@ jobs:
         env:
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
         run: |
-          curl -s -o /dev/null -w "%{http_code}\n" -X POST "$N8N_WEBHOOK_URL"
+          curl -s -o /dev/null -w "%{http_code}\n" -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"branch\": \"${{ github.ref_name }}\"}"

@@ -139,7 +139,8 @@ class TestAppUpdateService:
         mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
-        with patch.object(svc, 'detect_deployment_mode', return_value='docker'):
+        with patch.object(svc, 'detect_deployment_mode', return_value='docker'), \
+             patch.object(svc, 'backup_database', side_effect=FileNotFoundError("no db in test env")):
             result = svc.apply_update("v1.0.0")
         assert result["ok"] is False
         assert result["deployment_mode"] == "docker"

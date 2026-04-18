@@ -20,21 +20,14 @@ logger = logging.getLogger(__name__)
 # Tables that hold user/cognitive data (not schema or config)
 DATA_TABLES = [
     'episodes',
-    'cortex_iterations',
     'knowledge',
-    'interaction_log',
-    'topics',
-    'threads',
+    'transcript',
     'scheduled_items',
-    'autobiography',
     'lists',
     'list_items',
     'list_events',
     'documents',
-    'document_chunks',
-    'persistent_tasks',
     'place_fingerprints',
-    'moments',
     'tool_performance_metrics',
 ]
 

@@ -162,7 +162,7 @@ class TestOllamaContextLimit:
         }
         mock_post.return_value = mock_resp
 
-        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'qwen3:8b'})
+        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'gemma4:31b'})
         result = svc.get_context_limit()
         assert result == 131072
 
@@ -280,25 +280,3 @@ class TestAutoBudgetCalculation:
         budget = min(int(1_000_000 * 0.6), 150_000)
         assert budget == 150_000
 
-    def test_prune_messages_uses_estimate_tokens(self):
-        """Verify _prune_messages uses estimate_tokens instead of inline heuristic."""
-        from services.act_orchestrator_service import ACTOrchestrator
-
-        orch = ACTOrchestrator(config={})
-
-        # Create messages that exceed a small budget
-        messages = [
-            {"role": "user", "content": "original prompt"},
-            {"role": "assistant", "content": "response one " * 100},
-            {"role": "user", "content": "follow up " * 100},
-            {"role": "assistant", "content": "response two " * 100},
-            {"role": "user", "content": "latest message"},
-        ]
-
-        # With a tiny budget, pruning should kick in
-        pruned = orch._prune_messages(messages, budget_tokens=50)
-        assert len(pruned) <= len(messages)
-        # First message (original prompt) always kept
-        assert pruned[0]['content'] == 'original prompt'
-        # Last message always kept
-        assert pruned[-1]['content'] == 'latest message'

@@ -16,10 +16,8 @@ Key operations:
 """
 
 import logging
-from typing import Optional, Dict, List, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from services.topic_context import TopicContext
+import re
+from typing import Optional, Dict, List
 
 from services.llm_service import estimate_tokens
 from services.time_utils import utc_now
@@ -40,46 +38,146 @@ _MIN_ENTRIES_TO_COMPACT = 4
 # When context_budget is known, the fraction-based threshold is used directly.
 _FALLBACK_MAX_TOKENS = 36_000
 
-_COMPACTION_PROMPT = """Summarize the following conversation context into a compact, actionable summary.
+_COMPACTION_PROMPT = """Compress conversation into dense summary. No articles, no filler, no conversation flow.
 
-Preserve:
-- Decisions made and their reasoning
-- Facts established (names, dates, numbers, specifics)
-- User preferences expressed
-- Key information gathered from tools or research
-- Action items and their current status
-- Any unresolved questions or pending items
+Format:
+- Decisions: [decision] — [reasoning if non-obvious]
+- Facts: [name/date/number/specific]
+- Preferences: [preference expressed]
+- Tool findings: [key result] — [source tool if relevant]
+- Action items: [item] — [status]
+- Unresolved: [question/blocker]
 
-Do NOT preserve:
-- Conversation flow ("then we discussed...", "the user asked...")
-- Social pleasantries or greetings
-- Redundant confirmations ("yes", "ok", "got it")
-- Raw tool output — summarize the findings instead
-- Reasoning that led to discarded options
-
-Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."""
+Rules:
+- Bullet points only. No prose paragraphs.
+- Drop: greetings, confirmations, discarded options, raw tool output
+- Keep: every fact, decision, preference, number, URL, code snippet, file path
+- Fragments over sentences. Dense over readable."""
 
 
-def check_and_compact(topic: str, context_budget: int, _context: 'TopicContext' = None) -> bool:
-    """Check if compaction is needed for a topic and run it if so.
+def _strip_entry(content: str, role: str) -> str:
+    """Strip linguistic fluff from a transcript entry before compaction.
+
+    Pure function — no side effects. Protects code blocks, inline code, URLs,
+    and file paths from any stripping.
+    """
+    if role == 'internal':
+        return content
+
+    if role == 'tool':
+        # Collapse runs of 3+ newlines to 2, strip HTML tags
+        content = re.sub(r'<[^>]+>', '', content)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        return content
+
+    # Unknown roles — return content unmodified
+    if role not in ('user', 'assistant'):
+        return content
+
+    # --- user / assistant stripping ---
+
+    # Sanitise null bytes that would collide with placeholder sentinels
+    content = content.replace('\x00', '')
+
+    # Step 1: extract protected regions (code blocks, inline code, URLs, paths)
+    # Replace them with placeholders so subsequent regexes don't touch them.
+    placeholders = []
+
+    def protect(m):
+        idx = len(placeholders)
+        placeholders.append(m.group(0))
+        return f'\x00PROTECT{idx}\x00'
+
+    # Fenced code blocks (``` ... ```)
+    content = re.sub(r'```[\s\S]*?```', protect, content)
+    # Inline code (`...`)
+    content = re.sub(r'`[^`]+`', protect, content)
+    # URLs
+    content = re.sub(r'https?://\S+', protect, content)
+    # File paths: starts with /, ./, ../, or contains a / with no surrounding spaces
+    # Match sequences that look like paths: optional leading ./ ../ or / then word chars/slashes/dots
+    content = re.sub(r'(?<!\w)(?:\.\./|\.\/|/)[\w./\-]+', protect, content)
+
+    # Step 2: strip filler phrases at start of sentence (after . or start of string)
+    # Covers: "Sure thing, ", "Sure, ", "I'd be happy to ", "Let me ", "I'll ",
+    # "Certainly, ", "Of course, ", "Great, ", "Alright, ", "Ok, ", "Got it, ",
+    # "Thanks, ", "Thank you, ", "Absolutely, "
+    filler_starts = (
+        r"Sure thing,?\s+"
+        r"|Sure,?\s+"
+        r"|I'd be happy to\s+"
+        r"|Let me\s+"
+        r"|I'll\s+"
+        r"|Certainly,?\s+"
+        r"|Of course,?\s+"
+        r"|Great,?\s+"
+        r"|Alright,?\s+"
+        r"|Ok,?\s+"
+        r"|Got it,?\s+"
+        r"|Thanks,?\s+"
+        r"|Thank you,?\s+"
+        r"|Absolutely,?\s+"
+    )
+    content = re.sub(
+        r'(?:(?<=\.)\s+|(?:^))(?:' + filler_starts + r')',
+        lambda m: re.match(r'^(\s*)', m.group(0)).group(1),
+        content,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+
+    # Step 3: strip hedge phrases mid-sentence (case-insensitive)
+    hedge_patterns = [
+        r'\bI think[^\S\n]+',
+        r'\bIt seems like[^\S\n]+',
+        r'\bIt looks like[^\S\n]+',
+        r'\bbasically[^\S\n]+',
+        r'\bessentially[^\S\n]+',
+        r'\bjust[^\S\n]+',
+        r'\breally[^\S\n]+',
+        r'\bactually[^\S\n]+',
+        r'\bprobably[^\S\n]+',
+    ]
+    for pattern in hedge_patterns:
+        content = re.sub(pattern, ' ', content, flags=re.IGNORECASE)
+
+    # Step 4: strip articles (a/an/the) — natural language only, not in protected regions
+    # Only strip when surrounded by word boundaries and not adjacent to a placeholder marker
+    content = re.sub(r'(?<!\x00)\b(a|an|the)\s+(?!\x00)', ' ', content, flags=re.IGNORECASE)
+
+    # Step 5: restore protected regions
+    def restore(m):
+        return placeholders[int(m.group(1))]
+
+    content = re.sub(r'\x00PROTECT(\d+)\x00', restore, content)
+
+    # Step 6: collapse multiple spaces and strip trailing whitespace per line
+    content = re.sub(r'[^\S\n]+', ' ', content)
+    content = '\n'.join(line.strip() for line in content.split('\n'))
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content.strip()
+
+
+def check_and_compact(channel: str, context_budget: int, _context=None) -> bool:
+    """Check if compaction is needed for a channel and run it if so.
 
     Args:
-        topic: The conversation topic to check.
+        channel: The conversation channel to check.
         context_budget: Maximum token budget for the context window.
 
     Returns:
         True if compaction was performed, False otherwise.
     """
-    if not topic:
+    if not channel:
         return False
 
     # Get current compaction state
-    compaction = get_compaction(topic, _context=_context)
+    compaction = get_compaction(channel, _context=_context)
     compacted_tokens = compaction['token_count'] if compaction else 0
     watermark = compaction['compacted_up_to_id'] if compaction else 0
 
     # Get transcript entries since watermark
-    entries = get_entries_since(topic, watermark)
+    entries = get_entries_since(channel, watermark)
     if len(entries) < _MIN_ENTRIES_TO_COMPACT:
         return False
 
@@ -95,25 +193,25 @@ def check_and_compact(topic: str, context_budget: int, _context: 'TopicContext' 
 
     if total <= threshold:
         logger.debug(
-            f"{LOG_PREFIX} {topic}: {total} tokens "
+            f"{LOG_PREFIX} {channel}: {total} tokens "
             f"(compacted={compacted_tokens} + new={entries_tokens}) "
             f"<= threshold {threshold} — no compaction needed"
         )
         return False
 
     logger.info(
-        f"{LOG_PREFIX} {topic}: {total} tokens exceeds threshold {threshold} "
+        f"{LOG_PREFIX} {channel}: {total} tokens exceeds threshold {threshold} "
         f"({len(entries)} entries since watermark {watermark}) — compacting"
     )
 
     previous_text = compaction['compacted_text'] if compaction else ''
-    return _run_compaction(topic, previous_text, entries, _context=_context)
+    return _run_compaction(channel, previous_text, entries, _context=_context)
 
 
-def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict]:
-    """Retrieve the stored compaction for a topic.
+def get_compaction(channel: str, _context=None) -> Optional[Dict]:
+    """Retrieve the stored compaction for a channel.
 
-    Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at.
+    Returns dict with: compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content.
     Returns None if no compaction exists.
     """
     try:
@@ -124,11 +222,11 @@ def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT compacted_text, compacted_up_to_id, token_count, updated_at
-                FROM topic_compactions
-                WHERE topic = ?
+                SELECT compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content
+                FROM compactions
+                WHERE channel = ?
                 """,
-                (topic,),
+                (channel,),
             )
             row = cursor.fetchone()
             cursor.close()
@@ -141,29 +239,28 @@ def get_compaction(topic: str, _context: 'TopicContext' = None) -> Optional[Dict
             'compacted_up_to_id': row[1],
             'token_count': row[2],
             'updated_at': row[3],
+            'overflow_content': row[4],
         }
 
     except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Failed to get compaction for {topic}: {e}")
-        if _context is not None:
-            _context.record_failure('compaction_read', e)
+        logger.warning(f"{LOG_PREFIX} Failed to get compaction for {channel}: {e}")
         return None
 
 
-def get_entries_since(topic: str, watermark: int = 0, limit: int = 500) -> List[Dict]:
+def get_entries_since(channel: str, watermark: int = 0, limit: int = 500) -> List[Dict]:
     """Get transcript entries since a compaction watermark.
 
     Returns entries in chronological order (oldest first).
     """
     from services import transcript_service
-    return transcript_service.get_recent(topic, limit=limit, since_id=watermark)
+    return transcript_service.get_recent(channel, limit=limit, since_id=watermark)
 
 
-def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _context: 'TopicContext' = None) -> bool:
+def _run_compaction(channel: str, previous_text: str, entries: List[Dict], _context=None) -> bool:
     """Execute the compaction LLM call and store the result.
 
     Args:
-        topic: The conversation topic.
+        channel: The conversation channel.
         previous_text: The previous compaction text (may be empty for first compaction).
         entries: New transcript entries to incorporate.
 
@@ -178,7 +275,11 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _contex
     parts.append("## New Conversation Turns")
     for entry in entries:
         role = entry.get('role', 'unknown')
-        content = entry.get('content', '')
+        try:
+            content = _strip_entry(entry.get('content', ''), role)
+        except Exception:
+            logger.warning(f"{LOG_PREFIX} Strip failed for entry {entry.get('id')}, using raw content")
+            content = entry.get('content', '')
         tool_name = entry.get('tool_name')
         if tool_name:
             parts.append(f"[{role} — {tool_name}]: {content}")
@@ -195,11 +296,11 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _contex
         compacted_text = response.text.strip()
 
         if not compacted_text:
-            logger.warning(f"{LOG_PREFIX} LLM returned empty compaction for {topic}")
+            logger.warning(f"{LOG_PREFIX} LLM returned empty compaction for {channel}")
             return False
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Compaction LLM call failed for {topic}: {e}")
+        logger.error(f"{LOG_PREFIX} Compaction LLM call failed for {channel}: {e}")
         if _context is not None:
             _context.record_failure('compaction_llm', e)
         return False
@@ -217,26 +318,24 @@ def _run_compaction(topic: str, previous_text: str, entries: List[Dict], _contex
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at)
+                INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(topic) DO UPDATE SET
+                ON CONFLICT(channel) DO UPDATE SET
                     compacted_text = excluded.compacted_text,
                     compacted_up_to_id = excluded.compacted_up_to_id,
                     token_count = excluded.token_count,
                     updated_at = excluded.updated_at
                 """,
-                (topic, compacted_text, watermark, token_count, utc_now().isoformat()),
+                (channel, compacted_text, watermark, token_count, utc_now().isoformat()),
             )
             cursor.close()
 
         logger.info(
-            f"{LOG_PREFIX} Compacted {topic}: "
+            f"{LOG_PREFIX} Compacted {channel}: "
             f"{len(entries)} entries → {token_count} tokens, watermark={watermark}"
         )
         return True
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Failed to store compaction for {topic}: {e}")
-        if _context is not None:
-            _context.record_failure('compaction_store', e)
+        logger.error(f"{LOG_PREFIX} Failed to store compaction for {channel}: {e}")
         return False

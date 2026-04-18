@@ -68,7 +68,7 @@ TOOL_SCHEMA = {
 _DEFAULT_LIST_NAME = "Shopping List"
 
 
-def handle_list(topic: str, params: dict) -> str:
+def handle_list(channel: str, params: dict) -> str:
     """
     Manage user lists.
 
@@ -83,7 +83,7 @@ def handle_list(topic: str, params: dict) -> str:
     - history:  Show change log
 
     Args:
-        topic: Current conversation topic
+        channel: Current conversation channel
         params: Action parameters dict
 
     Returns:
@@ -97,28 +97,28 @@ def handle_list(topic: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = ListService(db)
-        return _dispatch(service, action, params, topic)
+        return _dispatch(service, action, params)
 
     except Exception as e:
         logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
         return _fail(str(e))
 
 
-def _dispatch(service, action: str, params: dict, topic: str) -> str:
+def _dispatch(service, action: str, params: dict) -> str:
     if action == 'add':
-        return _handle_add(service, params, topic)
+        return _handle_add(service, params)
     elif action == 'remove':
-        return _handle_remove(service, params, topic)
+        return _handle_remove(service, params)
     elif action == 'check':
-        return _handle_check(service, params, topic)
+        return _handle_check(service, params)
     elif action == 'view':
-        return _handle_view(service, params, topic)
+        return _handle_view(service, params)
     elif action in ('list_all', 'list'):
-        return _handle_list_all(service, topic)
+        return _handle_list_all(service)
     elif action == 'clear':
-        return _handle_clear(service, params, topic)
+        return _handle_clear(service, params)
     elif action == 'rename':
-        return _handle_rename(service, params, topic)
+        return _handle_rename(service, params)
     elif action == 'history':
         return _handle_history(service, params)
     else:
@@ -195,7 +195,7 @@ def _normalize_items(params: dict) -> list:
 # Handlers
 # ─────────────────────────────────────────────
 
-def _handle_add(service, params: dict, topic: str) -> str:
+def _handle_add(service, params: dict) -> str:
     items = _normalize_items(params)
 
     name = params.get('name', '').strip()
@@ -225,7 +225,7 @@ def _handle_add(service, params: dict, topic: str) -> str:
     return _success(_list_json(service, name))
 
 
-def _handle_remove(service, params: dict, topic: str) -> str:
+def _handle_remove(service, params: dict) -> str:
     items = _normalize_items(params)
 
     name = _resolve_name(service, params)
@@ -247,7 +247,7 @@ def _handle_remove(service, params: dict, topic: str) -> str:
     return _success(lst_data)
 
 
-def _handle_check(service, params: dict, topic: str) -> str:
+def _handle_check(service, params: dict) -> str:
     raw_items = params.get('items', [])
     if not isinstance(raw_items, list):
         return _fail("'items' must be an array of {content, checked} objects.")
@@ -282,7 +282,7 @@ def _handle_check(service, params: dict, topic: str) -> str:
     return _success(lst_data)
 
 
-def _handle_view(service, params: dict, topic: str) -> str:
+def _handle_view(service, params: dict) -> str:
     name = _resolve_name(service, params)
     if not name:
         return _fail("Multiple lists exist. Specify 'name'.")
@@ -294,7 +294,7 @@ def _handle_view(service, params: dict, topic: str) -> str:
     return _success(lst_data)
 
 
-def _handle_list_all(service, topic: str) -> str:
+def _handle_list_all(service) -> str:
     lists = service.get_all_lists()
     if not lists:
         return "[LIST] No lists found."
@@ -308,7 +308,7 @@ def _handle_list_all(service, topic: str) -> str:
     return "\n".join(lines)
 
 
-def _handle_clear(service, params: dict, topic: str) -> str:
+def _handle_clear(service, params: dict) -> str:
     name = params.get('name', '').strip()
     if not name:
         return "[LIST] 'name' is required to clear a list."
@@ -319,7 +319,7 @@ def _handle_clear(service, params: dict, topic: str) -> str:
     return f"[LIST] Cleared {count} item(s) from '{name}'."
 
 
-def _handle_rename(service, params: dict, topic: str) -> str:
+def _handle_rename(service, params: dict) -> str:
     name = params.get('name', '').strip()
     new_name = params.get('new_name', '').strip()
     if not name or not new_name:

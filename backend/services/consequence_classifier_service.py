@@ -21,16 +21,15 @@ reversibility and external impact:
   Tier 3 — COMMIT:   Spend money, delete data, irreversible external actions.
                      Hard or impossible to undo; always require explicit approval.
 
-Primary path: ONNX multi-label classifier (Qwen2.5-0.5B base, ~5ms inference).
+Primary path: ONNX multi-label classifier (gte-modernbert MLP head, ~5ms inference).
 Fallback: deterministic keyword-matching rule engine (zero dependencies).
 
 The ONNX model is optional — the service works fully without it. A warning
 is logged on startup if the model directory is absent.
 
-Integration points (Stage 6a):
+Integration points:
   - ActDispatcherService: gate external actions by tier before execution
-  - PlanAction: block Tier 3 tasks from autonomous creation
-  - PersistentTaskWorker: verify tier before each background cycle
+  - GoalPursuitProcessor: verify tier before each background cycle
 """
 
 import logging

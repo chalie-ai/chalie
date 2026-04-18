@@ -37,7 +37,7 @@ def _insert_item(db, **overrides):
         window_start=None,
         window_end=None,
         status="pending",
-        topic="general",
+        channel="general",
         created_by_session=None,
         created_at=now,
         last_fired_at=None,
@@ -50,14 +50,14 @@ def _insert_item(db, **overrides):
         """
         INSERT INTO scheduled_items
           (id, item_type, message, due_at, recurrence,
-           window_start, window_end, status, topic,
+           window_start, window_end, status, channel,
            created_by_session, created_at, last_fired_at, group_id, is_prompt)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             d["id"], d["item_type"], d["message"], d["due_at"],
             d["recurrence"], d["window_start"], d["window_end"],
-            d["status"], d["topic"], d["created_by_session"],
+            d["status"], d["channel"], d["created_by_session"],
             d["created_at"], d["last_fired_at"], d["group_id"],
             d["is_prompt"],
         ),

@@ -39,7 +39,7 @@ def health_check():
 
 @system_bp.route('/ready', methods=['GET'])
 def readiness_check():
-    """Readiness probe — true only when SQLite, MemoryStore, and prompt-queue worker are all available."""
+    """Readiness probe — true only when SQLite, MemoryStore, embeddings, and ONNX are ready."""
     components = {}
 
     # SQLite
@@ -65,16 +65,6 @@ def readiness_check():
         logger.debug(f'[READY] memory store not ready: {e}')
         components['memory_store'] = {'status': 'error', 'message': str(e)}
 
-    # prompt-queue worker (PromptQueue is an in-process thread dispatcher — always available
-    # once the module is importable; _locks is lazily populated on first enqueue so checking
-    # it causes a false 503 on every cold boot before the first message arrives)
-    try:
-        from services.prompt_queue import PromptQueue  # noqa: F401 — import-only check
-        components['workers'] = {'status': 'ok'}
-    except Exception as e:
-        logger.debug(f'[READY] worker check failed: {e}')
-        components['workers'] = {'status': 'error', 'message': str(e)}
-
     # Embedding model — lazy-loaded on first use. Ready once the ONNX session
     # and tokenizer are initialised.
     try:
@@ -94,6 +84,17 @@ def readiness_check():
         onnx_svc = get_onnx_inference_service()
         if onnx_svc.ready:
             components['onnx'] = {'status': 'ok'}
+        elif onnx_svc.degraded:
+            # Registration completed but one or more tasks failed (e.g. sha256
+            # gate refused on encoder mismatch). Surface this loudly — the boot
+            # gate exists precisely to catch these cases. Silent fallback would
+            # let the system run with a wrong/incomplete classifier.
+            failed = onnx_svc.failed_registrations
+            components['onnx'] = {
+                'status': 'degraded',
+                'failed_tasks': [t for t, _ in failed],
+                'message': '; '.join(f'{t}: {err}' for t, err in failed),
+            }
         else:
             components['onnx'] = {'status': 'loading'}
     except Exception as e:
@@ -147,8 +148,8 @@ def system_status():
                 cursor = conn.cursor()
                 for table_label, query in [
                     ("episodes", "SELECT COUNT(*) FROM episodes"),
-                    ("concepts", "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"),
-                    ("traits", "SELECT COUNT(*) FROM knowledge WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"),
+                    ("concepts", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
+                    ("traits", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
                 ]:
                     try:
                         cursor.execute(query)
@@ -162,19 +163,12 @@ def system_status():
             result["database_error"] = str(e)
 
         # Queue depths
-        for queue_name in ["prompt-queue", "output-queue"]:
+        for queue_name in ["output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
             except Exception as e:
                 logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
                 result["queues"][queue_name] = -1
-
-        # Last proactive drift run
-        try:
-            last_run = store.get("cognitive_drift:last_run")
-            result["last_proactive_run"] = last_run if last_run else None
-        except Exception as e:
-            logger.warning(f"[SYSTEM] Failed to read cognitive_drift:last_run: {e}")
 
         return jsonify(result), 200
 
@@ -210,22 +204,22 @@ def observability_memory():
 
         # ── Long-term counts from SQLite ──
         episode_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(activation_score), 0) AS avg_act "
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_act "
             "FROM episodes WHERE deleted_at IS NULL"
         )
         episodes = episode_row[0]['cnt'] if episode_row else 0
         avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
 
         concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM knowledge "
-            "WHERE kind = 'concept' AND deleted_at IS NULL"
+            "SELECT COUNT(*) AS cnt FROM data_graph "
+            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
         )
         concepts = concept_row[0]['cnt'] if concept_row else 0
 
         trait_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
-            "FROM knowledge "
-            "WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_conf "
+            "FROM data_graph "
+            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
         )
         traits = trait_row[0]['cnt'] if trait_row else 0
         avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
@@ -250,7 +244,7 @@ def observability_memory():
             fact_keys = store.keys("facts:*")
             facts = len(fact_keys) if fact_keys else traits
 
-            for q in ["prompt-queue", "output-queue"]:
+            for q in ["output-queue"]:
                 depth = store.llen(q)
                 if depth:
                     queues[q] = depth
@@ -357,60 +351,15 @@ def observability_tools():
         return jsonify({"error": "Failed to retrieve tool data"}), 500
 
 
-@system_bp.route('/system/observability/identity', methods=['GET'])
-@require_session
-def observability_identity():
-    """Identity vector states."""
-    try:
-        from services.identity_service import IdentityService
-        from services.database_service import get_shared_db_service
-
-        svc = IdentityService(get_shared_db_service())
-        raw = svc.get_vectors()
-
-        vectors = {}
-        for name, state in raw.items():
-            vectors[name] = {
-                'baseline': state.get('baseline_weight', 0.5),
-                'activation': state.get('current_activation', 0.5),
-                'plasticity': state.get('plasticity_rate', 0),
-                'inertia': state.get('inertia_rate', 0),
-                'reinforcements': state.get('reinforcement_count', 0),
-                'min': state.get('min_cap', 0),
-                'max': state.get('max_cap', 1),
-            }
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'vectors': vectors,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/identity error: {e}")
-        return jsonify({"error": "Failed to retrieve identity data"}), 500
-
 
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks."""
+    """Goal ecology stats."""
     try:
         result = {
             'generated_at': _now_iso(),
-            'persistent_tasks': [],
         }
-
-        # Persistent tasks
-        try:
-            from services.persistent_task_service import PersistentTaskService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            svc = PersistentTaskService(db)
-            with db.connection() as conn:
-                row = conn.execute("SELECT id FROM master_account LIMIT 1").fetchone()
-            account_id = row[0] if row else 1
-            result['persistent_tasks'] = svc.get_active_tasks(account_id)
-        except Exception as e:
-            logger.warning(f"[OBS] persistent tasks error: {e}")
 
         # Goal ecology stats
         try:
@@ -427,109 +376,35 @@ def observability_tasks():
         except Exception as e:
             logger.warning(f"[OBS] goal ecology stats error: {e}")
 
-
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")
         return jsonify({"error": "Failed to retrieve task data"}), 500
 
 
-@system_bp.route('/system/observability/tasks/<int:task_id>', methods=['DELETE'])
-@require_session
-def cancel_persistent_task(task_id):
-    """Cancel (dismiss) a persistent background task."""
-    try:
-        from services.persistent_task_service import PersistentTaskService
-        from services.database_service import get_shared_db_service
-        svc = PersistentTaskService(get_shared_db_service())
-        ok, msg = svc.transition(task_id, 'cancelled')
-        if ok:
-            return jsonify({"status": "cancelled"}), 200
-        return jsonify({"error": msg}), 400
-    except Exception as e:
-        logger.error(f"[REST API] cancel task error: {e}")
-        return jsonify({"error": "Failed to cancel task"}), 500
-
-
-@system_bp.route('/system/observability/autobiography', methods=['GET'])
-@require_session
-def observability_autobiography():
-    """Current autobiography narrative with delta information."""
-    try:
-        from services.autobiography_service import AutobiographyService
-        from services.autobiography_delta_service import AutobiographyDeltaService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        narrative_data = AutobiographyService(db).get_current_narrative()
-        delta_data = AutobiographyDeltaService(db).get_changed_sections()
-
-        result = {
-            'generated_at': _now_iso(),
-            'narrative': None,
-            'version': None,
-            'episodes_since': None,
-            'created_at': None,
-            'delta': None,
-        }
-
-        if narrative_data:
-            result['narrative'] = narrative_data.get('narrative')
-            result['version'] = narrative_data.get('version')
-            result['episodes_since'] = narrative_data.get('episodes_since')
-            created = narrative_data.get('created_at')
-            result['created_at'] = str(created) if created and not isinstance(created, str) else created
-
-        if delta_data:
-            result['delta'] = {
-                'changed': delta_data.get('changed', []),
-                'unchanged': delta_data.get('unchanged', []),
-                'from_version': delta_data.get('from_version'),
-                'to_version': delta_data.get('to_version'),
-            }
-
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/autobiography error: {e}")
-        return jsonify({"error": "Failed to retrieve autobiography data"}), 500
-
-
 @system_bp.route('/system/observability/traits', methods=['GET'])
 @require_session
 def observability_traits():
-    """User traits grouped by category."""
+    """User traits grouped by kind."""
     try:
-        from services.database_service import get_shared_db_service
+        from services.data_graph_service import get_data_graph_service
 
-        db = get_shared_db_service()
+        rows = get_data_graph_service().fetch(
+            kinds=['user_specific'],
+            order_by='retrieval_weight DESC',
+        )
         categories = {}
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT key, value, confidence, "
-                "json_extract(data, '$.category') AS category, "
-                "evidence_count, updated_at "
-                "FROM knowledge "
-                "WHERE kind IN ('trait', 'preference') "
-                "AND entity = 'user' "
-                "AND deleted_at IS NULL "
-                "ORDER BY category, confidence DESC"
-            )
-            rows = cursor.fetchall()
-
-            for row in rows:
-                cat = row[3] or 'general'
-                if cat not in categories:
-                    categories[cat] = []
-                updated = row[5]
-                categories[cat].append({
-                    'key': row[0],
-                    'value': row[1],
-                    'confidence': round(float(row[2] or 0), 3),
-                    'reinforcement_count': row[4] or 0,
-                    'updated_at': str(updated) if updated and not isinstance(updated, str) else updated,
-                })
+        for row in rows:
+            cat = 'general'
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append({
+                'key': row.get('key'),
+                'value': row.get('value'),
+                'confidence': round(float(row.get('retrieval_weight') or 0), 3),
+                'reinforcement_count': row.get('evidence_count') or 0,
+                'updated_at': row.get('last_confirmed_at'),
+            })
 
         return jsonify({
             'generated_at': _now_iso(),
@@ -545,16 +420,14 @@ def observability_traits():
 def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
-        from services.database_service import get_shared_db_service
-        from services.knowledge_service import KnowledgeService
-
-        db = get_shared_db_service()
-        deleted = KnowledgeService(db).forget('user', trait_key)
-
-        if deleted:
-            return jsonify({'ok': True, 'deleted': trait_key}), 200
-        else:
+        from services.data_graph_service import get_data_graph_service
+        dgs = get_data_graph_service()
+        rows = dgs.fetch(kinds=['user_specific'])
+        match = next((r for r in rows if r.get('key') == trait_key), None)
+        if not match:
             return jsonify({'error': 'Trait not found'}), 404
+        dgs.soft_delete_by_id(match['id'])
+        return jsonify({'ok': True, 'deleted': trait_key}), 200
     except Exception as e:
         logger.error(f"[REST API] observability/traits DELETE error: {e}")
         return jsonify({"error": "Failed to delete trait"}), 500
@@ -569,7 +442,7 @@ def observability_world_state():
 
         svc = WorldStateService()
         summary = svc.get_world_model_summary()
-        formatted = svc.get_world_state(topic='', thread_id=None, message_embedding=None)
+        formatted = svc.get_world_state(topic='', message_embedding=None)
 
         return jsonify({
             'generated_at': _now_iso(),
@@ -608,48 +481,6 @@ def observability_pipeline_health():
         logger.error(f"[REST API] observability/pipeline-health error: {e}")
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
 
-
-@system_bp.route('/system/activity', methods=['GET'])
-@require_session
-def activity_feed():
-    """Unified activity feed — what Chalie did autonomously."""
-    try:
-        from services.interaction_log_service import InteractionLogService
-
-        since_hours = request.args.get('since_hours', 24, type=int)
-        limit = min(max(1, request.args.get('limit', 50, type=int)), 200)
-        offset = max(0, request.args.get('offset', 0, type=int))
-
-        # Clamp since_hours to reasonable range (1h to 7 days)
-        since_hours = max(1, min(since_hours, 168))
-
-        log_service = InteractionLogService()
-        feed = log_service.get_activity_feed(
-            since_hours=since_hours, limit=limit, offset=offset
-        )
-        feed['generated_at'] = datetime.now(timezone.utc).isoformat()
-        return jsonify(feed), 200
-
-    except Exception as e:
-        logger.error(f"[REST API] activity feed error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to retrieve activity feed"}), 500
-
-
-
-@system_bp.route('/system/observability/failures', methods=['GET'])
-@require_session
-def observability_failures():
-    """Return failure-analysis blame distribution and lesson statistics."""
-    try:
-        from services.database_service import get_shared_db_service
-        from services.failure_analysis_service import FailureAnalysisService
-        db = get_shared_db_service()
-        fas = FailureAnalysisService(db)
-        stats = fas.get_stats()
-        return jsonify({'generated_at': _now_iso(), **stats}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/failures error: {e}")
-        return jsonify({"error": "Failed to retrieve failure stats"}), 500
 
 
 @system_bp.route('/system/observability/situation', methods=['GET'])
@@ -776,28 +607,81 @@ def update_apply():
 @system_bp.route('/system/reset-thread', methods=['POST'])
 @require_session
 def reset_thread():
-    """Expire the active thread for a channel, forcing the next message to start fresh.
+    """Clear conversation context and advance the thread ID.
 
-    Used by the nightly-test harness to test cross-thread memory recall
-    (i.e., knowledge pipeline) vs. in-context transcript recall.
+    Does two things:
+    1. Deletes all transcript rows (and their linked tool_calls + compaction watermark)
+       for the given processor channel (default 'user'). This empties the Previous
+       Messages block so the next turn starts genuinely fresh — recall must come from
+       the memory pipeline, not conversation context.
+    2. Advances the active_channel MemoryStore key (web:default:N → N+1) so postTurn
+       services (adaptive directives, phase, situation model) scope their writes to the
+       new thread_id.
 
-    Body (optional): {"channel": "default"}
+    In the persistent-context architecture, getPreviousMessages() reads from the
+    transcript table filtered by the hardcoded CHANNEL value ('user'). The MemoryStore
+    active_channel key is separate — it scopes postTurn service state, not transcript
+    retrieval. Both must be updated for a correct reset.
+
+    Body (optional):
+        {"channel": "user"}  — processor CHANNEL to clear (default: "user")
     """
     try:
-        from services.thread_service import ThreadService
+        from services.database_service import get_shared_db_service
+        from services.memory_client import MemoryClientService
 
         data = request.get_json(silent=True) or {}
-        channel_id = data.get('channel', 'default')
+        channel = data.get('channel', 'user')
 
-        ts = ThreadService()
-        thread_id = ts.get_active_thread_id(channel_id)
+        # ── 1. Clear transcript context ────────────────────────────────────────
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            # Compaction watermark has FK → transcript.id; delete it first
+            conn.execute('DELETE FROM compactions WHERE channel = ?', (channel,))
 
-        if not thread_id:
-            return jsonify({'ok': True, 'message': 'No active thread', 'expired': None}), 200
+            ids = [r[0] for r in conn.execute(
+                'SELECT id FROM transcript WHERE channel = ?', (channel,)
+            ).fetchall()]
 
-        ts.expire_thread(thread_id)
-        logger.info(f"[RESET-THREAD] Expired thread {thread_id} for channel {channel_id}")
-        return jsonify({'ok': True, 'expired': thread_id}), 200
+            cleared = 0
+            if ids:
+                placeholders = ','.join('?' * len(ids))
+                conn.execute(
+                    f'DELETE FROM tool_calls WHERE transcript_id IN ({placeholders})',
+                    ids,
+                )
+                conn.execute('DELETE FROM transcript WHERE channel = ?', (channel,))
+                cleared = len(ids)
+
+            conn.commit()
+
+        # ── 2. Advance MemoryStore thread_id ──────────────────────────────────
+        store = MemoryClientService.create_connection()
+        current = store.get('active_channel:default')
+        if isinstance(current, bytes):
+            current = current.decode()
+
+        new_thread = None
+        if current:
+            parts = current.rsplit(':', 1)
+            try:
+                seq = int(parts[-1]) + 1
+            except (ValueError, IndexError):
+                seq = 1
+            new_thread = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
+            store.set('active_channel:default', new_thread, ex=604800)
+
+        logger.info(
+            f"[RESET-THREAD] channel='{channel}': cleared {cleared} transcript rows, "
+            f"thread {current!r} → {new_thread!r}"
+        )
+        return jsonify({
+            'ok': True,
+            'channel': channel,
+            'transcript_rows_cleared': cleared,
+            'new_thread': new_thread,
+        }), 200
+
     except Exception as e:
         logger.error(f"[REST API] reset-thread error: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 500

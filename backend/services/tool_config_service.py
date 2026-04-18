@@ -5,10 +5,7 @@ Provides get/set/delete for tool config keys (credentials, endpoints, etc.).
 Config values are injected into tool containers at invocation time.
 """
 
-import hmac
 import logging
-import secrets
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +15,7 @@ class ToolConfigService:
 
     Provides get/set/delete operations for arbitrary tool config keys
     (API credentials, endpoint URLs, feature flags, etc.) as well as
-    reserved system keys such as ``_enabled``, ``_webhook_key``, and
-    OAuth token fields.
+    reserved system keys such as ``_enabled`` and OAuth token fields.
 
     Reserved keys are write-protected through the public ``set_tool_config``
     interface; dedicated helper methods (``_set_enabled_flag``,
@@ -27,7 +23,7 @@ class ToolConfigService:
     """
 
     RESERVED_KEYS = {
-        "_enabled", "_webhook_key",
+        "_enabled",
         "_oauth_access_token", "_oauth_refresh_token",
         "_oauth_token_expires_at", "_oauth_connected_at", "_oauth_scopes",
         "_source_type", "_source_url", "_installed_tag",
@@ -159,77 +155,6 @@ class ToolConfigService:
             logger.error(f"[TOOL CONFIG] set_tool_config('{tool_name}'): {e}", exc_info=True)
             return False
 
-    def generate_webhook_key(self, tool_name: str) -> str:
-        """
-        Generate and store a webhook API key for a tool.
-
-        Returns the generated key (shown once — caller must present it to the user).
-        Subsequent calls regenerate the key, invalidating the old one.
-        """
-        key = secrets.token_urlsafe(32)
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO tool_configs (tool_name, config_key, config_value)
-                    VALUES (?, '_webhook_key', ?)
-                    ON CONFLICT (tool_name, config_key)
-                    DO UPDATE SET config_value = EXCLUDED.config_value,
-                                  updated_at = datetime('now')
-                    """,
-                    (tool_name, key)
-                )
-                cursor.close()
-            logger.info(f"[TOOL CONFIG] Generated webhook key for '{tool_name}'")
-            return key
-        except Exception as e:
-            logger.error(f"[TOOL CONFIG] generate_webhook_key('{tool_name}'): {e}", exc_info=True)
-            raise
-
-    def get_webhook_key(self, tool_name: str) -> str | None:
-        """Return the stored webhook key for a tool, or None if not set."""
-        cfg = self.get_tool_config(tool_name)
-        return cfg.get("_webhook_key")
-
-    def validate_webhook_key(self, tool_name: str, provided_key: str) -> bool:
-        """
-        Validate a provided webhook API key using constant-time comparison.
-
-        Returns True if valid, False otherwise.
-        """
-        stored = self.get_webhook_key(tool_name)
-        if not stored or not provided_key:
-            return False
-        return hmac.compare_digest(stored.encode(), provided_key.encode())
-
-    def validate_webhook_hmac(self, tool_name: str, timestamp: str, raw_body: bytes, signature: str) -> bool:
-        """
-        Validate an HMAC-SHA256 webhook signature with replay protection.
-
-        Expected signature: HMAC-SHA256(webhook_key, "{timestamp}.{body_hex}")
-        Timestamp must be within 300 seconds of now.
-
-        Returns True if valid, False otherwise.
-        """
-        stored_key = self.get_webhook_key(tool_name)
-        if not stored_key or not signature or not timestamp:
-            return False
-
-        # Replay protection: reject requests older than 5 minutes
-        try:
-            ts = int(timestamp)
-            if abs(time.time() - ts) > 300:
-                logger.warning(f"[TOOL CONFIG] HMAC timestamp too old for '{tool_name}': {ts}")
-                return False
-        except (ValueError, TypeError):
-            return False
-
-        # Compute expected signature
-        msg = f"{timestamp}.{raw_body.hex()}".encode()
-        expected = hmac.new(stored_key.encode(), msg, "sha256").hexdigest()
-        return hmac.compare_digest(expected.encode(), signature.encode())
-
     def delete_tool_config_key(self, tool_name: str, key: str) -> bool:
         """
         Delete a single config key for a tool.
@@ -255,8 +180,8 @@ class ToolConfigService:
         """Delete ALL config rows for a tool (used during uninstall).
 
         Removes every row in ``tool_configs`` whose ``tool_name`` matches the
-        provided value, including reserved system keys such as ``_enabled``,
-        ``_webhook_key``, and OAuth fields.
+        provided value, including reserved system keys such as ``_enabled``
+        and OAuth fields.
 
         Args:
             tool_name: The tool identifier whose config rows should be purged.

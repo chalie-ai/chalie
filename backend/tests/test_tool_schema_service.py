@@ -147,3 +147,94 @@ class TestGetExternalToolSchemas:
 
         schemas = get_external_tool_schemas(['broken'])
         assert schemas == []
+
+
+class TestInputSchemaFastPath:
+    """Tests for the input_schema fast path in _manifest_to_schema."""
+
+    def test_input_schema_passthrough(self):
+        """Manifest with input_schema returns it unchanged without conversion."""
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        }
+        manifest = {
+            "name": "search",
+            "description": "Search the web",
+            "input_schema": input_schema,
+        }
+        schema = _manifest_to_schema(manifest)
+
+        assert schema is not None
+        assert schema["name"] == "search"
+        assert schema["description"] == "Search the web"
+        assert schema["input_schema"] is input_schema
+
+    def test_input_schema_takes_precedence_over_parameters(self):
+        """When both input_schema and parameters are present, input_schema wins."""
+        input_schema = {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+        }
+        manifest = {
+            "name": "dual_format",
+            "description": "Has both formats",
+            "input_schema": input_schema,
+            "parameters": {
+                "legacy_param": {"type": "string", "required": True},
+            },
+        }
+        schema = _manifest_to_schema(manifest)
+
+        # input_schema wins: legacy_param should NOT appear
+        assert "q" in schema["input_schema"]["properties"]
+        assert "legacy_param" not in schema["input_schema"]["properties"]
+        # The required list is from input_schema, not derived from parameters
+        assert schema["input_schema"]["required"] == ["q"]
+
+    def test_legacy_parameters_still_works(self):
+        """Interface tools using the legacy parameters format still convert correctly."""
+        manifest = {
+            "name": "interface_tool",
+            "description": "An interface tool",
+            "parameters": {
+                "action": {"type": "string", "required": True, "description": "What to do"},
+                "value": {"type": "string", "required": False, "default": "default_val"},
+            },
+        }
+        schema = _manifest_to_schema(manifest)
+
+        assert schema is not None
+        assert schema["name"] == "interface_tool"
+        assert schema["input_schema"]["type"] == "object"
+        assert "action" in schema["input_schema"]["properties"]
+        assert "value" in schema["input_schema"]["properties"]
+        assert "action" in schema["input_schema"]["required"]
+        assert "value" not in schema["input_schema"]["required"]
+        assert schema["input_schema"]["properties"]["value"]["default"] == "default_val"
+
+    def test_input_schema_with_nested_items(self):
+        """input_schema with array items passthrough preserves nested structure."""
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"action": {"type": "string"}},
+                        "required": ["action"],
+                    },
+                },
+            },
+            "required": ["steps"],
+        }
+        manifest = {"name": "multi_step", "description": "Multi-step tool", "input_schema": input_schema}
+        schema = _manifest_to_schema(manifest)
+
+        assert schema["input_schema"]["properties"]["steps"]["items"]["required"] == ["action"]

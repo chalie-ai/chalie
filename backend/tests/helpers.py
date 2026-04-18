@@ -2,64 +2,13 @@
 Test data factories — produce realistic row tuples matching actual DB column orders.
 
 Usage:
-    from tests.helpers import make_task_row, make_scheduled_item, make_trait_row
+    from tests.helpers import make_scheduled_item, make_trait_row
 
 All factories return tuples (matching cursor.fetchone/fetchall) unless
 noted otherwise.  Override any field via keyword argument.
 """
 
-import json
 from datetime import datetime, timezone, timedelta
-
-
-# ─── persistent_tasks ────────────────────────────────────────────────
-# Column order matches: SELECT id, account_id, thread_id, goal, scope,
-#   status, priority, progress, result, result_artifact, iterations_used,
-#   max_iterations, created_at, updated_at, expires_at, deadline,
-#   next_run_after, fatigue_budget
-
-def make_task_row(
-    task_id=1,
-    account_id=1,
-    thread_id=None,
-    goal="Test background task",
-    scope=None,
-    status="accepted",
-    priority=5,
-    progress=None,
-    result=None,
-    result_artifact=None,
-    iterations_used=0,
-    max_iterations=20,
-    created_at=None,
-    updated_at=None,
-    expires_at=None,
-    deadline=None,
-    next_run_after=None,
-    fatigue_budget=15.0,
-):
-    """Return an 18-element tuple matching persistent_tasks SELECT order."""
-    now = datetime.now(timezone.utc)
-    return (
-        task_id,
-        account_id,
-        thread_id,
-        goal,
-        scope,
-        status,
-        priority,
-        json.dumps(progress) if isinstance(progress, dict) else (progress or "{}"),
-        result,
-        json.dumps(result_artifact) if isinstance(result_artifact, dict) else result_artifact,
-        iterations_used,
-        max_iterations,
-        created_at or now,
-        updated_at or now,
-        expires_at or (now + timedelta(days=14)),
-        deadline,
-        next_run_after,
-        fatigue_budget,
-    )
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────
@@ -115,10 +64,8 @@ def make_episode_row(
     outcome="provided forecast",
     gist="Weather conversation about Malta",
     salience=5.0,
-    freshness=0.8,
     topic="weather",
     created_at=None,
-    activation_score=1.0,
     last_accessed_at=None,
     salience_factors=None,
     open_loops=None,
@@ -134,10 +81,8 @@ def make_episode_row(
         "outcome": outcome,
         "gist": gist,
         "salience": salience,
-        "freshness": freshness,
         "topic": topic,
         "created_at": created_at or now,
-        "activation_score": activation_score,
         "last_accessed_at": last_accessed_at,
         "salience_factors": salience_factors or {},
         "open_loops": open_loops or [],
@@ -152,7 +97,7 @@ def make_provider_row(
     provider_id=1,
     name="test-provider",
     platform="ollama",
-    model="qwen3:4b",
+    model="gemma4:31b",
     host="http://localhost:11434",
     api_key=None,
     dimensions=256,
@@ -166,35 +111,3 @@ def make_provider_row(
     )
 
 
-# ─── identity_vectors ────────────────────────────────────────────────
-# Column order matches: SELECT vector_name, baseline_weight, current_activation,
-#   plasticity_rate, inertia_rate, min_cap, max_cap, reinforcement_count,
-#   signal_history, baseline_drift_today, drift_window_start
-
-def make_identity_vector(
-    vector_name="warmth",
-    baseline_weight=0.5,
-    current_activation=0.5,
-    plasticity_rate=0.1,
-    inertia_rate=0.05,
-    min_cap=0.0,
-    max_cap=1.0,
-    reinforcement_count=0,
-    signal_history=None,
-    baseline_drift_today=0.0,
-    drift_window_start=None,
-):
-    """Return an 11-element tuple matching identity_vectors SELECT order."""
-    return (
-        vector_name,
-        baseline_weight,
-        current_activation,
-        plasticity_rate,
-        inertia_rate,
-        min_cap,
-        max_cap,
-        reinforcement_count,
-        signal_history or [],
-        baseline_drift_today,
-        drift_window_start,
-    )

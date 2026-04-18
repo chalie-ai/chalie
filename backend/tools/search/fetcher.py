@@ -256,8 +256,8 @@ def fetch_providers(providers: list, query: str, limit: int = 5) -> list:
 def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
     """Fall back to DDG web search. Returns results in standard format."""
     try:
-        from duckduckgo_search import DDGS
-        from duckduckgo_search.exceptions import RatelimitException, DuckDuckGoSearchException
+        from ddgs import DDGS
+        from ddgs.exceptions import RatelimitException, DDGSException as DuckDuckGoSearchException
 
         global _ddg_last_call
         limit = max(1, min(8, limit))
@@ -269,7 +269,7 @@ def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
                     time.sleep(_DDG_COOLDOWN - elapsed)
                 _ddg_last_call = time.time()
             try:
-                raw = list(DDGS().text(keywords=query, max_results=limit))
+                raw = list(DDGS().text(query, max_results=limit))
                 results = []
                 seen = set()
                 for r in raw:

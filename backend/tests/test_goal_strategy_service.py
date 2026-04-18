@@ -84,63 +84,47 @@ class TestGatherEvidenceContext:
 class TestGetUserContext:
     """Unit tests for _get_user_context()."""
 
-    def test_extracts_values_and_goals_sections(self, mock_store):
-        narrative = (
-            "## Background\nSome background.\n"
-            "## Values & Goals\nLearn new skills.\nGrow professionally.\n"
-            "## Active Threads\nCurrently studying Rust.\n"
-            "## Other\nSomething else.\n"
-        )
-        db, _ = _make_db_mock()
-
-        auto_mock = MagicMock()
-        auto_mock.get_current_narrative.return_value = {
-            'narrative': narrative,
-            'version': 1,
-        }
-
-        with patch('services.database_service.get_shared_db_service', return_value=db), \
-             patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
+    def test_returns_traits_from_data_graph(self, mock_store):
+        from unittest.mock import MagicMock, patch
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = [
+            {'key': 'name', 'value': 'Dylan', 'retrieval_weight': 0.99},
+            {'key': 'likes_coffee', 'value': 'true', 'retrieval_weight': 0.8},
+        ]
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
 
-        assert 'Values' in result or 'values' in result or 'Goals' in result
-        assert 'Active Threads' in result or 'active threads' in result
-        # 'Background' and 'Other' sections should not appear
-        assert 'Some background' not in result
-        assert 'Something else' not in result
+        assert 'name: Dylan' in result
+        assert 'likes_coffee: true' in result
 
     def test_truncates_long_context(self, mock_store):
-        # Build narrative with a very long values section
-        long_content = "A" * 1000
-        narrative = f"## Values & Goals\n{long_content}\n"
-        db, _ = _make_db_mock()
-
-        auto_mock = MagicMock()
-        auto_mock.get_current_narrative.return_value = {'narrative': narrative}
-
-        with patch('services.database_service.get_shared_db_service', return_value=db), \
-             patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
+        from unittest.mock import MagicMock, patch
+        mock_dgs = MagicMock()
+        # Generate traits that exceed 500 chars
+        mock_dgs.fetch.return_value = [
+            {'key': f'trait_{i}', 'value': 'A' * 50, 'retrieval_weight': 0.9}
+            for i in range(20)
+        ]
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
 
         assert len(result) <= 503  # 500 chars + "..."
 
-    def test_no_narrative_returns_empty(self, mock_store):
-        db, _ = _make_db_mock()
-
-        auto_mock = MagicMock()
-        auto_mock.get_current_narrative.return_value = None
-
-        with patch('services.database_service.get_shared_db_service', return_value=db), \
-             patch('services.autobiography_service.AutobiographyService', return_value=auto_mock):
+    def test_no_traits_returns_empty(self, mock_store):
+        from unittest.mock import MagicMock, patch
+        mock_dgs = MagicMock()
+        mock_dgs.fetch.return_value = []
+        with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
 
         assert result == ""
 
-    def test_autobiography_failure_returns_empty(self, mock_store):
-        with patch('services.database_service.get_shared_db_service', side_effect=RuntimeError("DB down")):
+    def test_failure_returns_empty(self, mock_store):
+        from unittest.mock import patch
+        with patch('services.data_graph_service.get_data_graph_service', side_effect=RuntimeError("unavailable")):
             from services.goal_strategy_service import _get_user_context
             result = _get_user_context()
 
@@ -197,6 +181,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value="- [explicit] Learn Rust"), \
              patch('services.goal_strategy_service._get_user_context', return_value="Values: engineering growth"), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value="Search for beginner Rust tutorials and bookmark the top three."), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 
@@ -214,6 +199,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value=""), \
              patch('services.goal_strategy_service._get_user_context', return_value=""), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value=None), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 
@@ -240,6 +226,7 @@ class TestGenerateStrategy:
 
         with patch('services.goal_strategy_service._gather_evidence_context', return_value="evidence"), \
              patch('services.goal_strategy_service._get_user_context', return_value="context"), \
+             patch('services.goal_strategy_service._gather_rejected_strategies', return_value=""), \
              patch('services.goal_strategy_service._call_strategy_llm', return_value=""), \
              patch('services.goal_strategy_service._store_strategy') as mock_store_fn:
 

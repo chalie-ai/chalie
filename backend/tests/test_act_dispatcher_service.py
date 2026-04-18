@@ -19,8 +19,6 @@ def _auto_execute_gate():
         'consequence_tier': 0,
         'consequence_name': 'observe',
         'domain': 'test',
-        'domain_confidence': 1.0,
-        'threshold': 0.0,
         'reasoning': 'test override',
     }
     with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
@@ -29,11 +27,16 @@ def _auto_execute_gate():
 
 
 @pytest.fixture
-def service(_auto_execute_gate):
-    """Create an ActDispatcherService with innate-skill registration mocked out."""
-    with patch('services.innate_skills.register_innate_skills'):
-        svc = ActDispatcherService(timeout=2.0)
-        yield svc
+def service(db):
+    """Create an ActDispatcherService with real innate-skill registration.
+
+    Uses the ``db`` fixture so that ToolRegistryService._load_tools() queries
+    the local test DB instead of the real chalie.db on the network mount.
+    SQLite on SMB is unreliable for file locking; without this the fixture hangs
+    indefinitely on the first SELECT to tool_configs.
+    """
+    svc = ActDispatcherService(timeout=2.0)
+    yield svc
 
 
 # ── Unknown / Missing Handler ─────────────────────────────────
@@ -65,19 +68,20 @@ class TestSuccessfulDispatch:
 
     def test_successful_handler_returns_success(self, service):
         """A handler that returns a value produces status=success with the result."""
-        service.handlers['test_action'] = lambda topic, action: {'output': 'ok'}
+        # Use a safe action type to bypass the execution gate
+        service.handlers['recall'] = lambda topic, action: {'output': 'ok'}
 
-        result = service.dispatch_action('topic', {'type': 'test_action'})
+        result = service.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'success'
         assert result['result'] == {'output': 'ok'}
-        assert result['action_type'] == 'test_action'
+        assert result['action_type'] == 'recall'
 
     def test_execution_time_is_tracked(self, service):
         """Result includes a positive execution_time."""
-        service.handlers['test_action'] = lambda topic, action: 'done'
+        service.handlers['recall'] = lambda topic, action: 'done'
 
-        result = service.dispatch_action('topic', {'type': 'test_action'})
+        result = service.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'success'
         assert 'execution_time' in result
@@ -94,9 +98,9 @@ class TestHandlerException:
         def exploding_handler(topic, action):
             raise ValueError("something broke")
 
-        service.handlers['boom'] = exploding_handler
+        service.handlers['recall'] = exploding_handler
 
-        result = service.dispatch_action('topic', {'type': 'boom'})
+        result = service.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'error'
         assert result['confidence'] == 0.0
@@ -110,16 +114,15 @@ class TestTimeout:
 
     def test_slow_handler_returns_timeout(self, _auto_execute_gate):
         """A handler that exceeds the timeout produces status=timeout."""
-        with patch('services.innate_skills.register_innate_skills'):
-            svc = ActDispatcherService(timeout=0.1)
+        svc = ActDispatcherService(timeout=0.1)
 
         def slow_handler(topic, action):
             time.sleep(5)
             return 'too late'
 
-        svc.handlers['slow'] = slow_handler
+        svc.handlers['recall'] = slow_handler
 
-        result = svc.dispatch_action('topic', {'type': 'slow'})
+        result = svc.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'timeout'
         assert result['confidence'] == 0.0
@@ -132,6 +135,8 @@ class TestConfidenceEstimation:
 
     def test_memorize_confidence_is_deterministic(self, service):
         """Deterministic actions like 'memorize' get 0.92 confidence."""
+        # Use the real memorize handler if available, or a lambda
+        # Since we want to pressure test the dispatcher's confidence logic:
         service.handlers['memorize'] = lambda topic, action: 'stored'
 
         result = service.dispatch_action('topic', {'type': 'memorize'})
@@ -172,9 +177,14 @@ class TestConfidenceEstimation:
 
     def test_default_confidence_for_unknown_action_type(self, service):
         """An action type not in deterministic or read sets gets 0.50 confidence."""
+        # This action is not in SAFE_ACTIONS, so it will be blocked by the gate
+        # unless we mock the gate or provide a description that bypasses it.
+        # For a pure confidence test, we'll mock the gate for this specific call.
         service.handlers['custom_thing'] = lambda topic, action: 'result'
 
-        result = service.dispatch_action('topic', {'type': 'custom_thing'})
+        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate') as mock_gate:
+            mock_gate.return_value.evaluate.return_value = {'auto_execute': True, 'consequence_tier': 0}
+            result = service.dispatch_action('topic', {'type': 'custom_thing'})
 
         assert result['confidence'] == pytest.approx(0.50)
 
@@ -195,8 +205,6 @@ class TestExecutionGate:
             'consequence_tier': 3,
             'consequence_name': 'commit',
             'domain': 'general',
-            'domain_confidence': 0.0,
-            'threshold': float('inf'),
             'reasoning': 'Tier 3 (commit) — irreversible; always requires explicit user approval.',
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
@@ -223,8 +231,6 @@ class TestExecutionGate:
             'consequence_tier': 2,
             'consequence_name': 'act',
             'domain': 'general',
-            'domain_confidence': 0.0,
-            'threshold': 0.75,
             'reasoning': 'Would block.',
         }
         with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
@@ -250,12 +256,3 @@ class TestEstimateConfidenceDirectly:
         """Read action with None result gets the lowest read confidence."""
         assert _estimate_confidence('recall', None) == 0.40
 
-    def test_associate_follows_read_rules(self):
-        """'associate' is a read action and follows length-based confidence."""
-        assert _estimate_confidence('associate', 'y' * 101) == 0.75
-        assert _estimate_confidence('associate', 'y' * 50) == 0.60
-        assert _estimate_confidence('associate', 'y') == 0.40
-
-    def test_autobiography_follows_read_rules(self):
-        """'autobiography' is a read action and follows length-based confidence."""
-        assert _estimate_confidence('autobiography', 'z' * 200) == 0.75

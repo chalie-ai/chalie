@@ -1,8 +1,8 @@
 """
 Tool Output Utilities — Shared formatting, sanitization, and telemetry.
 
-Extracted from ToolRegistryService and _CronToolWorker to eliminate
-verbatim duplication across both classes.
+Shared helpers used by ToolRegistryService for result formatting and
+telemetry construction.
 """
 
 import json

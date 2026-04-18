@@ -321,7 +321,7 @@ class AppUpdateService:
                 "message": "An update is already in progress.",
             }
 
-        store.set(IN_PROGRESS_KEY, "1")
+        store.set(IN_PROGRESS_KEY, "1", ex=3600)
 
         backend_dir = APP_ROOT / "backend"
         frontend_dir = APP_ROOT / "frontend"

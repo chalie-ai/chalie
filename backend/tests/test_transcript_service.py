@@ -22,9 +22,9 @@ class TestAppend:
 
         # Verify the entry is in the database
         cursor = db.cursor()
-        cursor.execute("SELECT topic, role, content FROM topic_transcript WHERE id = ?", (rowid,))
+        cursor.execute("SELECT channel, role, content FROM transcript WHERE id = ?", (rowid,))
         row = cursor.fetchone()
-        assert row['topic'] == 'test-topic'
+        assert row['channel'] == 'test-topic'
         assert row['role'] == 'user'
         assert row['content'] == 'Hello, world!'
 
@@ -38,7 +38,7 @@ class TestAppend:
             )
         cursor = db.cursor()
         cursor.execute(
-            "SELECT tool_call_id, tool_name FROM topic_transcript WHERE id = ?",
+            "SELECT tool_call_id, tool_name FROM transcript WHERE id = ?",
             (rowid,),
         )
         row = cursor.fetchone()
@@ -51,7 +51,7 @@ class TestAppend:
         with patch('services.transcript_service._embed_entry'):
             rowid = append('test-topic', 'internal', 'Working notes', internal=True)
         cursor = db.cursor()
-        cursor.execute("SELECT internal FROM topic_transcript WHERE id = ?", (rowid,))
+        cursor.execute("SELECT internal FROM transcript WHERE id = ?", (rowid,))
         assert cursor.fetchone()[0] == 1
 
     def test_append_empty_content_returns_none(self, db):
@@ -77,7 +77,7 @@ class TestAppendBatch:
         assert count == 3
 
         cursor = db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM topic_transcript WHERE topic = 'test'")
+        cursor.execute("SELECT COUNT(*) FROM transcript WHERE channel = 'test'")
         assert cursor.fetchone()[0] == 3
 
     def test_batch_skips_empty(self, db):
@@ -198,7 +198,7 @@ class TestKeywordSearch:
             append('topic-a', 'user', 'Malta weather')
 
         results = _keyword_search('topic-a', 'Malta', limit=5)
-        assert results[0]['topic'] == 'topic-a'
+        assert results[0]['channel'] == 'topic-a'
 
     def test_keyword_search_date_range(self, db):
         from services.transcript_service import _keyword_search, append
@@ -217,29 +217,106 @@ class TestKeywordSearch:
 
 
 class TestGetRecentTopicContext:
-    def test_get_recent_accepts_topic_context(self, db):
-        """get_recent works when a TopicContext is passed."""
+    def test_get_recent_works(self, db):
+        """get_recent retrieves entries correctly."""
         from services.transcript_service import append, get_recent
-        from services.topic_context import TopicContext
 
-        ctx = TopicContext(topic='test')
         with patch('services.transcript_service._embed_entry'):
             append('test', 'user', 'Hello')
 
-        results = get_recent('test', _context=ctx)
+        results = get_recent('test')
         assert len(results) == 1
-        assert ctx.failed_sections == []
 
-    def test_get_recent_records_failure_to_context(self):
-        """When DB fails, the failure is recorded on TopicContext."""
+    def test_get_recent_returns_empty_on_db_failure(self):
+        """When DB fails, get_recent returns empty list."""
         from services.transcript_service import get_recent
-        from services.topic_context import TopicContext
 
-        ctx = TopicContext(topic='test')
         with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
-            results = get_recent('test', _context=ctx)
+            results = get_recent('test')
 
         assert results == []
-        assert len(ctx.failed_sections) == 1
-        assert ctx.failed_sections[0][0] == 'transcript_recent'
-        assert 'db locked' in ctx.failed_sections[0][1]
+
+
+class TestPerChannelExtractionCounter:
+    """_channel_insert_counts is keyed per channel, not globally.
+
+    Two independent channels each accumulate their own counter. Hitting the
+    threshold on channel A must not fire on channel B, and vice versa.
+    """
+
+    def test_each_channel_has_independent_counter(self):
+        """Inserting (first_threshold-1) times on channel-A then once on channel-B
+        must NOT trigger extraction on channel-B (its count is only 1)."""
+        import services.transcript_service as ts
+
+        fired_channels = []
+
+        def _fake_trigger(channel, rowid):
+            fired_channels.append(channel)
+
+        original_counts = ts._channel_insert_counts.copy()
+        original_fired = ts._channel_first_fired.copy()
+        ts._channel_insert_counts.clear()
+        ts._channel_first_fired.clear()
+        first_threshold = ts._FIRST_EXTRACTION
+        interval = ts._EXTRACTION_INTERVAL
+
+        try:
+            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
+                # Push channel-A to just below the first-fire threshold
+                for i in range(first_threshold - 1):
+                    ts._maybe_trigger_extraction('channel-A', i)
+
+                # channel-A has not fired yet
+                assert 'channel-A' not in fired_channels
+
+                # One insert on channel-B — must NOT fire (its count is 1)
+                ts._maybe_trigger_extraction('channel-B', 99)
+                assert 'channel-B' not in fired_channels
+
+                # The first_threshold-th insert on channel-A now fires
+                ts._maybe_trigger_extraction('channel-A', first_threshold)
+                assert fired_channels == ['channel-A']
+
+                # channel-A counter has reset; next (interval-1) inserts must not fire again
+                fired_channels.clear()
+                for i in range(interval - 1):
+                    ts._maybe_trigger_extraction('channel-A', i + first_threshold + 1)
+                assert fired_channels == []
+
+        finally:
+            ts._channel_insert_counts.clear()
+            ts._channel_insert_counts.update(original_counts)
+            ts._channel_first_fired.clear()
+            ts._channel_first_fired.update(original_fired)
+
+    def test_two_channels_fire_independently(self):
+        """Both channels firing at first-fire threshold doesn't interfere."""
+        import services.transcript_service as ts
+
+        fired_channels = []
+
+        def _fake_trigger(channel, rowid):
+            fired_channels.append(channel)
+
+        original_counts = ts._channel_insert_counts.copy()
+        original_fired = ts._channel_first_fired.copy()
+        ts._channel_insert_counts.clear()
+        ts._channel_first_fired.clear()
+
+        try:
+            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
+                first_threshold = ts._FIRST_EXTRACTION
+                for i in range(first_threshold):
+                    ts._maybe_trigger_extraction('alpha', i)
+                for i in range(first_threshold):
+                    ts._maybe_trigger_extraction('beta', i)
+
+                assert fired_channels.count('alpha') == 1
+                assert fired_channels.count('beta') == 1
+
+        finally:
+            ts._channel_insert_counts.clear()
+            ts._channel_insert_counts.update(original_counts)
+            ts._channel_first_fired.clear()
+            ts._channel_first_fired.update(original_fired)

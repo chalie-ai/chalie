@@ -20,20 +20,15 @@ import logging
 
 from utils.logger import Logger
 
-# Force numpy to fully initialize before any background thread imports it.
-# Python's import system isn't fully thread-safe for nested imports — concurrent
-# first-imports of numpy from multiple threads cause a circular import in
-# numpy._typing (NDArray not yet available from the partially-initialized module),
-# which poisons sys.modules and makes every subsequent embedding call fail with
-# "maximum recursion depth exceeded".
+# Force numpy/transformers to fully initialize before any background thread
+# imports them. Python's import system isn't fully thread-safe for nested
+# imports — concurrent first-imports from multiple threads cause a circular
+# import in numpy._typing (NDArray not yet available from the
+# partially-initialized module), which poisons sys.modules and makes every
+# subsequent embedding call fail with "maximum recursion depth exceeded".
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
-    import torch  # noqa: F401 — thread-safety warm-up
     import transformers  # noqa: F401 — thread-safety warm-up
-    # These heavy imports must complete in the main thread before any background
-    # thread tries to import them. Python's import system isn't fully thread-safe
-    # for complex nested imports — concurrent first-imports from multiple threads
-    # cause circular import errors in numpy._typing that poison sys.modules.
 except Exception as _e:
     import sys as _sys
     print(f"[BOOT] CRITICAL: import failed: {_e}", file=_sys.stderr, flush=True)
@@ -66,17 +61,14 @@ def main():
         config["models_dir"] = args.models_dir
     runtime_config.set(config)
 
-    # Preload embedding model in a background thread so Flask starts immediately.
-    # On first run the model (~438MB) may need to download from HuggingFace;
-    # blocking here would prevent the onboarding page from loading for 5+ minutes.
-    def _preload_embedding_model():
+    # Preload models in a single background thread so Flask starts immediately.
+    # Models are loaded sequentially to avoid concurrent memory spikes that
+    # exceed the Docker VM limit (embedding + ONNX loaded in parallel = OOM).
+    def _preload_models():
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
             svc = get_embedding_service()
-            # Warm the ONNX session — first encode() triggers model load and,
-            # on first run, a ~300MB HuggingFace download. Running here so the
-            # user never hits that delay during an actual conversation.
             svc.generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
@@ -84,56 +76,100 @@ def main():
             logger.warning(f"[System] Embedding model preload failed: {e}")
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
-    import threading as _threading
-    _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
-
-    # Download/update ONNX classifiers, then warm the inference path.
-    def _preload_onnx_models():
         try:
             logger.info("[System] Checking ONNX models (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            # Download missing models / version-check existing ones
             svc.ensure_models()
-            # Warm the mode-tiebreaker — load session + tokenizer + throwaway inference
-            label, _ = svc.predict("mode-tiebreaker", "warmup")
-            if label is not None:
-                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
-            else:
-                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
+            # fire before any user request arrives. The encoder session is already
+            # warm (loaded by embedding preload above), so registration is fast.
+            # _get_head() calls _register_task() which emits the boot marker and
+            # validates the sha256 pin — any mismatch raises RuntimeError here.
+            from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
+            _failures: list[tuple[str, str]] = []
+            for _task, _ in _CLASSIFIER_REGISTRY:
+                try:
+                    svc._get_head(_task)
+                except RuntimeError as _reg_err:
+                    # sha256 gate refused this task. Surface this loudly — silent
+                    # fallback in production would defeat the boot-pin invariant.
+                    logger.error(
+                        f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
+                        f"reason={_reg_err}"
+                    )
+                    _failures.append((_task, str(_reg_err)))
+            svc._failed_registrations = _failures
             svc._ready = True
+            if _failures:
+                logger.error(
+                    f"[System] ONNX classifier DEGRADED — {len(_failures)} task(s) "
+                    f"failed registration: {[t for t, _ in _failures]} — health "
+                    f"endpoint will report not-ready until resolved"
+                )
+            else:
+                logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
-    _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
+    import threading as _threading
+    _threading.stack_size(2 * 1024 * 1024)
+    _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
-    # Initialize SQLite database
+    # Initialize SQLite database — declarative convergence
     from services.database_service import get_shared_db_service
-    from services.schema_service import SchemaService
-    from services.config_service import ConfigService
-
-    episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-    embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
+    from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
-    schema_service = SchemaService(database_service, embedding_dimensions)
+    convergence = SchemaConvergenceService(database_service)
+    convergence.converge()
 
-    if not schema_service.database_exists():
-        logger.info("Initializing database...")
+    # One-time transcript rebuild (runs exactly once; sentinel file prevents re-runs)
+    try:
+        from migrate_transcript_rebuild import run_once_on_boot
+        run_once_on_boot(db_path=database_service.db_path)
+    except Exception as _mig_err:
+        logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
-    # Always apply schema.sql — every CREATE TABLE/INDEX uses IF NOT EXISTS, so this is
-    # fully idempotent. Running it on every startup ensures new tables added in any commit
-    # are created in existing databases without requiring an explicit migration.
-    schema_service.initialize_schema()
-    current_version = schema_service.schema_version()
-    logger.info(f"Schema applied (version {current_version})")
+    # Seed data_graph from legacy knowledge table (runs once — idempotent check inside)
+    try:
+        from services.data_graph_service import seed_from_legacy_knowledge
+        seed_from_legacy_knowledge(database_service)
+    except Exception as _seed_err:
+        logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
 
-    # Always ensure vec tables exist — idempotent, repairs existing DBs missing new tables
-    schema_service.ensure_vec_tables()
+    # Drop zombie `invoked_by` column from tool_calls (NOT NULL, never populated by new code)
+    try:
+        import os as _os
+        _drop_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-calls-drop-invoked-by-v1.done',
+        )
+        if not _os.path.exists(_drop_sentinel):
+            with database_service.connection() as _conn:
+                # Check if column still exists before attempting drop
+                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
+                if 'invoked_by' in _cols:
+                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN invoked_by")
+                    _conn.commit()
+                    logger.info("[Startup] Dropped zombie invoked_by column from tool_calls")
+            with open(_drop_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _drop_err:
+        logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
-    # Run pending migrations
-    logger.info("Checking for pending database migrations...")
-    database_service.run_pending_migrations()
+    # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
+    try:
+        _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
+        if not _os.path.exists(_sentinel):
+            with database_service.connection() as _conn:
+                _conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
+                _conn.commit()
+            with open(_sentinel, 'w') as _f:
+                _f.write('done')
+            logger.info("[Startup] episodes_fts rebuilt from content table")
+    except Exception as _fts_err:
+        logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
 
     # Clean up expired auth sessions from SQLite
     try:
@@ -178,15 +214,9 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.cognitive_drift_engine import cognitive_drift_worker
-    from services.experience_assimilation_service import experience_assimilation_worker
-    from services.thread_expiry_service import thread_expiry_worker
-    from services.episodic_memory_observer import episodic_memory_observer_worker
+    from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
-    from services.autobiography_service import autobiography_synthesis_worker
-    from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
 
@@ -194,15 +224,9 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("cognitive-drift-engine", cognitive_drift_worker)
-    manager.register_service("experience-assimilation-service", experience_assimilation_worker)
-    manager.register_service("thread-expiry-service", thread_expiry_worker)
-    manager.register_service("episodic-memory-observer", episodic_memory_observer_worker)
+    manager.register_service("dmn-service", dmn_worker)
     manager.register_service("scheduler-service", scheduler_worker)
-    manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
 
@@ -215,9 +239,9 @@ def main():
     from workers.interface_daemon_worker import interface_daemon_worker
     manager.register_service("interface-daemon-watcher", interface_daemon_worker)
 
-    # Moment enrichment service
-    from services.moment_enrichment_service import moment_enrichment_worker
-    manager.register_service("moment-enrichment-service", moment_enrichment_worker)
+    # Moment context enrichment service (6h worker)
+    from services.moment_context_service import moment_context_worker
+    manager.register_service("moment-context-service", moment_context_worker)
 
     # Self-model service (interoception — epistemic, operational, capability awareness)
     from services.self_model_service import self_model_worker
@@ -239,19 +263,14 @@ def main():
                   "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
-    # Register cron-triggered tools
-    registry = None
+    # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        for tool in registry.get_cron_tools():
-            worker_func = registry.create_cron_worker(tool)
-            manager.register_service(f"tool-{tool['name']}-service", worker_func)
-        tool_count = len(registry.get_tool_names())
+        tool_count = len(ToolRegistryService().get_tool_names())
         if tool_count > 0:
             logger.info(f"[Startup] Tool registry loaded: {tool_count} tools")
     except Exception as e:
-        logger.warning(f"[Startup] Tool cron registration failed: {e}")
+        logger.warning(f"[Startup] Tool registry load failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:
@@ -271,33 +290,28 @@ def main():
     try:
         def _bootstrap_trait_sentence():
             try:
-                from services.database_service import get_shared_db_service
-                from services.knowledge_service import KnowledgeService
-                db = get_shared_db_service()
-                ks = KnowledgeService(db)
+                from services.data_graph_service import get_data_graph_service
+
+                dgs = get_data_graph_service()
 
                 # Already exists — nothing to do
-                existing = ks.get('system', 'user_summary')
-                if existing and existing.get('value'):
+                existing = dgs.fetch(kinds=['system'], limit=1)
+                summary_row = next((r for r in existing if r.get('key') == 'user_summary'), None)
+                if summary_row and summary_row.get('value'):
                     logger.info("[Startup] User trait sentence exists")
                     return
 
-                # No sentence yet — check if traits exist and synthesize
-                traits = db.execute_query(
-                    "SELECT key, value, confidence, decay_class FROM knowledge "
-                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
-                    "ORDER BY decay_class DESC, confidence DESC"
-                )
+                # No sentence yet — synthesize from user_specific rows
+                traits = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC', limit=50)
                 if not traits:
                     return
 
-                trait_lines = []
-                for row in traits:
-                    key = row['key'] if isinstance(row, dict) else row[0]
-                    value = row['value'] if isinstance(row, dict) else row[1]
-                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
-                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
-                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+                trait_lines = [
+                    f"{r['key']}: {r['value']} (weight: {r.get('retrieval_weight', 1.0):.2f})"
+                    for r in traits if r.get('key') and r.get('value')
+                ]
+                if not trait_lines:
+                    return
 
                 import os
                 prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'trait-synthesis.md')
@@ -317,48 +331,51 @@ def main():
                 if not sentence:
                     return
 
-                ks.store(
-                    kind='fact', entity='system', key='user_summary',
-                    value=sentence, decay_class='permanent',
-                    confidence=1.0, source='trait_synthesis',
-                )
-                logger.info("[Startup] User trait sentence synthesized from %d traits", len(traits))
+                dgs.store(kind='system', key='user_summary', value=sentence, source='trait_synthesis')
+                logger.info("[Startup] User trait sentence synthesized from %d traits", len(trait_lines))
             except Exception as e:
                 logger.warning(f"[Startup] Trait sentence bootstrap failed: {e}")
         threading.Thread(target=_bootstrap_trait_sentence, daemon=True, name="trait-sentence-bootstrap").start()
     except Exception as e:
         logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
 
-    # Warm search router embedding cache (background thread)
+    # Verify search routing embeddings are present
     try:
-        def _warm_search_cache():
-            try:
-                from tools.search.router import _ensure_cache
-                _ensure_cache()
+        import os as _os
+        import sqlite3 as _sql
+        _search_db = _os.path.join(
+            _os.path.dirname(__file__), "tools", "search", "assets", "search_tool_providers.sqlite"
+        )
+        if _os.path.exists(_search_db):
+            _c = _sql.connect(_search_db)
+            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            _c.close()
+            if "example_embeddings" in _tables:
                 logger.info("[Startup] Search router cache ready")
-            except Exception as e:
-                logger.warning(f"[Startup] Search router cache warmup failed: {e}")
-        threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
+            else:
+                logger.warning("[Startup] Search embeddings missing — run 'python -m utils.generate_search_cache'")
+        else:
+            logger.warning("[Startup] search_tool_providers.sqlite not found")
     except Exception as e:
-        logger.warning(f"[Startup] Search cache warmup start failed: {e}")
+        logger.warning(f"[Startup] Search cache check failed: {e}")
 
-    # Hourly cleanup for stale pending contradictions
-    def _pending_contradiction_cleanup_loop():
-        import time
-        from services.pending_contradiction_service import PendingContradictionService
-        from services.database_service import get_shared_db_service
-        while True:
-            try:
-                db = get_shared_db_service()
-                svc = PendingContradictionService(db)
-                count = svc.cleanup_stale()
-                if count > 0:
-                    logging.info(f"[PENDING_CONTRADICTION] Cleanup: processed {count} stale records")
-            except Exception as e:
-                logging.warning(f"[PENDING_CONTRADICTION] Cleanup error: {e}")
-            time.sleep(3600)
-
-    threading.Thread(target=_pending_contradiction_cleanup_loop, daemon=True, name="pending-contradiction-cleanup").start()
+    # Verify concept LUT is present and has embeddings
+    try:
+        _lut_db = _os.path.join(
+            _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
+        )
+        if _os.path.exists(_lut_db):
+            _c = _sql.connect(_lut_db)
+            _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            _c.close()
+            if "lut_embeddings" in _tables:
+                logger.info("[Startup] Concept LUT ready: %s", _lut_db)
+            else:
+                logger.warning("[Startup] Concept LUT embeddings missing — run 'cd backend && python -m utils.generate_concept_lut'")
+        else:
+            logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
+    except Exception as e:
+        logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):

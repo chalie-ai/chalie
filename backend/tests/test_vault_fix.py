@@ -11,7 +11,7 @@ Scenarios covered (≤10 total):
    decrypt_failed=True and still returning the good one intact
 
 Each test:
-- Uses the real ``db`` fixture (schema.sql via SchemaService, patched singleton)
+- Uses the real ``db`` fixture (schema.sql via SchemaConvergenceService)
 - Uses the real ``store`` fixture (isolated MemoryStore, same production class)
 - Uses the real VaultService, real ProviderDbService, real user_auth blueprint
 - Zero mocks, zero patches of production code
@@ -28,7 +28,6 @@ import services.vault_service as _vault_mod
 from api.user_auth import user_auth_bp
 from services.vault_service import VaultService, _vault_state
 from services.database_service import DatabaseService
-from services.schema_service import SchemaService
 from services.provider_db_service import ProviderDbService
 
 
