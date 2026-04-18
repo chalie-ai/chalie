@@ -571,7 +571,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     )
 
                     # Pop transient fields — not persisted
-                    has_open_loop = ep.pop('has_open_loop', False)  # noqa: F841 (consumed above)
+                    ep.pop('has_open_loop', None)
                     update_id = ep.pop('update_id', None)
                     ep.pop('delete_id', None)  # defensive — should be None here
 
