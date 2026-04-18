@@ -55,42 +55,31 @@ def make_trait_row(
 # but the raw query returns tuples.  This factory returns a dict matching
 # the service's output format (since the service converts internally).
 
-def make_episode_row(
-    episode_id="ep-001",
-    gist="Weather conversation about Malta",
-    salience=5,
-    channel="weather",
-    created_at=None,
-    last_accessed_at=None,
-    emotional_valence=None,
-    emotional_arousal=None,
-    transcript_ids=None,
-    transcript_id_start=None,
-    transcript_id_end=None,
-    consolidated_from=None,
-    consolidated_into=None,
-    storage_strength=1.0,
-    retrieval_weight=1.0,
-):
+_EPISODE_DEFAULTS = {
+    "id": "ep-001",
+    "gist": "Weather conversation about Malta",
+    "salience": 5,
+    "channel": "weather",
+    "created_at": None,
+    "last_accessed_at": None,
+    "emotional_valence": None,
+    "emotional_arousal": None,
+    "transcript_ids": "[]",
+    "transcript_id_start": None,
+    "transcript_id_end": None,
+    "consolidated_from": "[]",
+    "consolidated_into": None,
+    "storage_strength": 1.0,
+    "retrieval_weight": 1.0,
+}
+
+
+def make_episode_row(**overrides):
     """Return a dict matching episodic retrieval service output."""
-    now = datetime.now(timezone.utc)
-    return {
-        "id": episode_id,
-        "gist": gist,
-        "salience": salience,
-        "channel": channel,
-        "created_at": created_at or now,
-        "last_accessed_at": last_accessed_at,
-        "emotional_valence": emotional_valence,
-        "emotional_arousal": emotional_arousal,
-        "transcript_ids": transcript_ids or "[]",
-        "transcript_id_start": transcript_id_start,
-        "transcript_id_end": transcript_id_end,
-        "consolidated_from": consolidated_from or "[]",
-        "consolidated_into": consolidated_into,
-        "storage_strength": storage_strength,
-        "retrieval_weight": retrieval_weight,
-    }
+    row = {**_EPISODE_DEFAULTS, **overrides}
+    if row["created_at"] is None:
+        row["created_at"] = datetime.now(timezone.utc)
+    return row
 
 
 # ─── providers ───────────────────────────────────────────────────────
