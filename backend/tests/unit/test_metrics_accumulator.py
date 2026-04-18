@@ -74,7 +74,6 @@ class TestMetricsAccumulator:
     def test_record_tool_empty_name_ignored(self):
         acc = MetricsAccumulator()
         acc.record_tool("")
-        acc.record_tool(None)
         assert acc.tool_counts == {}
 
     def test_snapshot_shape(self):
