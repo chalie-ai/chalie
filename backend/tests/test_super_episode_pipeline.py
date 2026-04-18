@@ -138,9 +138,7 @@ def _sync_fts(db, episode_id: str, gist: str) -> None:
         pass
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# walk_up_to_apex
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── walk_up_to_apex ────────────────────────────────────────────────────────────
 
 
 class TestWalkUpToApex:
@@ -219,9 +217,7 @@ class TestWalkUpToApex:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# find_super_candidates
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── find_super_candidates ──────────────────────────────────────────────────────
 
 
 class TestFindSuperCandidates:
@@ -344,9 +340,7 @@ class TestFindSuperCandidates:
         assert sorted(clusters[0]) == sorted([a, b, c])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Retrieval apex-promotion — real FTS lane, no mocks
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Retrieval apex-promotion — real FTS lane, no mocks ─────────────────────────
 
 
 class TestRetrievalApexPromotion:
@@ -462,9 +456,7 @@ class TestRetrievalApexPromotion:
         )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Super-episode write contract — store_episode() + set_consolidated_into()
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Super-episode write contract — store_episode() + set_consolidated_into() ───
 
 
 class TestSuperEpisodeWriteContract:
