@@ -165,6 +165,7 @@ class OutputService:
         topic: str,
         response: str,
         source: str = 'task',
+        metrics: dict = None,
     ) -> str:
         """
         Enqueue a proactive/background output (goal pursuits, reminders, etc.).
@@ -176,6 +177,8 @@ class OutputService:
             topic: Conversation topic / thread identifier
             response: The message text to deliver
             source: Source identifier for SSE event type mapping
+            metrics: Optional per-turn metrics dict (tokens_total, tools,
+                response_time_s, …) for DMN / goal-pursuit / scheduled flows.
 
         Returns:
             str: UUID of the enqueued output
@@ -188,6 +191,7 @@ class OutputService:
             confidence=1.0,
             generation_time=0.0,
             original_metadata=metadata,
+            metrics=metrics,
         )
 
     def _send_to_notification_tools(self, message: str) -> None:
