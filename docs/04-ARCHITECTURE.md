@@ -168,7 +168,7 @@ Built-in cognitive skills always available to the LLM:
 ## Worker Processes (`backend/workers/`)
 
 ### Workers (Daemon Threads)
-- **Episodic Memory Worker** — Utility functions for goal emergence detection; episode extraction itself runs inline via the per-channel rolling transcript trigger (first fire at 25 inserts, then every 20).
+- **Episodic Memory Worker** — Utility functions for goal emergence detection; episode extraction itself runs inline via the per-channel rolling transcript trigger. Trigger is DB-state-driven: fires whenever `COUNT(transcript.id > MAX(episodes.transcript_id_end))` for the channel reaches 20, independent of process-local state, so restarts never desync from accumulated history.
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
