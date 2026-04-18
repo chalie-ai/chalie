@@ -37,7 +37,7 @@ Each provider needs a **name** (any label you want), the **platform**, a **model
 **Ollama** — Runs entirely on your machine. No API key needed.
 - **Platform**: Ollama
 - **Host**: `http://localhost:11434`
-- **Model**: Any model you've pulled (e.g., `gemma3:4b`). Run `ollama list` to see available models.
+- **Model**: Chalie queries your Ollama host automatically and shows every installed model. Pick from the populated list; hit **Refresh** to re-sync after running `ollama pull`.
 
 #### Cloud
 
@@ -126,6 +126,22 @@ curl -X DELETE http://localhost:8081/providers/{id} \
 curl -X PUT http://localhost:8081/providers/jobs/frontal-cortex \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"provider_id": 1}'
+```
+
+### List Ollama Models From a Host
+Backend proxy around `GET {host}/api/tags`. Used by the UI to populate the model picker; host is validated (http/https only, cloud-metadata / link-local blocked) to prevent SSRF.
+```bash
+curl "http://localhost:8081/providers/ollama/models?host=http://localhost:11434" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### List Anthropic Models
+Backend proxy around the Anthropic models endpoint. API key is sent in the request body (never as a query param) to keep it out of access logs.
+```bash
+curl -X POST http://localhost:8081/providers/anthropic/models \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "sk-ant-..."}'
 ```
 
 ## Security Best Practices

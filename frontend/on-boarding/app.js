@@ -7,6 +7,7 @@ const API_BASE = '';
 // State
 // ==========================================
 let currentPlatform = 'ollama';
+let ollamaSelectedModel = null;
 
 const PLATFORM_CONFIG = {
     ollama: {
@@ -161,19 +162,34 @@ function selectPlatform(platform) {
     // Show/hide api key field
     document.getElementById('setupApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
-    // Update model input placeholder
-    const modelInput = document.getElementById('setupModel');
-    modelInput.placeholder = config.modelPlaceholder;
+    // Ollama: show model picker panel, hide free-text model group and test-connection row
+    const ollamaGroup = document.getElementById('ollamaModelGroup');
+    const textModelGroup = document.getElementById('setupModelGroup');
+    const testConnRow = document.getElementById('testConnectionRow');
+    if (platform === 'ollama') {
+        if (ollamaGroup) ollamaGroup.style.display = '';
+        if (textModelGroup) textModelGroup.style.display = 'none';
+        if (testConnRow) testConnRow.style.display = 'none';
+        // Reset selection state when switching to Ollama
+        ollamaSelectedModel = null;
+    } else {
+        if (ollamaGroup) ollamaGroup.style.display = 'none';
+        if (textModelGroup) textModelGroup.style.display = '';
+        if (testConnRow) testConnRow.style.display = '';
 
-    // Update datalist
-    const datalist = document.getElementById('modelSuggestions');
-    datalist.innerHTML = '';
-    if (config.models.length > 0 && platform !== 'ollama') {
-        config.models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m;
-            datalist.appendChild(opt);
-        });
+        // Update model input placeholder and datalist for non-Ollama platforms
+        const modelInput = document.getElementById('setupModel');
+        if (modelInput) modelInput.placeholder = config.modelPlaceholder;
+
+        const datalist = document.getElementById('modelSuggestions');
+        if (datalist) {
+            datalist.innerHTML = '';
+            config.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                datalist.appendChild(opt);
+            });
+        }
     }
 
     // For Anthropic: fetch models when api key is entered
@@ -197,30 +213,101 @@ function debounce(fn, delay) {
 
 async function fetchAnthropicModels(key, datalistId) {
     try {
-        const res = await fetch('https://api.anthropic.com/v1/models', {
-            headers: {
-                'x-api-key': key,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true',
-            }
+        const res = await apiFetch('/providers/anthropic/models', {
+            method: 'POST',
+            body: JSON.stringify({ api_key: key }),
         });
         if (res.ok) {
             const data = await res.json();
             const datalist = document.getElementById(datalistId);
-            datalist.innerHTML = '';
-            (data.data || []).forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.id;
-                datalist.appendChild(opt);
-            });
+            if (datalist) {
+                datalist.innerHTML = '';
+                (data.models || []).forEach(id => {
+                    const opt = document.createElement('option');
+                    opt.value = id;
+                    datalist.appendChild(opt);
+                });
+            }
+        } else {
+            console.warn('[providers] Anthropic model fetch failed:', res.status);
         }
     } catch (e) {
-        // Ignore
+        console.warn('[providers] Anthropic model fetch error:', e);
     }
 }
 
 // ==========================================
-// Connection Test (all providers via backend)
+// Ollama Model Fetch & Picker
+// ==========================================
+async function refreshOllamaModels() {
+    const statusEl = document.getElementById('ollamaRefreshStatus');
+    if (statusEl) {
+        statusEl.textContent = 'Fetching models…';
+        statusEl.className = '';
+    }
+
+    const host = (document.getElementById('setupHost') || {}).value || 'http://localhost:11434';
+
+    try {
+        const res = await apiFetch(`/providers/ollama/models?host=${encodeURIComponent(host.trim() || 'http://localhost:11434')}`);
+        if (res.ok) {
+            const data = await res.json();
+            const names = data.models || [];
+            if (statusEl) {
+                statusEl.textContent = names.length > 0 ? `${names.length} model(s) available` : 'Connected — no models installed yet';
+                statusEl.className = 'status-ok';
+            }
+            renderOllamaModelPicker(names);
+        } else {
+            const err = await res.json().catch(() => ({}));
+            if (statusEl) {
+                statusEl.textContent = `✗ ${err.error || 'Connection failed'}`;
+                statusEl.className = 'status-err';
+            }
+            renderOllamaModelPicker([]);
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.textContent = '✗ Cannot reach backend';
+            statusEl.className = 'status-err';
+        }
+        renderOllamaModelPicker([]);
+    }
+}
+
+function renderOllamaModelPicker(names) {
+    const container = document.getElementById('ollamaModelPicker');
+    if (!container) return;
+
+    // Keep previously selected model if it still appears in the new list
+    if (ollamaSelectedModel && !names.includes(ollamaSelectedModel)) {
+        ollamaSelectedModel = null;
+    }
+
+    if (names.length === 0) {
+        container.innerHTML = '<div class="ollama-empty-state">No models found. Is Ollama running on this host?<br><button type="button" class="btn-retry" id="ollamaRetryBtn">Retry</button></div>';
+        const retryBtn = document.getElementById('ollamaRetryBtn');
+        if (retryBtn) retryBtn.addEventListener('click', refreshOllamaModels);
+        return;
+    }
+
+    container.innerHTML = names.map(n => {
+        const sel = n === ollamaSelectedModel;
+        return `<button type="button" class="ollama-model-chip${sel ? ' selected' : ''}" data-model="${n.replace(/"/g, '&quot;')}">${n.replace(/</g, '&lt;')}</button>`;
+    }).join('');
+
+    container.querySelectorAll('.ollama-model-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            ollamaSelectedModel = chip.dataset.model;
+            container.querySelectorAll('.ollama-model-chip').forEach(c => {
+                c.classList.toggle('selected', c.dataset.model === ollamaSelectedModel);
+            });
+        });
+    });
+}
+
+// ==========================================
+// Connection Test (non-Ollama providers via backend)
 // ==========================================
 async function testProviderConnection() {
     const statusEl = document.getElementById('connectionStatus');
@@ -234,9 +321,6 @@ async function testProviderConnection() {
     const model = document.getElementById('setupModel').value.trim();
     if (model) body.model = model;
 
-    if (config.hasHost) {
-        body.host = document.getElementById('setupHost').value.trim() || 'http://localhost:11434';
-    }
     if (config.hasApiKey) {
         const key = document.getElementById('setupApiKey').value.trim();
         if (key) body.api_key = key;
@@ -304,7 +388,30 @@ function setupEventListeners() {
         await submitLoginForm();
     });
 
-    // Test connection button
+    // Ollama: refresh models button (single code path)
+    let _ollamaRefreshInFlight = false;
+    const _safeRefreshOllamaModels = async () => {
+        if (_ollamaRefreshInFlight) return;
+        _ollamaRefreshInFlight = true;
+        try { await refreshOllamaModels(); } finally { _ollamaRefreshInFlight = false; }
+    };
+    document.getElementById('ollamaRefreshBtn').addEventListener('click', _safeRefreshOllamaModels);
+
+    // Host input: clear stale picker state as soon as the value changes,
+    // so a model selection from the previous host can't silently survive.
+    document.getElementById('setupHost').addEventListener('input', () => {
+        if (currentPlatform !== 'ollama') return;
+        ollamaSelectedModel = null;
+        renderOllamaModelPicker([]);
+    });
+
+    // Ollama: host blur → trigger refresh (guarded against double-fire when
+    // the blur was caused by clicking the Refresh button itself).
+    document.getElementById('setupHost').addEventListener('blur', () => {
+        if (currentPlatform === 'ollama') _safeRefreshOllamaModels();
+    });
+
+    // Test connection button (non-Ollama platforms only)
     document.getElementById('testConnectionBtn').addEventListener('click', () => {
         testProviderConnection();
     });
@@ -432,7 +539,20 @@ async function submitSetupForm() {
     const platform = currentPlatform;
     const config = PLATFORM_CONFIG[platform];
 
-    const modelVal = document.getElementById('setupModel').value.trim();
+    // For Ollama, model comes from the picker; for others from the text input.
+    let modelVal;
+    if (platform === 'ollama') {
+        modelVal = ollamaSelectedModel || '';
+        if (!modelVal) {
+            showToast('Select a model from the list first', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Save Provider';
+            return;
+        }
+    } else {
+        modelVal = document.getElementById('setupModel').value.trim();
+    }
+
     const body = {
         name: document.getElementById('setupName').value.trim(),
         platform: platform,
