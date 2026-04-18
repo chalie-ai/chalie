@@ -1152,7 +1152,7 @@ class GeminiService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
             from google import genai
         except ImportError:
@@ -1161,23 +1161,55 @@ class GeminiService:
                 "Run: pip install google-genai"
             )
 
-        api_key = _resolve_api_key(self._config)
-        client = genai.Client(api_key=api_key)
-
+        client = genai.Client(api_key=_resolve_api_key(self._config))
         start_time = time.time()
-
-        # Convert normalized messages to Gemini format
         gemini_contents = _gemini_convert_messages(messages)
+        gen_config_kwargs = self._gemini_build_config(genai, system_prompt, tools, thinking_mode)
+        response = _call_with_retry(
+            lambda: self._gemini_generate(client, genai, gemini_contents, gen_config_kwargs)
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+        text, tool_calls, finish_reason = self._gemini_parse_response(response)
 
-        gen_config_kwargs = {'system_instruction': system_prompt}
+        if not text and not tool_calls:
+            logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
+            raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
+
+        usage = getattr(response, 'usage_metadata', None)
+        tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
+        tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
+        tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
+
+        logger.info(
+            f"[GeminiService] model={self.model}, "
+            f"tokens={tokens_input}+{tokens_output}, "
+            f"latency={latency_ms}ms"
+            + (f", tools={len(tool_calls)}" if tool_calls else "")
+        )
+
+        return LLMResponse(
+            text=text,
+            model=self.model,
+            provider='gemini',
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            tokens_thinking=tokens_thinking,
+            latency_ms=latency_ms,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=finish_reason,
+        )
+
+    def _gemini_build_config(self, genai, system_prompt: str, tools: list, thinking_mode: str) -> dict:
+        """Build the GenerateContentConfig kwargs dict for a multi-turn request."""
+        cfg: dict = {'system_instruction': system_prompt}
         if self.format == 'json' and not tools:
-            gen_config_kwargs['response_mime_type'] = 'application/json'
+            cfg['response_mime_type'] = 'application/json'
         if tools:
             # Gemini: parameters follow OpenAPI schema subset (stricter than JSON Schema).
             # Standard types only. No default values in schema. Custom types rejected.
             # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf/anyOf.
             # Ref: https://ai.google.dev/gemini-api/docs/function-calling
-            gen_config_kwargs['tools'] = [
+            cfg['tools'] = [
                 genai.types.Tool(function_declarations=[
                     genai.types.FunctionDeclaration(
                         name=t['name'],
@@ -1187,47 +1219,46 @@ class GeminiService:
                     for t in tools
                 ])
             ]
-
         _thinking_budgets = {'medium': 4096, 'high': 16384}
         if thinking_mode in _thinking_budgets:
-            gen_config_kwargs['thinking_config'] = genai.types.ThinkingConfig(
+            cfg['thinking_config'] = genai.types.ThinkingConfig(
                 thinking_budget=_thinking_budgets[thinking_mode]
             )
             logger.info(
                 f"[THINKING] native flag passed: provider=gemini mode={thinking_mode} model={self.model}"
             )
+        return cfg
 
-        def _call():
-            try:
+    def _gemini_generate(self, client, genai, gemini_contents, gen_config_kwargs: dict):
+        """Execute a single generate_content call, mapping provider errors to typed exceptions."""
+        try:
+            return client.models.generate_content(
+                model=self.model,
+                contents=gemini_contents,
+                config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+            )
+        except Exception as e:
+            ename = type(e).__name__
+            if 'ResourceExhausted' in ename or '429' in str(e):
+                raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
+            if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
+                raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
+            if 'thinking_config' in gen_config_kwargs and (
+                'thinking' in str(e).lower() or 'unsupported' in str(e).lower()
+            ):
+                logger.info(
+                    f"[THINKING] native flag rejected by provider=gemini model={self.model} — retried without"
+                )
+                fallback_kwargs = {k: v for k, v in gen_config_kwargs.items() if k != 'thinking_config'}
                 return client.models.generate_content(
                     model=self.model,
                     contents=gemini_contents,
-                    config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+                    config=genai.types.GenerateContentConfig(**fallback_kwargs),
                 )
-            except Exception as e:
-                ename = type(e).__name__
-                if 'ResourceExhausted' in ename or '429' in str(e):
-                    raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
-                if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
-                    raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
-                if 'thinking_config' in gen_config_kwargs and (
-                    'thinking' in str(e).lower() or 'unsupported' in str(e).lower()
-                ):
-                    logger.info(
-                        f"[THINKING] native flag rejected by provider=gemini model={self.model} — retried without"
-                    )
-                    fallback_kwargs = {k: v for k, v in gen_config_kwargs.items() if k != 'thinking_config'}
-                    return client.models.generate_content(
-                        model=self.model,
-                        contents=gemini_contents,
-                        config=genai.types.GenerateContentConfig(**fallback_kwargs),
-                    )
-                raise
+            raise
 
-        response = _call_with_retry(_call)
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        # Extract text + tool calls from response parts
+    def _gemini_parse_response(self, response) -> tuple:
+        """Extract (text, tool_calls, finish_reason) from a Gemini response object."""
         text_parts = []
         tool_calls = []
         if response.candidates:
@@ -1241,40 +1272,10 @@ class GeminiService:
                         'name': fc.name,
                         'input': dict(fc.args) if fc.args else {},
                     })
-
-        text = '\n'.join(text_parts)
         finish_reason = None
-        if response.candidates:
-            finish_reason = str(response.candidates[0].finish_reason) if response.candidates[0].finish_reason else None
-
-        if not text and not tool_calls:
-            logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
-            raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
-
-        usage = getattr(response, 'usage_metadata', None)
-        tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
-        tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
-
-        logger.info(
-            f"[GeminiService] model={self.model}, "
-            f"tokens={tokens_input}+{tokens_output}, "
-            f"latency={latency_ms}ms"
-            + (f", tools={len(tool_calls)}" if tool_calls else "")
-        )
-
-        tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
-
-        return LLMResponse(
-            text=text,
-            model=self.model,
-            provider='gemini',
-            tokens_input=tokens_input,
-            tokens_output=tokens_output,
-            tokens_thinking=tokens_thinking,
-            latency_ms=latency_ms,
-            tool_calls=tool_calls if tool_calls else None,
-            stop_reason=finish_reason,
-        )
+        if response.candidates and response.candidates[0].finish_reason:
+            finish_reason = str(response.candidates[0].finish_reason)
+        return '\n'.join(text_parts), tool_calls, finish_reason
 
     def get_context_limit(self) -> int:
         """Query Gemini API for model's input token limit, cached."""

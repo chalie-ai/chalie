@@ -40,7 +40,7 @@ class Providers:
             tools = self._get_tools(job)
         provider = self._resolve(job)
         messages = [{"role": "user", "content": user_prompt}]
-        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools, thinking_mode=thinking_mode)
+        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         self._log_after_call(system_prompt, messages, tools, job, response)
         return response
 
@@ -62,7 +62,7 @@ class Providers:
         if tools is None:
             tools = self._get_tools(job)
         provider = self._resolve(job)
-        response = provider.send_messages(system_prompt, messages, cache_prefix=cache_prefix, tools=tools, thinking_mode=thinking_mode)
+        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         self._log_after_call(system_prompt, messages, tools, job, response)
         return response
 
