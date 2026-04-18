@@ -117,25 +117,18 @@ class OutputService:
 
         event_payload = json.dumps(event_payload_dict)
 
-        # Only publish to output:events for background outputs (no sync SSE channel).
-        # When a sync /chat SSE connection is open it delivers the response directly;
-        # publishing to output:events as well causes the drift stream to render a
-        # duplicate after _isSending resets to false.
-        if not sse_channel:
+        if sse_channel:
+            # Deliver via per-request channel for sync /chat SSE connections.
+            # Do NOT publish to output:events — that causes the drift stream to
+            # render a duplicate after _isSending resets to false.
+            self.store.publish(f"sse:{sse_channel}", output_id)
+        else:
+            # Background output: publish event, web push, and catch-up buffer.
             self.store.publish('output:events', event_payload)
 
-        # Deliver via per-request channel for sync /chat SSE connections
-        if sse_channel:
-            self.store.publish(f"sse:{sse_channel}", output_id)
-
-        # Web push + catch-up buffer for all background output (no sync SSE connection)
-        if not sse_channel:
             try:
                 from api.push import send_push_to_all
-                send_push_to_all(
-                    title='Chalie',
-                    body=response[:200] if len(response) > 200 else response,
-                )
+                send_push_to_all(title='Chalie', body=response[:200])
             except Exception as e:
                 logger.warning(f"Web push dispatch failed: {e}")
 
