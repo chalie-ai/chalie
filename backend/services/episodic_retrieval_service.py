@@ -8,9 +8,13 @@ Retrieval pipeline:
   4. Apex promotion — each hit walks the consolidated_into chain to the apex
      episode.  Duplicate apexes are deduplicated so a super-episode only
      appears once regardless of how many leaves matched.
-  5. Composite rerank — vector-sim + FTS-rank + emotional_congruence +
-     arousal_salience + recency + salience.  Entity/goal/outcome components
-     are intentionally absent (columns dropped in episodic simplification).
+  5. Composite rerank — vector-sim + FTS-rank + arousal_salience + recency
+     + salience + retrieval_weight.  Entity/goal/outcome/emotional_congruence
+     components are intentionally absent (dropped in episodic simplification).
+  6. Reconsolidation bump on the returned episodes (salience + activation).
+
+Single production entry point: ``retrieve()``.  No class — this is a module-
+level function API so there is no per-call EpisodicService construction cost.
 
 Plan: /Volumes/llm/chalie-plans/v0.3.3/episodic-simplification.md § Retrieval
 """
@@ -26,19 +30,90 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
-# ── Module-level constant ─────────────────────────────────────────────────────
+# ── Module-level constants ───────────────────────────────────────────────────
 
 _MAX_TRAVERSAL_DEPTH = APEX_TRAVERSAL_MAX_DEPTH
+
+# Reconsolidation debounce window — skip activation bump if the episode
+# was touched more recently than this.
+_RECONSOLIDATION_DEBOUNCE_SECONDS = 10 * 60  # 10 minutes
+_RECONSOLIDATION_SALIENCE_BOOST = 2  # 0.2 × 10 — matches legacy default
 
 
 # ── Apex traversal ────────────────────────────────────────────────────────────
 
 
-def walk_up_to_apex(episode_id: str) -> Optional[dict]:
+def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
+    """Fetch a single episode row WITHOUT bumping its activation score.
+
+    Used for apex traversal so intermediate hops don't accidentally boost
+    leaves that the caller will never see.  The final apex gets its bump
+    via the normal reconsolidation pass in ``retrieve``.
+
+    Args:
+        episode_id: The episode UUID.
+        db:         Optional DatabaseService; resolves via shared service if None.
+
+    Returns:
+        Episode dict or None if not found.
+    """
+    if db is None:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+
+    try:
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, gist, salience, channel, created_at, updated_at,
+                       last_accessed_at, access_count, transcript_ids,
+                       transcript_id_start, transcript_id_end,
+                       emotional_valence, emotional_arousal,
+                       consolidated_from, consolidated_into,
+                       storage_strength, retrieval_weight
+                FROM episodes
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (episode_id,),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if not row:
+            return None
+        return {
+            'id': str(row[0]),
+            'gist': row[1],
+            'salience': row[2],
+            'channel': row[3],
+            'created_at': row[4],
+            'updated_at': row[5],
+            'last_accessed_at': row[6],
+            'access_count': row[7],
+            'transcript_ids': row[8] if row[8] is not None else '[]',
+            'transcript_id_start': row[9],
+            'transcript_id_end': row[10],
+            'emotional_valence': row[11],
+            'emotional_arousal': row[12],
+            'consolidated_from': row[13] if row[13] is not None else '[]',
+            'consolidated_into': row[14],
+            'storage_strength': row[15] if row[15] is not None else 1.0,
+            'retrieval_weight': row[16] if row[16] is not None else 1.0,
+        }
+    except Exception as exc:
+        logger.warning(f"[RETRIEVAL] _get_episode_raw failed for id={episode_id}: {exc}")
+        return None
+
+
+def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
     """Walk the consolidated_into chain from *episode_id* to its apex.
 
     Returns the apex episode dict.  If the episode has no consolidated_into,
     it is its own apex and is returned directly.
+
+    Does NOT bump activation on intermediate hops — see ``_get_episode_raw``.
+    The caller (``retrieve``) is responsible for activating the final apex
+    it actually surfaces to the user.
 
     Cycle-safe: tracks visited IDs in a ``seen`` set and logs an error if a
     cycle is detected, returning the current episode rather than looping.
@@ -48,33 +123,23 @@ def walk_up_to_apex(episode_id: str) -> Optional[dict]:
 
     Args:
         episode_id: UUID string of the starting episode.
+        db:         Optional DatabaseService for testing; resolves the shared
+                    service when None.
 
     Returns:
         Episode dict at the apex (or the current episode on cycle/depth-guard),
         or None if the starting episode does not exist.
     """
-    from services.episodic_service import EpisodicService
-    from services.database_service import get_shared_db_service
-
-    def _fetch(eid: str) -> Optional[dict]:
-        try:
-            db = get_shared_db_service()
-            episodic_svc = EpisodicService(db)
-            return episodic_svc.get_episode_by_id(eid)
-        except Exception as exc:
-            logger.warning(f"[RETRIEVAL] walk_up_to_apex fetch failed for id={eid}: {exc}")
-            return None
-
     seen: set[str] = set()
     current_id = episode_id
 
     for _ in range(_MAX_TRAVERSAL_DEPTH):
         if current_id in seen:
             logger.error(f"[retrieval] consolidation cycle at id={current_id}")
-            return _fetch(current_id)
+            return _get_episode_raw(current_id, db=db)
         seen.add(current_id)
 
-        row = _fetch(current_id)
+        row = _get_episode_raw(current_id, db=db)
         if not row:
             return None
         if not row.get('consolidated_into'):
@@ -82,7 +147,7 @@ def walk_up_to_apex(episode_id: str) -> Optional[dict]:
         current_id = str(row['consolidated_into'])
 
     logger.warning(f"[retrieval] apex traversal hit max depth {_MAX_TRAVERSAL_DEPTH}")
-    return _fetch(current_id)
+    return _get_episode_raw(current_id, db=db)
 
 
 # ── Retrieval helpers ─────────────────────────────────────────────────────────
@@ -106,40 +171,51 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
-def _cosine_sim(embedding_a, blob_b: bytes) -> float:
-    """Cosine similarity between a float-list embedding and a packed blob."""
+def _generate_embedding(text: str) -> Optional[list[float]]:
+    """Resolve an embedding via the shared embedding service."""
     try:
-        import numpy as np
-        vec_a = np.array(embedding_a, dtype=np.float32)
-        vec_b = np.array(_unpack_blob(blob_b), dtype=np.float32)
-        if vec_a.shape != vec_b.shape or vec_a.shape[0] == 0:
-            return 0.0
-        norm_a = float(np.linalg.norm(vec_a))
-        if norm_a > 0:
-            vec_a = vec_a / norm_a
-        return float(np.dot(vec_a, vec_b))
+        from services.embedding_service import get_embedding_service
+        return get_embedding_service().generate_embedding(text)
+    except Exception as exc:
+        logger.warning(f"[RETRIEVAL] _generate_embedding failed: {exc}")
+        return None
+
+
+def _count_episodes(channel: Optional[str] = None) -> int:
+    """Return the live episode count, optionally scoped to a channel."""
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            if channel is not None:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND channel = ?",
+                    (channel,),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
+                )
+            return cursor.fetchone()[0]
     except Exception:
-        return 0.0
+        return 0
 
 
-def _fts_search(query_text: str, channel: str, k: int) -> list[dict]:
+def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
     """Full-text search against episodes_fts (gist column only).
-
-    Returns episode dicts with a ``text_rank`` key (negative float; lower =
-    better match in FTS5 rank semantics).
 
     Args:
         query_text: Free-text query string.
-        channel:    Episode channel filter.
-        k:          Maximum number of results to return.
+        channel:    Episode channel filter. ``None`` means no channel filter.
+        k:          Maximum number of results.
 
     Returns:
-        List of episode dicts (may be empty on failure or no matches).
+        List of episode dicts with ``text_rank`` key (negative float).
     """
     from services.database_service import get_shared_db_service
 
     # Sanitise for FTS5 — only alphanumeric + spaces, then quote each term.
-    safe = re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
+    safe = re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text or '')
     safe = re.sub(r'\s+', ' ', safe).strip()
     terms = ' '.join(f'"{w}"' for w in safe.split() if w)
     if not terms:
@@ -149,23 +225,41 @@ def _fts_search(query_text: str, channel: str, k: int) -> list[dict]:
         db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                       e.last_accessed_at, e.retrieval_weight,
-                       e.emotional_valence, e.emotional_arousal,
-                       e.consolidated_into,
-                       episodes_fts.rank AS text_rank
-                FROM episodes_fts
-                JOIN episodes e ON e.rowid = episodes_fts.rowid
-                WHERE episodes_fts MATCH ?
-                  AND e.channel = ?
-                  AND e.deleted_at IS NULL
-                ORDER BY episodes_fts.rank
-                LIMIT ?
-                """,
-                (terms, channel, k),
-            )
+            if channel is not None:
+                cursor.execute(
+                    """
+                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                           e.last_accessed_at, e.retrieval_weight,
+                           e.emotional_valence, e.emotional_arousal,
+                           e.consolidated_into,
+                           episodes_fts.rank AS text_rank
+                    FROM episodes_fts
+                    JOIN episodes e ON e.rowid = episodes_fts.rowid
+                    WHERE episodes_fts MATCH ?
+                      AND e.channel = ?
+                      AND e.deleted_at IS NULL
+                    ORDER BY episodes_fts.rank
+                    LIMIT ?
+                    """,
+                    (terms, channel, k),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                           e.last_accessed_at, e.retrieval_weight,
+                           e.emotional_valence, e.emotional_arousal,
+                           e.consolidated_into,
+                           episodes_fts.rank AS text_rank
+                    FROM episodes_fts
+                    JOIN episodes e ON e.rowid = episodes_fts.rowid
+                    WHERE episodes_fts MATCH ?
+                      AND e.deleted_at IS NULL
+                    ORDER BY episodes_fts.rank
+                    LIMIT ?
+                    """,
+                    (terms, k),
+                )
             rows = cursor.fetchall()
             cursor.close()
 
@@ -191,13 +285,19 @@ def _fts_search(query_text: str, channel: str, k: int) -> list[dict]:
         return []
 
 
-def _vector_search(query_embedding, channel: str, k: int) -> list[dict]:
+def _vector_search(
+    query_embedding,
+    channel: Optional[str],
+    k: int,
+    radius: Optional[float] = None,
+) -> list[dict]:
     """Cosine KNN search via sqlite-vec.
 
     Args:
         query_embedding: Query embedding as a list of floats.
-        channel:         Episode channel filter.
-        k:               Maximum number of results to return.
+        channel:         Channel filter (``None`` = no filter).
+        k:               Max results to pull from sqlite-vec.
+        radius:          If supplied, drop hits with ``vector_distance > radius``.
 
     Returns:
         List of episode dicts with a ``vector_distance`` key.
@@ -212,26 +312,43 @@ def _vector_search(query_embedding, channel: str, k: int) -> list[dict]:
         db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                       e.last_accessed_at, e.retrieval_weight,
-                       e.emotional_valence, e.emotional_arousal,
-                       e.consolidated_into,
-                       v.distance AS vector_distance
-                FROM episodes e
-                JOIN episodes_vec v ON v.rowid = e.rowid
-                WHERE v.embedding MATCH ? AND k = ?
-                  AND e.channel = ?
-                  AND e.deleted_at IS NULL
-                ORDER BY v.distance
-                """,
-                (blob, k, channel),
-            )
+            if channel is not None:
+                cursor.execute(
+                    """
+                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                           e.last_accessed_at, e.retrieval_weight,
+                           e.emotional_valence, e.emotional_arousal,
+                           e.consolidated_into,
+                           v.distance AS vector_distance
+                    FROM episodes e
+                    JOIN episodes_vec v ON v.rowid = e.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND e.channel = ?
+                      AND e.deleted_at IS NULL
+                    ORDER BY v.distance
+                    """,
+                    (blob, k, channel),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                           e.last_accessed_at, e.retrieval_weight,
+                           e.emotional_valence, e.emotional_arousal,
+                           e.consolidated_into,
+                           v.distance AS vector_distance
+                    FROM episodes e
+                    JOIN episodes_vec v ON v.rowid = e.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND e.deleted_at IS NULL
+                    ORDER BY v.distance
+                    """,
+                    (blob, k),
+                )
             rows = cursor.fetchall()
             cursor.close()
 
-        return [
+        hits = [
             {
                 'id': str(r[0]),
                 'gist': r[1],
@@ -248,6 +365,10 @@ def _vector_search(query_embedding, channel: str, k: int) -> list[dict]:
             }
             for r in rows
         ]
+        if radius is not None:
+            hits = [h for h in hits if h['vector_distance'] is not None
+                    and h['vector_distance'] <= radius]
+        return hits
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] Vector search failed: {exc}")
         return []
@@ -264,7 +385,6 @@ def _dedup_by_id(hits: list[dict]) -> list[dict]:
             seen[eid] = dict(hit)
             ordered.append(seen[eid])
         else:
-            # Merge: fill in the lane the first copy was missing.
             if seen[eid]['text_rank'] is None and hit.get('text_rank') is not None:
                 seen[eid]['text_rank'] = hit['text_rank']
             if seen[eid]['vector_distance'] is None and hit.get('vector_distance') is not None:
@@ -272,75 +392,145 @@ def _dedup_by_id(hits: list[dict]) -> list[dict]:
     return ordered
 
 
-def _rerank_composite(query_embedding, episodes: list[dict]) -> list[dict]:
+def _rerank_composite(episodes: list[dict]) -> list[dict]:
     """Composite rerank — simplified per plan.
 
-    Score = vector_sim + fts_rank_norm + emotional_congruence + arousal_salience
-            + recency + salience_norm
+    Score components (all normalised to ~[0, 1] before weighting):
+      - vector_sim      (w=4)  — 1 - vector_distance
+      - fts_rank_norm   (w=2)  — inverted + clamped FTS5 rank
+      - arousal         (w=1)  — raw emotional_arousal
+      - recency         (w=1)  — exponential decay with ~14-day half-life
+      - salience        (w=1)  — salience / 10
+      - retrieval       (w=3)  — retrieval_weight
 
-    No entity_overlap, goal_tag_overlap, or outcome_relevance (columns gone).
+    No entity_overlap / goal_tag_overlap / outcome_relevance (columns gone).
+    No emotional_congruence (no query emotion available here; was hardcoded
+    constant which is zero-discrimination — dropped).
     No super-episode boost — apex traversal already promoted supers.
-
-    Args:
-        query_embedding: The query embedding (list of floats) or None.
-        episodes:        List of apex episode dicts (may already be deduped).
-
-    Returns:
-        Episodes sorted by composite score (highest first), with
-        ``composite_score`` key added.
     """
     now = utc_now()
 
     for ep in episodes:
-        # 1. Vector similarity — convert distance to [0, 1] similarity.
         vd = ep.get('vector_distance')
-        if vd is not None and query_embedding is not None:
-            # sqlite-vec cosine distance is 1 - cosine_sim, clamped to [0, 2].
+        if vd is not None:
             vector_sim = max(0.0, 1.0 - float(vd))
         else:
             vector_sim = 0.0
 
-        # 2. FTS rank normalised — FTS5 rank is a negative float; better = lower.
-        #    We invert and clamp to [0, 1] using an empirical range of [-50, 0].
         tr = ep.get('text_rank')
         if tr is not None:
             fts_rank_norm = max(0.0, min(1.0, 1.0 - abs(float(tr)) / 50.0))
         else:
             fts_rank_norm = 0.0
 
-        # 3. Emotional congruence — no query emotion available at module level;
-        #    treat as neutral (0.5) so the signal is a non-zero soft bias.
-        ep_valence = ep.get('emotional_valence')
-        emotional_congruence = 0.5  # neutral default
+        arousal = ep.get('emotional_arousal')
+        arousal_norm = float(arousal) if arousal is not None else 0.0
 
-        # 4. Arousal-salience — raw arousal in [0, 1].
-        ep_arousal = ep.get('emotional_arousal')
-        arousal_salience = float(ep_arousal) if ep_arousal is not None else 0.0
-
-        # 5. Recency — exponential decay, half-life ≈ 14 days.
         created_str = ep.get('created_at')
         try:
             ref_time = parse_utc(ep.get('last_accessed_at') or created_str)
             hours = (now - ref_time).total_seconds() / 3600.0
-            recency = math.exp(-0.002 * hours)  # half-life ≈ 347 h ≈ 14 days
+            recency = math.exp(-0.002 * hours)  # half-life ≈ 14 days
         except Exception:
             recency = 0.5
 
-        # 6. Salience normalised to [0, 1].
         salience_norm = float(ep.get('salience') or 5) / 10.0
+        retrieval_w = float(ep.get('retrieval_weight') or 1.0)
 
         composite = (
             vector_sim * 4.0
             + fts_rank_norm * 2.0
-            + emotional_congruence * 1.0
-            + arousal_salience * 1.0
+            + arousal_norm * 1.0
             + recency * 1.0
             + salience_norm * 1.0
+            + retrieval_w * 3.0
         )
-        ep['composite_score'] = composite
+        # Scale into the 0-100-ish space memory_skill uses for its
+        # confidence label bucketing (hits/100).
+        ep['composite_score'] = composite * 10.0
 
     episodes.sort(key=lambda e: e.get('composite_score', 0.0), reverse=True)
     return episodes
+
+
+# ── Reconsolidation ───────────────────────────────────────────────────────────
+
+
+def _apply_reconsolidation(episodes: list[dict]) -> None:
+    """Bump activation_score + salience for retrieved episodes.
+
+    Debounced to avoid runaway boosts on rapid re-queries: an episode is
+    only reconsolidated once per ``_RECONSOLIDATION_DEBOUNCE_SECONDS`` window.
+    Falls back to ``last_accessed_at`` as the debounce clock.
+
+    Mutates the episode dicts in place — ``salience`` and
+    ``last_accessed_at`` reflect the new values on return.
+    """
+    if not episodes:
+        return
+
+    from services.database_service import get_shared_db_service
+
+    store = None
+    try:
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+    except Exception:
+        store = None
+
+    now = utc_now()
+
+    try:
+        db = get_shared_db_service()
+    except Exception as exc:
+        logger.warning(f"[RETRIEVAL] _apply_reconsolidation db resolve failed: {exc}")
+        return
+
+    for ep in episodes:
+        try:
+            eid = ep.get('id')
+            if not eid:
+                continue
+
+            if store is not None:
+                key = f"reconsolidation:{eid}"
+                if store.get(key):
+                    continue
+                store.set(key, "1", ex=_RECONSOLIDATION_DEBOUNCE_SECONDS)
+            else:
+                last = ep.get('last_accessed_at')
+                if last:
+                    try:
+                        last_dt = parse_utc(last)
+                        if (now - last_dt).total_seconds() < _RECONSOLIDATION_DEBOUNCE_SECONDS:
+                            continue
+                    except Exception:
+                        pass
+
+            new_salience = min(10, int(ep.get('salience') or 5) + _RECONSOLIDATION_SALIENCE_BOOST)
+            new_access_count = int(ep.get('access_count') or 0) + 1
+            iso_now = now.isoformat()
+
+            with db.connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE episodes
+                    SET salience = ?,
+                        last_accessed_at = ?,
+                        access_count = ?,
+                        storage_strength = MIN(COALESCE(storage_strength, 1.0) + 0.1, 10.0),
+                        retrieval_weight = MIN(COALESCE(retrieval_weight, 1.0) + 0.3, 1.0),
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (new_salience, iso_now, new_access_count, eid),
+                )
+
+            ep['salience'] = new_salience
+            ep['last_accessed_at'] = iso_now
+            ep['access_count'] = new_access_count
+        except Exception as exc:
+            logger.warning(f"[RETRIEVAL] reconsolidation failed for id={ep.get('id')}: {exc}")
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -348,45 +538,119 @@ def _rerank_composite(query_embedding, episodes: list[dict]) -> list[dict]:
 
 def retrieve(
     query_text: str,
-    query_embedding,
-    channel: str,
+    *,
+    query_embedding=None,
+    channel: Optional[str] = None,
+    radius: float = 0.3,
     k: int = 10,
-) -> list[dict]:
+    return_telemetry: bool = False,
+):
     """Hybrid FTS + vector retrieval with apex promotion and composite rerank.
 
+    This is the single production retrieval entry point for episodes.  It is
+    a drop-in replacement for the legacy ``EpisodicService.retrieve_episodes``
+    and carries the same radius/telemetry contract.
+
+    Adaptive radius: applies a population-aware shrink
+    ``effective = radius / (1 + 0.1 × log2(N + 2))`` before hitting sqlite-vec
+    so retrieval tightens as the corpus grows.
+
     Args:
-        query_text:      Raw text query (for FTS lane).
-        query_embedding: Pre-computed query embedding (for vector lane).
-        channel:         Episode channel to restrict search to.
-        k:               Number of results to return.
+        query_text:      Raw text query (FTS lane).
+        query_embedding: Pre-computed embedding.  If None, one is generated
+                         from ``query_text`` via the embedding service.
+        channel:         Episode channel filter.  ``None`` = all channels.
+        radius:          Input vector-distance ceiling (pre adaptive-shrink).
+        k:               Maximum number of results.
+        return_telemetry: If True, return ``(episodes, telemetry_dict)``.
 
     Returns:
-        Up to *k* apex episode dicts, sorted by composite score.
+        List of up to *k* apex episode dicts (highest composite_score first).
+        When ``return_telemetry`` is True, returns ``(list, telemetry)``.
     """
-    fts_hits = _fts_search(query_text, channel, k=k * 2)
-    vector_hits = _vector_search(query_embedding, channel, k=k * 2)
+    telemetry: dict = {
+        'episode_count': 0,
+        'input_radius': radius,
+        'adaptive_shrink_divisor': 1.0,
+        'effective_radius': radius,
+        'vector_candidates': 0,
+        'survivors_after_radius': 0,
+        'fts_candidates': 0,
+        'final_rrf_count': 0,
+        'top_distances': [],
+    }
 
-    union = _dedup_by_id(fts_hits + vector_hits)
+    try:
+        if query_embedding is None and query_text:
+            query_embedding = _generate_embedding(query_text)
 
-    promoted: list[dict] = []
-    seen_apex: set[str] = set()
+        episode_count = _count_episodes(channel)
+        adaptive_divisor = 1.0 + 0.1 * math.log2(episode_count + 2)
+        effective_radius = radius / adaptive_divisor
 
-    for hit in union:
-        apex = walk_up_to_apex(hit['id'])
-        if apex is None:
-            continue
-        apex_id = apex['id']
-        if apex_id in seen_apex:
-            # Carry over lane signals from the hit onto the already-promoted apex.
-            continue
-        seen_apex.add(apex_id)
-        # Merge hit signals (text_rank, vector_distance) onto the apex dict so
-        # the composite reranker has both lane scores even when the hit was a leaf.
-        merged = dict(apex)
-        if merged.get('text_rank') is None:
-            merged['text_rank'] = hit.get('text_rank')
-        if merged.get('vector_distance') is None:
-            merged['vector_distance'] = hit.get('vector_distance')
-        promoted.append(merged)
+        telemetry['episode_count'] = episode_count
+        telemetry['adaptive_shrink_divisor'] = adaptive_divisor
+        telemetry['effective_radius'] = effective_radius
 
-    return _rerank_composite(query_embedding, promoted)[:k]
+        # Pull 2× k candidates per lane so post-dedup/apex-promotion still has
+        # room to fill k slots.
+        fts_hits = _fts_search(query_text or '', channel, k=k * 2)
+        all_vector_hits = _vector_search(query_embedding, channel, k=200)
+        telemetry['vector_candidates'] = len(all_vector_hits)
+
+        vector_hits = [
+            h for h in all_vector_hits
+            if h['vector_distance'] is not None
+            and h['vector_distance'] <= effective_radius
+        ]
+        telemetry['survivors_after_radius'] = len(vector_hits)
+        telemetry['fts_candidates'] = len(fts_hits)
+
+        union = _dedup_by_id(fts_hits + vector_hits)
+        if not union:
+            if return_telemetry:
+                return [], telemetry
+            return []
+
+        promoted: list[dict] = []
+        seen_apex: set[str] = set()
+
+        for hit in union:
+            apex = walk_up_to_apex(hit['id'])
+            if apex is None:
+                continue
+            apex_id = apex['id']
+            if apex_id in seen_apex:
+                continue
+            seen_apex.add(apex_id)
+            # Merge lane signals from the hit onto the apex so rerank has both.
+            merged = dict(apex)
+            if merged.get('text_rank') is None:
+                merged['text_rank'] = hit.get('text_rank')
+            if merged.get('vector_distance') is None:
+                merged['vector_distance'] = hit.get('vector_distance')
+            promoted.append(merged)
+
+        ranked = _rerank_composite(promoted)[:k]
+        _apply_reconsolidation(ranked)
+
+        telemetry['final_rrf_count'] = len(ranked)
+        top_dists = []
+        for ep in ranked[:5]:
+            vd = ep.get('vector_distance')
+            if vd is not None:
+                try:
+                    top_dists.append(round(float(vd), 4))
+                except (TypeError, ValueError):
+                    pass
+        telemetry['top_distances'] = top_dists
+
+        if return_telemetry:
+            return ranked, telemetry
+        return ranked
+
+    except Exception as exc:
+        logger.error(f"[RETRIEVAL] retrieve failed: {exc}", exc_info=True)
+        if return_telemetry:
+            return [], telemetry
+        return []

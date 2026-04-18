@@ -21,19 +21,18 @@ def memory_search():
         return jsonify({"error": "Missing 'q' query parameter"}), 400
 
     try:
-        from services.database_service import get_shared_db_service
-        from services.episodic_service import EpisodicService
+        from services import episodic_retrieval_service
         from services.data_graph_service import get_data_graph_service
-        from services.config_service import ConfigService
 
-        db = get_shared_db_service()
         results = []
 
         # Episodic search
         try:
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            retrieval = EpisodicService(db, episodic_config)
-            episodes = retrieval.retrieve_episodes(query_text=query, radius=0.5)
+            episodes = episodic_retrieval_service.retrieve(
+                query_text=query,
+                channel=None,
+                radius=0.5,
+            )
             for ep in episodes:
                 results.append({
                     "type": "episode",

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
     emotional_arousal REAL,                   -- 0.0 (calm) to 1.0 (intense) — drives consolidation strength
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
-    consolidated_into INTEGER,                -- back-pointer to super-episode row id
+    consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
     storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
     retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
 );

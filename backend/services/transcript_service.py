@@ -853,6 +853,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
     Any per-cluster failure is logged and skipped — the remaining clusters still run.
     """
     from services.episodic_service import find_super_candidates, _fetch_novelty_comparison_set, compute_novelty
+    from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER
     from services.salience_service import compute_salience
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
 
@@ -864,6 +865,16 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
         logger.warning(f"{LOG_PREFIX} find_super_candidates failed: {exc}")
         return
 
+    # Hoisted out of the loop: the comparison set is channel-scoped and does
+    # not need to be recomputed for every cluster in a single extraction run.
+    # Minor staleness (cluster N doesn't see cluster N-1's super as prior art)
+    # is acceptable — novelty is a soft bias on salience, not a correctness gate.
+    try:
+        prior_embeddings = _fetch_novelty_comparison_set(channel)
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} _fetch_novelty_comparison_set failed: {exc}")
+        prior_embeddings = []
+
     for cluster_ids in clusters:
         try:
             sources = []
@@ -872,7 +883,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
                 if ep:
                     sources.append(ep)
 
-            if len(sources) < 2:
+            if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
                 continue
 
             transcript_spans = _fetch_transcript_spans(sources, db)
@@ -919,7 +930,6 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
             gist = super_ep.get('gist', '')
             embedding = emb_svc.generate_embedding(gist) if gist else None
 
-            prior_embeddings = _fetch_novelty_comparison_set(channel)
             novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
             super_ep['salience'] = compute_salience(
                 valence=float(super_ep.get('emotional_valence') or 0.0),

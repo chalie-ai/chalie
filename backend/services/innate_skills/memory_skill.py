@@ -11,7 +11,7 @@ LOG_PREFIX = "[MEMORY]"
 # ── Dynamic memory radius — tuning constants ────────────────────────────────
 #
 # Composition: effective_input = BASELINE × narrow_factor × expand_factor
-# `EpisodicService.retrieve_episodes` then applies its own population-aware
+# `episodic_retrieval_service.retrieve` then applies its own population-aware
 # adaptive shrink on top. All eight constants are tuned by the meta-harness
 # loop (loop_improve.sh) against the d1-context-recall benchmark suite —
 # see /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
@@ -720,8 +720,9 @@ def recall_episodes(
     and the pre-turn seed path (``caller='seed'``).
     """
     try:
-        from services.episodic_service import EpisodicService
+        from services import episodic_retrieval_service
         from services.database_service import get_shared_db_service
+        from services.embedding_service import get_embedding_service
         from services.message_processor import current_processor
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
@@ -734,9 +735,9 @@ def recall_episodes(
 
     try:
         db = get_shared_db_service()
-        service = EpisodicService(db)
+        emb_svc = get_embedding_service()
 
-        q_embedding = service._generate_embedding(query)
+        q_embedding = emb_svc.generate_embedding(query)
 
         proc = current_processor()
         history: List[Dict] = []
@@ -748,7 +749,7 @@ def recall_episodes(
                 h.get("caller") == "seed" for h in history
             ):
                 try:
-                    seed_emb = service._generate_embedding(proc._memory_seed)
+                    seed_emb = emb_svc.generate_embedding(proc._memory_seed)
                     history.insert(
                         0,
                         {
@@ -770,10 +771,12 @@ def recall_episodes(
         expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
         input_radius = baseline_radius * narrow_factor * expand_factor
 
-        episodes, telemetry = service.retrieve_episodes(
+        episodes, telemetry = episodic_retrieval_service.retrieve(
             query_text=query,
-            radius=input_radius,
             query_embedding=q_embedding,
+            channel=channel,
+            radius=input_radius,
+            k=limit,
             return_telemetry=True,
         )
 
