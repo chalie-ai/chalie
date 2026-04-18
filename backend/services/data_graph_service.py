@@ -602,15 +602,7 @@ class DataGraphService:
                             lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
                             rule = lut_hit['rule'] if lut_hit else None
 
-                            if lut_hit and rule == 'temporal':
-                                row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
-                                    conn, existing_dict, existing_req, now_iso
-                                )
-                                result = self._make_store_result(
-                                    "superseded", key, key, rule, value, old_value,
-                                    None, existing_date, row,
-                                )
-                            elif lut_hit and rule == 'coexist':
+                            if lut_hit and rule == 'coexist':
                                 # Coexist with existing same key — insert additive (different value)
                                 row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
                                     conn, existing_req, now_iso
