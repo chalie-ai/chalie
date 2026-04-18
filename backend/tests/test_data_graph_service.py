@@ -1493,10 +1493,6 @@ class TestHardDeleteBySourcePrefix:
         assert remaining[0]['source'] == 'skill:memory'
 
 
-# ══════════════════════════════════════════════════════════════════
-# TestForget
-# ══════════════════════════════════════════════════════════════════
-
 @pytest.mark.unit
 class TestForget:
     """forget() — rule-aware hard-delete for user memory.
