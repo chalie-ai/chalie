@@ -550,6 +550,40 @@ def _apply_reconsolidation(episodes: list[dict]) -> None:
             logger.warning(f"[RETRIEVAL] reconsolidation failed for id={eid}: {exc}")
 
 
+def _promote_to_apex(union: list) -> list:
+    """Walk each hit up to its apex and deduplicate, merging lane signals."""
+    promoted: list[dict] = []
+    seen_apex: set[str] = set()
+    for hit in union:
+        apex = walk_up_to_apex(hit['id'])
+        if apex is None:
+            continue
+        apex_id = apex['id']
+        if apex_id in seen_apex:
+            continue
+        seen_apex.add(apex_id)
+        merged = dict(apex)
+        if merged.get('text_rank') is None:
+            merged['text_rank'] = hit.get('text_rank')
+        if merged.get('vector_distance') is None:
+            merged['vector_distance'] = hit.get('vector_distance')
+        promoted.append(merged)
+    return promoted
+
+
+def _collect_top_distances(ranked: list) -> list:
+    """Return rounded vector distances for the top-5 ranked episodes."""
+    top_dists = []
+    for ep in ranked[:5]:
+        vd = ep.get('vector_distance')
+        if vd is not None:
+            try:
+                top_dists.append(round(float(vd), 4))
+            except (TypeError, ValueError):
+                pass
+    return top_dists
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 
@@ -629,38 +663,11 @@ def retrieve(
                 return [], telemetry
             return []
 
-        promoted: list[dict] = []
-        seen_apex: set[str] = set()
-
-        for hit in union:
-            apex = walk_up_to_apex(hit['id'])
-            if apex is None:
-                continue
-            apex_id = apex['id']
-            if apex_id in seen_apex:
-                continue
-            seen_apex.add(apex_id)
-            # Merge lane signals from the hit onto the apex so rerank has both.
-            merged = dict(apex)
-            if merged.get('text_rank') is None:
-                merged['text_rank'] = hit.get('text_rank')
-            if merged.get('vector_distance') is None:
-                merged['vector_distance'] = hit.get('vector_distance')
-            promoted.append(merged)
-
-        ranked = _rerank_composite(promoted)[:k]
+        ranked = _rerank_composite(_promote_to_apex(union))[:k]
         _apply_reconsolidation(ranked)
 
         telemetry['final_rrf_count'] = len(ranked)
-        top_dists = []
-        for ep in ranked[:5]:
-            vd = ep.get('vector_distance')
-            if vd is not None:
-                try:
-                    top_dists.append(round(float(vd), 4))
-                except (TypeError, ValueError):
-                    pass
-        telemetry['top_distances'] = top_dists
+        telemetry['top_distances'] = _collect_top_distances(ranked)
 
         if return_telemetry:
             return ranked, telemetry
