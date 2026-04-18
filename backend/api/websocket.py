@@ -553,11 +553,15 @@ def _handle_chat(ws, store, msg, active_request=None):
             elif bg_error:
                 seq = _next_seq()
                 err = {"type": "error", "message": bg_error.get('message', 'Processing failed'), "recoverable": False, "seq": seq}
+                if partial_metrics:
+                    err["metrics"] = partial_metrics
                 _buffer_event(err)
                 _send_json(ws, err)
             else:
                 seq = _next_seq()
                 err = {"type": "error", "message": "No response received", "recoverable": True, "seq": seq}
+                if partial_metrics:
+                    err["metrics"] = partial_metrics
                 _buffer_event(err)
                 _send_json(ws, err)
 
@@ -570,6 +574,8 @@ def _handle_chat(ws, store, msg, active_request=None):
         # Timeout
         seq = _next_seq()
         err = {"type": "error", "message": "Request timed out", "recoverable": True, "seq": seq}
+        if partial_metrics:
+            err["metrics"] = partial_metrics
         _buffer_event(err)
         _send_json(ws, err)
         seq = _next_seq()
