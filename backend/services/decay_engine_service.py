@@ -99,8 +99,6 @@ class DecayEngineService:
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
-        reconsolidation_count = 0
-        consolidation_count = self._run_episode_consolidation()
         knowledge_count = self._decay_knowledge()
         data_graph_count = self._decay_data_graph()
         goal_decay_count = self._decay_goals()
@@ -117,8 +115,6 @@ class DecayEngineService:
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
-            f"reconsolidation={reconsolidation_count} processed, "
-            f"consolidation={consolidation_count} super-episodes, "
             f"knowledge={knowledge_count} updated, "
             f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
@@ -233,26 +229,6 @@ class DecayEngineService:
 
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
-            return 0
-
-    def _run_episode_consolidation(self) -> int:
-        """Consolidate clusters of similar episodes into super episodes.
-
-        Returns:
-            Number of super episodes created, or 0 on any error.
-        """
-        try:
-            from .database_service import get_shared_db_service
-            from .episode_consolidation_service import EpisodeConsolidationService
-
-            db_service = get_shared_db_service()
-            try:
-                svc = EpisodeConsolidationService(db_service)
-                return svc.run_consolidation_cycle()
-            finally:
-                db_service.close_pool()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Episode consolidation failed: {e}", exc_info=True)
             return 0
 
     def _decay_knowledge(self) -> int:

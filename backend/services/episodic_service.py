@@ -992,6 +992,129 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
+def _cosine_sim_blobs(blob_a: bytes, blob_b: bytes) -> float:
+    """Compute cosine similarity between two sqlite-vec binary blobs.
+
+    Embeddings from EmbeddingService are L2-normalised, so cosine similarity
+    is just the dot product of the unpacked float vectors.  Returns 0.0 if
+    either blob is malformed or the lengths differ.
+    """
+    try:
+        import numpy as np
+        vec_a = np.array(_unpack_blob(blob_a), dtype=np.float32)
+        vec_b = np.array(_unpack_blob(blob_b), dtype=np.float32)
+        if vec_a.shape != vec_b.shape or vec_a.shape[0] == 0:
+            return 0.0
+        # Embeddings are pre-normalised — dot product equals cosine sim.
+        return float(np.dot(vec_a, vec_b))
+    except Exception:
+        return 0.0
+
+
+def find_super_candidates(channel: str) -> list[list[str]]:
+    """Return lists of episode IDs that form tight semantic clusters.
+
+    A cluster qualifies when:
+      - it contains at least SUPER_EPISODE_MIN_CLUSTER episodes,
+      - every pairwise cosine similarity across all members >= SUPER_EPISODE_THRESHOLD.
+
+    Algorithm: greedy pairwise scan over the apex pool (consolidated_into IS NULL,
+    deleted_at IS NULL).  First-found wins; episodes already claimed by an emitted
+    cluster are not re-evaluated.
+
+    Args:
+        channel: The episode channel to cluster.
+
+    Returns:
+        List of ID-lists (strings), each list being one tight cluster.
+        Clusters are non-overlapping and deterministic (sorted IDs within each list).
+    """
+    from services.database_service import get_shared_db_service
+    from services.episodic_constants import SUPER_EPISODE_THRESHOLD, SUPER_EPISODE_MIN_CLUSTER
+
+    try:
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            # Fetch apex episodes with their embeddings.
+            cursor.execute(
+                """
+                SELECT e.id, ev.embedding
+                FROM episodes e
+                JOIN episodes_vec ev ON ev.rowid = e.rowid
+                WHERE e.channel = ?
+                  AND e.consolidated_into IS NULL
+                  AND e.deleted_at IS NULL
+                  AND ev.embedding IS NOT NULL
+                ORDER BY e.created_at ASC
+                """,
+                (channel,),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+    except Exception as exc:
+        logging.warning(f"[SUPER_CLUSTER] find_super_candidates query failed: {exc}")
+        return []
+
+    if not rows:
+        return []
+
+    # Build parallel id/embedding lists.
+    ep_ids: list[str] = [str(r[0]) for r in rows]
+    ep_embs: list[bytes] = [r[1] for r in rows]
+    n = len(ep_ids)
+
+    # Pre-compute all pairwise cosine similarities (upper triangle only).
+    # For typical apex pools (<200 episodes) this is fast (~40k ops @ 256-d).
+    sims: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            sims[(i, j)] = _cosine_sim_blobs(ep_embs[i], ep_embs[j])
+
+    def _pair_sim(i: int, j: int) -> float:
+        return sims[(i, j)] if i < j else sims[(j, i)]
+
+    claimed: set[int] = set()
+    clusters: list[list[str]] = []
+
+    for i in range(n):
+        if i in claimed:
+            continue
+
+        # Candidates: all unclaimed j where cosine(i, j) >= threshold.
+        candidates = [
+            j for j in range(n)
+            if j != i and j not in claimed and _pair_sim(i, j) >= SUPER_EPISODE_THRESHOLD
+        ]
+
+        if len(candidates) < SUPER_EPISODE_MIN_CLUSTER - 1:
+            # Not enough neighbours even before the all-pairs check.
+            continue
+
+        # Verify the cluster is fully tight — all pairs within {i} ∪ candidates
+        # must also exceed the threshold.
+        members = [i] + candidates
+        tight = True
+        for a in range(len(members)):
+            if not tight:
+                break
+            for b in range(a + 1, len(members)):
+                if _pair_sim(members[a], members[b]) < SUPER_EPISODE_THRESHOLD:
+                    tight = False
+                    break
+
+        if not tight or len(members) < SUPER_EPISODE_MIN_CLUSTER:
+            continue
+
+        # Emit cluster with sorted IDs for determinism.
+        cluster_ids = sorted(ep_ids[m] for m in members)
+        clusters.append(cluster_ids)
+        for m in members:
+            claimed.add(m)
+
+    return clusters
+
+
 def compute_novelty(new_embedding, prior_embeddings: list[bytes]) -> float:
     """Return semantic novelty of new_embedding vs the prior comparison set.
 

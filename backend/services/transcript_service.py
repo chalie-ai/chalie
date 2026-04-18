@@ -613,7 +613,8 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                 except Exception as ep_err:
                     logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
 
-            # TODO(commit-c): trigger super-episode cluster check here
+            # After storing all snapshots, check for super-episode clusters.
+            _maybe_trigger_super_episode(channel, db, episodic_svc, emb_svc)
 
         except Exception as e:
             logger.warning(
@@ -754,6 +755,217 @@ def _is_delete_only(ep: dict) -> bool:
     # All other meaningful fields must be absent or null/empty
     meaningful = ('gist', 'transcript_ids', 'update_id')
     return not any(ep.get(f) for f in meaningful)
+
+
+def _fetch_transcript_spans(sources: list[dict], db) -> str:
+    """Fetch and format the raw transcript rows spanning all source episodes.
+
+    Collects the union of transcript IDs from the source episodes, then
+    fetches those rows and formats them in the same `[id] (ts) role: content`
+    style used by the EpisodeEncoderProcessor prompt.
+
+    Args:
+        sources: List of episode dicts (from episodic_svc.get_episode_by_id).
+        db:      Shared DatabaseService instance.
+
+    Returns:
+        Formatted multi-line string of transcript entries, oldest first.
+        Returns empty string if no transcript IDs are found.
+    """
+    import json as _json
+
+    # Collect union of transcript IDs across all sources.
+    all_t_ids: set[int] = set()
+    for ep in sources:
+        raw_ids = ep.get('transcript_ids')
+        if isinstance(raw_ids, str):
+            try:
+                ids = _json.loads(raw_ids)
+            except Exception:
+                ids = []
+        elif isinstance(raw_ids, list):
+            ids = raw_ids
+        else:
+            ids = []
+        for tid in ids:
+            if tid is not None:
+                try:
+                    all_t_ids.add(int(tid))
+                except (TypeError, ValueError):
+                    pass
+
+    # Also cover the full start–end range (inclusive) so overlap rows are included.
+    starts = [ep.get('transcript_id_start') for ep in sources if ep.get('transcript_id_start') is not None]
+    ends = [ep.get('transcript_id_end') for ep in sources if ep.get('transcript_id_end') is not None]
+    if starts and ends:
+        span_min = min(starts)
+        span_max = max(ends)
+        all_t_ids.update(range(span_min, span_max + 1))
+
+    if not all_t_ids:
+        return ''
+
+    try:
+        placeholders = ','.join('?' * len(all_t_ids))
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, role, content, tool_name, created_at
+                FROM transcript
+                WHERE id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                list(all_t_ids),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+
+        entries = [
+            {
+                'id': r[0],
+                'role': r[1],
+                'content': r[2],
+                'tool_name': r[3],
+                'created_at': r[4],
+            }
+            for r in rows
+        ]
+        return _format_window_entries(entries)
+
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} _fetch_transcript_spans failed: {exc}")
+        return ''
+
+
+def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> None:
+    """Check for tight semantic clusters in the apex pool and create super-episodes.
+
+    Called at the end of each successful episode extraction run.  For each
+    cluster of 3+ apex episodes with all-pairwise cosine >= SUPER_EPISODE_THRESHOLD:
+
+    1. Fetches raw transcript spans for the cluster.
+    2. Calls SuperEpisodeEncoderProcessor to synthesise a consolidated gist.
+    3. Embeds the gist, computes novelty + salience.
+    4. Stores the super-episode via EpisodicService.
+    5. Sets consolidated_into back-pointers on each source episode.
+
+    Any per-cluster failure is logged and skipped — the remaining clusters still run.
+    """
+    from services.episodic_service import find_super_candidates, _fetch_novelty_comparison_set, compute_novelty
+    from services.salience_service import compute_salience
+    from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
+
+    try:
+        clusters = find_super_candidates(channel)
+        if not clusters:
+            return
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} find_super_candidates failed: {exc}")
+        return
+
+    for cluster_ids in clusters:
+        try:
+            sources = []
+            for eid in cluster_ids:
+                ep = episodic_svc.get_episode_by_id(eid)
+                if ep:
+                    sources.append(ep)
+
+            if len(sources) < 2:
+                continue
+
+            transcript_spans = _fetch_transcript_spans(sources, db)
+
+            response = SuperEpisodeEncoderProcessor(sources, transcript_spans).send()
+            if not response:
+                logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response for cluster {cluster_ids}")
+                continue
+
+            super_ep = _safe_json_load_object(response)
+            if not super_ep or not super_ep.get('gist'):
+                logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty gist for cluster {cluster_ids}")
+                continue
+
+            super_ep['channel'] = channel
+
+            # Union of all source transcript_ids.
+            import json as _json
+            all_t_ids: list[int] = []
+            for ep in sources:
+                raw_ids = ep.get('transcript_ids')
+                if isinstance(raw_ids, str):
+                    try:
+                        ids = _json.loads(raw_ids)
+                    except Exception:
+                        ids = []
+                elif isinstance(raw_ids, list):
+                    ids = raw_ids
+                else:
+                    ids = []
+                for tid in ids:
+                    if tid is not None:
+                        try:
+                            all_t_ids.append(int(tid))
+                        except (TypeError, ValueError):
+                            pass
+
+            unique_t_ids = sorted(set(all_t_ids))
+            super_ep['transcript_ids'] = unique_t_ids
+            super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
+            super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
+            super_ep['consolidated_from'] = [ep['id'] for ep in sources]
+
+            gist = super_ep.get('gist', '')
+            embedding = emb_svc.generate_embedding(gist) if gist else None
+
+            prior_embeddings = _fetch_novelty_comparison_set(channel)
+            novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+            super_ep['salience'] = compute_salience(
+                valence=float(super_ep.get('emotional_valence') or 0.0),
+                arousal=float(super_ep.get('emotional_arousal') or 0.0),
+                has_open_loop=bool(super_ep.get('has_open_loop', False)),
+                novelty=novelty,
+            )
+
+            # Pop transient field not persisted.
+            super_ep.pop('has_open_loop', None)
+
+            new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+
+            for src_id in cluster_ids:
+                episodic_svc.set_consolidated_into(src_id, new_id)
+
+            logger.info(
+                f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}"
+            )
+
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} Super-episode creation failed for cluster {cluster_ids}: {exc}"
+            )
+
+
+def _safe_json_load_object(text: str) -> dict:
+    """Parse a JSON object from LLM response text. Returns {} on any failure."""
+    import json as _json
+    import re as _re
+
+    if not text:
+        return {}
+    text = text.strip()
+    match = _re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if match:
+        text = match.group(1).strip()
+    try:
+        parsed = _json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned non-dict JSON")
+        return {}
+    except (_json.JSONDecodeError, ValueError):
+        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable JSON")
+        return {}
 
 
 def _embed_entry(rowid: int, content: str) -> None:

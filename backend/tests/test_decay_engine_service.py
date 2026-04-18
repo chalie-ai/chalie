@@ -71,7 +71,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
-             patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
@@ -105,7 +104,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
-             patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \

@@ -226,6 +226,32 @@ Return ONLY a JSON array. No preamble, no markdown. If nothing meaningful happen
 """
 
 
+class SuperEpisodeEncoderSystemPrompt(SystemMessagePrompt):
+    """Static cacheable system-message body for SuperEpisodeEncoderProcessor.
+
+    Wired to: ``SuperEpisodeEncoderProcessor``.
+    """
+
+    _SYSTEM_PROMPT = """\
+You are a super-episode encoder. You are shown 3 coherent episodes plus the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
+
+Output a single JSON object:
+{
+  "gist": "2-4 sentence consolidated summary",
+  "has_open_loop": false,
+  "emotional_valence": 0.0,
+  "emotional_arousal": 0.0
+}
+
+Rules:
+- emotional_valence / emotional_arousal: reflect the combined emotional character.
+- has_open_loop: true if the combined memory still carries an unresolved thread.
+- No transcript_ids — the caller computes the union.
+
+Return ONLY the JSON object. No preamble, no markdown.\
+"""
+
+
 class ToolSynthesisSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for background tool-synthesis turns.
 
