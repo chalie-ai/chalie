@@ -135,11 +135,15 @@ textarea::placeholder { color: var(--text-secondary); }
   --bs-btn-active-bg:       rgba(255, 255, 255, 0.08);
 }
 .btn-danger {
-  --bs-btn-bg:              #fb7185;
-  --bs-btn-border-color:    #fb7185;
-  --bs-btn-hover-bg:        #f95f76;
-  --bs-btn-color:           #fff;
-  --bs-btn-hover-color:     #fff;
+  --bs-btn-bg:              transparent;
+  --bs-btn-border-color:    rgba(251, 113, 133, 0.30);
+  --bs-btn-hover-bg:        rgba(251, 113, 133, 0.10);
+  --bs-btn-hover-border-color: rgba(251, 113, 133, 0.55);
+  --bs-btn-active-bg:       rgba(251, 113, 133, 0.15);
+  --bs-btn-color:           #fb7185;
+  --bs-btn-hover-color:     #fb7185;
+  --bs-btn-disabled-bg:     transparent;
+  --bs-btn-disabled-color:  rgba(251, 113, 133, 0.45);
 }
 .btn-outline-primary {
   --bs-btn-color:           #8A5CFF;
