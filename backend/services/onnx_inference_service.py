@@ -200,21 +200,21 @@ class _ClassifierHead:
 
     def __init__(
         self,
-        W1: np.ndarray,
+        w1: np.ndarray,
         b1: np.ndarray,
-        W2: np.ndarray,
+        w2: np.ndarray,
         b2: np.ndarray,
         labels: List[str],
         activation: str = "gelu",
     ):
-        self.W1 = W1.astype(np.float32)    # (hidden_dim, input_dim)
+        self.W1 = w1.astype(np.float32)    # (hidden_dim, input_dim)
         self.b1 = b1.astype(np.float32)    # (hidden_dim,)
-        self.W2 = W2.astype(np.float32)    # (num_classes, hidden_dim)
+        self.W2 = w2.astype(np.float32)    # (num_classes, hidden_dim)
         self.b2 = b2.astype(np.float32)    # (num_classes,)
         self.labels = labels
         self.activation = activation
-        self.hidden_dim, self.input_dim = W1.shape
-        self.num_classes = W2.shape[0]
+        self.hidden_dim, self.input_dim = w1.shape
+        self.num_classes = w2.shape[0]
 
     def forward(self, features: np.ndarray) -> np.ndarray:
         """Apply the 2-layer MLP.
@@ -490,9 +490,9 @@ class OnnxInferenceService:
 
         try:
             with np.load(str(npz_path)) as f:
-                W1 = f["W1"].astype(np.float32)
+                w1 = f["W1"].astype(np.float32)
                 b1 = f["b1"].astype(np.float32)
-                W2 = f["W2"].astype(np.float32)
+                w2 = f["W2"].astype(np.float32)
                 b2 = f["b2"].astype(np.float32)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to load head for '{task_name}': {e}")
@@ -500,11 +500,11 @@ class OnnxInferenceService:
 
         labels = meta.get("labels", [])
         activation = meta.get("activation", meta.get("mlp_activation", "gelu"))
-        input_dim = meta.get("input_dim", W1.shape[1])
-        hidden_dim = meta.get("hidden_dim", W1.shape[0])
-        num_classes = meta.get("num_classes", W2.shape[0])
+        input_dim = meta.get("input_dim", w1.shape[1])
+        hidden_dim = meta.get("hidden_dim", w1.shape[0])
+        num_classes = meta.get("num_classes", w2.shape[0])
 
-        head = _ClassifierHead(W1=W1, b1=b1, W2=W2, b2=b2,
+        head = _ClassifierHead(w1=w1, b1=b1, w2=w2, b2=b2,
                                labels=labels, activation=activation)
 
         # Emit boot marker — format is contractual (scenarios grep exact prefix)
