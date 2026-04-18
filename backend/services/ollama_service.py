@@ -97,7 +97,8 @@ class OllamaService:
             except requests.exceptions.HTTPError as e:
                 self._handle_http_error(e, attempt, payload)
 
-    def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        del cache_prefix  # interface parity with Anthropic; Ollama has no prefix-cache.
         url = f"{self.host}/api/chat"
 
         api_messages = _ollama_convert_messages(messages)
