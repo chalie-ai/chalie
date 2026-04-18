@@ -1,7 +1,7 @@
 """Tests for Transcript Service.
 
 Tests cover:
-- append() and append_batch()
+- append()
 - get_recent() with and without since_id
 - get_latest_id()
 - search() (keyword fallback path, cross-topic, date range)
@@ -62,35 +62,6 @@ class TestAppend:
         from services.transcript_service import append
         assert append('', 'user', 'content') is None
 
-
-class TestAppendBatch:
-    def test_batch_insert(self, db):
-        from services.transcript_service import append_batch
-
-        entries = [
-            {'topic': 'test', 'role': 'user', 'content': 'First message'},
-            {'topic': 'test', 'role': 'assistant', 'content': 'First response'},
-            {'topic': 'test', 'role': 'user', 'content': 'Second message'},
-        ]
-        with patch('services.transcript_service._embed_entry'):
-            count = append_batch(entries)
-        assert count == 3
-
-        cursor = db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM transcript WHERE channel = 'test'")
-        assert cursor.fetchone()[0] == 3
-
-    def test_batch_skips_empty(self, db):
-        from services.transcript_service import append_batch
-
-        entries = [
-            {'topic': 'test', 'role': 'user', 'content': 'Valid'},
-            {'topic': '', 'role': 'user', 'content': 'No topic'},
-            {'topic': 'test', 'role': 'user', 'content': ''},
-        ]
-        with patch('services.transcript_service._embed_entry'):
-            count = append_batch(entries)
-        assert count == 1
 
 
 class TestGetRecent:

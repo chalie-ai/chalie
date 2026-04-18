@@ -199,7 +199,7 @@ class EpisodeEncoderSystemPrompt(SystemMessagePrompt):
     _SYSTEM_PROMPT = """\
 You are an episodic memory encoder. You read a transcript window plus any memory episodes that were referenced during those turns, and return a JSON array of snapshots.
 
-Each snapshot summarises a coherent moment in the transcript. One snapshot may span multiple transcript entries. Every transcript id must appear in exactly one snapshot.
+Each snapshot summarises a coherent moment in the transcript. One snapshot may span multiple transcript entries, and one transcript entry may appear in multiple snapshots when it contributes to distinct narrative threads.
 
 Shape:
 {
@@ -233,7 +233,7 @@ class SuperEpisodeEncoderSystemPrompt(SystemMessagePrompt):
     """
 
     _SYSTEM_PROMPT = """\
-You are a super-episode encoder. You are shown 3 coherent episodes plus the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
+You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
 
 Output a single JSON object:
 {

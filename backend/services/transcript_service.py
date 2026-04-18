@@ -93,61 +93,6 @@ def append(
         return None
 
 
-def append_batch(entries: List[Dict]) -> int:
-    """Append multiple turns in a single transaction.
-
-    Each entry dict should have: topic, role, content, and optionally
-    tool_call_id, tool_name, internal.
-
-    Returns the number of entries successfully inserted.
-    """
-    if not entries:
-        return 0
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        inserted = 0
-        rowids_to_embed = []
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            for entry in entries:
-                topic = entry.get('channel') or entry.get('topic', '')
-                content = entry.get('content', '')
-                if not topic or not content:
-                    continue
-                cursor.execute(
-                    """
-                    INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        topic,
-                        entry.get('role', 'user'),
-                        content,
-                        entry.get('tool_call_id'),
-                        entry.get('tool_name'),
-                        1 if entry.get('internal') else 0,
-                    ),
-                )
-                rowid = cursor.lastrowid
-                inserted += 1
-                if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-                    rowids_to_embed.append((rowid, content))
-            cursor.close()
-
-        # Generate embeddings outside the transaction
-        for rowid, content in rowids_to_embed:
-            _embed_entry(rowid, content)
-
-        return inserted
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Batch append failed: {e}")
-        return 0
-
 
 def search(
     channel: Optional[str],
@@ -498,7 +443,8 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
                   AND id > COALESCE(
                       (SELECT MAX(transcript_id_end)
                        FROM episodes
-                       WHERE channel = ? AND deleted_at IS NULL),
+                       WHERE channel = ? AND deleted_at IS NULL
+                         AND transcript_id_end IS NOT NULL),
                       0
                   )
                 """,
@@ -634,6 +580,15 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                         episodic_svc.update_episode(update_id, ep, embedding=embedding)
                     else:
                         episodic_svc.store_episode(ep, embedding=embedding)
+
+                    # Update the novelty comparison set so subsequent snapshots
+                    # in this same extraction run are compared against already-stored
+                    # episodes, not just the stale pre-run set.
+                    if embedding is not None:
+                        from services.embedding_utils import pack_embedding as _pack
+                        blob = _pack(embedding)
+                        if blob is not None:
+                            prior_embeddings.append(blob)
 
                 except Exception as ep_err:
                     logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
