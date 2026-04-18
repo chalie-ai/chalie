@@ -748,11 +748,47 @@ def _is_delete_only(ep: dict) -> bool:
     return not any(ep.get(f) for f in meaningful)
 
 
+def _collect_transcript_ids(episodes: list[dict]) -> set[int]:
+    """Return the union of all transcript IDs referenced by *episodes*.
+
+    Handles both JSON-string and list forms of the ``transcript_ids`` field,
+    and also expands the ``transcript_id_start``–``transcript_id_end`` range so
+    that overlap rows are always included.
+    """
+    import json as _json
+
+    ids: set[int] = set()
+    for ep in episodes:
+        raw = ep.get('transcript_ids')
+        if isinstance(raw, str):
+            try:
+                parsed = _json.loads(raw)
+            except Exception:
+                parsed = []
+        elif isinstance(raw, list):
+            parsed = raw
+        else:
+            parsed = []
+        for tid in parsed:
+            if tid is not None:
+                try:
+                    ids.add(int(tid))
+                except (TypeError, ValueError):
+                    pass
+
+    starts = [ep['transcript_id_start'] for ep in episodes if ep.get('transcript_id_start') is not None]
+    ends = [ep['transcript_id_end'] for ep in episodes if ep.get('transcript_id_end') is not None]
+    if starts and ends:
+        ids.update(range(min(starts), max(ends) + 1))
+
+    return ids
+
+
 def _fetch_transcript_spans(sources: list[dict], db) -> str:
     """Fetch and format the raw transcript rows spanning all source episodes.
 
     Collects the union of transcript IDs from the source episodes, then
-    fetches those rows and formats them in the same `[id] (ts) role: content`
+    fetches those rows and formats them in the same ``[id] (ts) role: content``
     style used by the EpisodeEncoderProcessor prompt.
 
     Args:
@@ -763,36 +799,7 @@ def _fetch_transcript_spans(sources: list[dict], db) -> str:
         Formatted multi-line string of transcript entries, oldest first.
         Returns empty string if no transcript IDs are found.
     """
-    import json as _json
-
-    # Collect union of transcript IDs across all sources.
-    all_t_ids: set[int] = set()
-    for ep in sources:
-        raw_ids = ep.get('transcript_ids')
-        if isinstance(raw_ids, str):
-            try:
-                ids = _json.loads(raw_ids)
-            except Exception:
-                ids = []
-        elif isinstance(raw_ids, list):
-            ids = raw_ids
-        else:
-            ids = []
-        for tid in ids:
-            if tid is not None:
-                try:
-                    all_t_ids.add(int(tid))
-                except (TypeError, ValueError):
-                    pass
-
-    # Also cover the full start–end range (inclusive) so overlap rows are included.
-    starts = [ep.get('transcript_id_start') for ep in sources if ep.get('transcript_id_start') is not None]
-    ends = [ep.get('transcript_id_end') for ep in sources if ep.get('transcript_id_end') is not None]
-    if starts and ends:
-        span_min = min(starts)
-        span_max = max(ends)
-        all_t_ids.update(range(span_min, span_max + 1))
-
+    all_t_ids = _collect_transcript_ids(sources)
     if not all_t_ids:
         return ''
 
@@ -813,13 +820,7 @@ def _fetch_transcript_spans(sources: list[dict], db) -> str:
             cursor.close()
 
         entries = [
-            {
-                'id': r[0],
-                'role': r[1],
-                'content': r[2],
-                'tool_name': r[3],
-                'created_at': r[4],
-            }
+            {'id': r[0], 'role': r[1], 'content': r[2], 'tool_name': r[3], 'created_at': r[4]}
             for r in rows
         ]
         return _format_window_entries(entries)
@@ -892,27 +893,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
             super_ep['channel'] = channel
 
             # Union of all source transcript_ids.
-            import json as _json
-            all_t_ids: list[int] = []
-            for ep in sources:
-                raw_ids = ep.get('transcript_ids')
-                if isinstance(raw_ids, str):
-                    try:
-                        ids = _json.loads(raw_ids)
-                    except Exception:
-                        ids = []
-                elif isinstance(raw_ids, list):
-                    ids = raw_ids
-                else:
-                    ids = []
-                for tid in ids:
-                    if tid is not None:
-                        try:
-                            all_t_ids.append(int(tid))
-                        except (TypeError, ValueError):
-                            pass
-
-            unique_t_ids = sorted(set(all_t_ids))
+            unique_t_ids = sorted(_collect_transcript_ids(sources))
             super_ep['transcript_ids'] = unique_t_ids
             super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
             super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
