@@ -1416,7 +1416,91 @@ class DataGraphService:
 
     # ── forget() ──────────────────────────────────────────────────────
 
-    def forget(self, kind: str, key: str, value: str = None, *, source: str = None) -> Optional[dict]:
+    @staticmethod
+    def _row_date(d: dict) -> Optional[str]:
+        """Extract a YYYY-MM-DD date string from a row dict, or None."""
+        raw = d.get('last_confirmed_at') or d.get('first_seen_at') or ""
+        return raw[:10] or None
+
+    def _resolve_lut_key(self, kind: str, key: str) -> tuple:
+        """Return (canonical_key, rule) after LUT lookup, or (key, None) on miss."""
+        policy = _KIND_POLICY[kind]
+        if policy.get('contradiction') != 'lut_canonicalize':
+            return key, None
+        key_emb = self._generate_embedding(key)
+        lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
+        if lut_hit:
+            return lut_hit['canonical_key'], lut_hit['rule']
+        return key, None
+
+    def _forget_immutable(self, conn, kind: str, canonical_key: str, provided_key: str, rule: Optional[str], value: Optional[str]) -> dict:
+        row = conn.execute(
+            "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL LIMIT 1",
+            (kind, canonical_key),
+        ).fetchone()
+        if row is None:
+            return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+        d = self._row_to_dict(row)
+        self._hard_delete_row(conn, d['id'])
+        return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=self._row_date(d))
+
+    def _forget_temporal(self, conn, kind: str, canonical_key: str, provided_key: str, rule: Optional[str], value: Optional[str]) -> dict:
+        rows = conn.execute(
+            "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
+            (kind, canonical_key),
+        ).fetchall()
+        if not rows:
+            return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+        for r in rows:
+            self._hard_delete_row(conn, self._row_to_dict(r)['id'])
+        return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=len(rows))
+
+    def _forget_coexist(self, conn, kind: str, canonical_key: str, provided_key: str, rule: Optional[str], value: Optional[str]) -> dict:
+        if value is None:
+            return {"action": "forget", "status": "error", "message": "value required for coexist key"}
+        exact = conn.execute(
+            "SELECT * FROM data_graph "
+            "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
+            "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+            (kind, canonical_key, value),
+        ).fetchone()
+        if exact is None:
+            remaining = self._fetch_coexist_values(conn, kind, canonical_key)
+            return self._make_forget_result("value_not_found", provided_key, canonical_key, rule, value, remaining_values=remaining)
+        d = self._row_to_dict(exact)
+        self._hard_delete_row(conn, d['id'])
+        remaining = self._fetch_coexist_values(conn, kind, canonical_key)
+        status = "forgotten_empty" if not remaining else "forgotten"
+        return self._make_forget_result(status, provided_key, canonical_key, rule, value, date=self._row_date(d), remaining_values=remaining or None)
+
+    def _forget_raw(self, conn, kind: str, canonical_key: str, provided_key: str, rule: Optional[str], value: Optional[str]) -> dict:
+        """LUT-miss path: raw key lookup, optional value filter."""
+        rows = conn.execute(
+            "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
+            (kind, canonical_key),
+        ).fetchall()
+        if not rows:
+            return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+        if value is not None:
+            exact = conn.execute(
+                "SELECT * FROM data_graph "
+                "WHERE kind=? AND key=? AND deleted_at IS NULL "
+                "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
+                (kind, canonical_key, value),
+            ).fetchone()
+            if exact is None:
+                return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
+            d = self._row_to_dict(exact)
+            self._hard_delete_row(conn, d['id'])
+            return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=self._row_date(d))
+        for r in rows:
+            self._hard_delete_row(conn, self._row_to_dict(r)['id'])
+        if len(rows) == 1:
+            d = self._row_to_dict(rows[0])
+            return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=self._row_date(d))
+        return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=len(rows))
+
+    def forget(self, kind: str, key: str, value: str = None) -> Optional[dict]:
         """Hard-delete memory rows by key (and optionally value).
 
         Rule-aware: temporal deletes all versions, coexist deletes the specific
@@ -1427,102 +1511,17 @@ class DataGraphService:
             logger.warning("[DATA GRAPH] forget: invalid kind '%s'", kind)
             return None
 
+        _RULE_HANDLERS = {
+            'immutable': self._forget_immutable,
+            'temporal': self._forget_temporal,
+            'coexist': self._forget_coexist,
+        }
+
         try:
+            canonical_key, rule = self._resolve_lut_key(kind, key)
+            handler = _RULE_HANDLERS.get(rule, self._forget_raw)
             with self.db.connection() as conn:
-                # Resolve canonical key via LUT
-                provided_key = key
-                canonical_key = key
-                rule = None
-
-                policy = _KIND_POLICY[kind]
-                if policy.get('contradiction') == 'lut_canonicalize':
-                    key_emb = self._generate_embedding(key)
-                    lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
-                    if lut_hit:
-                        canonical_key = lut_hit['canonical_key']
-                        rule = lut_hit['rule']
-
-                if rule == 'immutable':
-                    row = conn.execute(
-                        "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL LIMIT 1",
-                        (kind, canonical_key),
-                    ).fetchone()
-                    if row is None:
-                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
-                    d = self._row_to_dict(row)
-                    old_val = d.get('value')
-                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    self._hard_delete_row(conn, d['id'])
-                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=old_val, date=date)
-
-                if rule == 'temporal':
-                    rows = conn.execute(
-                        "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
-                        (kind, canonical_key),
-                    ).fetchall()
-                    if not rows:
-                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
-                    count = len(rows)
-                    for r in rows:
-                        self._hard_delete_row(conn, self._row_to_dict(r)['id'])
-                    return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
-
-                if rule == 'coexist':
-                    if value is None:
-                        return {
-                            "action": "forget",
-                            "status": "error",
-                            "message": "value required for coexist key",
-                        }
-                    exact = conn.execute(
-                        "SELECT * FROM data_graph "
-                        "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
-                        "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
-                        (kind, canonical_key, value),
-                    ).fetchone()
-                    if exact is None:
-                        remaining = self._fetch_coexist_values(conn, kind, canonical_key)
-                        return self._make_forget_result("value_not_found", provided_key, canonical_key, rule, value, remaining_values=remaining)
-                    d = self._row_to_dict(exact)
-                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    self._hard_delete_row(conn, d['id'])
-                    remaining = self._fetch_coexist_values(conn, kind, canonical_key)
-                    if not remaining:
-                        return self._make_forget_result("forgotten_empty", provided_key, canonical_key, rule, value, date=date)
-                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, date=date, remaining_values=remaining)
-
-                # LUT miss or no rule (misc/moment/document/system without cosine match) — raw key lookup
-                rows = conn.execute(
-                    "SELECT * FROM data_graph WHERE kind=? AND key=? AND deleted_at IS NULL",
-                    (kind, canonical_key),
-                ).fetchall()
-                if not rows:
-                    return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
-                if value is not None:
-                    # Value-specific delete
-                    exact = conn.execute(
-                        "SELECT * FROM data_graph "
-                        "WHERE kind=? AND key=? AND deleted_at IS NULL "
-                        "AND LOWER(TRIM(value))=LOWER(TRIM(?)) LIMIT 1",
-                        (kind, canonical_key, value),
-                    ).fetchone()
-                    if exact is None:
-                        return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
-                    d = self._row_to_dict(exact)
-                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    self._hard_delete_row(conn, d['id'])
-                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
-                # No value param — delete all rows for this key
-                count = len(rows)
-                for r in rows:
-                    rd = self._row_to_dict(r)
-                    self._hard_delete_row(conn, rd['id'])
-                if count == 1:
-                    d = self._row_to_dict(rows[0])
-                    date = (d.get('last_confirmed_at') or d.get('first_seen_at') or "")[:10] or None
-                    return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=date)
-                return self._make_forget_result("forgotten_all", provided_key, canonical_key, rule, value, versions_removed=count)
-
+                return handler(conn, kind, canonical_key, key, rule, value)
         except Exception as e:
             logger.error("[DATA GRAPH] forget failed for kind=%s key='%s': %s", kind, key, e)
             return None

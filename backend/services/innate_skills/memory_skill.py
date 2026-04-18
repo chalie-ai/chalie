@@ -233,7 +233,7 @@ def _handle_forget(channel: str, params: dict) -> str:
     from services.data_graph_service import get_data_graph_service
 
     dgs = get_data_graph_service()
-    result = dgs.forget(kind=kind, key=key, value=value, source=f"skill:memory:forget:{channel}")
+    result = dgs.forget(kind=kind, key=key, value=value)
 
     if result is None:
         return f"{LOG_PREFIX} Forget failed — invalid kind or internal error."
