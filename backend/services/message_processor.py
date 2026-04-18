@@ -148,6 +148,12 @@ class MessageProcessor:
     CHANNEL: str = ''   # e.g. 'user', 'dmn', 'goal_pursuit', 'scheduled'
     ROLE: str = ''      # e.g. 'user', 'proactive_thought', 'goal_pursuit'
 
+    # When True, send() skips write_input_row() and store() skips the
+    # assistant row — self._uid stays None for the entire turn.
+    # Set this on internal processors (EpisodeEncoderProcessor,
+    # SuperEpisodeEncoderProcessor) that must not pollute the transcript.
+    SKIP_TRANSCRIPT_WRITE: bool = False
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self, raw_input: str, metadata: dict | None = None):
@@ -531,7 +537,10 @@ class MessageProcessor:
         with bind_current_processor(self):
             # Write input row BEFORE the loop so transcript_id is available
             # for ToolRenderAndRecordService during tool dispatch.
-            self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
+            # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
+            # they leave no trace in the transcript table.
+            if not self.SKIP_TRANSCRIPT_WRITE:
+                self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
             # Single dispatcher for the entire turn. Tools discovered
             # mid-turn via find_tools are registered as handlers on this
@@ -978,7 +987,13 @@ class MessageProcessor:
         """Write the assistant transcript row. Input row was already written
         at the top of send(). Tool calls were recorded inline via
         ToolRenderAndRecordService during the ACT loop.
+
+        When SKIP_TRANSCRIPT_WRITE is True (internal processors), this is a
+        no-op — no rows are written and self._uid remains None.
         """
+        if self.SKIP_TRANSCRIPT_WRITE:
+            self._uid = None
+            return
         from services.transcript_service import write_assistant_row
         write_assistant_row(self.CHANNEL, llm_response)
 

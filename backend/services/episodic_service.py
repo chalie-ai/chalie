@@ -17,6 +17,7 @@ a single cohesive service. Provides episode persistence, hybrid search
 import json
 import logging
 import math
+import struct
 import uuid
 from datetime import datetime
 from typing import Optional, List
@@ -62,10 +63,17 @@ class EpisodicService:
 
     # ── Storage / CRUD ───────────────────────────────────────────────
 
-    def store_episode(self, episode_data: dict) -> str:
+    def store_episode(self, episode_data: dict, *, embedding=None) -> str:
         """Store a new episode in the database.
 
         Required fields: gist, salience, channel.
+
+        Args:
+            episode_data: Episode fields dict. May include an 'embedding' key
+                for backwards compatibility, but the ``embedding`` kwarg takes
+                precedence when both are supplied.
+            embedding: Optional embedding vector (list of floats). When provided,
+                supersedes episode_data.get('embedding').
 
         Returns:
             UUID of the created episode.
@@ -80,7 +88,10 @@ class EpisodicService:
 
         try:
             episode_id = str(uuid.uuid4())
-            embedding = episode_data.get('embedding')
+            # Kwarg takes precedence; fall back to the dict key for callers
+            # that embedded the vector inside episode_data (old path).
+            if embedding is None:
+                embedding = episode_data.get('embedding')
 
             transcript_id_start = episode_data.get('transcript_id_start')
             transcript_id_end = episode_data.get('transcript_id_end')
@@ -907,3 +918,124 @@ class EpisodicService:
         except Exception as e:
             logging.warning(f"Failed to get consolidated date range: {e}")
             return fallback_str
+
+
+# ── Module-level novelty helpers ─────────────────────────────────────────────
+
+
+def _fetch_novelty_comparison_set(channel: str) -> list[bytes]:
+    """Return embedding blobs for the (recent ∪ most-activated) apex episodes.
+
+    Comparison set = dedup(last-100 by created_at) ∪ (top-100 by access_count),
+    apex-only (consolidated_into IS NULL), same channel, not deleted.
+
+    Returns a list of raw binary blobs suitable for compute_novelty().
+    Returns [] on any failure — novelty will be 1.0 (fully novel).
+    """
+    from services.database_service import get_shared_db_service
+    from services.episodic_constants import NOVELTY_RECENT_LIMIT, NOVELTY_ACTIVATION_LIMIT
+
+    try:
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT id FROM episodes
+                WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (channel, NOVELTY_RECENT_LIMIT),
+            )
+            recent_ids = {row[0] for row in cursor.fetchall()}
+
+            cursor.execute(
+                """
+                SELECT id FROM episodes
+                WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
+                ORDER BY access_count DESC LIMIT ?
+                """,
+                (channel, NOVELTY_ACTIVATION_LIMIT),
+            )
+            top_ids = {row[0] for row in cursor.fetchall()}
+
+            all_ids = list(recent_ids | top_ids)
+            if not all_ids:
+                cursor.close()
+                return []
+
+            placeholders = ','.join('?' * len(all_ids))
+            cursor.execute(
+                f"""
+                SELECT ev.embedding
+                FROM episodes_vec ev
+                JOIN episodes e ON e.rowid = ev.rowid
+                WHERE e.id IN ({placeholders})
+                  AND ev.embedding IS NOT NULL
+                """,
+                all_ids,
+            )
+            blobs = [row[0] for row in cursor.fetchall() if row[0]]
+            cursor.close()
+
+        return blobs
+
+    except Exception as exc:
+        logging.warning(f"[NOVELTY] _fetch_novelty_comparison_set failed: {exc}")
+        return []
+
+
+def _unpack_blob(blob: bytes) -> list[float]:
+    """Unpack a sqlite-vec binary blob into a list of floats."""
+    n = len(blob) // 4  # 4 bytes per float32
+    return list(struct.unpack(f'{n}f', blob))
+
+
+def compute_novelty(new_embedding, prior_embeddings: list[bytes]) -> float:
+    """Return semantic novelty of new_embedding vs the prior comparison set.
+
+    novelty = 1.0 - max(cosine_sim(new, prior) for prior in prior_embeddings)
+    Clamped to [0.0, 1.0]. Returns 1.0 (fully novel) if prior_embeddings is empty.
+
+    Args:
+        new_embedding: The new embedding as a list/array of floats (L2-normalized).
+        prior_embeddings: List of raw binary blobs from _fetch_novelty_comparison_set().
+
+    Returns:
+        Float in [0.0, 1.0]. Higher = more novel.
+    """
+    if not prior_embeddings:
+        return 1.0
+
+    try:
+        import numpy as np
+
+        if isinstance(new_embedding, bytes):
+            new_vec = np.array(_unpack_blob(new_embedding), dtype=np.float32)
+        else:
+            new_vec = np.array(new_embedding, dtype=np.float32)
+
+        # L2-normalize (embeddings from EmbeddingService are already normalized,
+        # but defend against callers who pass raw vectors).
+        norm = np.linalg.norm(new_vec)
+        if norm > 0:
+            new_vec = new_vec / norm
+
+        max_sim = 0.0
+        for blob in prior_embeddings:
+            try:
+                prior_vec = np.array(_unpack_blob(blob), dtype=np.float32)
+                if prior_vec.shape != new_vec.shape:
+                    continue
+                sim = float(np.dot(new_vec, prior_vec))
+                if sim > max_sim:
+                    max_sim = sim
+            except Exception:
+                continue
+
+        return max(0.0, min(1.0, 1.0 - max_sim))
+
+    except Exception as exc:
+        logging.warning(f"[NOVELTY] compute_novelty failed: {exc}")
+        return 1.0

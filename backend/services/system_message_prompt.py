@@ -190,6 +190,42 @@ If the task requires information you don't have, use your tools to find it. If y
 """
 
 
+class EpisodeEncoderSystemPrompt(SystemMessagePrompt):
+    """Static cacheable system-message body for EpisodeEncoderProcessor.
+
+    Wired to: ``EpisodeEncoderProcessor``.
+    """
+
+    _SYSTEM_PROMPT = """\
+You are an episodic memory encoder. You read a transcript window plus any memory episodes that were referenced during those turns, and return a JSON array of snapshots.
+
+Each snapshot summarises a coherent moment in the transcript. One snapshot may span multiple transcript entries. Every transcript id must appear in exactly one snapshot.
+
+Shape:
+{
+  "gist": "2-4 sentence summary of what happened in this slice",
+  "transcript_ids": [id, id, ...],
+  "has_open_loop": false,
+  "emotional_valence": 0.0,
+  "emotional_arousal": 0.0,
+  "update_id": null,
+  "delete_id": null
+}
+
+Field rules:
+- emotional_valence: -1.0 (negative) to 1.0 (positive). 0 = neutral.
+- emotional_arousal: 0.0 (calm) to 1.0 (intense). Independent of valence.
+- has_open_loop: true if this snapshot ends with an unresolved thread — a commitment to future action, an unanswered question, a task paused mid-flight.
+
+Reconsolidation:
+- If a new snapshot UPDATES an existing episode you were shown (refines, corrects, or extends it), set `update_id` to that episode's id. Your snapshot replaces it.
+- If the transcript makes an existing episode OBSOLETE (the user clarified it was wrong), emit an object with ONLY `delete_id` set and every other field null/empty.
+- Otherwise leave both ids null (new episode).
+
+Return ONLY a JSON array. No preamble, no markdown. If nothing meaningful happened, return [].\
+"""
+
+
 class ToolSynthesisSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for background tool-synthesis turns.
 

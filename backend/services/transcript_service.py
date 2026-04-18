@@ -494,23 +494,25 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
     Queries the last _EXTRACTION_WINDOW (25) transcript entries up to and
     including rowid for the given channel — 20 new entries plus a
-    5-entry overlap with the prior window. Runs episode extraction, computes
-    embeddings, calculates salience, stores episodes + traits. Never raises —
-    any failure is logged only.
+    5-entry overlap with the prior window. Runs EpisodeEncoderProcessor,
+    computes novelty + salience in pure code, and stores resulting episodes.
+    Never raises — any failure is logged only.
     """
     def _run():
         try:
+            import json as _json
             from services.database_service import get_shared_db_service
-            from services.episode_extractor_service import EpisodeExtractorService
-            from services.episodic_service import EpisodicService
-            from services.salience_service import SalienceService
+            from services.episode_encoder_processor import EpisodeEncoderProcessor
+            from services.episodic_service import (
+                EpisodicService, _fetch_novelty_comparison_set, compute_novelty,
+            )
+            from services.salience_service import compute_salience
             from services.embedding_service import get_embedding_service
-            from services.data_graph_service import get_data_graph_service
             from services.config_service import ConfigService
 
             db = get_shared_db_service()
 
-            # Fetch the window: up to _EXTRACTION_WINDOW entries for this channel up to rowid
+            # ── 1. Fetch the window ──────────────────────────────────────────
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -541,59 +543,217 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                 for r in reversed(rows)
             ]
 
-            extractor = EpisodeExtractorService()
-            episodes = extractor.extract(entries, channel)
+            # ── 2. Format window string ──────────────────────────────────────
+            window_str = _format_window_entries(entries)
 
-            if not episodes:
+            # ── 3. Fetch referenced episodes via tool_calls ──────────────────
+            referenced_episodes = _fetch_referenced_episodes(entries, db)
+            referenced_str = _format_episodes_for_prompt(referenced_episodes)
+
+            # ── 4. Call EpisodeEncoderProcessor ─────────────────────────────
+            response = EpisodeEncoderProcessor(window_str, referenced_str).send()
+            snapshots = _safe_json_load(response)
+            if not snapshots:
                 return
 
+            # ── 5. Resolve service handles ───────────────────────────────────
             try:
                 episodic_config = ConfigService.resolve_agent_config("episodic-memory")
             except Exception:
                 episodic_config = {}
 
             episodic_svc = EpisodicService(db, episodic_config)
-            salience_svc = SalienceService()
             emb_svc = get_embedding_service()
-            dgs = get_data_graph_service()
 
-            for ep in episodes:
+            valid_ids = {e['id'] for e in entries}
+
+            # Hoist novelty comparison set ONCE — shared across all snapshots
+            prior_embeddings = _fetch_novelty_comparison_set(channel)
+
+            # ── 6. Store snapshots ───────────────────────────────────────────
+            for ep in snapshots:
                 try:
-                    factors = ep.get('salience_factors', {}) or {}
-                    # Map prompt-side keys to SalienceService-side keys
-                    mapped_factors = {
-                        'novelty': factors.get('novelty', 0),
-                        'emotional': factors.get('emotional_weight', factors.get('emotional', 0)),
-                        'commitment': factors.get('goal_relevance', factors.get('commitment', 0)),
-                        'unresolved': factors.get('open_loop_created', factors.get('unresolved', False)),
-                    }
-                    salience_f = salience_svc.calculate_salience(mapped_factors)  # 0.1..1.0
-                    # DB requires INTEGER 1..10
-                    ep['salience'] = max(1, min(10, int(round(salience_f * 10))))
+                    if _is_delete_only(ep):
+                        delete_id = ep.get('delete_id')
+                        if delete_id:
+                            episodic_svc.soft_delete(delete_id)
+                        continue
+
+                    # Filter transcript_ids to valid window IDs
+                    raw_ids = ep.get('transcript_ids') or []
+                    ep['transcript_ids'] = [i for i in raw_ids if i in valid_ids]
+                    if not ep['transcript_ids']:
+                        continue
+
+                    ep['transcript_id_start'] = min(ep['transcript_ids'])
+                    ep['transcript_id_end'] = max(ep['transcript_ids'])
                     ep['channel'] = channel
 
-                    gist = ep.get('gist', '')
-                    if gist:
-                        ep['embedding'] = emb_svc.generate_embedding(gist)
+                    gist = ep.get('gist', '') or ''
+                    embedding = emb_svc.generate_embedding(gist) if gist else None
 
-                    episodic_svc.store_episode(ep)
+                    novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+                    ep['salience'] = compute_salience(
+                        valence=float(ep.get('emotional_valence') or 0.0),
+                        arousal=float(ep.get('emotional_arousal') or 0.0),
+                        has_open_loop=bool(ep.get('has_open_loop', False)),
+                        novelty=novelty,
+                    )
 
-                    for trait in ep.get('traits', []):
-                        if not isinstance(trait, dict):
-                            continue
-                        key = trait.get('key', '')
-                        value = trait.get('value')
-                        if key and value:
-                            dgs.store(kind='user_specific', key=key, value=value,
-                                      source='episode_extraction')
+                    # Pop transient fields — not persisted
+                    has_open_loop = ep.pop('has_open_loop', False)  # noqa: F841 (consumed above)
+                    update_id = ep.pop('update_id', None)
+                    ep.pop('delete_id', None)  # defensive — should be None here
+
+                    if update_id:
+                        episodic_svc.update_episode(update_id, ep, embedding=embedding)
+                    else:
+                        episodic_svc.store_episode(ep, embedding=embedding)
 
                 except Exception as ep_err:
                     logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
 
+            # TODO(commit-c): trigger super-episode cluster check here
+
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Episode extraction trigger failed (channel={channel}, rowid={rowid}): {e}")
+            logger.warning(
+                f"{LOG_PREFIX} Episode extraction trigger failed "
+                f"(channel={channel}, rowid={rowid}): {e}"
+            )
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+# ── Episode extraction helpers ───────────────────────────────────────────────
+
+
+def _format_window_entries(entries: list) -> str:
+    """Format transcript entries as `[id] (timestamp) role: content` lines."""
+    lines = []
+    for entry in entries:
+        entry_id = entry.get('id', '?')
+        role = entry.get('role', 'unknown')
+        content = entry.get('content', '')
+        tool_name = entry.get('tool_name')
+        created_at = entry.get('created_at', '')
+        if tool_name:
+            lines.append(f"[{entry_id}] ({created_at}) {role} [{tool_name}]: {content}")
+        else:
+            lines.append(f"[{entry_id}] ({created_at}) {role}: {content}")
+    return "\n".join(lines)
+
+
+def _fetch_referenced_episodes(entries: list, db) -> list:
+    """Query tool_calls for memory skill invocations within the window.
+
+    Parses each result for episode IDs in the format `[id:{uuid},...]`
+    (the output format of _format_results in memory_skill.py). Fetches
+    the matching episodes from the DB and returns them as dicts.
+
+    tool_name='memory' covers both auto-seed (tool_name='memory') and
+    LLM-invoked recall (also dispatched as tool_name='memory').
+    """
+    import re as _re
+    import json as _json
+
+    t_ids = [e['id'] for e in entries if e.get('id')]
+    if not t_ids:
+        return []
+
+    try:
+        placeholders = ','.join('?' * len(t_ids))
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT result FROM tool_calls
+                WHERE transcript_id IN ({placeholders})
+                  AND tool_name = 'memory'
+                  AND result IS NOT NULL
+                """,
+                t_ids,
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} _fetch_referenced_episodes query failed: {exc}")
+        return []
+
+    # Parse episode IDs from memory result strings: [id:{uuid},relevance:...]
+    episode_ids = set()
+    _id_pattern = _re.compile(r'\[id:([^,\]]+)')
+    for row in rows:
+        result_text = row[0] or ''
+        for match in _id_pattern.finditer(result_text):
+            eid = match.group(1).strip()
+            if eid:
+                episode_ids.add(eid)
+
+    if not episode_ids:
+        return []
+
+    try:
+        from services.episodic_service import EpisodicService
+        from services.config_service import ConfigService
+        try:
+            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
+        except Exception:
+            episodic_config = {}
+        episodic_svc = EpisodicService(db, episodic_config)
+        episodes = []
+        for eid in episode_ids:
+            ep = episodic_svc.get_episode_by_id(eid)
+            if ep:
+                episodes.append(ep)
+        return episodes
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} _fetch_referenced_episodes fetch failed: {exc}")
+        return []
+
+
+def _format_episodes_for_prompt(episodes: list) -> str:
+    """Format referenced episodes for the EpisodeEncoderProcessor user prompt."""
+    if not episodes:
+        return ''
+    lines = []
+    for ep in episodes:
+        eid = ep.get('id', '')
+        gist = ep.get('gist', '')
+        created_at = ep.get('created_at', '')
+        lines.append(f"id: {eid} | gist: {gist} | created: {created_at}")
+    return "\n".join(lines)
+
+
+def _safe_json_load(text: str) -> list:
+    """Parse a JSON array from LLM response text. Returns [] on any failure."""
+    import json as _json
+    import re as _re
+
+    if not text:
+        return []
+    text = text.strip()
+    # Strip markdown code fences if present
+    match = _re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if match:
+        text = match.group(1).strip()
+    try:
+        parsed = _json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned non-list JSON")
+        return []
+    except (_json.JSONDecodeError, ValueError):
+        logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned unparseable JSON")
+        return []
+
+
+def _is_delete_only(ep: dict) -> bool:
+    """Return True if the snapshot is a delete-only directive (no other data)."""
+    if not ep.get('delete_id'):
+        return False
+    # All other meaningful fields must be absent or null/empty
+    meaningful = ('gist', 'transcript_ids', 'update_id')
+    return not any(ep.get(f) for f in meaningful)
 
 
 def _embed_entry(rowid: int, content: str) -> None:
