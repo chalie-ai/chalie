@@ -734,7 +734,7 @@ def _safe_json_load(text: str) -> list:
             return parsed
         logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned non-list JSON")
         return []
-    except (_json.JSONDecodeError, ValueError):
+    except ValueError:
         logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned unparseable JSON")
         return []
 
@@ -963,7 +963,7 @@ def _safe_json_load_object(text: str) -> dict:
             return parsed
         logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned non-dict JSON")
         return {}
-    except (_json.JSONDecodeError, ValueError):
+    except ValueError:
         logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable JSON")
         return {}
 
