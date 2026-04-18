@@ -149,8 +149,8 @@ class EpisodeConsolidationService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, rowid, gist, context, intent, outcome, open_loops,
-                           entities, goal_tags, emotional_valence, emotional_arousal,
+                    SELECT id, rowid, gist,
+                           emotional_valence, emotional_arousal,
                            salience, storage_strength, retrieval_weight,
                            transcript_id_start, transcript_id_end, channel
                     FROM episodes
@@ -169,20 +169,14 @@ class EpisodeConsolidationService:
                         'id': ep_id,
                         'rowid': row[1],
                         'gist': row[2] or '',
-                        'context': row[3] or '',
-                        'intent': row[4] or '',
-                        'outcome': row[5] or '',
-                        'open_loops': _safe_json_list(row[6]),
-                        'entities': _safe_json_list(row[7]),
-                        'goal_tags': _safe_json_list(row[8]),
-                        'emotional_valence': row[9],
-                        'emotional_arousal': row[10],
-                        'salience': row[11] or 1.0,
-                        'storage_strength': row[12] or 1.0,
-                        'retrieval_weight': row[13] or 1.0,
-                        'transcript_id_start': row[14],
-                        'transcript_id_end': row[15],
-                        'channel': row[16] or '',
+                        'emotional_valence': row[3],
+                        'emotional_arousal': row[4],
+                        'salience': row[5] or 1.0,
+                        'storage_strength': row[6] or 1.0,
+                        'retrieval_weight': row[7] or 1.0,
+                        'transcript_id_start': row[8],
+                        'transcript_id_end': row[9],
+                        'channel': row[10] or '',
                     })
             return result
 
@@ -212,8 +206,7 @@ class EpisodeConsolidationService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT e.id, e.rowid, e.gist, e.context, e.intent, e.outcome,
-                           e.open_loops, e.entities, e.goal_tags,
+                    SELECT e.id, e.rowid, e.gist,
                            e.emotional_valence, e.emotional_arousal,
                            e.salience, e.storage_strength, e.retrieval_weight,
                            v.distance, e.transcript_id_start, e.transcript_id_end,
@@ -231,7 +224,7 @@ class EpisodeConsolidationService:
             results = []
             for row in rows:
                 ep_id = str(row[0])
-                distance = row[14]
+                distance = row[8]
                 if ep_id == exclude_id:
                     continue
                 if ep_id in exclude_ids:
@@ -242,20 +235,14 @@ class EpisodeConsolidationService:
                     'id': ep_id,
                     'rowid': row[1],
                     'gist': row[2] or '',
-                    'context': row[3] or '',
-                    'intent': row[4] or '',
-                    'outcome': row[5] or '',
-                    'open_loops': _safe_json_list(row[6]),
-                    'entities': _safe_json_list(row[7]),
-                    'goal_tags': _safe_json_list(row[8]),
-                    'emotional_valence': row[9],
-                    'emotional_arousal': row[10],
-                    'salience': row[11] or 1.0,
-                    'storage_strength': row[12] or 1.0,
-                    'retrieval_weight': row[13] or 1.0,
-                    'transcript_id_start': row[15],
-                    'transcript_id_end': row[16],
-                    'channel': row[17] or '',
+                    'emotional_valence': row[3],
+                    'emotional_arousal': row[4],
+                    'salience': row[5] or 1.0,
+                    'storage_strength': row[6] or 1.0,
+                    'retrieval_weight': row[7] or 1.0,
+                    'transcript_id_start': row[9],
+                    'transcript_id_end': row[10],
+                    'channel': row[11] or '',
                 })
             return results
 
@@ -300,23 +287,9 @@ class EpisodeConsolidationService:
     def _format_cluster(self, cluster: list) -> str:
         parts = []
         for i, ep in enumerate(cluster, 1):
-            intent = ep.get('intent', '')
-            if isinstance(intent, str):
-                try:
-                    intent_obj = json.loads(intent)
-                    intent = intent_obj.get('direction', str(intent_obj))
-                except Exception:
-                    pass
-
             parts.append(
                 f"Episode {i}:\n"
                 f"  Gist: {ep['gist']}\n"
-                f"  Context: {ep['context']}\n"
-                f"  Intent: {intent}\n"
-                f"  Outcome: {ep['outcome']}\n"
-                f"  Open loops: {json.dumps(ep['open_loops'])}\n"
-                f"  Entities: {json.dumps(ep['entities'])}\n"
-                f"  Goal tags: {json.dumps(ep['goal_tags'])}\n"
                 f"  Emotional valence: {ep.get('emotional_valence')}\n"
                 f"  Emotional arousal: {ep.get('emotional_arousal')}"
             )
@@ -330,21 +303,7 @@ class EpisodeConsolidationService:
         max_salience = max(ep.get('salience', 1.0) for ep in cluster)
         salience = min(10, max_salience + 1)
 
-        merged_entities = list({
-            e for ep in cluster for e in ep.get('entities', [])
-        })
-        merged_goal_tags = list({
-            t for ep in cluster for t in ep.get('goal_tags', [])
-        })
-
-        intent = data.get('intent', {'type': 'reflection', 'direction': 'consolidated memory'})
-        context = data.get('context', '')
-        action = data.get('action', '')
-        emotion = data.get('emotion', {'valence': 'neutral', 'intensity': 'low'})
-        outcome = data.get('outcome', '')
         gist = data.get('gist', '')
-        salience_factors = data.get('salience_factors', {})
-        open_loops = data.get('open_loops', [])
         emotional_valence = data.get('emotional_valence')
         emotional_arousal = data.get('emotional_arousal')
 
@@ -382,32 +341,20 @@ class EpisodeConsolidationService:
 
                 cursor.execute("""
                     INSERT INTO episodes (
-                        id, intent, context, action, emotion, outcome, gist,
-                        salience, channel,
-                        salience_factors, open_loops,
+                        id, gist, salience, channel,
                         transcript_ids, transcript_id_start, transcript_id_end,
-                        entities, goal_tags,
                         emotional_valence, emotional_arousal,
                         consolidated_from, storage_strength, retrieval_weight
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
-                    json.dumps(intent),
-                    json.dumps(context),
-                    action,
-                    json.dumps(emotion),
-                    outcome,
                     gist,
                     salience,
                     channel,
-                    json.dumps(salience_factors),
-                    json.dumps(open_loops),
                     json.dumps([]),
                     super_transcript_start,
                     super_transcript_end,
-                    json.dumps(merged_entities),
-                    json.dumps(merged_goal_tags),
                     emotional_valence,
                     emotional_arousal,
                     json.dumps(source_ids),
@@ -434,8 +381,8 @@ class EpisodeConsolidationService:
                 ).fetchone()
                 if fts_row:
                     conn.execute(
-                        "INSERT INTO episodes_fts(rowid, gist, action) VALUES (?, ?, ?)",
-                        (fts_row[0], gist, action),
+                        "INSERT INTO episodes_fts(rowid, gist) VALUES (?, ?)",
+                        (fts_row[0], gist),
                     )
 
                 cursor.close()

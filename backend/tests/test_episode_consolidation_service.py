@@ -108,37 +108,27 @@ def fake_db(mem_db):
     return _FakeDB(mem_db)
 
 
-def _insert_episode(conn, ep_id=None, gist="test gist", entities=None,
-                    goal_tags=None, salience=5, storage_strength=1.0,
-                    retrieval_weight=0.5, consolidated_from=None,
-                    open_loops=None, emotional_valence=0.0, emotional_arousal=0.5,
-                    embedding=None, channel='test',
+def _insert_episode(conn, ep_id=None, gist="test gist", salience=5,
+                    storage_strength=1.0, retrieval_weight=0.5,
+                    consolidated_from=None, emotional_valence=0.0,
+                    emotional_arousal=0.5, embedding=None, channel='test',
                     transcript_id_start=None, transcript_id_end=None):
     ep_id = ep_id or str(uuid.uuid4())
     conn.execute("""
         INSERT INTO episodes (
-            id, intent, context, action, emotion, outcome, gist,
-            salience, channel, entities, goal_tags, storage_strength,
-            retrieval_weight, consolidated_from, open_loops,
+            id, gist, salience, channel, storage_strength,
+            retrieval_weight, consolidated_from,
             emotional_valence, emotional_arousal,
             transcript_id_start, transcript_id_end
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ep_id,
-        json.dumps({'type': 'exploration', 'direction': 'test'}),
-        json.dumps('test context'),
-        'test action',
-        json.dumps({'valence': 'neutral', 'intensity': 'low'}),
-        'test outcome',
         gist,
         salience,
         channel,
-        json.dumps(entities or []),
-        json.dumps(goal_tags or []),
         storage_strength,
         retrieval_weight,
         json.dumps(consolidated_from or []),
-        json.dumps(open_loops or []),
         emotional_valence,
         emotional_arousal,
         transcript_id_start,
@@ -334,18 +324,12 @@ class TestRunConsolidationCycle:
         existing_super = str(uuid.uuid4())
         mem_db.execute("""
             INSERT INTO episodes (
-                id, intent, context, action, emotion, outcome, gist,
-                salience, channel, consolidated_from, retrieval_weight
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, gist, salience, channel, consolidated_from, retrieval_weight
+            ) VALUES (?, ?, ?, ?, ?, ?)
         """, (
             existing_super,
-            json.dumps({'type': 'reflection'}),
-            json.dumps('ctx'),
-            'action',
-            json.dumps({'valence': 'neutral'}),
-            'outcome',
             'Existing super episode',
-            7.0,
+            7,
             'consolidated',
             json.dumps([ep1, ep2, ep3]),
             1.0,

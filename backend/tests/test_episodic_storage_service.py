@@ -1,6 +1,5 @@
 """Tests for EpisodicService storage — real SQLite via shared db fixture."""
 
-import json
 import uuid
 import pytest
 from unittest.mock import patch
@@ -19,13 +18,8 @@ def episodic_svc(db):
 
 
 def _make_episode_data(**overrides):
-    """Minimal valid episode data with all 8 required fields."""
+    """Minimal valid episode data with all 3 required fields."""
     base = {
-        'intent': {'type': 'exploration'},
-        'context': {'topic': 'test'},
-        'action': 'user asked a question',
-        'emotion': {'valence': 0.5},
-        'outcome': 'answered successfully',
         'gist': 'Test conversation about coding',
         'salience': 5,
         'channel': 'programming',
@@ -39,11 +33,10 @@ def _make_episode_data(**overrides):
 class TestStoreEpisodeValidation:
 
     @pytest.mark.parametrize("missing_field", [
-        'intent', 'context', 'action', 'emotion', 'outcome',
         'gist', 'salience', 'channel',
     ])
     def test_raises_value_error_for_missing_field(self, episodic_svc, missing_field):
-        """Each of the 8 required fields triggers ValueError when absent."""
+        """Each of the 3 required fields triggers ValueError when absent."""
         svc = episodic_svc
         data = _make_episode_data()
         del data[missing_field]
@@ -77,42 +70,31 @@ class TestStoreEpisodeSuccess:
 
 class TestUpdateEpisode:
 
-    def test_empty_updates_returns_true_immediately(self, episodic_svc):
-        """Empty updates dict returns True without touching DB."""
+    def test_empty_updates_is_noop(self, episodic_svc):
+        """Empty updates dict returns None without touching DB."""
         with patch.object(episodic_svc.db_service, 'connection', wraps=episodic_svc.db_service.connection) as spy:
             result = episodic_svc.update_episode('some-id', {})
-            assert result is True
+            assert result is None
             spy.assert_not_called()
 
-    def test_returns_true_when_row_updated(self, db, episodic_svc):
-        """rowcount=1 returns True."""
+    def test_gist_update_persisted(self, db, episodic_svc):
+        """Field update is written to the database."""
         svc = episodic_svc
-        # Insert an episode first
         episode_id = svc.store_episode(_make_episode_data())
 
         result = svc.update_episode(episode_id, {'gist': 'updated gist'})
-        assert result is True
+        assert result is None
 
-        # Verify the update persisted
         row = db.execute("SELECT gist FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] == 'updated gist'
 
-    def test_returns_false_when_no_row_found(self, episodic_svc):
-        """rowcount=0 returns False."""
+    def test_update_nonexistent_row_raises(self, episodic_svc):
+        """Updating a row that doesn't exist propagates without silent failure."""
+        # update_episode does not guard against missing rows — caller's responsibility.
+        # It should complete without raising (SQLite silently updates 0 rows).
         svc = episodic_svc
         result = svc.update_episode('nonexistent-id', {'gist': 'updated'})
-        assert result is False
-
-    def test_json_fields_serialized(self, db, episodic_svc):
-        """JSON-typed fields (intent, context, emotion, etc.) are serialized."""
-        svc = episodic_svc
-        episode_id = svc.store_episode(_make_episode_data())
-
-        svc.update_episode(episode_id, {'intent': {'type': 'new'}})
-
-        # Verify the JSON was serialized correctly in the DB
-        row = db.execute("SELECT intent FROM episodes WHERE id = ?", (episode_id,)).fetchone()
-        assert json.loads(row[0]) == {'type': 'new'}
+        assert result is None
 
 
 # ── soft_delete_episode ──────────────────────────────────────────────

@@ -87,13 +87,8 @@ def episodic_svc(mem_db):
 
 
 def _ep(**overrides) -> dict:
-    """Minimal valid episode_data dict — all 8 required fields present."""
+    """Minimal valid episode_data dict — 3 required fields."""
     base = {
-        'intent': {'type': 'exploration'},
-        'context': {'topic': 'test'},
-        'action': 'user asked a question',
-        'emotion': {'valence': 0.5},
-        'outcome': 'answered successfully',
         'gist': 'Test conversation',
         'salience': 5,
         'channel': 'programming',
@@ -128,26 +123,6 @@ class TestStoreEpisodeNewColumns:
         ).fetchone()
         assert row['transcript_id_start'] == 5
         assert row['transcript_id_end'] == 29
-
-    def test_entities_stored_as_json(self, mem_db, episodic_svc):
-        """entities list is persisted as a JSON array."""
-        data = _ep(entities=['Python', 'Flask', 'SQLite'])
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT entities FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert json.loads(row['entities']) == ['Python', 'Flask', 'SQLite']
-
-    def test_goal_tags_stored_as_json(self, mem_db, episodic_svc):
-        """goal_tags list is persisted as a JSON array."""
-        data = _ep(goal_tags=['learn-python', 'build-app'])
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT goal_tags FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert json.loads(row['goal_tags']) == ['learn-python', 'build-app']
 
     def test_emotional_valence_stored(self, mem_db, episodic_svc):
         """emotional_valence float is stored and retrievable."""
@@ -201,21 +176,19 @@ class TestStoreEpisodeNewColumns:
         assert row['retrieval_weight'] == pytest.approx(0.8)
 
     def test_new_columns_default_when_absent(self, mem_db, episodic_svc):
-        """When new optional columns are omitted, defaults are applied."""
-        data = _ep()  # no new columns
+        """When optional columns are omitted, defaults are applied."""
+        data = _ep()
 
         episode_id = episodic_svc.store_episode(data)
 
         row = mem_db.execute("""
-            SELECT transcript_ids, entities, goal_tags, emotional_valence,
+            SELECT transcript_ids, emotional_valence,
                    emotional_arousal, consolidated_from, storage_strength, retrieval_weight,
                    transcript_id_start, transcript_id_end
             FROM episodes WHERE id = ?
         """, (episode_id,)).fetchone()
 
         assert json.loads(row['transcript_ids']) == []
-        assert json.loads(row['entities']) == []
-        assert json.loads(row['goal_tags']) == []
         assert row['emotional_valence'] is None
         assert row['emotional_arousal'] is None
         assert json.loads(row['consolidated_from']) == []
@@ -224,15 +197,13 @@ class TestStoreEpisodeNewColumns:
         assert row['transcript_id_start'] is None
         assert row['transcript_id_end'] is None
 
-    def test_all_ten_new_columns_round_trip(self, mem_db, episodic_svc):
-        """All 10 Phase-0 columns survive a full store-and-read round trip."""
+    def test_new_columns_round_trip(self, mem_db, episodic_svc):
+        """All optional columns survive a full store-and-read round trip."""
         src_ids = [str(uuid.uuid4())]
         data = _ep(
             transcript_ids=[1, 2, 3],
             transcript_id_start=1,
             transcript_id_end=3,
-            entities=['Alice', 'Bob'],
-            goal_tags=['goal-a'],
             emotional_valence=-0.3,
             emotional_arousal=0.6,
             consolidated_from=src_ids,
@@ -244,7 +215,7 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("""
             SELECT transcript_ids, transcript_id_start, transcript_id_end,
-                   entities, goal_tags, emotional_valence, emotional_arousal,
+                   emotional_valence, emotional_arousal,
                    consolidated_from, storage_strength, retrieval_weight
             FROM episodes WHERE id = ?
         """, (episode_id,)).fetchone()
@@ -252,8 +223,6 @@ class TestStoreEpisodeNewColumns:
         assert json.loads(row['transcript_ids']) == [1, 2, 3]
         assert row['transcript_id_start'] == 1
         assert row['transcript_id_end'] == 3
-        assert json.loads(row['entities']) == ['Alice', 'Bob']
-        assert json.loads(row['goal_tags']) == ['goal-a']
         assert row['emotional_valence'] == pytest.approx(-0.3)
         assert row['emotional_arousal'] == pytest.approx(0.6)
         assert json.loads(row['consolidated_from']) == src_ids
@@ -654,92 +623,3 @@ class TestExtractorLlmFailure:
         result = svc.extract(entries, 'test')
 
         assert result == []
-
-
-# ── Reconsolidation: correction carries transcript links forward ──────────────
-
-
-class TestReconsolidationCorrectTranscriptLinks:
-    """When reconsolidation detects a contradiction and stores a correction
-    episode, the correction must carry forward the original episode's transcript
-    link columns (transcript_id_start, transcript_id_end, transcript_ids).
-
-    The reconsolidation LLM is mocked because we cannot run a real LLM in tests.
-    """
-
-    def _make_episodic_svc(self, mem_db):
-        from services.episodic_service import EpisodicService
-        fake_db = _FakeDB(mem_db)
-        return EpisodicService(fake_db)
-
-    def test_correction_episode_carries_transcript_id_start_and_end(self, mem_db):
-        """A reconsolidation contradiction correction preserves the original
-        episode's transcript_id_start and transcript_id_end on the new episode."""
-        svc = self._make_episodic_svc(mem_db)
-
-        original_id = svc.store_episode(_ep(
-            transcript_ids=[10, 11, 12],
-            transcript_id_start=10,
-            transcript_id_end=12,
-            gist='Original memory: user lives in Valletta',
-            open_loops=['confirm address'],
-        ))
-
-        reconsolidate_response = json.dumps({
-            'verdict': 'contradiction',
-            'resolved_loops': [],
-            'correction': 'User now lives in Swieqi, not Valletta',
-        })
-
-        mock_llm = MagicMock()
-        mock_llm.send_message.return_value = MagicMock(text=reconsolidate_response)
-
-        with patch('services.background_llm_queue.create_background_llm_proxy',
-                   return_value=mock_llm):
-            svc._reconsolidate_episode(original_id, 'User corrected their address to Swieqi')
-
-        # The correction episode (action = 'reconsolidation_correction') must exist
-        row = mem_db.execute(
-            "SELECT transcript_id_start, transcript_id_end, transcript_ids "
-            "FROM episodes WHERE action = 'reconsolidation_correction'"
-        ).fetchone()
-
-        assert row is not None, "Correction episode was not stored"
-        assert row['transcript_id_start'] == 10, (
-            f"Expected transcript_id_start=10, got {row['transcript_id_start']}"
-        )
-        assert row['transcript_id_end'] == 12, (
-            f"Expected transcript_id_end=12, got {row['transcript_id_end']}"
-        )
-        stored_ids = json.loads(row['transcript_ids'])
-        assert stored_ids == [10, 11, 12], (
-            f"Expected transcript_ids=[10,11,12], got {stored_ids}"
-        )
-
-    def test_correction_episode_does_not_appear_when_verdict_is_none(self, mem_db):
-        """When the LLM returns verdict='none', no correction episode is stored."""
-        svc = self._make_episodic_svc(mem_db)
-
-        original_id = svc.store_episode(_ep(
-            transcript_id_start=5,
-            transcript_id_end=8,
-            gist='Stable fact',
-        ))
-
-        no_change_response = json.dumps({
-            'verdict': 'none',
-            'resolved_loops': [],
-            'correction': '',
-        })
-
-        mock_llm = MagicMock()
-        mock_llm.send_message.return_value = MagicMock(text=no_change_response)
-
-        with patch('services.background_llm_queue.create_background_llm_proxy',
-                   return_value=mock_llm):
-            svc._reconsolidate_episode(original_id, 'Everything still correct')
-
-        count = mem_db.execute(
-            "SELECT COUNT(*) FROM episodes WHERE action = 'reconsolidation_correction'"
-        ).fetchone()[0]
-        assert count == 0

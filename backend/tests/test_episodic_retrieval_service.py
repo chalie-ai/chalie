@@ -65,21 +65,18 @@ class TestEpisodicRetrievalService:
         candidates = [
             {
                 'id': str(i),
-                'intent': {},
-                'context': '',
-                'action': f'action-{i}',
-                'emotion': '',
-                'outcome': f'outcome-{i}',
                 'gist': f'gist-{i}',
                 'salience': 5,
-                'topic': 'test',
+                'channel': 'test',
                 'created_at': utc_now() - timedelta(hours=i),
                 'last_accessed_at': None,
-                'salience_factors': {},
-                'open_loops': [],
+                'emotional_valence': None,
+                'emotional_arousal': None,
+                'consolidated_into': None,
                 'vector_distance': 0.1 * i,
                 'text_rank': None,
                 'rrf_score': 1.0 / (60 + i),
+                'retrieval_weight': 1.0,
             }
             for i in range(10)
         ]
@@ -298,13 +295,13 @@ class TestFormatForPrompt:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-                "VALUES (?, '{}', '', '', '{}', '', 'old gist a', 5, 'test', ?)",
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, 'old gist a', 5, 'test', ?)",
                 (src_id_a, '2026-01-01T00:00:00+00:00')
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-                "VALUES (?, '{}', '', '', '{}', '', 'old gist b', 5, 'test', ?)",
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, 'old gist b', 5, 'test', ?)",
                 (src_id_b, '2026-01-10T00:00:00+00:00')
             )
 
@@ -360,8 +357,8 @@ class TestFormatForPrompt:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-                "VALUES (?, '{}', '', '', '{}', '', 'same day', 5, 'test', ?)",
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, 'same day', 5, 'test', ?)",
                 (src_id, '2026-02-14T09:00:00+00:00')
             )
 
@@ -392,8 +389,8 @@ class TestCountEpisodes:
         with db_conn.connection() as conn:
             for i in range(5):
                 conn.execute(
-                    "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
-                    "VALUES (?, '{}', '', '', '{}', '', ?, 5, 'test')",
+                    "INSERT INTO episodes (id, gist, salience, channel) "
+                    "VALUES (?, ?, 5, 'test')",
                     (str(uuid.uuid4()), f'gist {i}')
                 )
         assert svc._count_episodes() == 5
@@ -406,13 +403,13 @@ class TestCountEpisodes:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, deleted_at) "
-                "VALUES (?, '{}', '', '', '{}', '', 'deleted ep', 5, 'test', datetime('now'))",
+                "INSERT INTO episodes (id, gist, salience, channel, deleted_at) "
+                "VALUES (?, 'deleted ep', 5, 'test', datetime('now'))",
                 (ep_id,)
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
-                "VALUES (?, '{}', '', '', '{}', '', 'live ep', 5, 'test')",
+                "INSERT INTO episodes (id, gist, salience, channel) "
+                "VALUES (?, 'live ep', 5, 'test')",
                 (str(uuid.uuid4()),)
             )
         assert svc._count_episodes() == 1
@@ -517,22 +514,14 @@ class TestRetrieveEpisodesIntegration:
         """Build a minimal candidate dict as _hybrid_retrieve would return."""
         return {
             'id': str(idx),
-            'intent': '{}',
-            'context': '',
-            'action': f'action-{idx}',
-            'emotion': '{}',
-            'outcome': f'outcome-{idx}',
             'gist': f'gist-{idx}',
             'salience': 5,
-            'topic': 'test',
+            'channel': 'test',
             'created_at': utc_now() - timedelta(hours=idx),
             'last_accessed_at': None,
-            'salience_factors': {},
-            'open_loops': [],
-            'entities': '[]',
-            'goal_tags': '[]',
             'emotional_valence': None,
             'emotional_arousal': None,
+            'consolidated_into': None,
             'vector_distance': 0.05 * idx,
             'text_rank': None,
             'rrf_score': 1.0 / (60 + idx),
@@ -600,37 +589,6 @@ class TestRetrieveEpisodesIntegration:
         assert len(result) == 1
         assert result[0]['gist'] == 'gist-0'
 
-    def test_query_analysis_entities_fed_into_scoring(self, db):
-        """Entity overlap from _analyze_query should influence composite_score."""
-        svc = EpisodicService(get_shared_db_service(), config={})
-
-        # candidate with entity matching the query
-        candidate_match = self._make_candidate(0)
-        candidate_match['entities'] = '["Alice"]'
-        candidate_match['gist'] = 'Alice did something'
-
-        # candidate without matching entity
-        candidate_no_match = self._make_candidate(1)
-        candidate_no_match['entities'] = '["Bob"]'
-        candidate_no_match['gist'] = 'Bob did something'
-
-        mock_analysis = {
-            'entities': ['Alice'],
-            'keywords': ['Alice', 'did', 'something'],
-            'noun_phrases': ['Alice'],
-        }
-
-        with patch.object(svc, '_generate_embedding', return_value=[0.0] * 256), \
-             patch.object(svc, '_hybrid_retrieve', return_value=[candidate_match, candidate_no_match]), \
-             patch.object(svc, '_analyze_query', return_value=mock_analysis), \
-             patch.object(svc, '_apply_reconsolidation'):
-            result = svc.retrieve_episodes(query_text='Alice did something')
-
-        # Alice-matching episode should outscore Bob episode
-        alice_score = next(ep['composite_score'] for ep in result if ep['gist'] == 'Alice did something')
-        bob_score = next(ep['composite_score'] for ep in result if ep['gist'] == 'Bob did something')
-        assert alice_score > bob_score
-
 
 # ── _get_consolidated_date_range ──────────────────────────────────────────────
 
@@ -653,13 +611,13 @@ class TestGetConsolidatedDateRange:
         db_conn = get_shared_db_service()
         with db_conn.connection() as conn:
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-                "VALUES (?, '{}', '', '', '{}', '', '', 5, 'test', ?)",
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, '', 5, 'test', ?)",
                 (id_a, '2026-02-01T00:00:00+00:00')
             )
             conn.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel, created_at) "
-                "VALUES (?, '{}', '', '', '{}', '', '', 5, 'test', ?)",
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, '', 5, 'test', ?)",
                 (id_b, '2026-02-28T00:00:00+00:00')
             )
         episode = {'created_at': '2026-02-28T00:00:00+00:00'}

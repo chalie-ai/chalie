@@ -41,19 +41,18 @@ def _make_service(db, store):
     return svc
 
 
-def _insert_episode(db, ep_id, gist, action='', outcome='', salience=5,
-                    entities='[]', open_loops='[]', emotional_valence=None,
+def _insert_episode(db, ep_id, gist, salience=5,
+                    emotional_valence=None,
                     retrieval_weight=1.0, deleted_at=None):
     """Insert a minimal episode row into the real database."""
     from services.time_utils import utc_now
     ts = utc_now().isoformat()
     db.execute(
         "INSERT INTO episodes "
-        "(id, intent, context, action, emotion, outcome, gist, salience, channel, "
-        "created_at, entities, open_loops, emotional_valence, retrieval_weight, deleted_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ep_id, '"query"', '{}', action, '"neutral"', outcome, gist,
-         salience, 'general', ts, entities, open_loops, emotional_valence,
+        "(id, gist, salience, channel, "
+        "created_at, emotional_valence, retrieval_weight, deleted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (ep_id, gist, salience, 'general', ts, emotional_valence,
          retrieval_weight, deleted_at),
     )
     db.commit()
@@ -62,44 +61,25 @@ def _insert_episode(db, ep_id, gist, action='', outcome='', salience=5,
 # ── TestFormatEpisodes ─────────────────────────────────────────────────────────
 
 class TestFormatEpisodes:
-    """_format_episodes() — direct input/output tests on the formatting logic."""
+    """_format_episodes() — direct input/output tests on the formatting logic.
+
+    Each row is (gist, salience, emotional_valence, created_at).
+    """
 
     def test_basic_fields_appear(self, db, store):
         """gist, salience, and timestamp appear in output for a minimal row."""
         svc = _make_service(db, store)
-        rows = [('User asked about weather', 'search', 'success', 7,
-                 None, '[]', '[]', '2026-04-10T14:30:00')]
+        rows = [('User asked about weather', 7, None, '2026-04-10T14:30:00')]
         result = svc._format_episodes(rows)
 
         assert 'User asked about weather' in result
         assert 'salience:7' in result
         assert '2026-04-10 14:30' in result
 
-    def test_action_and_outcome_lines(self, db, store):
-        """Non-empty action and outcome each produce a dedicated line."""
-        svc = _make_service(db, store)
-        rows = [('Discussed plans', 'plan_review', 'confirmed', 5,
-                 None, '[]', '[]', '2026-04-10T10:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Action: plan_review' in result
-        assert 'Outcome: confirmed' in result
-
-    def test_empty_action_and_outcome_omitted(self, db, store):
-        """Empty action and outcome strings do not produce lines in the output."""
-        svc = _make_service(db, store)
-        rows = [('Just a gist', '', '', 3, None, '[]', '[]', '2026-04-10T09:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Action:' not in result
-        assert 'Outcome:' not in result
-        assert 'Just a gist' in result
-
     def test_emotional_valence_included_when_present(self, db, store):
         """A numeric emotional_valence is formatted to 1 decimal place."""
         svc = _make_service(db, store)
-        rows = [('Good session', 'exercise', 'done', 6,
-                 0.8, '[]', '[]', '2026-04-10T08:00:00')]
+        rows = [('Good session', 6, 0.8, '2026-04-10T08:00:00')]
         result = svc._format_episodes(rows)
 
         assert 'valence:0.8' in result
@@ -107,66 +87,18 @@ class TestFormatEpisodes:
     def test_null_valence_omitted(self, db, store):
         """A NULL emotional_valence does not produce a valence token in output."""
         svc = _make_service(db, store)
-        rows = [('Neutral event', '', '', 4, None, '[]', '[]', '2026-04-10T07:00:00')]
+        rows = [('Neutral event', 4, None, '2026-04-10T07:00:00')]
         result = svc._format_episodes(rows)
 
         assert 'valence:' not in result
-
-    def test_entities_json_list_rendered(self, db, store):
-        """A valid JSON entities list appears as a comma-separated Entities line."""
-        svc = _make_service(db, store)
-        entities = json.dumps(['Alice', 'Bob'])
-        rows = [('Meeting recap', '', '', 5, None,
-                 entities, '[]', '2026-04-10T11:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Entities: Alice, Bob' in result
-
-    def test_open_loops_json_list_rendered(self, db, store):
-        """A valid JSON open_loops list appears as an Open loops line."""
-        svc = _make_service(db, store)
-        loops = json.dumps(['Follow up on report', 'Check budget'])
-        rows = [('Project update', '', '', 5, None, '[]',
-                 loops, '2026-04-10T12:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Open loops: Follow up on report, Check budget' in result
-
-    def test_empty_entities_list_omitted(self, db, store):
-        """An empty JSON entities list does not produce an Entities line."""
-        svc = _make_service(db, store)
-        rows = [('Brief note', '', '', 3, None, '[]', '[]', '2026-04-10T13:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Entities:' not in result
-
-    def test_malformed_entities_json_skipped_gracefully(self, db, store):
-        """Malformed entities JSON does not raise; the episode still renders."""
-        svc = _make_service(db, store)
-        rows = [('Event with bad json', '', '', 4, None,
-                 'not-valid-json', '[]', '2026-04-10T15:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Event with bad json' in result
-        assert 'Entities:' not in result
-
-    def test_malformed_open_loops_json_skipped_gracefully(self, db, store):
-        """Malformed open_loops JSON does not raise; the episode still renders."""
-        svc = _make_service(db, store)
-        rows = [('Event with bad loops', '', '', 4, None,
-                 '[]', '{bad json}', '2026-04-10T15:00:00')]
-        result = svc._format_episodes(rows)
-
-        assert 'Event with bad loops' in result
-        assert 'Open loops:' not in result
 
     def test_multiple_episodes_numbered(self, db, store):
         """Multiple rows produce incrementing 1., 2., 3. prefixes."""
         svc = _make_service(db, store)
         rows = [
-            ('First', '', '', 3, None, '[]', '[]', '2026-04-10T01:00:00'),
-            ('Second', '', '', 4, None, '[]', '[]', '2026-04-10T02:00:00'),
-            ('Third', '', '', 5, None, '[]', '[]', '2026-04-10T03:00:00'),
+            ('First', 3, None, '2026-04-10T01:00:00'),
+            ('Second', 4, None, '2026-04-10T02:00:00'),
+            ('Third', 5, None, '2026-04-10T03:00:00'),
         ]
         result = svc._format_episodes(rows)
 
@@ -174,13 +106,13 @@ class TestFormatEpisodes:
         assert '2.' in result
         assert '3.' in result
 
-    def test_none_entities_value_handled(self, db, store):
-        """NULL entities column (Python None) does not raise."""
+    def test_gist_always_rendered(self, db, store):
+        """The gist string always appears in the output."""
         svc = _make_service(db, store)
-        rows = [('Null entities', '', '', 5, None, None, None, '2026-04-10T00:00:00')]
+        rows = [('Just a gist', 3, None, '2026-04-10T09:00:00')]
         result = svc._format_episodes(rows)
 
-        assert 'Null entities' in result
+        assert 'Just a gist' in result
 
 
 # ── TestGatherRecentContext ────────────────────────────────────────────────────
@@ -207,9 +139,9 @@ class TestGatherRecentContext:
 
     def test_multiple_episodes_all_appear(self, db, store):
         """All inserted episodes appear in the output."""
-        _insert_episode(db, 'ep-a', 'Episode Alpha', action='search')
-        _insert_episode(db, 'ep-b', 'Episode Beta', action='reply')
-        _insert_episode(db, 'ep-c', 'Episode Gamma', outcome='done')
+        _insert_episode(db, 'ep-a', 'Episode Alpha')
+        _insert_episode(db, 'ep-b', 'Episode Beta')
+        _insert_episode(db, 'ep-c', 'Episode Gamma')
 
         svc = _make_service(db, store)
         result = svc._gather_recent_context()
@@ -230,15 +162,6 @@ class TestGatherRecentContext:
         assert 'Active episode' in result
         assert 'Deleted episode' not in result
 
-    def test_action_appears_in_output(self, db, store):
-        """A non-empty action value is included in the output for that episode."""
-        _insert_episode(db, 'ep-act', 'Did something', action='web_search')
-
-        svc = _make_service(db, store)
-        result = svc._gather_recent_context()
-
-        assert 'web_search' in result
-
     def test_salience_value_appears(self, db, store):
         """The salience integer is visible in the formatted output."""
         _insert_episode(db, 'ep-sal', 'High salience moment', salience=9)
@@ -247,17 +170,6 @@ class TestGatherRecentContext:
         result = svc._gather_recent_context()
 
         assert 'salience:9' in result
-
-    def test_entities_from_db_rendered(self, db, store):
-        """Entities stored as JSON in the DB are rendered in the context string."""
-        _insert_episode(db, 'ep-ent', 'Met with team',
-                        entities=json.dumps(['Alice', 'Bob']))
-
-        svc = _make_service(db, store)
-        result = svc._gather_recent_context()
-
-        assert 'Alice' in result
-        assert 'Bob' in result
 
     def test_episodes_numbered_starting_from_one(self, db, store):
         """Output starts with '1.' — episodes are numbered."""

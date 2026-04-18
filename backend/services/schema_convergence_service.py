@@ -517,8 +517,31 @@ class SchemaConvergenceService:
 
         return synced
 
+    def _extract_fts5_columns(self, normalized_ddl: str) -> list:
+        """Parse the column list from a normalized FTS5 CREATE VIRTUAL TABLE DDL.
+
+        Strips key=value options (e.g. content='episodes', content_rowid='rowid')
+        and returns only bare column names.
+
+        Returns an empty list if the DDL is not an FTS5 table or cannot be parsed.
+        """
+        if "fts5" not in normalized_ddl:
+            return []
+        # Extract the argument list between the outer parentheses after USING fts5(
+        match = re.search(r"using\s+fts5\s*\((.+)\)", normalized_ddl)
+        if not match:
+            return []
+        args_str = match.group(1)
+        # Split by comma, then discard entries that contain '=' (key=value options)
+        columns = []
+        for part in args_str.split(","):
+            part = part.strip().strip("'\"")
+            if "=" not in part and part:
+                columns.append(part)
+        return columns
+
     def _converge_virtual_tables(self, desired: dict, actual: dict, live_conn: sqlite3.Connection, schema_sql: str) -> int:
-        """Create missing virtual tables; warn on DDL mismatch (no auto-rebuild)."""
+        """Create missing virtual tables; rebuild FTS5 tables whose column list changed."""
         created = 0
 
         for table_name, desired_ddl in desired.items():
@@ -545,7 +568,33 @@ class SchemaConvergenceService:
                                 f"[convergence] FTS5 rebuild failed for {table_name}: {exc}"
                             )
             elif actual[table_name] != desired_ddl:
-                # FTS5/vec0 recreation is destructive — log only
+                # For FTS5 content tables, check if only the column list changed.
+                # If so, rebuild automatically (DROP + CREATE + rebuild).
+                live_ddl = actual[table_name]
+                if "fts5" in desired_ddl and "content=" in desired_ddl:
+                    desired_cols = self._extract_fts5_columns(desired_ddl)
+                    live_cols = self._extract_fts5_columns(live_ddl)
+                    if desired_cols != live_cols:
+                        logger.warning(
+                            f"[convergence] FTS5 column list changed for {table_name}: "
+                            f"{live_cols} -> {desired_cols}. Rebuilding."
+                        )
+                        raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+                        if raw_ddl:
+                            try:
+                                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                                live_conn.execute(raw_ddl)
+                                live_conn.execute(
+                                    f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
+                                )
+                                logger.info(f"[convergence] Rebuilt FTS5 table (column change): {table_name}")
+                                created += 1
+                            except Exception as exc:
+                                logger.error(
+                                    f"[convergence] Failed to rebuild FTS5 table {table_name}: {exc}"
+                                )
+                        continue
+                # Non-FTS5 or non-column-list change — log only
                 logger.warning(
                     f"[convergence] Virtual table DDL mismatch (not auto-fixed): {table_name}"
                 )

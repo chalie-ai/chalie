@@ -14,11 +14,6 @@
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY,
-    intent TEXT NOT NULL,                     -- JSONB stored as TEXT
-    context TEXT NOT NULL,                    -- JSONB stored as TEXT
-    action TEXT NOT NULL,
-    emotion TEXT NOT NULL,                    -- JSONB stored as TEXT
-    outcome TEXT NOT NULL,
     gist TEXT NOT NULL,
     salience INTEGER NOT NULL CHECK (salience BETWEEN 1 AND 10),
     channel TEXT NOT NULL,
@@ -27,29 +22,27 @@ CREATE TABLE IF NOT EXISTS episodes (
     last_accessed_at TEXT,
     access_count INTEGER DEFAULT 0,
     deleted_at TEXT,
-    salience_factors TEXT DEFAULT '{}',       -- JSONB
-    open_loops TEXT DEFAULT '[]',             -- JSONB
     transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of transcript.id values this episode covers
     transcript_id_start INTEGER,              -- lowest transcript.id in this episode's range
     transcript_id_end INTEGER,                -- highest transcript.id in this episode's range
-    entities TEXT DEFAULT '[]',               -- JSONB: people, places, orgs, products mentioned
-    goal_tags TEXT DEFAULT '[]',              -- JSONB: active goal tags detected
     emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
     emotional_arousal REAL,                   -- 0.0 (calm) to 1.0 (intense) — drives consolidation strength
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
+    consolidated_into INTEGER,                -- back-pointer to super-episode row id
     storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
     retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_composite ON episodes(channel, retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_episodes_intent_type ON episodes(json_extract(intent, '$.type'));
 CREATE INDEX IF NOT EXISTS idx_episodes_transcript_range ON episodes(transcript_id_start, transcript_id_end);
 CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_weight DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_consolidated_into ON episodes(consolidated_into) WHERE consolidated_into IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL AND consolidated_into IS NULL;
 
 -- FTS5 for full-text search on episodes (replaces GIN tsvector indexes)
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, action, content='episodes', content_rowid='rowid'
+    gist, content='episodes', content_rowid='rowid'
 );
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.

@@ -71,7 +71,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
-             patch.object(svc, '_process_pending_reconsolidation',   side_effect=_record('reconsolidation', 0)), \
              patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
@@ -106,7 +105,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
-             patch.object(svc, '_process_pending_reconsolidation',   side_effect=_record('reconsolidation', 0)), \
              patch.object(svc, '_run_episode_consolidation',          side_effect=_record('consolidation', 0)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
@@ -168,9 +166,9 @@ class TestDecayEngineService:
         # Insert a stale episode — last accessed 2 hours ago so it qualifies for decay
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel, "
+            "(id, gist, salience, channel, "
             " retrieval_weight, last_accessed_at) "
-            "VALUES ('ep-decay-1', '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 'ch:1', "
+            "VALUES ('ep-decay-1', 'test gist', 5, 'ch:1', "
             "  0.9, datetime('now', '-2 hours'))",
         )
         db.commit()
@@ -208,9 +206,9 @@ class TestDecayEngineService:
         """
         db.execute(
             "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel, "
+            "(id, gist, salience, channel, "
             " retrieval_weight, last_accessed_at) "
-            "VALUES ('ep-fresh-1', '{}', '{}', 'fresh', '{}', 'ok', 'fresh gist', 5, 'ch:1', "
+            "VALUES ('ep-fresh-1', 'fresh gist', 5, 'ch:1', "
             "  0.9, datetime('now', '-10 minutes'))",
         )
         db.commit()

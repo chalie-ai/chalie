@@ -128,10 +128,7 @@ class TestGetSnapshot:
         # Seed episodes (42 total)
         for i in range(42):
             db.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
-                " gist, salience, channel)"
-                " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
-                " ?, ?, 'test')",
+                "INSERT INTO episodes (id, gist, salience, channel) VALUES (?, ?, ?, 'test')",
                 (f"ep-{i}", f"gist {i}", 5),
             )
 

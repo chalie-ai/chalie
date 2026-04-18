@@ -99,7 +99,7 @@ class DecayEngineService:
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
-        reconsolidation_count = self._process_pending_reconsolidation()
+        reconsolidation_count = 0
         consolidation_count = self._run_episode_consolidation()
         knowledge_count = self._decay_knowledge()
         data_graph_count = self._decay_data_graph()
@@ -193,9 +193,7 @@ class DecayEngineService:
 
                     cursor.execute("""
                         SELECT id, retrieval_weight,
-                               (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', COALESCE(last_accessed_at, created_at)) AS REAL)) / 3600.0 AS hours_since,
-                               json_extract(salience_factors, '$.source') AS sf_source,
-                               json_extract(salience_factors, '$.durability') AS sf_durability
+                               (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', COALESCE(last_accessed_at, created_at)) AS REAL)) / 3600.0 AS hours_since
                         FROM episodes
                         WHERE deleted_at IS NULL
                           AND retrieval_weight > 0.01
@@ -204,21 +202,11 @@ class DecayEngineService:
                     rows = cursor.fetchall()
 
                     updated = 0
-                    durability_updated = 0
 
                     for row in rows:
-                        episode_id, retrieval_weight, hours_since, sf_source, sf_durability = row
+                        episode_id, retrieval_weight, hours_since = row
 
                         exponent = self.retrieval_decay_exponent
-
-                        # Durability-based accelerated decay for tool_reflection episodes
-                        if sf_source == 'tool_reflection':
-                            if sf_durability == 'transient':
-                                exponent = self.retrieval_decay_exponent * 2.0
-                                durability_updated += 1
-                            elif sf_durability == 'evolving':
-                                exponent = self.retrieval_decay_exponent * 1.5
-                                durability_updated += 1
 
                         # Power-law decay: rw = rw * (1 + hours)^(-exponent)
                         new_rw = max(0.01, retrieval_weight * math.pow(1.0 + hours_since, -exponent))
@@ -230,12 +218,6 @@ class DecayEngineService:
                                 WHERE id = ?
                             """, (new_rw, episode_id))
                             updated += 1
-
-                    if durability_updated > 0:
-                        logger.info(
-                            f"[DECAY ENGINE] Applied durability-based decay to "
-                            f"{durability_updated} tool_reflection episodes"
-                        )
 
                     cursor.close()
 
@@ -251,21 +233,6 @@ class DecayEngineService:
 
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
-            return 0
-
-    def _process_pending_reconsolidation(self) -> int:
-        try:
-            from .database_service import get_shared_db_service
-            from .episodic_service import EpisodicService
-
-            db_service = get_shared_db_service()
-            try:
-                svc = EpisodicService(db_service)
-                return svc.process_pending_reconsolidation()
-            finally:
-                db_service.close_pool()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Pending reconsolidation failed: {e}", exc_info=True)
             return 0
 
     def _run_episode_consolidation(self) -> int:

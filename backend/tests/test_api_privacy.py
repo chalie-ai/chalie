@@ -75,9 +75,9 @@ class TestPrivacyAPI:
         """DELETE /privacy/delete-all with header clears episodes, transcript, tool_calls."""
         # Seed data
         db.execute(
-            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, channel) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("ep1", '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 'test'),
+            "INSERT INTO episodes (id, gist, salience, channel) "
+            "VALUES (?, ?, ?, ?)",
+            ("ep1", 'test gist', 5, 'test'),
         )
         db.execute(
             "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",

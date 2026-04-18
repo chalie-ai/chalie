@@ -164,7 +164,6 @@ def create_app():
     from .intents import intents_bp
     from .browser import browser_bp
     from .capabilities import capabilities_bp
-    from .probe import probe_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -191,7 +190,6 @@ def create_app():
     app.register_blueprint(intents_bp)
     app.register_blueprint(browser_bp)
     app.register_blueprint(capabilities_bp)
-    app.register_blueprint(probe_bp)
 
     # ── Dashboard gateway (interface daemons) ─────────────────────
     _init_dashboard_gateway(app)
