@@ -357,7 +357,7 @@ MessageProcessor tool compact    same as JOB   TOOL_COMPACTION_PROMPT   ~200ms  
 DMNMessageProcessor              primary       DMNSystemMessagePrompt   ~500ms-2s DMN idle / cadence trigger
 GoalPursuitProcessor             primary       GoalPursuitSystemMsgPr.  ~500ms-2s Per-goal daemon thread
 ScheduledMessageProcessor        primary       ScheduledSystemMsgPrompt ~500ms-2s Scheduler service (60s poll)
-episodic extraction              frontal-ctx   episode-extraction.md    ~500ms-2s rolling per-channel trigger (async, first at 25, then +20)
+EpisodeEncoderProcessor          frontal-ctx   EpisodeEncoderSystemPr.  ~500ms-2s rolling per-channel trigger (async, first at 25, then +20)
 ```
 
 **Deterministic paths (zero LLM):**
@@ -408,4 +408,4 @@ Component latency (user path, typical, no tools):
 
 ---
 
-*Last updated: 2026-04-11. See `docs/INDEX.md` for the full documentation map.*
+*Last updated: 2026-04-18. See `docs/INDEX.md` for the full documentation map.*
