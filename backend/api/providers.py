@@ -272,6 +272,9 @@ def test_provider():
                     'max_tokens': 1,
                     'timeout': 10,
                 }
+                host = config.get('host')
+                if host:
+                    test_config['host'] = host
                 from services.llm_service import create_llm_service
                 llm = create_llm_service(test_config)
                 llm.send_message("You are a test assistant.", "Say: ok")
