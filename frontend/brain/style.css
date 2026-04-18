@@ -197,6 +197,11 @@ body::before {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
+    flex: 1;
+}
+.modal-overlay .modal-title-row h2 {
+    margin: 0;
 }
 
 .modal-overlay .modal-body {
@@ -1470,11 +1475,23 @@ body::before {
 }
 .host-input-row {
     display: flex;
-    gap: 8px;
-    align-items: center;
+    align-items: stretch;
 }
 .host-input-row input {
     flex: 1;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+}
+.host-input-row .btn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.host-input-row input:focus {
+    position: relative;
+    z-index: 1;
 }
 .btn-sm {
     padding: 6px 12px;
