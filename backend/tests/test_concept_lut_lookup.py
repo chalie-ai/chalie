@@ -118,6 +118,7 @@ class TestLutKnnLookup:
 
         from services.embedding_utils import pack_embedding
         emb = self._embed("residency")
+        assert emb is not None
         blob = pack_embedding(emb)
 
         hits = conn.execute(
