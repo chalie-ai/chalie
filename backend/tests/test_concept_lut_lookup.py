@@ -84,6 +84,7 @@ class TestLutKnnLookup:
         conn = _get_lut_conn()
         if conn is None:
             pytest.skip("LUT not available")
+        assert conn is not None
 
         from services.embedding_utils import pack_embedding
         emb = self._embed("residence")
