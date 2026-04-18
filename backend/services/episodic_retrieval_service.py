@@ -456,6 +456,58 @@ def _rerank_composite(episodes: list[dict]) -> list[dict]:
 # ── Reconsolidation ───────────────────────────────────────────────────────────
 
 
+def _is_debounced(ep: dict, store, now) -> bool:
+    """Return True if this episode should be skipped (debounce window active).
+
+    When a MemoryStore connection is available the debounce key is set on the
+    store; otherwise ``last_accessed_at`` is used as a fallback clock.
+    Side-effect: sets the debounce key in *store* when the episode is NOT
+    debounced and *store* is available.
+    """
+    eid = ep.get('id')
+    if store is not None:
+        key = f"reconsolidation:{eid}"
+        if store.get(key):
+            return True
+        store.set(key, "1", ex=_RECONSOLIDATION_DEBOUNCE_SECONDS)
+        return False
+
+    last = ep.get('last_accessed_at')
+    if not last:
+        return False
+    try:
+        last_dt = parse_utc(last)
+        return (now - last_dt).total_seconds() < _RECONSOLIDATION_DEBOUNCE_SECONDS
+    except Exception:
+        return False
+
+
+def _write_reconsolidation(ep: dict, db, now) -> None:
+    """Persist activation bump for one episode and update the dict in place."""
+    new_salience = min(10, int(ep.get('salience') or 5) + _RECONSOLIDATION_SALIENCE_BOOST)
+    new_access_count = int(ep.get('access_count') or 0) + 1
+    iso_now = now.isoformat()
+
+    with db.connection() as conn:
+        conn.execute(
+            """
+            UPDATE episodes
+            SET salience = ?,
+                last_accessed_at = ?,
+                access_count = ?,
+                storage_strength = MIN(COALESCE(storage_strength, 1.0) + 0.1, 10.0),
+                retrieval_weight = MIN(COALESCE(retrieval_weight, 1.0) + 0.3, 1.0),
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (new_salience, iso_now, new_access_count, ep['id']),
+        )
+
+    ep['salience'] = new_salience
+    ep['last_accessed_at'] = iso_now
+    ep['access_count'] = new_access_count
+
+
 def _apply_reconsolidation(episodes: list[dict]) -> None:
     """Bump activation_score + salience for retrieved episodes.
 
@@ -487,50 +539,15 @@ def _apply_reconsolidation(episodes: list[dict]) -> None:
         return
 
     for ep in episodes:
+        eid = ep.get('id')
+        if not eid:
+            continue
         try:
-            eid = ep.get('id')
-            if not eid:
+            if _is_debounced(ep, store, now):
                 continue
-
-            if store is not None:
-                key = f"reconsolidation:{eid}"
-                if store.get(key):
-                    continue
-                store.set(key, "1", ex=_RECONSOLIDATION_DEBOUNCE_SECONDS)
-            else:
-                last = ep.get('last_accessed_at')
-                if last:
-                    try:
-                        last_dt = parse_utc(last)
-                        if (now - last_dt).total_seconds() < _RECONSOLIDATION_DEBOUNCE_SECONDS:
-                            continue
-                    except Exception:
-                        pass
-
-            new_salience = min(10, int(ep.get('salience') or 5) + _RECONSOLIDATION_SALIENCE_BOOST)
-            new_access_count = int(ep.get('access_count') or 0) + 1
-            iso_now = now.isoformat()
-
-            with db.connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE episodes
-                    SET salience = ?,
-                        last_accessed_at = ?,
-                        access_count = ?,
-                        storage_strength = MIN(COALESCE(storage_strength, 1.0) + 0.1, 10.0),
-                        retrieval_weight = MIN(COALESCE(retrieval_weight, 1.0) + 0.3, 1.0),
-                        updated_at = datetime('now')
-                    WHERE id = ?
-                    """,
-                    (new_salience, iso_now, new_access_count, eid),
-                )
-
-            ep['salience'] = new_salience
-            ep['last_accessed_at'] = iso_now
-            ep['access_count'] = new_access_count
+            _write_reconsolidation(ep, db, now)
         except Exception as exc:
-            logger.warning(f"[RETRIEVAL] reconsolidation failed for id={ep.get('id')}: {exc}")
+            logger.warning(f"[RETRIEVAL] reconsolidation failed for id={eid}: {exc}")
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
