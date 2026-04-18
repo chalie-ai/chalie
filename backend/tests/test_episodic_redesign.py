@@ -230,69 +230,21 @@ class TestStoreEpisodeNewColumns:
         assert row['retrieval_weight'] == pytest.approx(0.9)
 
 
-# ── store_episode: overlap → super episode ────────────────────────────────────
+# ── store_episode: overlap / super-episode behaviour ─────────────────────────
+#
+# Three tests that asserted INLINE super-episode creation inside store_episode()
+# were deleted in Commit D (episodic-simplification arbiter pass):
+#
+#   test_exact_range_overlap_stores_both_and_creates_super
+#   test_overlapping_range_stores_new_and_creates_super
+#   test_super_episode_has_merged_transcript_range
+#
+# Rationale: the inline >50% overlap → super-episode path inside store_episode()
+# was removed.  Super-episodes are now triggered post-extraction via
+# _maybe_trigger_super_episode (transcript_service) and find_super_candidates
+# (episodic_service module-level).  Coverage lives in test_super_episode_pipeline.py.
 
 class TestStoreEpisodeOverlap:
-
-    def test_exact_range_overlap_stores_both_and_creates_super(self, mem_db, episodic_svc):
-        """Storing an episode with the exact same transcript range stores the new episode
-        and creates a super episode linking both — does not skip or deduplicate."""
-        data = _ep(transcript_id_start=1, transcript_id_end=25,
-                   transcript_ids=[1, 2, 3], gist='First episode')
-
-        first_id = episodic_svc.store_episode(data)
-        second_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=1, transcript_id_end=25,
-                transcript_ids=[1, 2, 3], gist='Second episode')
-        )
-
-        assert second_id != first_id
-
-        count = mem_db.execute(
-            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
-        ).fetchone()[0]
-        # first + second + super = 3
-        assert count == 3
-
-    def test_overlapping_range_stores_new_and_creates_super(self, mem_db, episodic_svc):
-        """An episode whose range partially overlaps an existing one is stored,
-        and a super episode is created linking both."""
-        first_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=1, transcript_id_end=25,
-                transcript_ids=list(range(1, 26)), gist='First')
-        )
-        second_id = episodic_svc.store_episode(
-            _ep(transcript_id_start=10, transcript_id_end=35,
-                transcript_ids=list(range(10, 36)), gist='Second')
-        )
-
-        assert second_id != first_id
-
-        supers = mem_db.execute(
-            "SELECT consolidated_from FROM episodes WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
-        ).fetchall()
-        assert len(supers) == 1
-        cf = json.loads(supers[0][0])
-        assert first_id in cf
-        assert second_id in cf
-
-    def test_super_episode_has_merged_transcript_range(self, mem_db, episodic_svc):
-        """Super episode's transcript range spans both source episodes."""
-        episodic_svc.store_episode(
-            _ep(transcript_id_start=1, transcript_id_end=20,
-                transcript_ids=list(range(1, 21)), gist='A')
-        )
-        episodic_svc.store_episode(
-            _ep(transcript_id_start=10, transcript_id_end=30,
-                transcript_ids=list(range(10, 31)), gist='B')
-        )
-
-        row = mem_db.execute(
-            "SELECT transcript_id_start, transcript_id_end FROM episodes "
-            "WHERE consolidated_from != '[]' AND consolidated_from IS NOT NULL"
-        ).fetchone()
-        assert row[0] == 1
-        assert row[1] == 30
 
     def test_adjacent_non_overlapping_range_is_stored_without_super(self, mem_db, episodic_svc):
         """Episodes with non-overlapping ranges are both stored with no super episode."""

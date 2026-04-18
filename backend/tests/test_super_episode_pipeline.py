@@ -415,13 +415,17 @@ class TestFindSuperCandidates:
 
 
 def _retrieve_with_db(query_text, query_embedding, channel, k, fake_db, *, fts_hits=None, vector_hits=None):
-    """Call retrieve() with fake search lanes and test DB injected."""
+    """Call retrieve() with fake search lanes and test DB injected.
+
+    retrieve() takes query_text as the only positional arg; query_embedding and
+    all other params are keyword-only (enforced by the ``*`` in its signature).
+    """
     from services.episodic_retrieval_service import retrieve
 
     with patch('services.episodic_retrieval_service._fts_search', return_value=fts_hits or []), \
          patch('services.episodic_retrieval_service._vector_search', return_value=vector_hits or []), \
          patch('services.database_service.get_shared_db_service', return_value=fake_db):
-        return retrieve(query_text, query_embedding, channel=channel, k=k)
+        return retrieve(query_text, query_embedding=query_embedding, channel=channel, k=k)
 
 
 class TestRetrievalApexPromotion:

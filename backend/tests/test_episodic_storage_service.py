@@ -97,30 +97,43 @@ class TestUpdateEpisode:
         assert result is None
 
 
-# ── soft_delete_episode ──────────────────────────────────────────────
+# ── soft_delete ──────────────────────────────────────────────────────
+#
+# Method was renamed from soft_delete_episode → soft_delete in the
+# episodic-simplification arbiter pass (Commit C).  The new method returns
+# None and propagates DB errors to the caller (no bool wrapper).
 
 class TestSoftDeleteEpisode:
 
-    def test_returns_true_when_row_deleted(self, db, episodic_svc):
-        """rowcount>0 returns True."""
+    def test_sets_deleted_at_on_existing_episode(self, db, episodic_svc):
+        """soft_delete() sets deleted_at on an existing live episode."""
         svc = episodic_svc
         episode_id = svc.store_episode(_make_episode_data())
 
-        result = svc.soft_delete_episode(episode_id)
-        assert result is True
+        svc.soft_delete(episode_id)
 
-        # Verify deleted_at is set
         row = db.execute("SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] is not None
 
-    def test_returns_false_when_not_found_or_already_deleted(self, episodic_svc):
-        """rowcount=0 returns False (episode doesn't exist or already deleted)."""
-        svc = episodic_svc
-        result = svc.soft_delete_episode('nonexistent-id')
-        assert result is False
+    def test_nonexistent_id_is_noop(self, episodic_svc):
+        """soft_delete() on a nonexistent ID completes without raising."""
+        # SQLite silently updates 0 rows — no error expected.
+        episodic_svc.soft_delete('nonexistent-id')
 
-    def test_returns_false_on_db_error(self, episodic_svc):
-        """Database exception returns False (doesn't propagate)."""
-        with patch.object(episodic_svc.db_service, 'connection', side_effect=Exception("connection lost")):
-            result = episodic_svc.soft_delete_episode('some-id')
-        assert result is False
+    def test_already_deleted_episode_is_noop(self, db, episodic_svc):
+        """soft_delete() on an already-deleted episode is a no-op (WHERE deleted_at IS NULL)."""
+        svc = episodic_svc
+        episode_id = svc.store_episode(_make_episode_data())
+        svc.soft_delete(episode_id)
+
+        first_deleted_at = db.execute(
+            "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()[0]
+
+        # Second call should not change deleted_at (WHERE deleted_at IS NULL filters it out)
+        svc.soft_delete(episode_id)
+
+        second_deleted_at = db.execute(
+            "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()[0]
+        assert first_deleted_at == second_deleted_at
