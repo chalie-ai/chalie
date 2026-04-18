@@ -10,7 +10,6 @@ column definitions, constraints, and indexes are never out of sync with producti
 """
 
 import json
-import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -43,15 +42,11 @@ def _build_schema(conn: sqlite3.Connection) -> None:
     if vec_available:
         conn.executescript(sql)
     else:
-        for stmt in re.split(r';', sql):
-            s = stmt.strip()
-            if not s or 'vec0' in s.lower():
-                continue
-            try:
-                conn.execute(s)
-            except Exception:
-                pass
-        conn.commit()
+        filtered = ';'.join(
+            s for s in (stmt.strip() for stmt in sql.split(';'))
+            if s and 'vec0' not in s.lower()
+        )
+        conn.executescript(filtered)
 
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────
