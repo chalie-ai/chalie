@@ -8,12 +8,25 @@ Usage:
     text = response.text
 """
 
+import re
 import time
 import logging
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> chain-of-thought blocks emitted by reasoning
+    models (MiniMax, DeepSeek-R1, Qwen-reasoning, etc.) served via OpenAI-
+    compatible endpoints. Real OpenAI never emits these, so stripping is safe
+    for all routes through OpenAIService."""
+    if not text or "<think>" not in text.lower():
+        return text
+    return _THINK_BLOCK_RE.sub("", text).strip()
 
 
 def estimate_tokens(text: str) -> int:
@@ -816,7 +829,7 @@ class OpenAIService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        text = response.choices[0].message.content or ""
+        text = _strip_think_blocks(response.choices[0].message.content or "")
         finish_reason = response.choices[0].finish_reason
 
         if not text or not text.strip():
@@ -913,7 +926,7 @@ class OpenAIService:
         latency_ms = int((time.time() - start_time) * 1000)
 
         msg = response.choices[0].message
-        text = msg.content or ""
+        text = _strip_think_blocks(msg.content or "")
         finish_reason = response.choices[0].finish_reason
 
         # Extract tool calls
