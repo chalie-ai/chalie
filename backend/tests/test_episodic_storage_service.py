@@ -3,7 +3,6 @@
 All tests use the real production stack. No mocks.
 """
 
-import json
 import uuid
 
 import pytest

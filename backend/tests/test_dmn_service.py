@@ -7,7 +7,6 @@ Strategy: input → output, not wiring.
   service at instantiation — all subsequent calls hit real objects.
 """
 
-import json
 import time
 from datetime import datetime, timezone, timedelta
 
