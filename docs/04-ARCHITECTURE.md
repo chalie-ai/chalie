@@ -446,7 +446,7 @@ A daemon thread pings all paired interfaces every 30 seconds. After 3 consecutiv
 
 ## Glossary
 
-- **MessageProcessor**: Abstract base class for all LLM turns. Defines the tool-calling loop, transcript persistence, and context window reconstruction. Subclasses: `UserMessageProcessor`, `DMNMessageProcessor`, `ScheduledMessageProcessor`, `GoalPursuitProcessor`, `EpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`), `ToolSynthesisProcessor`.
+- **MessageProcessor**: Abstract base class for all LLM turns. Defines the tool-calling loop, transcript persistence, and context window reconstruction. Subclasses: `UserMessageProcessor`, `DMNMessageProcessor`, `ScheduledMessageProcessor`, `GoalPursuitProcessor`, `EpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`), `SuperEpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`).
 - **Channel**: Stable string identifier scoping a conversation context in the `transcript` and `compactions` tables. Replaced the former topic/thread distinction.
 - **Block Protocol**: Universal content format — all LLM-to-client content is JSON arrays of typed block objects. `blocks_render_service.py` (backend) → `blocks.js` (frontend). No HTML over the wire.
 - **DMN (Default Mode Network)**: Timer-based proactive intelligence; fires after 60min idle (recent context) and every 6h (salience); uses `DMNMessageProcessor`; exits on `DMN_NO_ACTION`.
