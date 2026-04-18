@@ -1,83 +1,38 @@
 """
-Unit tests for Commit C — super-episode pipeline.
+Feature tests for the super-episode pipeline.
 
 Covers:
   - walk_up_to_apex  (episodic_retrieval_service)
   - find_super_candidates  (episodic_service)
   - Retrieval apex-promotion  (episodic_retrieval_service.retrieve)
+  - Super-episode write contract — store_episode() + set_consolidated_into()
 
-Database strategy: in-memory SQLite built from the real schema.sql so that
-column definitions never drift from production.
+Database strategy: the shared `db` fixture from conftest builds a
+fully-migrated SQLite database from the real schema.sql + SchemaConvergenceService
+and patches get_shared_db_service so every production service sees the same
+real database.  No mocks, no fakes.
 
-LLM, embedding service, and sqlite-vec are not required — tests either inject
-raw blobs directly into episodes_vec or skip the vec-dependent path gracefully.
+For tests that require sqlite-vec (find_super_candidates, vector search), a
+skip guard is applied when the extension is unavailable.  FTS5-backed retrieval
+tests run unconditionally — they exercise the real _fts_search lane and real
+apex promotion logic.
 """
 
 import json
-import re
-import sqlite3
+import math
 import struct
 import uuid
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.unit
 
-_SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
-
-
-# ── Schema helpers ─────────────────────────────────────────────────────────────
-
-
-def _try_load_vec(conn: sqlite3.Connection) -> bool:
-    """Return True if sqlite-vec loaded successfully."""
-    try:
-        conn.enable_load_extension(True)
-        import sqlite_vec
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        return True
-    except Exception:
-        return False
-
-
-def _build_schema(conn: sqlite3.Connection, *, vec: bool) -> None:
-    """Apply schema.sql, optionally skipping vec0 statements."""
-    sql = _SCHEMA_PATH.read_text()
-    if vec:
-        conn.executescript(sql)
-    else:
-        for stmt in re.split(r';', sql):
-            s = stmt.strip()
-            if not s or 'vec0' in s.lower():
-                continue
-            try:
-                conn.execute(s)
-            except Exception:
-                pass
-        conn.commit()
-
-
-# ── Fake DB wrapper ────────────────────────────────────────────────────────────
-
-
-class _FakeDB:
-    """Thin wrapper satisfying db_service.connection() context-manager API."""
-
-    def __init__(self, conn: sqlite3.Connection):
-        self._conn = conn
-
-    @contextmanager
-    def connection(self):
-        yield self._conn
-        self._conn.commit()
-
 
 # ── Embedding helpers ──────────────────────────────────────────────────────────
+
+# The shared `db` fixture (conftest) runs SchemaConvergenceService with
+# embedding_dimensions=256 — episodes_vec is 256-dimensional in test DBs.
+_EMB_DIM = 256
 
 
 def _pack(floats: list[float]) -> bytes:
@@ -85,22 +40,8 @@ def _pack(floats: list[float]) -> bytes:
     return struct.pack(f'{len(floats)}f', *floats)
 
 
-# Embedding dimension matching schema.sql episodes_vec float[768]
-_EMB_DIM = 768
-
-
-def _unit(value: float = 1.0) -> list[float]:
-    """Return a _EMB_DIM-dimensional unit vector with ``value`` in the first slot."""
-    import math
-    v = [0.0] * _EMB_DIM
-    v[0] = value
-    norm = math.sqrt(sum(x * x for x in v))
-    return [x / norm for x in v]
-
-
 def _sim_vec(*, angle_deg: float = 0.0) -> list[float]:
     """Return a _EMB_DIM unit vector at ``angle_deg`` from the x-axis (2-plane)."""
-    import math
     rad = math.radians(angle_deg)
     v = [0.0] * _EMB_DIM
     v[0] = math.cos(rad)
@@ -110,72 +51,37 @@ def _sim_vec(*, angle_deg: float = 0.0) -> list[float]:
     return [x / norm for x in v]
 
 
-# ── Fixtures ───────────────────────────────────────────────────────────────────
+def _sqlite_vec_available(db) -> bool:
+    """Check whether sqlite-vec is loaded (episodes_vec is accessible)."""
+    try:
+        db.execute("SELECT COUNT(*) FROM episodes_vec")
+        return True
+    except Exception:
+        return False
 
 
-@pytest.fixture
-def mem_db():
-    """In-memory SQLite built from real schema.sql — no sqlite-vec required."""
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    _build_schema(conn, vec=False)
-    yield conn
-    conn.close()
-
-
-@pytest.fixture
-def mem_db_vec():
-    """In-memory SQLite with sqlite-vec loaded.
-
-    Yields (conn, vec_available) so tests can skip gracefully.
-    """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    vec = _try_load_vec(conn)
-    _build_schema(conn, vec=vec)
-    yield conn, vec
-    conn.close()
-
-
-@pytest.fixture
-def fake_db(mem_db):
-    return _FakeDB(mem_db)
-
-
-@pytest.fixture
-def fake_db_vec(mem_db_vec):
-    conn, vec = mem_db_vec
-    return _FakeDB(conn), conn, vec
-
-
-@pytest.fixture
-def episodic_svc(fake_db):
-    from services.episodic_service import EpisodicService
-    return EpisodicService(fake_db)
-
-
-# ── Helpers to seed episodes directly via SQL ─────────────────────────────────
+# ── DB helpers ─────────────────────────────────────────────────────────────────
 
 
 def _insert_episode(
-    conn: sqlite3.Connection,
+    db,
     *,
-    episode_id: Optional[str] = None,
+    episode_id: str = None,
     gist: str = "Test gist",
     salience: int = 5,
     channel: str = "test",
-    consolidated_into: Optional[str] = None,
-    consolidated_from: Optional[list] = None,
-    deleted_at: Optional[str] = None,
-    transcript_ids: Optional[list] = None,
-    transcript_id_start: Optional[int] = None,
-    transcript_id_end: Optional[int] = None,
+    consolidated_into: str = None,
+    consolidated_from: list = None,
+    deleted_at: str = None,
+    transcript_ids: list = None,
+    transcript_id_start: int = None,
+    transcript_id_end: int = None,
     emotional_valence: float = 0.0,
     emotional_arousal: float = 0.0,
 ) -> str:
-    """Insert a minimal episode row. Returns the episode UUID."""
+    """Insert a minimal episode row directly via SQL. Returns the episode UUID."""
     eid = episode_id or str(uuid.uuid4())
-    conn.execute(
+    db.execute(
         """
         INSERT INTO episodes (
             id, gist, salience, channel,
@@ -197,25 +103,39 @@ def _insert_episode(
             deleted_at,
         ),
     )
-    conn.commit()
+    db.commit()
     return eid
 
 
-def _insert_embedding(conn: sqlite3.Connection, episode_id: str, emb: list[float]) -> None:
+def _insert_embedding(db, episode_id: str, emb: list[float]) -> None:
     """Insert an embedding blob into episodes_vec for the given episode_id.
 
-    Silently skips if sqlite-vec is not loaded (vec0 table absent).
+    Silently skips if sqlite-vec is not loaded.
     """
     try:
-        row = conn.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+        row = db.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         if row:
-            conn.execute(
+            db.execute(
                 "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
                 (row[0], _pack(emb)),
             )
-            conn.commit()
+            db.commit()
     except Exception:
         pass  # sqlite-vec not loaded — tests that need it will skip
+
+
+def _sync_fts(db, episode_id: str, gist: str) -> None:
+    """Sync an episode row into the FTS5 external-content index."""
+    try:
+        row = db.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+        if row:
+            db.execute(
+                "INSERT INTO episodes_fts(rowid, gist) VALUES (?, ?)",
+                (row[0], gist),
+            )
+            db.commit()
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -223,75 +143,79 @@ def _insert_embedding(conn: sqlite3.Connection, episode_id: str, emb: list[float
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _walk(episode_id: str, fake_db) -> Optional[dict]:
-    """Call walk_up_to_apex with the test DB injected."""
-    from services.episodic_service import EpisodicService
-    from services.episodic_retrieval_service import walk_up_to_apex
-
-    # walk_up_to_apex does a local import of get_shared_db_service inside
-    # EpisodicService.__init__, so we patch at the database_service level.
-    with patch('services.database_service.get_shared_db_service', return_value=fake_db):
-        return walk_up_to_apex(episode_id)
-
-
 class TestWalkUpToApex:
-    """Unit tests for episodic_retrieval_service.walk_up_to_apex()."""
+    """Feature tests for episodic_retrieval_service.walk_up_to_apex().
 
-    def test_leaf_no_consolidated_into_returns_itself(self, mem_db, fake_db):
+    Uses the shared `db` fixture — no manual DB wiring needed.
+    walk_up_to_apex accepts an optional db kwarg; we pass None so it
+    resolves the shared singleton (already patched by the db fixture).
+    """
+
+    def test_leaf_no_consolidated_into_returns_itself(self, db):
         """A leaf episode with consolidated_into=NULL is its own apex."""
-        eid = _insert_episode(mem_db, gist="leaf gist", channel="ch1")
-        result = _walk(eid, fake_db)
+        from services.episodic_retrieval_service import walk_up_to_apex
+
+        eid = _insert_episode(db, gist="leaf gist", channel="ch1")
+        result = walk_up_to_apex(eid)
         assert result is not None
         assert result['id'] == eid
 
-    def test_one_hop_returns_super(self, mem_db, fake_db):
+    def test_one_hop_returns_super(self, db):
         """leaf → super (one hop) → returns super."""
-        leaf_id = _insert_episode(mem_db, gist="leaf", channel="ch1")
-        super_id = _insert_episode(mem_db, gist="super", channel="ch1")
-        mem_db.execute(
+        from services.episodic_retrieval_service import walk_up_to_apex
+
+        leaf_id = _insert_episode(db, gist="leaf", channel="ch1")
+        super_id = _insert_episode(db, gist="super", channel="ch1")
+        db.execute(
             "UPDATE episodes SET consolidated_into = ? WHERE id = ?",
             (super_id, leaf_id),
         )
-        mem_db.commit()
+        db.commit()
 
-        result = _walk(leaf_id, fake_db)
+        result = walk_up_to_apex(leaf_id)
         assert result is not None
         assert result['id'] == super_id
 
-    def test_two_hops_returns_apex(self, mem_db, fake_db):
+    def test_two_hops_returns_apex(self, db):
         """leaf → super → super-super (two hops) → returns apex."""
-        leaf_id = _insert_episode(mem_db, gist="leaf", channel="ch1")
-        super_id = _insert_episode(mem_db, gist="super", channel="ch1")
-        apex_id = _insert_episode(mem_db, gist="apex", channel="ch1")
+        from services.episodic_retrieval_service import walk_up_to_apex
 
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (apex_id, super_id))
-        mem_db.commit()
+        leaf_id = _insert_episode(db, gist="leaf", channel="ch1")
+        super_id = _insert_episode(db, gist="super", channel="ch1")
+        apex_id = _insert_episode(db, gist="apex", channel="ch1")
 
-        result = _walk(leaf_id, fake_db)
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (apex_id, super_id))
+        db.commit()
+
+        result = walk_up_to_apex(leaf_id)
         assert result is not None
         assert result['id'] == apex_id
 
-    def test_cycle_logs_error_and_returns(self, mem_db, fake_db, caplog):
+    def test_cycle_logs_error_and_returns(self, db, caplog):
         """Cycle (a→b→a) is detected, logs an error, does not hang."""
         import logging
-        a_id = _insert_episode(mem_db, gist="a", channel="ch1")
-        b_id = _insert_episode(mem_db, gist="b", channel="ch1")
+        from services.episodic_retrieval_service import walk_up_to_apex
 
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (b_id, a_id))
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (a_id, b_id))
-        mem_db.commit()
+        a_id = _insert_episode(db, gist="a", channel="ch1")
+        b_id = _insert_episode(db, gist="b", channel="ch1")
+
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (b_id, a_id))
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (a_id, b_id))
+        db.commit()
 
         with caplog.at_level(logging.ERROR, logger='services.episodic_retrieval_service'):
-            result = _walk(a_id, fake_db)
+            result = walk_up_to_apex(a_id)
 
         # Does not raise, does not hang, returns something
         assert result is not None
         assert 'cycle' in caplog.text.lower()
 
-    def test_nonexistent_episode_returns_none(self, fake_db):
+    def test_nonexistent_episode_returns_none(self, db):
         """Walking a non-existent episode ID returns None gracefully."""
-        result = _walk("00000000-0000-0000-0000-000000000000", fake_db)
+        from services.episodic_retrieval_service import walk_up_to_apex
+
+        result = walk_up_to_apex("00000000-0000-0000-0000-000000000000")
         assert result is None
 
 
@@ -301,276 +225,262 @@ class TestWalkUpToApex:
 
 
 class TestFindSuperCandidates:
-    """Unit tests for episodic_service.find_super_candidates().
+    """Feature tests for episodic_service.find_super_candidates().
 
     All tests require sqlite-vec (episodes_vec table) — they skip when unavailable.
+    Uses the shared `db` fixture which patches get_shared_db_service globally.
     """
 
-    def _insert_apex(
-        self,
-        conn: sqlite3.Connection,
-        emb: list[float],
-        *,
-        channel: str = "ch1",
-        gist: str = "test",
-    ) -> str:
-        eid = _insert_episode(conn, gist=gist, channel=channel)
-        _insert_embedding(conn, eid, emb)
+    def _insert_apex(self, db, emb: list[float], *, channel: str = "ch1", gist: str = "test") -> str:
+        eid = _insert_episode(db, gist=gist, channel=channel)
+        _insert_embedding(db, eid, emb)
         return eid
 
-    def _find(self, conn: sqlite3.Connection, channel: str) -> list[list[str]]:
-        """Call find_super_candidates with the test DB injected."""
-        from services.episodic_service import find_super_candidates
-        fake_db = _FakeDB(conn)
-        with patch('services.database_service.get_shared_db_service', return_value=fake_db):
-            return find_super_candidates(channel)
-
-    def test_empty_channel_returns_empty(self, mem_db_vec):
+    def test_empty_channel_returns_empty(self, db):
         """No episodes → empty list."""
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
 
-        result = self._find(conn, "empty_channel")
+        from services.episodic_service import find_super_candidates
+        result = find_super_candidates("empty_channel")
         assert result == []
 
-    def test_tight_cluster_returns_one_cluster(self, mem_db_vec):
+    def test_tight_cluster_returns_one_cluster(self, db):
         """3 embeddings at angle 0° from each other form a tight cluster."""
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
 
-        # All three identical (cosine = 1.0 > 0.90 threshold)
-        base = _sim_vec(angle_deg=0.0)
-        e1 = self._insert_apex(conn, base, gist="ep1")
-        e2 = self._insert_apex(conn, base, gist="ep2")
-        e3 = self._insert_apex(conn, base, gist="ep3")
+        from services.episodic_service import find_super_candidates
 
-        clusters = self._find(conn, "ch1")
+        base = _sim_vec(angle_deg=0.0)
+        e1 = self._insert_apex(db, base, gist="ep1")
+        e2 = self._insert_apex(db, base, gist="ep2")
+        e3 = self._insert_apex(db, base, gist="ep3")
+
+        clusters = find_super_candidates("ch1")
         assert len(clusters) == 1
         assert sorted(clusters[0]) == sorted([e1, e2, e3])
 
-    def test_loose_embeddings_returns_empty(self, mem_db_vec):
+    def test_loose_embeddings_returns_empty(self, db):
         """3 embeddings far apart produce no cluster."""
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
+
+        from services.episodic_service import find_super_candidates
 
         # 60° apart → cosine ≈ 0.5, well below 0.90 threshold
-        self._insert_apex(conn, _sim_vec(angle_deg=0.0), gist="ep1")
-        self._insert_apex(conn, _sim_vec(angle_deg=60.0), gist="ep2")
-        self._insert_apex(conn, _sim_vec(angle_deg=120.0), gist="ep3")
+        self._insert_apex(db, _sim_vec(angle_deg=0.0), gist="ep1")
+        self._insert_apex(db, _sim_vec(angle_deg=60.0), gist="ep2")
+        self._insert_apex(db, _sim_vec(angle_deg=120.0), gist="ep3")
 
-        clusters = self._find(conn, "ch1")
+        clusters = find_super_candidates("ch1")
         assert clusters == []
 
-    def test_two_tight_clusters_both_emitted(self, mem_db_vec):
+    def test_two_tight_clusters_both_emitted(self, db):
         """Two disjoint tight clusters in the same channel are both emitted with no overlap."""
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
+
+        from services.episodic_service import find_super_candidates
 
         # Cluster A: angle 0° (cosine ≈ 1.0 between all three)
         base_a = _sim_vec(angle_deg=0.0)
-        a1 = self._insert_apex(conn, base_a, gist="a1")
-        a2 = self._insert_apex(conn, base_a, gist="a2")
-        a3 = self._insert_apex(conn, base_a, gist="a3")
+        a1 = self._insert_apex(db, base_a, gist="a1")
+        a2 = self._insert_apex(db, base_a, gist="a2")
+        a3 = self._insert_apex(db, base_a, gist="a3")
 
         # Cluster B: angle 90° (orthogonal to A; within-group cosine = 1.0)
         base_b = _sim_vec(angle_deg=90.0)
-        b1 = self._insert_apex(conn, base_b, gist="b1")
-        b2 = self._insert_apex(conn, base_b, gist="b2")
-        b3 = self._insert_apex(conn, base_b, gist="b3")
+        b1 = self._insert_apex(db, base_b, gist="b1")
+        b2 = self._insert_apex(db, base_b, gist="b2")
+        b3 = self._insert_apex(db, base_b, gist="b3")
 
-        clusters = self._find(conn, "ch1")
+        clusters = find_super_candidates("ch1")
         assert len(clusters) == 2
-        # All 6 IDs are accounted for, no overlap
         all_emitted = [eid for cl in clusters for eid in cl]
         assert sorted(all_emitted) == sorted([a1, a2, a3, b1, b2, b3])
 
-    def test_already_consolidated_episodes_excluded(self, mem_db_vec):
+    def test_already_consolidated_episodes_excluded(self, db):
         """Episodes with consolidated_into set (i.e. non-apex) are not in the pool."""
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
+
+        from services.episodic_service import find_super_candidates
 
         base = _sim_vec(angle_deg=0.0)
 
-        # Insert 3 tight episodes but mark 2 as consolidated (non-apex)
-        super_id = _insert_episode(conn, gist="super", channel="ch1")
-        self._insert_apex(conn, base, gist="leaf1")
-        e2 = _insert_episode(conn, gist="leaf2", channel="ch1", consolidated_into=super_id)
-        _insert_embedding(conn, e2, base)
-        e3 = _insert_episode(conn, gist="leaf3", channel="ch1", consolidated_into=super_id)
-        _insert_embedding(conn, e3, base)
+        super_id = _insert_episode(db, gist="super", channel="ch1")
+        self._insert_apex(db, base, gist="leaf1")
+        e2 = _insert_episode(db, gist="leaf2", channel="ch1", consolidated_into=super_id)
+        _insert_embedding(db, e2, base)
+        e3 = _insert_episode(db, gist="leaf3", channel="ch1", consolidated_into=super_id)
+        _insert_embedding(db, e3, base)
 
-        clusters = self._find(conn, "ch1")
+        clusters = find_super_candidates("ch1")
         # Only leaf1 and super_id are apex; 2 items < SUPER_EPISODE_MIN_CLUSTER=3 → no cluster
         assert clusters == []
 
-    def test_transitive_chain_forms_one_component(self, mem_db_vec):
+    def test_transitive_chain_forms_one_component(self, db):
         """A-B edge + B-C edge (but NO A-C edge) still forms one component.
 
-        This is the whole point of connected-components clustering: when
-        min_cluster > 2, requiring every pairwise edge above threshold
-        compounds against itself and rarely produces clusters on real
-        embedding distributions. Transitive neighbourhoods capture chains
+        Connected-components clustering: transitive neighbourhoods capture chains
         of related episodes as a single memory group.
         """
-        conn, vec = mem_db_vec
-        if not vec:
+        if not _sqlite_vec_available(db):
             pytest.skip("sqlite-vec not available")
+
+        from services.episodic_service import find_super_candidates
 
         # A–B cosine ≈ 0.966 (15° apart) → above 0.90
         # B–C cosine ≈ 0.966 (B at 15°, C at 30°)
         # A–C cosine ≈ 0.866 (30° apart) → BELOW 0.90
-        a = self._insert_apex(conn, _sim_vec(angle_deg=0.0), gist="a")
-        b = self._insert_apex(conn, _sim_vec(angle_deg=15.0), gist="b")
-        c = self._insert_apex(conn, _sim_vec(angle_deg=30.0), gist="c")
+        a = self._insert_apex(db, _sim_vec(angle_deg=0.0), gist="a")
+        b = self._insert_apex(db, _sim_vec(angle_deg=15.0), gist="b")
+        c = self._insert_apex(db, _sim_vec(angle_deg=30.0), gist="c")
 
-        clusters = self._find(conn, "ch1")
+        clusters = find_super_candidates("ch1")
         # Connected components via A–B and B–C edges → single cluster of 3.
-        # Under strict all-pairs-tight rules this would NOT form (A–C too far).
         assert len(clusters) == 1
         assert sorted(clusters[0]) == sorted([a, b, c])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Retrieval apex-promotion
+# Retrieval apex-promotion — real FTS lane, no mocks
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _retrieve_with_db(query_text, query_embedding, channel, k, fake_db, *, fts_hits=None, vector_hits=None):
-    """Call retrieve() with fake search lanes and test DB injected.
-
-    retrieve() takes query_text as the only positional arg; query_embedding and
-    all other params are keyword-only (enforced by the ``*`` in its signature).
-    """
-    from services.episodic_retrieval_service import retrieve
-
-    with patch('services.episodic_retrieval_service._fts_search', return_value=fts_hits or []), \
-         patch('services.episodic_retrieval_service._vector_search', return_value=vector_hits or []), \
-         patch('services.database_service.get_shared_db_service', return_value=fake_db):
-        return retrieve(query_text, query_embedding=query_embedding, channel=channel, k=k)
-
-
 class TestRetrievalApexPromotion:
-    """Unit tests for episodic_retrieval_service.retrieve() apex-promotion behaviour.
+    """Feature tests for episodic_retrieval_service.retrieve() apex-promotion.
 
-    Because sqlite-vec is required for vector_search, these tests mock the
-    internal search lanes and inject episodes directly, then verify that
-    walk_up_to_apex is applied and the apex is returned rather than the leaf.
+    Episodes are stored via EpisodicService.store_episode() (which syncs FTS)
+    and then retrieved via the real retrieve() function.  The FTS lane finds
+    the leaf; apex promotion returns the super.  No mocks.
     """
 
-    def _make_hit(self, eid, gist, *, consolidated_into=None, vector_distance=0.05):
-        return {
-            'id': eid,
-            'gist': gist,
+    @pytest.fixture
+    def episodic_svc(self, db):
+        from services.database_service import get_shared_db_service
+        from services.episodic_service import EpisodicService
+        return EpisodicService(get_shared_db_service())
+
+    def test_leaf_hit_promoted_to_super(self, db, episodic_svc):
+        """FTS hit on a leaf episode → retrieve() returns its super, not the leaf."""
+        from services.episodic_retrieval_service import retrieve
+
+        # Store leaf and super via the real service (syncs FTS)
+        leaf_id = episodic_svc.store_episode({
+            'gist': 'watering the garden on a sunny afternoon',
             'salience': 5,
-            'channel': 'ch1',
-            'created_at': '2026-01-01T00:00:00+00:00',
-            'last_accessed_at': None,
-            'retrieval_weight': 1.0,
-            'emotional_valence': 0.0,
-            'emotional_arousal': 0.0,
-            'consolidated_into': consolidated_into,
-            'text_rank': None,
-            'vector_distance': vector_distance,
-        }
+            'channel': 'ch-apex',
+        })
+        super_id = episodic_svc.store_episode({
+            'gist': 'outdoor activities super episode',
+            'salience': 7,
+            'channel': 'ch-apex',
+        })
 
-    def test_leaf_hit_promoted_to_super(self, mem_db, fake_db):
-        """Vector-search hit on leaf → retrieve() returns the super, not the leaf."""
-        leaf_id = _insert_episode(mem_db, gist="leaf", channel="ch1")
-        super_id = _insert_episode(mem_db, gist="super", channel="ch1")
-
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
-        mem_db.commit()
-
-        leaf_hit = self._make_hit(leaf_id, "leaf", consolidated_into=super_id)
-        results = _retrieve_with_db(
-            "test query", [0.0] * _EMB_DIM, "ch1", 10, fake_db,
-            vector_hits=[leaf_hit],
+        # Wire leaf → super
+        db.execute(
+            "UPDATE episodes SET consolidated_into = ? WHERE id = ?",
+            (super_id, leaf_id),
         )
+        db.commit()
 
+        results = retrieve('watering garden', channel='ch-apex', k=10)
         returned_ids = [r['id'] for r in results]
-        assert super_id in returned_ids, f"Expected super_id={super_id} in {returned_ids}"
+
+        assert super_id in returned_ids, (
+            f"Expected super_id={super_id!r} in results. "
+            f"Apex promotion should replace the leaf hit with its super. "
+            f"Got: {returned_ids!r}"
+        )
         assert leaf_id not in returned_ids, "Leaf should be replaced by its apex"
 
-    def test_two_hop_chain_returns_apex(self, mem_db, fake_db):
+    def test_two_hop_chain_returns_apex(self, db, episodic_svc):
         """leaf → super → super-super chain: retrieve() returns the outermost apex."""
-        leaf_id = _insert_episode(mem_db, gist="leaf", channel="ch1")
-        super_id = _insert_episode(mem_db, gist="super", channel="ch1")
-        apex_id = _insert_episode(mem_db, gist="apex", channel="ch1")
+        from services.episodic_retrieval_service import retrieve
 
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (apex_id, super_id))
-        mem_db.commit()
+        leaf_id = episodic_svc.store_episode({
+            'gist': 'morning coffee ritual',
+            'salience': 5,
+            'channel': 'ch-chain',
+        })
+        super_id = episodic_svc.store_episode({
+            'gist': 'daily routines',
+            'salience': 6,
+            'channel': 'ch-chain',
+        })
+        apex_id = episodic_svc.store_episode({
+            'gist': 'lifestyle patterns',
+            'salience': 8,
+            'channel': 'ch-chain',
+        })
 
-        leaf_hit = self._make_hit(leaf_id, "leaf", consolidated_into=super_id)
-        results = _retrieve_with_db(
-            "test query", [0.0] * _EMB_DIM, "ch1", 10, fake_db,
-            vector_hits=[leaf_hit],
-        )
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (apex_id, super_id))
+        db.commit()
 
+        results = retrieve('morning coffee', channel='ch-chain', k=10)
         returned_ids = [r['id'] for r in results]
-        assert apex_id in returned_ids, f"Expected apex_id={apex_id} in {returned_ids}"
+
+        assert apex_id in returned_ids, (
+            f"Expected apex_id={apex_id!r} in results. Two-hop chain must resolve to apex. "
+            f"Got: {returned_ids!r}"
+        )
         assert leaf_id not in returned_ids
         assert super_id not in returned_ids
 
-    def test_apex_deduplication(self, mem_db, fake_db):
+    def test_apex_deduplication(self, db, episodic_svc):
         """Two leaves from the same super emit the super only once."""
-        leaf1_id = _insert_episode(mem_db, gist="leaf1", channel="ch1")
-        leaf2_id = _insert_episode(mem_db, gist="leaf2", channel="ch1")
-        super_id = _insert_episode(mem_db, gist="super", channel="ch1")
+        from services.episodic_retrieval_service import retrieve
 
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf1_id))
-        mem_db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf2_id))
-        mem_db.commit()
+        leaf1_id = episodic_svc.store_episode({
+            'gist': 'reading fiction novels late at night',
+            'salience': 5,
+            'channel': 'ch-dedup',
+        })
+        leaf2_id = episodic_svc.store_episode({
+            'gist': 'reading science books at night',
+            'salience': 5,
+            'channel': 'ch-dedup',
+        })
+        super_id = episodic_svc.store_episode({
+            'gist': 'reading habit super episode',
+            'salience': 7,
+            'channel': 'ch-dedup',
+        })
 
-        leaf_hits = [
-            self._make_hit(leaf1_id, "leaf1", consolidated_into=super_id),
-            self._make_hit(leaf2_id, "leaf2", consolidated_into=super_id),
-        ]
-        results = _retrieve_with_db(
-            "test query", [0.0] * _EMB_DIM, "ch1", 10, fake_db,
-            vector_hits=leaf_hits,
-        )
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf1_id))
+        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf2_id))
+        db.commit()
 
+        results = retrieve('reading at night', channel='ch-dedup', k=10)
         returned_ids = [r['id'] for r in results]
-        assert returned_ids.count(super_id) == 1, "Super should appear exactly once"
+
+        assert returned_ids.count(super_id) == 1, (
+            f"Super should appear exactly once; got count={returned_ids.count(super_id)!r}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Super-episode write contract — store_episode() + set_consolidated_into()
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# These tests lock the mechanical DB write paths used by the final two steps
-# of `_maybe_trigger_super_episode` in transcript_service.py:
-#
-#     new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-#     for src_id in cluster_ids:
-#         episodic_svc.set_consolidated_into(src_id, new_id)
-#
-# The judge for nightly 103 recently reported "Super-episodes were created but
-# contained 0 source references" — a failure mode where store_episode silently
-# dropped consolidated_from or set_consolidated_into silently dropped the
-# back-pointer. The gap was real: existing tests asserted that
-# find_super_candidates returns the correct cluster IDs, but nothing locked in
-# what the write path does with those IDs. These tests close that gap.
-#
-# Pure mechanical — no LLM, no embedding service, no collaborators beyond DB.
 
 
 class TestSuperEpisodeWriteContract:
     """store_episode() must persist consolidated_from exactly as supplied, and
     set_consolidated_into() must persist the back-pointer exactly as supplied.
 
-    These are the last two steps of super-episode creation — if either drops
-    its payload the retrieval apex-chain breaks silently, as caught by the
-    103 nightly regression.
+    Pure mechanical — no LLM, no embedding service, no collaborators beyond DB.
     """
 
-    def test_store_episode_persists_consolidated_from_list(self, episodic_svc, mem_db):
+    @pytest.fixture
+    def episodic_svc(self, db):
+        from services.database_service import get_shared_db_service
+        from services.episodic_service import EpisodicService
+        return EpisodicService(get_shared_db_service())
+
+    def test_store_episode_persists_consolidated_from_list(self, db, episodic_svc):
         """A super-episode dict with consolidated_from=['a','b','c'] must land
         in the DB as a JSON array containing those three IDs, preserving order."""
         src_ids = ['src-aaa', 'src-bbb', 'src-ccc']
@@ -583,7 +493,7 @@ class TestSuperEpisodeWriteContract:
 
         new_id = episodic_svc.store_episode(super_ep)
 
-        row = mem_db.execute(
+        row = db.execute(
             "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
         ).fetchone()
         assert row is not None, "Super-episode row was not inserted"
@@ -596,7 +506,7 @@ class TestSuperEpisodeWriteContract:
         )
 
     def test_store_episode_empty_consolidated_from_defaults_to_empty_list(
-        self, episodic_svc, mem_db,
+        self, db, episodic_svc,
     ):
         """A plain (leaf) episode with no consolidated_from key must land as
         an empty JSON array, not NULL and not a string literal '[]'.
@@ -611,7 +521,7 @@ class TestSuperEpisodeWriteContract:
 
         new_id = episodic_svc.store_episode(leaf_ep)
 
-        row = mem_db.execute(
+        row = db.execute(
             "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
         ).fetchone()
         assert row is not None
@@ -620,21 +530,21 @@ class TestSuperEpisodeWriteContract:
             f"consolidated_from must default to empty list; got {row[0]!r}"
         )
 
-    def test_set_consolidated_into_persists_backpointer(self, episodic_svc, mem_db):
+    def test_set_consolidated_into_persists_backpointer(self, db, episodic_svc):
         """set_consolidated_into(leaf_id, super_id) must land the super UUID
         verbatim in the leaf row's consolidated_into column."""
-        leaf_id = _insert_episode(mem_db, gist='leaf to be consolidated', channel='ch-bp')
+        leaf_id = _insert_episode(db, gist='leaf to be consolidated', channel='ch-bp')
         super_id = 'super-xyz-123'
 
         # Sanity: initially NULL
-        row = mem_db.execute(
+        row = db.execute(
             "SELECT consolidated_into FROM episodes WHERE id = ?", (leaf_id,)
         ).fetchone()
         assert row[0] is None, "leaf must start with consolidated_into=NULL"
 
         episodic_svc.set_consolidated_into(leaf_id, super_id)
 
-        row = mem_db.execute(
+        row = db.execute(
             "SELECT consolidated_into FROM episodes WHERE id = ?", (leaf_id,)
         ).fetchone()
         assert row[0] == super_id, (
@@ -645,7 +555,7 @@ class TestSuperEpisodeWriteContract:
         )
 
     def test_set_consolidated_into_applied_to_all_sources_in_cluster(
-        self, episodic_svc, mem_db,
+        self, db, episodic_svc,
     ):
         """End-to-end contract of the loop in _maybe_trigger_super_episode:
 
@@ -653,13 +563,11 @@ class TestSuperEpisodeWriteContract:
                 episodic_svc.set_consolidated_into(src_id, new_id)
 
         After the loop, every source leaf must point back to the super.
-        Nothing else in the DB should gain a back-pointer — scoping matters."""
-        # Three leaves that will be clustered + one unrelated leaf that must
-        # NOT receive a back-pointer.
-        src_a = _insert_episode(mem_db, gist='src a', channel='ch-cluster')
-        src_b = _insert_episode(mem_db, gist='src b', channel='ch-cluster')
-        src_c = _insert_episode(mem_db, gist='src c', channel='ch-cluster')
-        unrelated = _insert_episode(mem_db, gist='unrelated', channel='ch-cluster')
+        The unrelated leaf must NOT gain a back-pointer."""
+        src_a = _insert_episode(db, gist='src a', channel='ch-cluster')
+        src_b = _insert_episode(db, gist='src b', channel='ch-cluster')
+        src_c = _insert_episode(db, gist='src c', channel='ch-cluster')
+        unrelated = _insert_episode(db, gist='unrelated', channel='ch-cluster')
 
         super_ep = {
             'gist': 'Super of a, b, c',
@@ -669,12 +577,11 @@ class TestSuperEpisodeWriteContract:
         }
         new_id = episodic_svc.store_episode(super_ep)
 
-        # Simulate the caller loop verbatim
         for src_id in [src_a, src_b, src_c]:
             episodic_svc.set_consolidated_into(src_id, new_id)
 
         # Every clustered source now points back to the super
-        rows = mem_db.execute(
+        rows = db.execute(
             "SELECT id, consolidated_into FROM episodes WHERE id IN (?, ?, ?)",
             (src_a, src_b, src_c),
         ).fetchall()
@@ -683,16 +590,13 @@ class TestSuperEpisodeWriteContract:
             assert ci == new_id, f"source {eid} back-pointer {ci!r} != {new_id!r}"
 
         # The unrelated leaf is untouched
-        row = mem_db.execute(
+        row = db.execute(
             "SELECT consolidated_into FROM episodes WHERE id = ?", (unrelated,)
         ).fetchone()
-        assert row[0] is None, (
-            "Back-pointer leaked onto a non-cluster leaf; scoping broken."
-        )
+        assert row[0] is None, "Back-pointer leaked onto a non-cluster leaf; scoping broken."
 
-        # The super itself is an apex (consolidated_into IS NULL) and carries
-        # the source IDs in consolidated_from — both invariants in one row.
-        row = mem_db.execute(
+        # The super itself is an apex and carries the source IDs in consolidated_from
+        row = db.execute(
             "SELECT consolidated_into, consolidated_from FROM episodes WHERE id = ?",
             (new_id,),
         ).fetchone()

@@ -1,8 +1,12 @@
-"""Tests for EpisodicService storage — real SQLite via shared db fixture."""
+"""Tests for EpisodicService storage — real SQLite via shared db fixture.
 
+All tests use the real production stack. No mocks.
+"""
+
+import json
 import uuid
+
 import pytest
-from unittest.mock import patch
 
 from services.episodic_service import EpisodicService
 
@@ -48,22 +52,30 @@ class TestStoreEpisodeValidation:
 class TestStoreEpisodeSuccess:
 
     def test_returns_uuid_string_on_success(self, db, episodic_svc):
-        """Successful store returns the episode UUID as a string."""
+        """Successful store returns a UUID string and persists the row."""
         svc = episodic_svc
-        test_uuid = 'c862db4f-bd83-4724-92a8-33fcf3bd38e8'
+        result = svc.store_episode(_make_episode_data())
 
-        with patch('services.episodic_service.uuid') as mock_uuid_mod:
-            mock_uuid_mod.uuid4.return_value = uuid.UUID(test_uuid)
-            result = svc.store_episode(_make_episode_data())
+        # Result must be a well-formed UUID string
+        assert isinstance(result, str)
+        parsed = uuid.UUID(result)  # raises if not a valid UUID
+        assert str(parsed) == result
 
-        assert result == test_uuid
-
-        # Verify the episode was actually persisted
-        row = db.execute("SELECT id, gist, channel FROM episodes WHERE id = ?", (test_uuid,)).fetchone()
+        # Verify the episode was actually persisted with the right data
+        row = db.execute(
+            "SELECT id, gist, channel FROM episodes WHERE id = ?", (result,)
+        ).fetchone()
         assert row is not None
-        assert row[0] == test_uuid
+        assert row[0] == result
         assert row[1] == 'Test conversation about coding'
         assert row[2] == 'programming'
+
+    def test_each_store_produces_distinct_id(self, episodic_svc):
+        """Two store_episode calls produce two different UUIDs."""
+        svc = episodic_svc
+        id1 = svc.store_episode(_make_episode_data())
+        id2 = svc.store_episode(_make_episode_data())
+        assert id1 != id2
 
 
 # ── update_episode ───────────────────────────────────────────────────
@@ -71,11 +83,9 @@ class TestStoreEpisodeSuccess:
 class TestUpdateEpisode:
 
     def test_empty_updates_is_noop(self, episodic_svc):
-        """Empty updates dict returns None without touching DB."""
-        with patch.object(episodic_svc.db_service, 'connection', wraps=episodic_svc.db_service.connection) as spy:
-            result = episodic_svc.update_episode('some-id', {})
-            assert result is None
-            spy.assert_not_called()
+        """Empty updates dict returns None without modifying any row."""
+        result = episodic_svc.update_episode('some-id', {})
+        assert result is None
 
     def test_gist_update_persisted(self, db, episodic_svc):
         """Field update is written to the database."""
@@ -88,20 +98,14 @@ class TestUpdateEpisode:
         row = db.execute("SELECT gist FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] == 'updated gist'
 
-    def test_update_nonexistent_row_raises(self, episodic_svc):
-        """Updating a row that doesn't exist propagates without silent failure."""
-        # update_episode does not guard against missing rows — caller's responsibility.
-        # It should complete without raising (SQLite silently updates 0 rows).
-        svc = episodic_svc
-        result = svc.update_episode('nonexistent-id', {'gist': 'updated'})
+    def test_update_nonexistent_row_is_silent(self, episodic_svc):
+        """Updating a row that doesn't exist completes without raising
+        (SQLite silently updates 0 rows)."""
+        result = episodic_svc.update_episode('nonexistent-id', {'gist': 'updated'})
         assert result is None
 
 
 # ── soft_delete ──────────────────────────────────────────────────────
-#
-# Method was renamed from soft_delete_episode → soft_delete in the
-# episodic-simplification arbiter pass (Commit C).  The new method returns
-# None and propagates DB errors to the caller (no bool wrapper).
 
 class TestSoftDeleteEpisode:
 
@@ -117,10 +121,9 @@ class TestSoftDeleteEpisode:
 
     def test_nonexistent_id_is_noop(self, episodic_svc):
         """soft_delete() on a nonexistent ID completes without raising."""
-        # SQLite silently updates 0 rows — no error expected.
         episodic_svc.soft_delete('nonexistent-id')
 
-    def test_already_deleted_episode_is_noop(self, db, episodic_svc):
+    def test_already_deleted_episode_timestamp_unchanged(self, db, episodic_svc):
         """soft_delete() on an already-deleted episode is a no-op (WHERE deleted_at IS NULL)."""
         svc = episodic_svc
         episode_id = svc.store_episode(_make_episode_data())

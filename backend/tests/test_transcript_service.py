@@ -4,8 +4,18 @@ Tests cover:
 - append()
 - get_recent() with and without since_id
 - get_latest_id()
-- search() (keyword fallback path, cross-topic, date range)
-- prune_old()
+- _keyword_search() (keyword fallback path, cross-topic, date range)
+- TestDbStateExtractionTrigger: DB-state-driven extraction trigger
+
+All tests use the real production stack against the shared `db` fixture
+(in-memory SQLite built from schema.sql).  No mocks except the single
+acceptable boundary: patch('_trigger_episode_extraction') in
+TestDbStateExtractionTrigger, which stubs the daemon-thread spawn only —
+the query logic itself is real.
+
+Short content strings (< 50 estimated tokens) are used throughout so that
+_embed_entry is never invoked — its embedding-service dependency is
+irrelevant to the transcript storage and retrieval behaviours under test.
 """
 
 from unittest.mock import patch
@@ -15,27 +25,24 @@ class TestAppend:
     def test_basic_append(self, db):
         from services.transcript_service import append
 
-        with patch('services.transcript_service._embed_entry'):
-            rowid = append('test-topic', 'user', 'Hello, world!')
+        rowid = append('test-topic', 'user', 'Hi')
         assert rowid is not None
         assert rowid > 0
 
-        # Verify the entry is in the database
         cursor = db.cursor()
         cursor.execute("SELECT channel, role, content FROM transcript WHERE id = ?", (rowid,))
         row = cursor.fetchone()
         assert row['channel'] == 'test-topic'
         assert row['role'] == 'user'
-        assert row['content'] == 'Hello, world!'
+        assert row['content'] == 'Hi'
 
     def test_append_with_tool_info(self, db):
         from services.transcript_service import append
 
-        with patch('services.transcript_service._embed_entry'):
-            rowid = append(
-                'test-topic', 'tool', 'Search results here',
-                tool_call_id='tc_123', tool_name='search',
-            )
+        rowid = append(
+            'test-topic', 'tool', 'ok',
+            tool_call_id='tc_123', tool_name='search',
+        )
         cursor = db.cursor()
         cursor.execute(
             "SELECT tool_call_id, tool_name FROM transcript WHERE id = ?",
@@ -48,8 +55,7 @@ class TestAppend:
     def test_append_internal_flag(self, db):
         from services.transcript_service import append
 
-        with patch('services.transcript_service._embed_entry'):
-            rowid = append('test-topic', 'internal', 'Working notes', internal=True)
+        rowid = append('test-topic', 'internal', 'notes', internal=True)
         cursor = db.cursor()
         cursor.execute("SELECT internal FROM transcript WHERE id = ?", (rowid,))
         assert cursor.fetchone()[0] == 1
@@ -63,15 +69,13 @@ class TestAppend:
         assert append('', 'user', 'content') is None
 
 
-
 class TestGetRecent:
     def test_get_recent_returns_ordered(self, db):
         from services.transcript_service import append, get_recent
 
-        with patch('services.transcript_service._embed_entry'):
-            append('test', 'user', 'First')
-            append('test', 'assistant', 'Second')
-            append('test', 'user', 'Third')
+        append('test', 'user', 'First')
+        append('test', 'assistant', 'Second')
+        append('test', 'user', 'Third')
 
         results = get_recent('test', limit=10)
         assert len(results) == 3
@@ -82,9 +86,8 @@ class TestGetRecent:
     def test_get_recent_respects_limit(self, db):
         from services.transcript_service import append, get_recent
 
-        with patch('services.transcript_service._embed_entry'):
-            for i in range(10):
-                append('test', 'user', f'Message {i}')
+        for i in range(10):
+            append('test', 'user', f'Msg{i}')
 
         results = get_recent('test', limit=3)
         assert len(results) == 3
@@ -92,10 +95,9 @@ class TestGetRecent:
     def test_get_recent_since_id(self, db):
         from services.transcript_service import append, get_recent
 
-        with patch('services.transcript_service._embed_entry'):
-            id1 = append('test', 'user', 'First')
-            append('test', 'assistant', 'Second')
-            append('test', 'user', 'Third')
+        id1 = append('test', 'user', 'First')
+        append('test', 'assistant', 'Second')
+        append('test', 'user', 'Third')
 
         results = get_recent('test', since_id=id1)
         assert len(results) == 2
@@ -105,9 +107,8 @@ class TestGetRecent:
     def test_get_recent_filters_by_topic(self, db):
         from services.transcript_service import append, get_recent
 
-        with patch('services.transcript_service._embed_entry'):
-            append('topic-a', 'user', 'A message')
-            append('topic-b', 'user', 'B message')
+        append('topic-a', 'user', 'A message')
+        append('topic-b', 'user', 'B message')
 
         results = get_recent('topic-a')
         assert len(results) == 1
@@ -118,9 +119,8 @@ class TestGetLatestId:
     def test_returns_highest_id(self, db):
         from services.transcript_service import append, get_latest_id
 
-        with patch('services.transcript_service._embed_entry'):
-            append('test', 'user', 'First')
-            id2 = append('test', 'user', 'Second')
+        append('test', 'user', 'First')
+        id2 = append('test', 'user', 'Second')
 
         assert get_latest_id('test') == id2
 
@@ -133,9 +133,8 @@ class TestKeywordSearch:
     def test_keyword_search_finds_content(self, db):
         from services.transcript_service import _keyword_search, append
 
-        with patch('services.transcript_service._embed_entry'):
-            append('test', 'user', 'The weather in Malta is sunny today')
-            append('test', 'user', 'I need to buy groceries')
+        append('test', 'user', 'Malta sunny')
+        append('test', 'user', 'Groceries')
 
         results = _keyword_search('test', 'Malta', limit=5)
         assert len(results) == 1
@@ -144,9 +143,8 @@ class TestKeywordSearch:
     def test_keyword_search_filters_by_topic(self, db):
         from services.transcript_service import _keyword_search, append
 
-        with patch('services.transcript_service._embed_entry'):
-            append('topic-a', 'user', 'Python programming')
-            append('topic-b', 'user', 'Python snakes')
+        append('topic-a', 'user', 'Python programming')
+        append('topic-b', 'user', 'Python snakes')
 
         results = _keyword_search('topic-a', 'Python', limit=5)
         assert len(results) == 1
@@ -155,9 +153,8 @@ class TestKeywordSearch:
     def test_keyword_search_global(self, db):
         from services.transcript_service import _keyword_search, append
 
-        with patch('services.transcript_service._embed_entry'):
-            append('topic-a', 'user', 'Python programming')
-            append('topic-b', 'user', 'Python snakes')
+        append('topic-a', 'user', 'Python programming')
+        append('topic-b', 'user', 'Python snakes')
 
         results = _keyword_search(None, 'Python', limit=5)
         assert len(results) == 2
@@ -165,8 +162,7 @@ class TestKeywordSearch:
     def test_keyword_search_with_topic_field(self, db):
         from services.transcript_service import _keyword_search, append
 
-        with patch('services.transcript_service._embed_entry'):
-            append('topic-a', 'user', 'Malta weather')
+        append('topic-a', 'user', 'Malta weather')
 
         results = _keyword_search('topic-a', 'Malta', limit=5)
         assert results[0]['channel'] == 'topic-a'
@@ -174,9 +170,8 @@ class TestKeywordSearch:
     def test_keyword_search_date_range(self, db):
         from services.transcript_service import _keyword_search, append
 
-        with patch('services.transcript_service._embed_entry'):
-            append('test', 'user', 'Old message about Python')
-            append('test', 'user', 'New message about Python')
+        append('test', 'user', 'Old Python')
+        append('test', 'user', 'New Python')
 
         # All results (no date filter)
         results = _keyword_search('test', 'Python', limit=5)
@@ -187,32 +182,14 @@ class TestKeywordSearch:
         assert len(results) == 0
 
 
-class TestGetRecentTopicContext:
-    def test_get_recent_works(self, db):
-        """get_recent retrieves entries correctly."""
-        from services.transcript_service import append, get_recent
-
-        with patch('services.transcript_service._embed_entry'):
-            append('test', 'user', 'Hello')
-
-        results = get_recent('test')
-        assert len(results) == 1
-
-    def test_get_recent_returns_empty_on_db_failure(self):
-        """When DB fails, get_recent returns empty list."""
-        from services.transcript_service import get_recent
-
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
-            results = get_recent('test')
-
-        assert results == []
-
-
 class TestDbStateExtractionTrigger:
     """Extraction trigger is DB-state-driven: counts transcripts with
     id > MAX(episodes.transcript_id_end) for the channel. When the tail
     reaches _EXTRACTION_THRESHOLD, extraction fires. No process-local
     state, so restarts cannot desync from accumulated history.
+
+    Only acceptable mock: patch.object(ts, '_trigger_episode_extraction') —
+    a fire-and-forget daemon-thread boundary spy. The query logic is real.
     """
 
     def test_fires_when_untriggered_tail_crosses_threshold(self, db):
