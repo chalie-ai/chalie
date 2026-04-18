@@ -625,6 +625,68 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
+def boot_catch_up_extraction() -> None:
+    """Boot-time catch-up: fire a one-off extraction for every channel whose
+    latest transcript is newer than its latest episode.
+
+    Invoked once from run.py after schema convergence. Compensates for the
+    process-local insert counter being lost across restarts: without this
+    pass, a channel that accumulated transcripts in a previous run would
+    silently wait until it crosses the 25-row fresh-boot threshold again
+    before any episode is written.
+
+    Scheme is intentionally simple — no moving cursor, no persisted state:
+      for each channel:
+          max_t = MAX(transcript.id) WHERE channel=?
+          max_e = MAX(transcript_id_end) FROM episodes WHERE channel=?
+                  AND deleted_at IS NULL
+          if max_t > (max_e or 0):
+              _trigger_episode_extraction(channel, max_t)
+
+    ``_trigger_episode_extraction`` already windows to the last 25 transcripts
+    ending at ``max_t`` and chains into super-episode consolidation, so one
+    call per stale channel covers both generation and consolidation catch-up.
+
+    Never raises — failures logged only. Each channel's extraction runs in
+    its own daemon thread (spawned by ``_trigger_episode_extraction``) so
+    this function returns promptly.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.channel,
+                       MAX(t.id) AS max_t,
+                       COALESCE(
+                           (SELECT MAX(e.transcript_id_end)
+                            FROM episodes e
+                            WHERE e.channel = t.channel
+                              AND e.deleted_at IS NULL),
+                           0
+                       ) AS max_e
+                FROM transcript t
+                GROUP BY t.channel
+                """
+            ).fetchall()
+
+        stale = [(ch, max_t) for ch, max_t, max_e in rows if max_t > (max_e or 0)]
+        if not stale:
+            logger.info(f"{LOG_PREFIX} Boot catch-up: no stale channels")
+            return
+
+        logger.info(
+            f"{LOG_PREFIX} Boot catch-up: firing extraction for "
+            f"{len(stale)} channel(s): {[c for c, _ in stale]}"
+        )
+        for channel, max_t in stale:
+            _trigger_episode_extraction(channel, max_t)
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Boot catch-up failed: {e}")
+
+
 # ── Episode extraction helpers ───────────────────────────────────────────────
 
 

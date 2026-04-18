@@ -538,3 +538,163 @@ class TestRetrievalApexPromotion:
 
         returned_ids = [r['id'] for r in results]
         assert returned_ids.count(super_id) == 1, "Super should appear exactly once"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Super-episode write contract — store_episode() + set_consolidated_into()
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These tests lock the mechanical DB write paths used by the final two steps
+# of `_maybe_trigger_super_episode` in transcript_service.py:
+#
+#     new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+#     for src_id in cluster_ids:
+#         episodic_svc.set_consolidated_into(src_id, new_id)
+#
+# The judge for nightly 103 recently reported "Super-episodes were created but
+# contained 0 source references" — a failure mode where store_episode silently
+# dropped consolidated_from or set_consolidated_into silently dropped the
+# back-pointer. The gap was real: existing tests asserted that
+# find_super_candidates returns the correct cluster IDs, but nothing locked in
+# what the write path does with those IDs. These tests close that gap.
+#
+# Pure mechanical — no LLM, no embedding service, no collaborators beyond DB.
+
+
+class TestSuperEpisodeWriteContract:
+    """store_episode() must persist consolidated_from exactly as supplied, and
+    set_consolidated_into() must persist the back-pointer exactly as supplied.
+
+    These are the last two steps of super-episode creation — if either drops
+    its payload the retrieval apex-chain breaks silently, as caught by the
+    103 nightly regression.
+    """
+
+    def test_store_episode_persists_consolidated_from_list(self, episodic_svc, mem_db):
+        """A super-episode dict with consolidated_from=['a','b','c'] must land
+        in the DB as a JSON array containing those three IDs, preserving order."""
+        src_ids = ['src-aaa', 'src-bbb', 'src-ccc']
+        super_ep = {
+            'gist': 'Three sibling episodes unified into one super',
+            'salience': 7,
+            'channel': 'ch-write-contract',
+            'consolidated_from': src_ids,
+        }
+
+        new_id = episodic_svc.store_episode(super_ep)
+
+        row = mem_db.execute(
+            "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
+        ).fetchone()
+        assert row is not None, "Super-episode row was not inserted"
+
+        stored = json.loads(row[0])
+        assert stored == src_ids, (
+            f"consolidated_from round-trip failed: stored={stored!r} expected={src_ids!r}. "
+            "This is the exact failure mode reported by nightly 103 "
+            "('Super-episodes were created but contained 0 source references')."
+        )
+
+    def test_store_episode_empty_consolidated_from_defaults_to_empty_list(
+        self, episodic_svc, mem_db,
+    ):
+        """A plain (leaf) episode with no consolidated_from key must land as
+        an empty JSON array, not NULL and not a string literal '[]'.
+
+        Ensures readers that do `json.loads(row['consolidated_from'])` never
+        hit a None or a JSON parse error on leaf rows."""
+        leaf_ep = {
+            'gist': 'A plain leaf episode',
+            'salience': 5,
+            'channel': 'ch-write-contract',
+        }
+
+        new_id = episodic_svc.store_episode(leaf_ep)
+
+        row = mem_db.execute(
+            "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
+        ).fetchone()
+        assert row is not None
+        assert row[0] is not None, "consolidated_from must default to '[]', not NULL"
+        assert json.loads(row[0]) == [], (
+            f"consolidated_from must default to empty list; got {row[0]!r}"
+        )
+
+    def test_set_consolidated_into_persists_backpointer(self, episodic_svc, mem_db):
+        """set_consolidated_into(leaf_id, super_id) must land the super UUID
+        verbatim in the leaf row's consolidated_into column."""
+        leaf_id = _insert_episode(mem_db, gist='leaf to be consolidated', channel='ch-bp')
+        super_id = 'super-xyz-123'
+
+        # Sanity: initially NULL
+        row = mem_db.execute(
+            "SELECT consolidated_into FROM episodes WHERE id = ?", (leaf_id,)
+        ).fetchone()
+        assert row[0] is None, "leaf must start with consolidated_into=NULL"
+
+        episodic_svc.set_consolidated_into(leaf_id, super_id)
+
+        row = mem_db.execute(
+            "SELECT consolidated_into FROM episodes WHERE id = ?", (leaf_id,)
+        ).fetchone()
+        assert row[0] == super_id, (
+            f"set_consolidated_into failed to persist back-pointer: "
+            f"expected {super_id!r}, got {row[0]!r}. Apex-traversal in retrieve() "
+            "relies on this column — a NULL here means the super is unreachable "
+            "from its leaves."
+        )
+
+    def test_set_consolidated_into_applied_to_all_sources_in_cluster(
+        self, episodic_svc, mem_db,
+    ):
+        """End-to-end contract of the loop in _maybe_trigger_super_episode:
+
+            for src_id in cluster_ids:
+                episodic_svc.set_consolidated_into(src_id, new_id)
+
+        After the loop, every source leaf must point back to the super.
+        Nothing else in the DB should gain a back-pointer — scoping matters."""
+        # Three leaves that will be clustered + one unrelated leaf that must
+        # NOT receive a back-pointer.
+        src_a = _insert_episode(mem_db, gist='src a', channel='ch-cluster')
+        src_b = _insert_episode(mem_db, gist='src b', channel='ch-cluster')
+        src_c = _insert_episode(mem_db, gist='src c', channel='ch-cluster')
+        unrelated = _insert_episode(mem_db, gist='unrelated', channel='ch-cluster')
+
+        super_ep = {
+            'gist': 'Super of a, b, c',
+            'salience': 7,
+            'channel': 'ch-cluster',
+            'consolidated_from': [src_a, src_b, src_c],
+        }
+        new_id = episodic_svc.store_episode(super_ep)
+
+        # Simulate the caller loop verbatim
+        for src_id in [src_a, src_b, src_c]:
+            episodic_svc.set_consolidated_into(src_id, new_id)
+
+        # Every clustered source now points back to the super
+        rows = mem_db.execute(
+            "SELECT id, consolidated_into FROM episodes WHERE id IN (?, ?, ?)",
+            (src_a, src_b, src_c),
+        ).fetchall()
+        assert len(rows) == 3
+        for eid, ci in rows:
+            assert ci == new_id, f"source {eid} back-pointer {ci!r} != {new_id!r}"
+
+        # The unrelated leaf is untouched
+        row = mem_db.execute(
+            "SELECT consolidated_into FROM episodes WHERE id = ?", (unrelated,)
+        ).fetchone()
+        assert row[0] is None, (
+            "Back-pointer leaked onto a non-cluster leaf; scoping broken."
+        )
+
+        # The super itself is an apex (consolidated_into IS NULL) and carries
+        # the source IDs in consolidated_from — both invariants in one row.
+        row = mem_db.execute(
+            "SELECT consolidated_into, consolidated_from FROM episodes WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        assert row[0] is None, "super must be an apex (consolidated_into=NULL)"
+        assert sorted(json.loads(row[1])) == sorted([src_a, src_b, src_c])

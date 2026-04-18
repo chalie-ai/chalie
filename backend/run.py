@@ -178,6 +178,22 @@ def main():
     except Exception:
         pass
 
+    # Episode extraction catch-up — fires a one-off extraction for every
+    # channel whose latest transcript is newer than its latest episode.
+    # Compensates for the process-local insert counter being reset across
+    # restarts. Runs on a daemon thread so LLM calls inside extraction do
+    # not block boot.
+    try:
+        import threading as _cu_threading
+        from services.transcript_service import boot_catch_up_extraction
+        _cu_threading.Thread(
+            target=boot_catch_up_extraction,
+            name="episode-catch-up",
+            daemon=True,
+        ).start()
+    except Exception as _cu_err:
+        logger.warning(f"[Startup] Episode catch-up skipped: {_cu_err}")
+
     # Encryption key initialisation and capability reconnection are deferred to
     # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
     # requires an interactive password to unseal, so neither step can run at
