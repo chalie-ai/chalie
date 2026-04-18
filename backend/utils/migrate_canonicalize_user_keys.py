@@ -193,14 +193,12 @@ def _apply_temporal_collision(
     existing: dict,
     canonical_key: str,
     dry_run: bool,
-) -> str:
+) -> None:
     """Resolve a temporal collision between migrating and existing active rows.
 
     The newer row (by last_confirmed_at / first_seen_at) wins and stays active=1.
     The older row is demoted to active=0 with retrieval_weight halved.
     Supersession edges link the two rows.
-
-    Returns 'merged-temporal'.
     """
     migrating_date = _effective_date(migrating)
     existing_date = _effective_date(existing)
@@ -217,7 +215,7 @@ def _apply_temporal_collision(
 
     print(action)
     if dry_run:
-        return 'merged-temporal'
+        return
 
     conn.execute(
         "UPDATE data_graph SET active=0, retrieval_weight=? WHERE rowid=?",
@@ -229,7 +227,6 @@ def _apply_temporal_collision(
         (winner_key, winner_id),
     )
     _add_supersession_edges(conn, winner_id, loser_id)
-    return 'merged-temporal'
 
 
 def _apply_coexist_collision(
@@ -391,7 +388,8 @@ def _process_row(
     }
 
     if rule == 'temporal':
-        return _apply_temporal_collision(conn, migrating, existing, canonical_key, dry_run)
+        _apply_temporal_collision(conn, migrating, existing, canonical_key, dry_run)
+        return 'merged-temporal'
 
     if rule == 'coexist':
         canonical_blob = None if dry_run else _build_canonical_blob(canonical_key, emb_service)
@@ -404,7 +402,8 @@ def _process_row(
         return _apply_immutable_collision(conn, migrating, existing, canonical_key, key, dry_run)
 
     # Unknown rule — fall back to temporal semantics (safe default)
-    return _apply_temporal_collision(conn, migrating, existing, canonical_key, dry_run)
+    _apply_temporal_collision(conn, migrating, existing, canonical_key, dry_run)
+    return 'merged-temporal'
 
 
 def main() -> None:
