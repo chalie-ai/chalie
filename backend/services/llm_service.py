@@ -88,6 +88,16 @@ class LLMResponse:
             by the provider.
         tokens_output: Number of output/completion tokens generated, if
             reported by the provider.
+        tokens_thinking: CoT/reasoning tokens charged separately by the
+            provider (OpenAI reasoning_tokens, Gemini thoughts_token_count).
+            Anthropic: extended thinking tokens are INCLUDED in
+            ``output_tokens`` per the Anthropic API docs — the SDK does not
+            report a separate field, so ``tokens_thinking`` stays ``None``
+            and thinking cost is reflected in ``tokens_output``. If a future
+            SDK version exposes it separately, extract here and subtract
+            from ``tokens_output`` to avoid double-counting.
+        tokens_cache_read: Prompt-cache read tokens (Anthropic only).
+        tokens_cache_create: Prompt-cache write tokens (Anthropic only).
         latency_ms: End-to-end round-trip latency in milliseconds from
             request dispatch to response receipt.
     """
@@ -97,6 +107,9 @@ class LLMResponse:
     provider: Optional[str] = None
     tokens_input: Optional[int] = None
     tokens_output: Optional[int] = None
+    tokens_thinking: Optional[int] = None
+    tokens_cache_read: Optional[int] = None
+    tokens_cache_create: Optional[int] = None
     tool_calls: Optional[list] = None
     stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
@@ -583,7 +596,11 @@ class AnthropicService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text + tool_calls from response content blocks
+        # Extract text + tool_calls from response content blocks.
+        # Thinking blocks (extended thinking) are intentionally NOT surfaced
+        # in `text` — they are internal reasoning, not user-visible output.
+        # Their token cost is already folded into response.usage.output_tokens
+        # (Anthropic API docs: "Thinking tokens are counted as output tokens").
         text_parts = []
         tool_calls = []
         for block in (response.content or []):
@@ -594,6 +611,13 @@ class AnthropicService:
                     'name': block.name,
                     'input': block.input,
                 })
+            elif block_type == 'thinking':
+                # Log usage on the first thinking-block we see so future turns
+                # can be audited if Anthropic ever splits the accounting.
+                logger.debug(
+                    f"[AnthropicService] thinking block present; "
+                    f"usage={getattr(response, 'usage', None)}"
+                )
             elif hasattr(block, 'text') and block.text:
                 text_parts.append(block.text)
 
@@ -613,6 +637,8 @@ class AnthropicService:
             provider='anthropic',
             tokens_input=response.usage.input_tokens,
             tokens_output=response.usage.output_tokens,
+            tokens_cache_read=getattr(response.usage, 'cache_read_input_tokens', None),
+            tokens_cache_create=getattr(response.usage, 'cache_creation_input_tokens', None),
             latency_ms=latency_ms,
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=stop_reason,
@@ -896,12 +922,16 @@ class OpenAIService:
             + (f", tools={len(tool_calls)}" if tool_calls else "")
         )
 
+        _completion_details = getattr(response.usage, 'completion_tokens_details', None)
+        _reasoning_tokens = getattr(_completion_details, 'reasoning_tokens', None) if _completion_details else None
+
         return LLMResponse(
             text=text,
             model=response.model,
             provider='openai',
             tokens_input=response.usage.prompt_tokens,
             tokens_output=response.usage.completion_tokens,
+            tokens_thinking=_reasoning_tokens,
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
@@ -1186,12 +1216,15 @@ class GeminiService:
             + (f", tools={len(tool_calls)}" if tool_calls else "")
         )
 
+        tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
+
         return LLMResponse(
             text=text,
             model=self.model,
             provider='gemini',
             tokens_input=tokens_input,
             tokens_output=tokens_output,
+            tokens_thinking=tokens_thinking,
             latency_ms=latency_ms,
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=finish_reason,

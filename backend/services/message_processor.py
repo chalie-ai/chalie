@@ -28,6 +28,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import parse_utc, utc_now
 
@@ -176,6 +177,12 @@ class MessageProcessor:
         # regressing benchmark behaviour on simple recall/chit-chat.
         self._thinking_level: str = 'low'
         self._thinking_exploration: str | None = None
+        # Accumulator starts immediately so exploration + compaction tokens count.
+        self._metrics: MetricsAccumulator = MetricsAccumulator()
+
+    def set_turn_start(self, ts: float) -> None:
+        """Override the accumulator start time (called from _handle_chat before thread spawn)."""
+        self._metrics.start_time = ts
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
@@ -331,7 +338,7 @@ class MessageProcessor:
 
         # Batch-load durable tool_calls for all transcript rows.
         # `include_ephemeral=False` enforces the north star rule: Previous
-        # Messages must only surface ephemeral=0 rows (tool_synthesis,
+        # Messages must only surface ephemeral=0 rows (narration,
         # user_steer, tool_compaction, act_restart, and batched LLM tool
         # results are audit-only and never replay in future context).
         all_ids = [e['id'] for e in entries if e.get('id')]
@@ -392,6 +399,8 @@ class MessageProcessor:
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
+
+        self._metrics.record_tool(tool_name)
 
         result_text = ''
         try:
@@ -638,6 +647,7 @@ class MessageProcessor:
                     system_prompt, messages, job=self.JOB, tools=tools,
                     thinking_mode=self._get_thinking_mode_for_send(),
                 )
+                self._metrics.accumulate(llm_response)
 
                 if not llm_response.tool_calls:
                     loop_exited_cleanly = True
@@ -647,11 +657,11 @@ class MessageProcessor:
                 # narration in its response ahead of the tool_use block, so
                 # the stored timeline must reflect that semantic order. The
                 # transcript-timeline example in the north star § Storage
-                # Model shows tool_synthesis preceding the tool_call DTOs
+                # Model shows the narration DTO preceding the tool_call DTOs
                 # for the same iteration.
                 if llm_response.text:
                     rendered = ToolRenderAndRecordService(
-                        tool_name='tool_synthesis',
+                        tool_name='narration',
                         params={},
                         result=llm_response.text,
                         ephemeral=True,
@@ -685,7 +695,7 @@ class MessageProcessor:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
                 # Cap exit — no clean terminating text. The last iteration's
-                # narration is already captured as a tool_synthesis DTO; we
+                # narration is already captured as a narration DTO; we
                 # must NOT re-use it as the assistant row.
                 logger.warning(
                     "[MessageProcessor.send] ACT loop hit safety cap "
@@ -835,6 +845,7 @@ class MessageProcessor:
                 job=self.JOB,
                 tools=None,
             )
+            self._metrics.accumulate(response)
             compacted_text = (response.text or '').strip()
         except Exception as exc:
             logger.error(
@@ -929,6 +940,7 @@ class MessageProcessor:
                 job=self.JOB,
                 tools=None,
             )
+            self._metrics.accumulate(response)
             summary_text = (response.text or '').strip()
         except Exception as exc:
             logger.warning(
@@ -1167,6 +1179,7 @@ class MessageProcessor:
                 tools=tools,
                 thinking_mode='high',
             )
+            self._metrics.accumulate(response)
 
             if response.tool_calls:
                 logger.debug(

@@ -34,27 +34,34 @@ This document is the single authoritative visual map of how a user message trave
                             │                                                   │
                             │  One instance per turn. No singleton. No process()│
                             │                                                   │
+                            │  _metrics = MetricsAccumulator(start=turn_start) │
                             │  _run_memory_seed()  — episodic auto-recall        │
+                            │  _run_thinking_gate() — exploration pass 🧠 LLM  │
+                            │    → _metrics.accumulate(exploration_response)    │
                             │                                                   │
                             │  ACT loop (see §2):                               │
                             │    getUserPrompt()   — builds literal-text body   │
                             │    _wrap_with_checkpoint()  — envelopes body      │
                             │    [compaction check at 80% — see §3]             │
+                            │      Stage 1 LLM call → _metrics.accumulate()    │
+                            │      Stage 2 LLM call → _metrics.accumulate()    │
                             │    getSystemPrompt() — identity + unified template│
                             │    getTools()        — innate skills + discovered  │
                             │    Providers.send_messages()  🧠 LLM              │
+                            │      → _metrics.accumulate(llm_response)          │
                             │    handleTool() per tool_call → ActDispatcher     │
-                            │    tool_synthesis DTO, user_steer drain           │
+                            │      → _metrics.record_tool(tool_name)            │
+                            │    narration DTO, user_steer drain                │
                             │    repeat until text-only response or cap hit     │
                             │                                                   │
                             │  store()  — append_atomic_turn() ONE transaction  │
                             │  postTurn() — 8-service fan-out (see §4)          │
                             └──────────┬────────────────────────────────────────┘
                                        │ final response text
-                            ┌──────────▼───────────┐
-                            │  OutputService.       │
-                            │  enqueue_text()       │
-                            └──────────┬───────────┘
+                            ┌──────────▼───────────────────────────────────────┐
+                            │  metrics = proc._metrics.snapshot()              │
+                            │  OutputService.enqueue_text(…, metrics=metrics)  │
+                            └──────────┬───────────────────────────────────────┘
                                        │
                             ┌──────────▼───────────┐
                             │  📤 M  pub/sub        │
@@ -70,6 +77,14 @@ Tool calls from the LLM are dispatched inline by handleTool() via
 ActDispatcherService. Nothing accumulates across turns in memory; the
 transcript is the persistence layer and is read fresh via getPreviousMessages()
 at the start of each ACT iteration.
+
+The final WS `message` frame carries a `metrics` key on every chat response:
+  {"tokens_total": N, "tools": {"ToolName": count, ...}, "response_time_s": X.XXX}
+Tokens span all LLM calls in the turn (ACT loop, thinking exploration, Stage 1
+and Stage 2 compaction). response_time_s is measured from before the background
+thread is spawned. `tokens_total_complete: false` is added when any provider
+call omitted usage fields. Action-button responses include metrics with
+tokens_total=0 (no LLM call). Error frames carry partial metrics when available.
 
 BACKGROUND (always running, independent of user messages):
   PATH B  ──  DMN Service            (60min idle / 6h cadence)  (see §5)
@@ -125,14 +140,16 @@ Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProces
 │  │                                                              │   │
 │  │  Providers.send_messages(system, messages, tools)  🧠 LLM   │   │
 │  │    messages = [{'role':'user','content':user_body}]          │   │
+│  │    → _metrics.accumulate(llm_response)                       │   │
 │  │                                                              │   │
 │  │  No tool_calls → loop_exited_cleanly = True → break         │   │
 │  │                                                              │   │
 │  │  If LLM returned narration text alongside tool_calls:       │   │
-│  │    tool_synthesis DTO appended (ephemeral=1)                 │   │
+│  │    narration DTO appended (ephemeral=1)                      │   │
 │  │    _emit_narration() → on_narration callback → SSE           │   │
 │  │                                                              │   │
 │  │  For each tool_call: handleTool()        ⚡ DET + varies     │   │
+│  │    _metrics.record_tool(tool_name)                           │   │
 │  │    ActDispatcherService.dispatch_action()                    │   │
 │  │    DTO appended to _pending_tool_calls (ephemeral=1)         │   │
 │  │    Rendered line appended to _act_trail                      │   │
