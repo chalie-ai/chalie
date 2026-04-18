@@ -210,11 +210,15 @@ async function loadData() {
 async function loadJobDefinitions() {
     try {
         const res = await apiFetch('/providers/jobs/definitions');
-        if (res.ok) {
-            const data = await res.json();
-            jobs = data.jobs || [];
+        if (!res.ok) {
+            console.warn('[Jobs] definitions fetch failed:', res.status);
+            return;
         }
-    } catch (e) { /* non-critical — jobs will be empty */ }
+        const data = await res.json();
+        jobs = data.jobs || [];
+    } catch (e) {
+        console.warn('[Jobs] definitions fetch error:', e);
+    }
 }
 
 // ==========================================
@@ -808,7 +812,7 @@ function renderCognition() {
                     </div>
                     <div class="job-override-selects">
                         <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
-                            <option value="">-- inherit --</option>
+                            <option value="">Inherit from group</option>
                             ${jobProviderOpts}
                         </select>
                         <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
@@ -835,11 +839,11 @@ function renderCognition() {
                 <div class="group-card__assign">
                     <div class="group-card__selects">
                         <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
-                            <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
+                            <option value="">${!isUniform && assignedCount > 0 ? `Assign all ${groupJobs.length} jobs` : 'Select provider'}</option>
                             ${providerOptions}
                         </select>
                         <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">-- Select model --</option>
+                            <option value="">Select model</option>
                             ${modelOptions}
                         </select>
                     </div>
@@ -869,7 +873,7 @@ function wireGroupCardEvents(el) {
 
             // Repopulate model dropdown
             const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = '<option value="">-- Select model --</option>' +
+            modelSel.innerHTML = '<option value="">Select model</option>' +
                 models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
             modelSel.disabled = models.length === 0;
 
@@ -1152,7 +1156,7 @@ function renderScheduler() {
                 <h3>Nothing scheduled</h3>
                 <p>Create a scheduled reminder or task and Chalie will act on it automatically.</p>
             </div>`;
-        footer.style.display = 'none';
+        footer.classList.add('hidden');
         return;
     }
 
@@ -1169,10 +1173,11 @@ function renderScheduler() {
     }
 
     // Show/hide footer controls
-    footer.style.display = 'flex';
-    loadMoreBtn.style.display = scheduleItems.length < scheduleTotal ? '' : 'none';
+    footer.classList.remove('hidden');
+    loadMoreBtn.classList.toggle('hidden', scheduleItems.length >= scheduleTotal);
     const hasHistory = scheduleItems.some(i => i.status !== 'pending');
-    clearBtn.style.display = (scheduleFilter === 'all' || scheduleFilter !== 'pending') && hasHistory ? '' : 'none';
+    const showClear = (scheduleFilter === 'all' || scheduleFilter !== 'pending') && hasHistory;
+    clearBtn.classList.toggle('hidden', !showClear);
 }
 
 function renderScheduleCard(item) {
@@ -1198,8 +1203,8 @@ function renderScheduleCard(item) {
         : '';
 
     const actions = isPending ? `
-        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
-        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+        <button class="tool-card__btn" data-edit-schedule="${escapeHtml(item.id)}">Edit</button>
+        <button class="tool-card__btn --danger" data-cancel-schedule="${escapeHtml(item.id)}">Cancel</button>
     ` : '';
 
     return `
@@ -1482,8 +1487,8 @@ function renderAccordionRow(item, groupId) {
     const typeBadge = `<span class="schedule-badge --type-${escapeHtml(item.item_type)}">${escapeHtml(item.item_type)}</span>`;
     const recurrBadge = `<span class="schedule-badge --recurrence">${escapeHtml(formatRecurrence(item.recurrence))}</span>`;
     const actions = isPending ? `
-        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
-        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+        <button class="tool-card__btn" data-edit-schedule="${escapeHtml(item.id)}">Edit</button>
+        <button class="tool-card__btn --danger" data-cancel-schedule="${escapeHtml(item.id)}">Cancel</button>
     ` : '';
     return `
         <div class="schedule-accordion-row" data-group-id="${escapeHtml(groupId)}" data-loaded="false">
@@ -1567,6 +1572,13 @@ document.getElementById('keepScheduleBtn').addEventListener('click', () => {
     cancellingScheduleId = null;
 });
 document.getElementById('confirmCancelScheduleBtn').addEventListener('click', executeCancelSchedule);
+
+document.getElementById('schedulerList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-edit-schedule]');
+    if (editBtn) { openEditSchedule(editBtn.dataset.editSchedule); return; }
+    const cancelBtn = e.target.closest('[data-cancel-schedule]');
+    if (cancelBtn) { confirmCancelSchedule(cancelBtn.dataset.cancelSchedule); }
+});
 document.getElementById('scheduleLoadMoreBtn').addEventListener('click', () => loadScheduler(true));
 document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
 
@@ -2300,7 +2312,7 @@ async function loadUnderstandingObs() {
 
         if (catKeys.length > 0) {
             for (const cat of catKeys) {
-                const label = TRAIT_CATEGORY_LABELS[cat] || cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                const label = TRAIT_CATEGORY_LABELS[cat] || humanizeSlug(cat);
                 const traits = categories[cat];
 
                 html += `<div class="obs-trait-category">
@@ -2309,7 +2321,7 @@ async function loadUnderstandingObs() {
                 for (const t of traits) {
                     const conf = Math.round((t.confidence || 0) * 100);
                     const confClass = conf >= 70 ? '--high' : conf >= 40 ? '--mid' : '--low';
-                    const keyLabel = escapeHtml((t.key || '').replace(/_/g, ' '));
+                    const keyLabel = escapeHtml(humanizeSlug(t.key || ''));
                     const reinforcements = t.reinforcement_count || 0;
 
                     html += `<div class="obs-trait-item">
@@ -2437,6 +2449,23 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+const ACRONYMS = {
+    cot: 'CoT', ai: 'AI', api: 'API', llm: 'LLM', url: 'URL', id: 'ID',
+    ui: 'UI', ux: 'UX', nlp: 'NLP', ocr: 'OCR', sql: 'SQL', html: 'HTML',
+    css: 'CSS', js: 'JS', json: 'JSON', xml: 'XML', pdf: 'PDF', mcp: 'MCP',
+    os: 'OS', io: 'IO', tts: 'TTS', stt: 'STT', rag: 'RAG',
+};
+
+function humanizeSlug(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/[_-]+/g, ' ')
+        .split(' ')
+        .filter(Boolean)
+        .map(w => ACRONYMS[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+        .join(' ');
 }
 
 // ==========================================
@@ -3281,9 +3310,9 @@ function renderCapabilities() {
 }
 
 function openCapSetup(capId) {
-    document.getElementById('capSetupId').value = capId;
     document.getElementById('capSetupForm').reset();
-    document.getElementById('capSetupId').value = capId; // reset clears hidden too
+    document.getElementById('capSetupId').value = capId;
+    document.getElementById('capServerUrl').value = '';
     document.getElementById('capServerUrlGroup').classList.add('hidden');
     document.getElementById('capPasswordHint').textContent = '';
 

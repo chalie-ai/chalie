@@ -347,12 +347,15 @@ async function submitAccountForm() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
+            credentials: 'same-origin',
         });
 
         if (res.ok) {
-            // Session cookie is set by server
-            showPhase('setupPhase');
-            showToast('Account created successfully!', 'success');
+            // Session cookie is set by server. Reload so init() re-runs
+            // /auth/status and transitions to the next phase against the
+            // fresh backend state — avoids in-page state drift (issue #1656).
+            window.location.reload();
+            return;
         } else if (res.status === 409) {
             showToast('Account already exists', 'error');
         } else {
