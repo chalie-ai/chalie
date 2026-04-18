@@ -237,86 +237,152 @@ class TestGetRecentTopicContext:
         assert results == []
 
 
-class TestPerChannelExtractionCounter:
-    """_channel_insert_counts is keyed per channel, not globally.
-
-    Two independent channels each accumulate their own counter. Hitting the
-    threshold on channel A must not fire on channel B, and vice versa.
+class TestDbStateExtractionTrigger:
+    """Extraction trigger is DB-state-driven: counts transcripts with
+    id > MAX(episodes.transcript_id_end) for the channel. When the tail
+    reaches _EXTRACTION_THRESHOLD, extraction fires. No process-local
+    state, so restarts cannot desync from accumulated history.
     """
 
-    def test_each_channel_has_independent_counter(self):
-        """Inserting (first_threshold-1) times on channel-A then once on channel-B
-        must NOT trigger extraction on channel-B (its count is only 1)."""
+    def test_fires_when_untriggered_tail_crosses_threshold(self, db):
+        """Seed THRESHOLD untriggered transcripts in a channel; the next
+        _maybe_trigger_extraction call must fire."""
         import services.transcript_service as ts
 
-        fired_channels = []
+        threshold = ts._EXTRACTION_THRESHOLD
+        channel = 'ch-fire'
 
-        def _fake_trigger(channel, rowid):
-            fired_channels.append(channel)
+        for _ in range(threshold):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (channel,),
+            )
+        db.commit()
 
-        original_counts = ts._channel_insert_counts.copy()
-        original_fired = ts._channel_first_fired.copy()
-        ts._channel_insert_counts.clear()
-        ts._channel_first_fired.clear()
-        first_threshold = ts._FIRST_EXTRACTION
-        interval = ts._EXTRACTION_INTERVAL
+        fired = []
+        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            ts._maybe_trigger_extraction(channel, 999)
 
-        try:
-            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
-                # Push channel-A to just below the first-fire threshold
-                for i in range(first_threshold - 1):
-                    ts._maybe_trigger_extraction('channel-A', i)
+        assert fired == [(channel, 999)]
 
-                # channel-A has not fired yet
-                assert 'channel-A' not in fired_channels
-
-                # One insert on channel-B — must NOT fire (its count is 1)
-                ts._maybe_trigger_extraction('channel-B', 99)
-                assert 'channel-B' not in fired_channels
-
-                # The first_threshold-th insert on channel-A now fires
-                ts._maybe_trigger_extraction('channel-A', first_threshold)
-                assert fired_channels == ['channel-A']
-
-                # channel-A counter has reset; next (interval-1) inserts must not fire again
-                fired_channels.clear()
-                for i in range(interval - 1):
-                    ts._maybe_trigger_extraction('channel-A', i + first_threshold + 1)
-                assert fired_channels == []
-
-        finally:
-            ts._channel_insert_counts.clear()
-            ts._channel_insert_counts.update(original_counts)
-            ts._channel_first_fired.clear()
-            ts._channel_first_fired.update(original_fired)
-
-    def test_two_channels_fire_independently(self):
-        """Both channels firing at first-fire threshold doesn't interfere."""
+    def test_does_not_fire_below_threshold(self, db):
+        """Below threshold, no trigger."""
         import services.transcript_service as ts
 
-        fired_channels = []
+        threshold = ts._EXTRACTION_THRESHOLD
+        channel = 'ch-quiet'
 
-        def _fake_trigger(channel, rowid):
-            fired_channels.append(channel)
+        for _ in range(threshold - 1):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (channel,),
+            )
+        db.commit()
 
-        original_counts = ts._channel_insert_counts.copy()
-        original_fired = ts._channel_first_fired.copy()
-        ts._channel_insert_counts.clear()
-        ts._channel_first_fired.clear()
+        fired = []
+        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            ts._maybe_trigger_extraction(channel, 999)
 
-        try:
-            with patch.object(ts, '_trigger_episode_extraction', side_effect=_fake_trigger):
-                first_threshold = ts._FIRST_EXTRACTION
-                for i in range(first_threshold):
-                    ts._maybe_trigger_extraction('alpha', i)
-                for i in range(first_threshold):
-                    ts._maybe_trigger_extraction('beta', i)
+        assert fired == []
 
-                assert fired_channels.count('alpha') == 1
-                assert fired_channels.count('beta') == 1
+    def test_episodes_in_other_channels_do_not_mask(self, db):
+        """Episodes in other channels must not suppress a stale channel."""
+        import services.transcript_service as ts
 
-        finally:
-            ts._channel_insert_counts.clear()
-            ts._channel_insert_counts.update(original_counts)
-            ts._channel_first_fired.clear()
-            ts._channel_first_fired.update(original_fired)
+        threshold = ts._EXTRACTION_THRESHOLD
+        stale = 'ch-stale'
+        other = 'ch-other'
+
+        for _ in range(threshold):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (stale,),
+            )
+        # Episode in a DIFFERENT channel — must not suppress stale channel's trigger
+        db.execute(
+            "INSERT INTO episodes (id, channel, gist, salience, transcript_id_start, "
+            "transcript_id_end, created_at) VALUES ('other-ep', ?, 'g', 5, 1, 9999, datetime('now'))",
+            (other,),
+        )
+        db.commit()
+
+        fired = []
+        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            ts._maybe_trigger_extraction(stale, 999)
+
+        assert fired == [(stale, 999)]
+
+    def test_latest_episode_end_suppresses_until_tail_grows(self, db):
+        """An episode already covering the tail means count_since = 0 →
+        no fire. Only once more transcripts accumulate past the episode's
+        transcript_id_end does the trigger re-fire."""
+        import services.transcript_service as ts
+
+        threshold = ts._EXTRACTION_THRESHOLD
+        channel = 'ch-covered'
+
+        # Seed transcripts 1..threshold
+        for _ in range(threshold):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (channel,),
+            )
+        # Episode covers the full tail (transcript_id_end = last row)
+        last_id = db.execute(
+            "SELECT MAX(id) FROM transcript WHERE channel = ?", (channel,)
+        ).fetchone()[0]
+        db.execute(
+            "INSERT INTO episodes (id, channel, gist, salience, transcript_id_start, "
+            "transcript_id_end, created_at) VALUES ('ep-cov', ?, 'g', 5, 1, ?, datetime('now'))",
+            (channel, last_id),
+        )
+        db.commit()
+
+        fired = []
+        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            # First call — episode covers everything, no untriggered tail
+            ts._maybe_trigger_extraction(channel, last_id)
+            assert fired == []
+
+            # Add THRESHOLD more transcripts past the episode
+            for _ in range(threshold):
+                db.execute(
+                    "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                    (channel,),
+                )
+            db.commit()
+
+            new_last = db.execute(
+                "SELECT MAX(id) FROM transcript WHERE channel = ?", (channel,)
+            ).fetchone()[0]
+            ts._maybe_trigger_extraction(channel, new_last)
+            assert fired == [(channel, new_last)]
+
+    def test_soft_deleted_episodes_do_not_mask(self, db):
+        """Soft-deleted episodes must be ignored when computing the tail."""
+        import services.transcript_service as ts
+
+        threshold = ts._EXTRACTION_THRESHOLD
+        channel = 'ch-soft-del'
+
+        for _ in range(threshold):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (channel,),
+            )
+        last_id = db.execute(
+            "SELECT MAX(id) FROM transcript WHERE channel = ?", (channel,)
+        ).fetchone()[0]
+        # Episode exists but is soft-deleted — must not suppress
+        db.execute(
+            "INSERT INTO episodes (id, channel, gist, salience, transcript_id_start, "
+            "transcript_id_end, created_at, deleted_at) "
+            "VALUES ('ep-del', ?, 'g', 5, 1, ?, datetime('now'), datetime('now'))",
+            (channel, last_id),
+        )
+        db.commit()
+
+        fired = []
+        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            ts._maybe_trigger_extraction(channel, last_id)
+        assert fired == [(channel, last_id)]

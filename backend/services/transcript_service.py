@@ -28,16 +28,18 @@ _EMBED_TOKEN_THRESHOLD = 50
 # Default TTL for pruning (90 days in seconds)
 _PRUNE_TTL_DAYS = 90
 
-# Per-channel insert counters for rolling episode extraction.
-# First extraction fires when a channel has accumulated FIRST_EXTRACTION
-# inserts (25). Subsequent extractions fire every EXTRACTION_INTERVAL (20).
-# Each window covers 25 entries (20 new + 5 overlap with the prior window)
-# so consecutive windows share 5 entries of context.
-_channel_insert_counts: dict[str, int] = {}
-_channel_first_fired: dict[str, bool] = {}
-_channel_insert_lock = threading.Lock()
-_FIRST_EXTRACTION = 25
-_EXTRACTION_INTERVAL = 20
+# Rolling episode extraction — DB-state-driven.
+#
+# On every transcript append, count the transcripts in the channel whose id
+# is greater than the channel's latest episode.transcript_id_end. When the
+# tail reaches _EXTRACTION_THRESHOLD (20), fire extraction. The extractor
+# pulls the last _EXTRACTION_WINDOW (25) rows — 20 new + 5 overlap with
+# the prior window — producing one episode per ~20 new transcript turns.
+#
+# No process-local counter, no boot catch-up: trigger state lives entirely
+# in the DB (transcript.id vs episodes.transcript_id_end) so restarts never
+# desync from accumulated history.
+_EXTRACTION_THRESHOLD = 20
 _EXTRACTION_WINDOW = 25
 _EXTRACTION_OVERLAP = 5
 
@@ -473,20 +475,43 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
 
 
 def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
-    with _channel_insert_lock:
-        count = _channel_insert_counts.get(channel, 0) + 1
-        _channel_insert_counts[channel] = count
-        first_fired = _channel_first_fired.get(channel, False)
-        # First fire at FIRST_EXTRACTION, subsequent every EXTRACTION_INTERVAL
-        threshold = _EXTRACTION_INTERVAL if first_fired else _FIRST_EXTRACTION
-        if count >= threshold:
-            _channel_insert_counts[channel] = 0
-            _channel_first_fired[channel] = True
-            trigger = True
-        else:
-            trigger = False
-    if trigger:
-        _trigger_episode_extraction(channel, rowid)
+    """Fire episode extraction when the channel has accumulated
+    _EXTRACTION_THRESHOLD untriggered transcripts.
+
+    DB-state-driven: counts transcripts with id > MAX(episodes.transcript_id_end)
+    for the channel. When count >= threshold, fire. No process-local state,
+    so restarts and container rebuilds cannot desync the trigger from the
+    actual tail of accumulated history.
+
+    Never raises — failures logged and silently ignored.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM transcript
+                WHERE channel = ?
+                  AND id > COALESCE(
+                      (SELECT MAX(transcript_id_end)
+                       FROM episodes
+                       WHERE channel = ? AND deleted_at IS NULL),
+                      0
+                  )
+                """,
+                (channel, channel),
+            ).fetchone()
+        untriggered = row[0] if row else 0
+        if untriggered >= _EXTRACTION_THRESHOLD:
+            _trigger_episode_extraction(channel, rowid)
+    except Exception as e:
+        logger.warning(
+            f"{LOG_PREFIX} _maybe_trigger_extraction failed "
+            f"(channel={channel}, rowid={rowid}): {e}"
+        )
 
 
 def _trigger_episode_extraction(channel: str, rowid: int) -> None:
@@ -623,68 +648,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             )
 
     threading.Thread(target=_run, daemon=True).start()
-
-
-def boot_catch_up_extraction() -> None:
-    """Boot-time catch-up: fire a one-off extraction for every channel whose
-    latest transcript is newer than its latest episode.
-
-    Invoked once from run.py after schema convergence. Compensates for the
-    process-local insert counter being lost across restarts: without this
-    pass, a channel that accumulated transcripts in a previous run would
-    silently wait until it crosses the 25-row fresh-boot threshold again
-    before any episode is written.
-
-    Scheme is intentionally simple — no moving cursor, no persisted state:
-      for each channel:
-          max_t = MAX(transcript.id) WHERE channel=?
-          max_e = MAX(transcript_id_end) FROM episodes WHERE channel=?
-                  AND deleted_at IS NULL
-          if max_t > (max_e or 0):
-              _trigger_episode_extraction(channel, max_t)
-
-    ``_trigger_episode_extraction`` already windows to the last 25 transcripts
-    ending at ``max_t`` and chains into super-episode consolidation, so one
-    call per stale channel covers both generation and consolidation catch-up.
-
-    Never raises — failures logged only. Each channel's extraction runs in
-    its own daemon thread (spawned by ``_trigger_episode_extraction``) so
-    this function returns promptly.
-    """
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT t.channel,
-                       MAX(t.id) AS max_t,
-                       COALESCE(
-                           (SELECT MAX(e.transcript_id_end)
-                            FROM episodes e
-                            WHERE e.channel = t.channel
-                              AND e.deleted_at IS NULL),
-                           0
-                       ) AS max_e
-                FROM transcript t
-                GROUP BY t.channel
-                """
-            ).fetchall()
-
-        stale = [(ch, max_t) for ch, max_t, max_e in rows if max_t > (max_e or 0)]
-        if not stale:
-            logger.info(f"{LOG_PREFIX} Boot catch-up: no stale channels")
-            return
-
-        logger.info(
-            f"{LOG_PREFIX} Boot catch-up: firing extraction for "
-            f"{len(stale)} channel(s): {[c for c, _ in stale]}"
-        )
-        for channel, max_t in stale:
-            _trigger_episode_extraction(channel, max_t)
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Boot catch-up failed: {e}")
 
 
 # ── Episode extraction helpers ───────────────────────────────────────────────
