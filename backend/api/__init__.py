@@ -215,8 +215,12 @@ def create_app():
             return send_from_directory(str(_BRAIN_DIR), filename)
         return send_from_directory(str(_BRAIN_DIR), 'index.html')
 
-    @app.route('/brain/')
     @app.route('/brain')
+    def brain_index_no_slash():
+        """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
+        return redirect('/brain/', code=301)
+
+    @app.route('/brain/')
     def brain_index():
         """Serve brain dashboard index. Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
@@ -233,8 +237,12 @@ def create_app():
             return send_from_directory(str(_ONBOARDING_DIR), filename)
         return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
 
-    @app.route('/on-boarding/')
     @app.route('/on-boarding')
+    def onboarding_index_no_slash():
+        """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
+        return redirect('/on-boarding/', code=301)
+
+    @app.route('/on-boarding/')
     def onboarding_index():
         """Serve onboarding index."""
         return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
@@ -247,8 +255,12 @@ def create_app():
             return send_from_directory(str(_LOGIN_DIR), filename)
         return send_from_directory(str(_LOGIN_DIR), 'index.html')
 
-    @app.route('/login/')
     @app.route('/login')
+    def login_index_no_slash():
+        """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
+        return redirect('/login/', code=301)
+
+    @app.route('/login/')
     def login_index():
         """Serve login page."""
         return send_from_directory(str(_LOGIN_DIR), 'index.html')
