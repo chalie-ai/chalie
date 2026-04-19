@@ -11,7 +11,6 @@ North star: /Volumes/llm/chalie-plans/message-processing.md
 
 import json
 import logging
-import re
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UserSummarySystemPrompt
@@ -102,8 +101,9 @@ class UserSummaryProcessor(MessageProcessor):
             return
 
         # Strip markdown code fences if the model wrapped the JSON.
-        stripped = re.sub(r'^```(?:json)?\s*', '', text)
-        stripped = re.sub(r'\s*```$', '', stripped).strip()
+        # Pure stdlib string ops — no regex, no backtracking risk (Sonar S5852).
+        stripped = text.removeprefix('```json').removeprefix('```').lstrip()
+        stripped = stripped.removesuffix('```').rstrip()
 
         try:
             parsed = json.loads(stripped)
