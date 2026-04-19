@@ -13,12 +13,8 @@ logger = logging.getLogger(__name__)
 TOOL_SCHEMA = {
     "name": "document",
     "description": (
-        "Search, create, and manage documents (warranties, contracts, manuals, receipts, "
-        "research notes, etc.). Two-phase retrieval: first 'search' to identify relevant "
-        "documents (returns metadata only, not content), then 'view' to load full text for "
-        "analysis. Never answer from search results alone. Use when user asks about uploaded "
-        "documents or wants to save/store content. Do NOT use for general knowledge unrelated "
-        "to personal documents."
+        "CRUD operations for persistent documents. Each document is a file "
+        "on the system which you can create, read, search, and delete."
     ),
     "input_schema": {
         "type": "object",

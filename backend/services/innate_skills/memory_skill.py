@@ -34,11 +34,13 @@ EXPAND_FACTOR_CEILING: float = 2.2
 TOOL_SCHEMA = {
     "name": "memory",
     "description": (
-        "Store, recall, or forget knowledge about the user. "
-        "STORE EVERY personal fact the user discloses — no judgment, no "
-        "filtering. Quirky habits, streaks, hobbies, niche preferences, "
-        "throwaway details: store them ALL. The user told you because it "
-        "matters to them. Recall before recommending anything. "
+        "Store, recall, or forget FIRST-PARTY facts about the user themself — "
+        "the human you are talking to. Their traits, preferences, "
+        "relationships, goals, habits. "
+        "STORE EVERY first-party personal fact the user discloses — no "
+        "judgment, no filtering. Quirky habits, streaks, hobbies, niche "
+        "preferences, throwaway details: store them ALL. The user told you "
+        "because it matters to them. Recall before recommending anything. "
         "Use forget to remove a specific memory when asked.\n\n"
         "STORE RULES — read carefully:\n"
         "1. One fact per call. Never summarize multiple facts into one value. "
@@ -53,7 +55,7 @@ TOOL_SCHEMA = {
         "5. Store on FIRST mention. Don't wait for a second confirmation. "
         "If the user says 'My favorite food is pasta', store it now — don't "
         "wait to see if they repeat it.\n\n"
-        "CANONICAL KEYS (kind=user_specific):\n"
+        "CANONICAL KEYS (kind=user_specific) — all describe THE USER:\n"
         "  Immutable (set once, never change): birth_date, birth_place, "
         "biological_parents\n"
         "  Temporal (latest replaces previous): residence, gender, religion, "
@@ -84,10 +86,13 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "enum": ["user_specific", "system", "misc"],
                 "description": (
-                    "user_specific: about the human (traits, preferences, "
-                    "relationships, secrets, goals). system: about how Chalie "
-                    "operates (rules, decisions, analysis). misc: short-lived "
-                    "scratchpad."
+                    "user_specific: first-party facts about the human you "
+                    "are talking to (traits, preferences, relationships, "
+                    "secrets, goals). system: about how Chalie operates "
+                    "(rules, decisions, analysis). misc: short-lived "
+                    "scratchpad for Chalie's own working notes — NOT a "
+                    "dumping ground for user-supplied bulk content (use the "
+                    "`document` tool for that)."
                 ),
             },
             "key": {
