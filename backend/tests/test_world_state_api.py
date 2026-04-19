@@ -49,21 +49,21 @@ class TestWorldStateObservabilityEmpty:
     and four correctly-keyed inputs with zero entries."""
 
     def test_empty_state_returns_200(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
 
         resp = client.get("/system/observability/world-state")
         assert resp.status_code == 200
 
     def test_empty_state_rendered_is_empty_string(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
 
         data = client.get("/system/observability/world-state").get_json()
         assert data["rendered"] == ""
 
     def test_empty_state_inputs_has_four_required_keys(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
@@ -73,7 +73,7 @@ class TestWorldStateObservabilityEmpty:
         assert "bg_processes" in inputs
 
     def test_empty_state_inputs_all_zero_or_empty(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
@@ -92,7 +92,7 @@ class TestWorldStateTelemetryRendering:
     """Telemetry pushed to the singleton appears verbatim in the rendered block."""
 
     def test_telemetry_section_header_present(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
         world_state.set("telemetry", {"local_time": "10:00", "location": "Valletta"})
 
@@ -101,7 +101,7 @@ class TestWorldStateTelemetryRendering:
         assert "[telemetry]" in data["rendered"]
 
     def test_telemetry_location_appears_in_rendered(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
         world_state.set("telemetry", {"location": "Sliema, MT"})
 
@@ -109,7 +109,7 @@ class TestWorldStateTelemetryRendering:
         assert "location:Sliema, MT" in data["rendered"]
 
     def test_telemetry_reflected_in_inputs(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
         world_state.set("telemetry", {"location": "Valletta", "mobility": "stationary"})
 
@@ -128,7 +128,7 @@ class TestWorldStateScheduleRendering:
     and in inputs.schedule."""
 
     def test_pending_scheduled_item_appears_in_inputs_schedule(self, authed_client):
-        client, db_conn, store = authed_client
+        client, db_conn, _ = authed_client
         _reset_world_state()
 
         item_id = str(uuid.uuid4())
@@ -144,7 +144,7 @@ class TestWorldStateScheduleRendering:
         assert "Check-in flight" in messages
 
     def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client):
-        client, db_conn, store = authed_client
+        client, db_conn, _ = authed_client
         _reset_world_state()
 
         item_id = str(uuid.uuid4())
@@ -171,7 +171,7 @@ class TestWorldStateBgProcessRendering:
     lines and in inputs.bg_processes."""
 
     def test_goal_pursuit_row_appears_in_inputs_bg_processes(self, authed_client):
-        client, db_conn, store = authed_client
+        client, db_conn, _ = authed_client
         _reset_world_state()
 
         db_conn.execute(
@@ -186,7 +186,7 @@ class TestWorldStateBgProcessRendering:
         assert "Booking hotel" in contents
 
     def test_goal_pursuit_row_appears_in_rendered_block(self, authed_client):
-        client, db_conn, store = authed_client
+        client, db_conn, _ = authed_client
         _reset_world_state()
 
         db_conn.execute(
@@ -210,7 +210,7 @@ class TestWorldStateSignalRendering:
     """push_signal() on the singleton produces a [signal:…] line in rendered output."""
 
     def test_signal_appears_in_rendered_block(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
         world_state.push_signal("weather", "Thunderstorm at 18:00")
 
@@ -219,7 +219,7 @@ class TestWorldStateSignalRendering:
         assert "Thunderstorm at 18:00" in data["rendered"]
 
     def test_signal_reflected_in_inputs_signals(self, authed_client):
-        client, db_conn, store = authed_client
+        client, _, _ = authed_client
         _reset_world_state()
         world_state.push_signal("inbox", "3 unread emails")
 
@@ -238,7 +238,7 @@ class TestWorldStateFullLifecycle:
     and all inputs populated."""
 
     def test_all_four_sections_in_render_and_inputs(self, authed_client):
-        client, db_conn, store = authed_client
+        client, db_conn, _ = authed_client
         _reset_world_state()
 
         # Telemetry

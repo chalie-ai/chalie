@@ -62,6 +62,72 @@ LIMIT 10
 """
 
 
+# ── Render helpers (module-level, pure functions) ─────────────────────────────
+
+
+def _telemetry_user_fields(ctx: dict) -> list[str]:
+    """Extract the user-line fields (time, location, mobility) from telemetry ctx."""
+    fields = []
+    time_val = ctx.get("local_time") or ctx.get("time")
+    offset_val = ctx.get("utc_offset") or ctx.get("timezone_offset")
+    if time_val:
+        fields.append(f"time:{time_val}{offset_val}" if offset_val else f"time:{time_val}")
+    location = ctx.get("location") or ctx.get("place")
+    if location:
+        fields.append(f"location:{location}")
+    mobility = ctx.get("mobility")
+    if mobility:
+        fields.append(f"mobility:{mobility}")
+    return fields
+
+
+def _telemetry_device_fields(device) -> list[str]:
+    """Extract the device-line fields (name, battery) from telemetry ctx.device."""
+    if not isinstance(device, dict):
+        return []
+    fields = []
+    name = device.get("name")
+    if name:
+        fields.append(f"name:{name}")
+    battery = device.get("battery")
+    if battery is not None:
+        fields.append(f"battery:{battery}")
+    return fields
+
+
+def _schedule_due_field(due_at_str: str, now) -> str:
+    """Format the due-in field for a scheduled_items row."""
+    try:
+        diff_secs = (parse_utc(due_at_str) - now).total_seconds()
+    except Exception:
+        return "due-in:unknown"
+    if diff_secs >= 0:
+        return f"due-in:{TimeFormatterService.duration(diff_secs)}"
+    return f"due-in:{TimeFormatterService.duration(abs(diff_secs))} ago"
+
+
+def _schedule_last_fired_field(last_fired_str) -> str | None:
+    """Format the last-fired field, or None if absent / unparseable."""
+    if not last_fired_str:
+        return None
+    try:
+        return f"last-fired:{TimeFormatterService.ago(last_fired_str)}"
+    except Exception:
+        return None
+
+
+def _schedule_recurrence_field(recurrence_str) -> str | None:
+    """Format the repeats field, or None if absent / non-numeric."""
+    if not recurrence_str:
+        return None
+    try:
+        rec_secs = float(recurrence_str)
+    except (ValueError, TypeError):
+        logger.debug("[WorldState] unparseable recurrence dropped: %r", recurrence_str)
+        return None
+    return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
+
+
 class WorldState:
     """In-process singleton. Sole owner of world-state data + rendering.
 
@@ -166,38 +232,12 @@ class WorldState:
             return []
 
         lines = []
-
-        # user line
-        user_fields = []
-        # Time + offset
-        time_val = ctx.get("local_time") or ctx.get("time")
-        offset_val = ctx.get("utc_offset") or ctx.get("timezone_offset")
-        if time_val:
-            if offset_val:
-                user_fields.append(f"time:{time_val}{offset_val}")
-            else:
-                user_fields.append(f"time:{time_val}")
-        location = ctx.get("location") or ctx.get("place")
-        if location:
-            user_fields.append(f"location:{location}")
-        mobility = ctx.get("mobility")
-        if mobility:
-            user_fields.append(f"mobility:{mobility}")
+        user_fields = _telemetry_user_fields(ctx)
         if user_fields:
             lines.append("* **user**;" + ",".join(user_fields))
-
-        # device line
-        device = ctx.get("device") or {}
-        device_fields = []
-        device_name = device.get("name") if isinstance(device, dict) else None
-        if device_name:
-            device_fields.append(f"name:{device_name}")
-        battery = device.get("battery") if isinstance(device, dict) else None
-        if battery is not None:
-            device_fields.append(f"battery:{battery}")
+        device_fields = _telemetry_device_fields(ctx.get("device"))
         if device_fields:
             lines.append("* **device**;" + ",".join(device_fields))
-
         return lines
 
     def _render_schedule(self) -> list[str]:
@@ -210,42 +250,13 @@ class WorldState:
         lines = []
         for row in rows:
             message = row.get("message") or ""
-            due_at_str = row.get("due_at") or ""
-            last_fired_str = row.get("last_fired_at")
-            recurrence_str = row.get("recurrence")
-
-            # Compute due-in
-            try:
-                due_dt = parse_utc(due_at_str)
-                diff_secs = (due_dt - now).total_seconds()
-                if diff_secs >= 0:
-                    due_part = f"due-in:{TimeFormatterService.duration(diff_secs)}"
-                else:
-                    due_part = f"due-in:{TimeFormatterService.duration(abs(diff_secs))} ago"
-            except Exception:
-                due_part = "due-in:unknown"
-
-            fields = [due_part]
-
-            # last-fired
-            if last_fired_str:
-                try:
-                    fields.append(f"last-fired:{TimeFormatterService.ago(last_fired_str)}")
-                except Exception:
-                    pass
-
-            # recurrence — schema stores TEXT; we expect a numeric seconds
-            # string. Non-numeric values (e.g. 'daily') are dropped silently
-            # from the render but logged so the drop is visible.
-            if recurrence_str:
-                try:
-                    rec_secs = float(recurrence_str)
-                    fields.append(f"repeats:every {TimeFormatterService.duration(rec_secs)}")
-                except (ValueError, TypeError):
-                    logger.debug(
-                        "[WorldState] unparseable recurrence dropped: %r", recurrence_str
-                    )
-
+            fields = [_schedule_due_field(row.get("due_at") or "", now)]
+            last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
+            if last_fired_field:
+                fields.append(last_fired_field)
+            recurrence_field = _schedule_recurrence_field(row.get("recurrence"))
+            if recurrence_field:
+                fields.append(recurrence_field)
             lines.append(f"* {message} ({','.join(fields)})")
 
         return lines
