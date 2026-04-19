@@ -14,9 +14,8 @@ from datetime import timedelta
 
 import pytest
 
-from services.time_formatter_service import TimeFormatterService
 from services.time_utils import utc_now
-from services.world_state import WorldState, _fetch_schedule_rows, _fetch_bg_process_rows
+from services.world_state import WorldState
 
 _HEADER = "### Background Telemetry,Processes & Signals"
 
@@ -223,7 +222,7 @@ class TestRenderTelemetry:
         result = ws.render()
         # Find the user bullet
         lines = result.splitlines()
-        user_line = next((l for l in lines if "**user**" in l), None)
+        user_line = next((ln for ln in lines if "**user**" in ln), None)
         assert user_line is not None
         fields_part = user_line.split(";", 1)[1] if ";" in user_line else ""
         # No ': ' or ', ' in the fields part
@@ -273,7 +272,7 @@ class TestRenderSignals:
         ws.push_signal("news", "headline")
         result = ws.render()
         lines = result.splitlines()
-        signal_line = next((l for l in lines if "[signal:news]" in l), None)
+        signal_line = next((ln for ln in lines if "[signal:news]" in ln), None)
         assert signal_line is not None
         assert not signal_line.startswith("*")
 
@@ -422,7 +421,7 @@ class TestRenderBgProcess:
         ws = _fresh()
         result = ws.render()
         lines = result.splitlines()
-        bg_line = next((l for l in lines if "[bg_process(" in l), None)
+        bg_line = next((ln for ln in lines if "[bg_process(" in ln), None)
         assert bg_line is not None
         assert not bg_line.startswith("*")
 
@@ -522,7 +521,7 @@ class TestRenderFullMix:
         ws.set("telemetry", {"local_time": "08:00", "location": "Office"})
         result = ws.render()
         lines = result.splitlines()
-        telem_idx = next(i for i, l in enumerate(lines) if "[telemetry]" in l)
+        telem_idx = next(i for i, ln in enumerate(lines) if "[telemetry]" in ln)
         # Next line after [telemetry] must be blank
         assert lines[telem_idx + 1] == ""
 
@@ -538,7 +537,7 @@ class TestRenderFullMix:
         ws = _fresh()
         result = ws.render()
         lines = result.splitlines()
-        sched_idx = next(i for i, l in enumerate(lines) if "[schedule]" in l)
+        sched_idx = next(i for i, ln in enumerate(lines) if "[schedule]" in ln)
         assert lines[sched_idx + 1] == ""
 
     def test_bullet_uses_star_single_space(self, db):
@@ -546,7 +545,7 @@ class TestRenderFullMix:
         ws.set("telemetry", {"local_time": "09:00", "location": "Home"})
         result = ws.render()
         lines = result.splitlines()
-        bullet_lines = [l for l in lines if l.startswith("* ")]
+        bullet_lines = [ln for ln in lines if ln.startswith("* ")]
         assert len(bullet_lines) >= 1
         for line in bullet_lines:
             assert line.startswith("* "), f"Expected '* ' prefix, got: {line!r}"
@@ -558,6 +557,6 @@ class TestRenderFullMix:
             "location": "Sliema",
         })
         result = ws.render()
-        user_line = next((l for l in result.splitlines() if "**user**" in l), None)
+        user_line = next((ln for ln in result.splitlines() if "**user**" in ln), None)
         assert user_line is not None
         assert "**user**;" in user_line

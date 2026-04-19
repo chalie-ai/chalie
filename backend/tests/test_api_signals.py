@@ -76,7 +76,7 @@ def _cookie_patches(rate_allowed=True, capabilities_ok=True):
 class TestIngestSignal:
     def test_valid_signal_returns_202(self, cookie_app):
         with cookie_app.test_client() as client:
-            with _cookie_patches() as limiter:
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={
