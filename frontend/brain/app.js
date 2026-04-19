@@ -2218,7 +2218,7 @@ function _recordsAppendRows(rows) {
         const tr = document.createElement('tr');
         const createdText = r.created ? new Date(r.created).toLocaleDateString() : '—';
         const lastAccessedText = r.last_accessed ? timeAgo(r.last_accessed) : '—';
-        const valueFull = r.value != null ? String(r.value) : '';
+        const valueFull = r.value == null ? '' : String(r.value);
         const valueDisplay = valueFull.length > 500 ? valueFull.slice(0, 500) + '…' : valueFull;
         tr.innerHTML = `<td>${escapeHtml(createdText)}</td>` +
             `<td>${escapeHtml(lastAccessedText)}</td>` +
