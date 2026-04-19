@@ -359,11 +359,9 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 
 ### Observability Endpoints (`/system/observability/*`)
 - **`routing`** — Mode router decision distribution and recent activity
-- **`memory`** — Memory layer counts and health indicators
+- **`records`** — Paginated data-graph records. `GET /system/observability/records?source=<episodes|user|system>&q=<str>&offset=<int>` returns up to 250 rows of `{created, last_accessed, key, value}` ordered by `last_accessed_at IS NULL, last_accessed_at DESC, created DESC`.
 - **`tools`** — Tool performance stats
 - **`tasks`** — Active goal pursuit threads
-- **`traits`** (GET) — User traits grouped by category with confidence scores
-- **`traits/<key>`** (DELETE) — Remove a specific learned trait (user correction)
 
 See API blueprints in `backend/api/` for full reference.
 

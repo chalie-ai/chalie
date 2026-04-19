@@ -84,7 +84,29 @@
 
             <!-- Memory sub-panel -->
             <div class="cognition-subpanel" id="subtab-memory">
-                <div id="memoryContent"></div>
+                <div class="records-controls">
+                    <div class="records-source-switcher" id="recordsSourceSwitcher">
+                        <button class="filter-tab active" data-source="episodes">Episodes</button>
+                        <button class="filter-tab" data-source="user">User</button>
+                        <button class="filter-tab" data-source="system">System</button>
+                    </div>
+                    <input type="text" class="records-search-input" id="recordsSearchInput" placeholder="Search…" maxlength="200">
+                </div>
+                <div id="recordsStatus" class="obs-empty" style="display:none"></div>
+                <table class="records-table" id="recordsTable" style="display:none">
+                    <thead>
+                        <tr>
+                            <th>Created</th>
+                            <th>Last Accessed</th>
+                            <th>Key</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsTableBody"></tbody>
+                </table>
+                <div class="records-footer">
+                    <button class="btn btn-secondary hidden" id="recordsLoadMore">Load more</button>
+                </div>
             </div>
 
             <!-- Tools sub-panel -->

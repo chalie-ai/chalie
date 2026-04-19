@@ -116,7 +116,7 @@ This reflects a core design principle: reducing noise is as valuable as completi
 - Place fingerprints store signal clusters, not raw coordinates
 - All data remains local (SQLite); ambient telemetry never leaves the device
 - Locale/demographic traits are stored as low-confidence inferences, not assertions
-- Users can delete any learned trait via `DELETE /system/observability/traits/<key>`
+- Users can delete any learned trait via the Brain dashboard or the privacy API
 
 ---
 

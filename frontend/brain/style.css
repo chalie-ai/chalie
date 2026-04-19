@@ -1607,6 +1607,95 @@ body::before {
 .group-status--mixed { color: var(--warning); }
 .group-status--unset { color: var(--text-muted); }
 
+/* =====================================================
+   Memory Records panel
+   ===================================================== */
+
+.records-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.records-source-switcher {
+    display: flex;
+    gap: 4px;
+}
+
+.records-search-input {
+    flex: 1;
+    min-width: 160px;
+    max-width: 320px;
+    padding: 6px 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.records-search-input:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.5);
+}
+
+.records-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.records-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.records-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    vertical-align: top;
+    color: var(--text-primary);
+}
+
+.records-table td:nth-child(1),
+.records-table td:nth-child(2) {
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 12px;
+    width: 110px;
+}
+
+.records-table td:nth-child(3) code {
+    font-size: 12px;
+    color: var(--accent-primary);
+    background: rgba(138, 92, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+.records-table td:nth-child(4) {
+    max-width: 500px;
+    word-break: break-word;
+    color: var(--text-secondary);
+}
+
+.records-table tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.records-footer {
+    padding: 4px 0 8px;
+}
+
 /* Advanced toggle + body */
 .group-card__advanced {
     border-top: 1px solid rgba(255, 255, 255, 0.04);

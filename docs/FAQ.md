@@ -35,7 +35,7 @@ Chalie does not store everything forever. Episodic memories (specific conversati
 
 This mirrors how human memory works — and it serves a practical purpose: it prevents Chalie from accumulating an ever-growing pile of outdated, contradictory noise. What persists is what matters.
 
-You can inspect Chalie's memory at any time via the Brain dashboard or the `/system/observability/memory` endpoint.
+You can inspect Chalie's memory at any time via the Brain dashboard Memory tab, which shows paginated records across episodes, user facts, and system knowledge.
 
 ---
 
@@ -98,7 +98,6 @@ See `docs/02-PROVIDERS-SETUP.md` for full details.
 ## How do I reset or delete Chalie's memory?
 
 Via the REST API or Brain dashboard:
-- **Delete a specific trait**: `DELETE /system/observability/traits/<key>`
 - **Privacy endpoints**: `DELETE /api/privacy/data` — full data wipe
 - **Export your data**: `GET /api/privacy/export`
 

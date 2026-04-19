@@ -2144,17 +2144,19 @@ document.getElementById('cognitionSubtabs').addEventListener('click', (e) => {
 
 // Refresh button
 document.getElementById('obsRefreshBtn').addEventListener('click', () => {
-    delete obsLoaded[activeSubtab];
-    delete obsData[activeSubtab];
+    if (activeSubtab !== 'memory') {
+        delete obsLoaded[activeSubtab];
+        delete obsData[activeSubtab];
+    }
     loadCognitionSubtab(activeSubtab);
 });
 
 function loadCognitionSubtab(subtab) {
     if (subtab === 'jobs') return; // Jobs panel uses existing renderCognition()
+    if (subtab === 'memory') { loadRecordsObs(); return; }
     if (obsLoaded[subtab]) return; // Already cached
 
     const loaders = {
-        memory: loadMemoryObs,
         tools: loadToolsObs,
         tasks: loadTasksObs,
         worldstate: loadWorldStateObs,
@@ -2189,61 +2191,110 @@ function obsPct(n) {
     return Math.round((n || 0) * 100);
 }
 
-// ── Memory ──
+// ── Memory Records ──
 
-async function loadMemoryObs() {
-    const el = document.getElementById('memoryContent');
-    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(100);
+let activeRecordsSource = 'episodes';
+let recordsQuery = '';
+let recordsOffset = 0;
+let recordsRows = [];
+let _recordsDebounceTimer = null;
 
-    try {
-        const res = await apiFetch('/system/observability/memory');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-        obsData.memory = data;
-        obsLoaded.memory = true;
-        obsSetTimestamp(data.generated_at);
-
-        let html = `<p class="obs-summary">Chalie remembers ${data.episodes || 0} episodes and ${data.concepts || 0} concepts, with ${data.facts || 0} facts in short-term memory.</p>`;
-
-        // Long-term stat cards
-        html += '<div class="obs-section-title">Long-Term Memory</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Episodes', data.episodes || 0);
-        html += obsStatCard('Concepts', data.concepts || 0);
-        html += obsStatCard('Traits', data.traits || 0);
-        html += '</div>';
-
-        // Health indicators
-        html += '<div class="obs-section-title">Health</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Avg Episode Activation', (data.avg_episode_activation || 0).toFixed(3), 'Higher = more accessible');
-        html += obsStatCard('Avg Trait Strength', (data.avg_trait_strength || 0).toFixed(3), 'Higher = more confident');
-        html += '</div>';
-
-        // Short-term memory
-        html += '<div class="obs-section-title">Short-Term Memory</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Working Memory', data.working_memory || 0, 'Active conversation turns');
-        html += obsStatCard('Facts', data.facts || 0, 'Atomic assertions');
-        html += '</div>';
-
-        // Queue depths (only if non-zero)
-        const queues = data.queues || {};
-        const nonZeroQueues = Object.entries(queues).filter(([, v]) => v > 0);
-        if (nonZeroQueues.length > 0) {
-            html += '<div class="obs-section-title">Processing Queues</div>';
-            html += '<div class="obs-stats">';
-            for (const [name, depth] of nonZeroQueues) {
-                html += obsStatCard(name.replace(/-/g, ' '), depth, 'items waiting');
-            }
-            html += '</div>';
-        }
-
-        el.innerHTML = html;
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load memory data.</div>';
+function _recordsSetStatus(msg) {
+    const statusEl = document.getElementById('recordsStatus');
+    const tableEl = document.getElementById('recordsTable');
+    if (msg) {
+        statusEl.textContent = msg;
+        statusEl.style.display = '';
+        tableEl.style.display = 'none';
+    } else {
+        statusEl.style.display = 'none';
+        tableEl.style.display = '';
     }
 }
+
+function _recordsAppendRows(rows) {
+    const tbody = document.getElementById('recordsTableBody');
+    for (const r of rows) {
+        const tr = document.createElement('tr');
+        const createdText = r.created ? new Date(r.created).toLocaleDateString() : '—';
+        const lastAccessedText = r.last_accessed ? timeAgo(r.last_accessed) : '—';
+        const valueFull = r.value != null ? String(r.value) : '';
+        const valueDisplay = valueFull.length > 500 ? valueFull.slice(0, 500) + '…' : valueFull;
+        tr.innerHTML = `<td>${escapeHtml(createdText)}</td>` +
+            `<td>${escapeHtml(lastAccessedText)}</td>` +
+            `<td><code>${escapeHtml(String(r.key))}</code></td>` +
+            `<td title="${escapeHtml(valueFull)}">${escapeHtml(valueDisplay)}</td>`;
+        tbody.appendChild(tr);
+    }
+}
+
+async function _recordsFetch(append) {
+    if (!append) {
+        recordsRows = [];
+        recordsOffset = 0;
+        document.getElementById('recordsTableBody').innerHTML = '';
+    }
+
+    if (!append) _recordsSetStatus('Loading…');
+
+    const params = new URLSearchParams({ source: activeRecordsSource, offset: recordsOffset });
+    if (recordsQuery) params.set('q', recordsQuery);
+
+    try {
+        const res = await apiFetch(`/system/observability/records?${params}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        obsSetTimestamp(data.generated_at);
+
+        recordsRows = recordsRows.concat(data.rows || []);
+        _recordsAppendRows(data.rows || []);
+
+        const loadMoreBtn = document.getElementById('recordsLoadMore');
+        if (data.has_more) {
+            loadMoreBtn.classList.remove('hidden');
+        } else {
+            loadMoreBtn.classList.add('hidden');
+        }
+
+        if (recordsRows.length === 0) {
+            _recordsSetStatus('No records found.');
+        } else {
+            _recordsSetStatus(null);
+        }
+    } catch (e) {
+        _recordsSetStatus('Could not load records.');
+        document.getElementById('recordsLoadMore').classList.add('hidden');
+    }
+}
+
+function loadRecordsObs() {
+    _recordsFetch(false);
+}
+
+document.getElementById('recordsSourceSwitcher').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-tab');
+    if (!btn) return;
+    const src = btn.dataset.source;
+    if (src === activeRecordsSource) return;
+    clearTimeout(_recordsDebounceTimer);
+    activeRecordsSource = src;
+    document.querySelectorAll('#recordsSourceSwitcher .filter-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    _recordsFetch(false);
+});
+
+document.getElementById('recordsSearchInput').addEventListener('input', (e) => {
+    clearTimeout(_recordsDebounceTimer);
+    _recordsDebounceTimer = setTimeout(() => {
+        recordsQuery = e.target.value.trim();
+        _recordsFetch(false);
+    }, 300);
+});
+
+document.getElementById('recordsLoadMore').addEventListener('click', () => {
+    recordsOffset += 250;
+    _recordsFetch(true);
+});
 
 // ── Tools ──
 

@@ -3,11 +3,11 @@ System blueprint — /health, /metrics, /system/status, /system/observability/* 
 """
 
 import logging
-from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -182,91 +182,80 @@ def system_status():
 # ─────────────────────────────────────────────
 
 def _now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now().isoformat()
 
 
+_RECORDS_LIMIT = 250
+_VALID_SOURCES = {'episodes', 'user', 'system'}
 
-@system_bp.route('/system/observability/memory', methods=['GET'])
+
+@system_bp.route('/system/observability/records', methods=['GET'])
 @require_session
-def observability_memory():
-    """Memory layer counts and health indicators.
-
-    Returns flat fields consumed by the brain admin frontend:
-      episodes, concepts, traits, facts,
-      avg_episode_activation, avg_trait_strength,
-      working_memory, queues
-    """
+def observability_records():
+    """Paginated record browser for episodes, user, and system memory sources."""
     try:
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        source = request.args.get('source', '')
+        if source not in _VALID_SOURCES:
+            return jsonify({"error": "invalid source"}), 400
 
+        raw_offset = request.args.get('offset', '0')
+        try:
+            offset = int(raw_offset)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid offset"}), 400
+        if offset < 0:
+            return jsonify({"error": "invalid offset"}), 400
+
+        q = (request.args.get('q', '') or '')[:200]
+
+        from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
-        # ── Long-term counts from SQLite ──
-        episode_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_act "
-            "FROM episodes WHERE deleted_at IS NULL"
-        )
-        episodes = episode_row[0]['cnt'] if episode_row else 0
-        avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
+        if source == 'episodes':
+            rows = db.fetch_all(
+                "SELECT created_at AS created, last_accessed_at AS last_accessed, "
+                "id AS key, gist AS value "
+                "FROM episodes "
+                "WHERE deleted_at IS NULL "
+                "AND (? = '' OR gist LIKE ?) "
+                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, created_at DESC "
+                "LIMIT ? OFFSET ?",
+                (q, f"%{q}%", _RECORDS_LIMIT, offset),
+            )
+        else:
+            kind = 'user_specific' if source == 'user' else 'system'
+            rows = db.fetch_all(
+                "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
+                "key, value "
+                "FROM data_graph "
+                "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
+                "AND (? = '' OR key LIKE ? OR value LIKE ?) "
+                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
+                "LIMIT ? OFFSET ?",
+                (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
+            )
 
-        concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM data_graph "
-            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
-        )
-        concepts = concept_row[0]['cnt'] if concept_row else 0
-
-        trait_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_conf "
-            "FROM data_graph "
-            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
-        )
-        traits = trait_row[0]['cnt'] if trait_row else 0
-        avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
-
-        # ── Short-term counts from MemoryStore ──
-        working_memory_turns = 0
-        facts = 0
-        queues = {}
-
-        try:
-            store = MemoryClientService.create_connection()
-
-            # Count total buffered turns across all active working-memory keys.
-            # Each key is a list of JSON turn entries; sum their lengths.
-            wm_keys = store.keys("working_memory:*")
-            for key in wm_keys:
-                working_memory_turns += store.llen(key)
-
-            # "Facts" = short-term atomic assertions stored in MemoryStore
-            # under the "facts:*" namespace (if any), otherwise fall back to
-            # user_traits count which already covers persistent facts.
-            fact_keys = store.keys("facts:*")
-            facts = len(fact_keys) if fact_keys else traits
-
-            for q in ["output-queue"]:
-                depth = store.llen(q)
-                if depth:
-                    queues[q] = depth
-        except Exception as e:
-            logger.warning(f"[OBS] memory store error: {e}")
-
-        result = {
+        rows = rows or []
+        return jsonify({
             'generated_at': _now_iso(),
-            'episodes': episodes,
-            'concepts': concepts,
-            'traits': traits,
-            'facts': facts,
-            'avg_episode_activation': round(avg_episode_activation, 4),
-            'avg_trait_strength': round(avg_trait_strength, 4),
-            'working_memory': working_memory_turns,
-            'queues': queues,
-        }
-
-        return jsonify(result), 200
+            'source': source,
+            'rows': [
+                {
+                    'created': r['created'],
+                    'last_accessed': r['last_accessed'],
+                    'key': r['key'],
+                    'value': r['value'],
+                }
+                for r in rows
+            ],
+            'offset': offset,
+            'limit': _RECORDS_LIMIT,
+            'returned': len(rows),
+            'has_more': len(rows) == _RECORDS_LIMIT,
+        }), 200
     except Exception as e:
-        logger.error(f"[REST API] observability/memory error: {e}")
-        return jsonify({"error": "Failed to retrieve memory data"}), 500
+        logger.error(f"[REST API] observability/records error: {e}")
+        return jsonify({"error": "Failed to retrieve records"}), 500
 
 
 @system_bp.route('/system/observability/tools', methods=['GET'])

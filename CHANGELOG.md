@@ -13,6 +13,12 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 
 ## Recent
 
+### Brain Memory Sub-Panel Rework (rc-0.3.3)
+- Replaced `GET /system/observability/memory` (which double-counted `data_graph` rows under multiple labels and referenced MemoryStore keys that were never written in production) with `GET /system/observability/records?source=<episodes|user|system>&q=<str>&offset=<int>`
+- New endpoint returns 250-row pages of `{created, last_accessed, key, value}` ordered `last_accessed_at IS NULL, last_accessed_at DESC, created DESC`
+- Brain Memory sub-panel now renders a source switcher (Episodes / User / System), a search input, a paginated table, and a Load-more button
+- Removed `/system/observability/traits` and `/system/observability/traits/<key>` endpoints (already ripped in 5c9b8c2 alongside the Understanding sub-tab)
+
 ### LUT Canonicalization Engine + Forget Action (2026-04-17)
 - Replaced the ONNX contradiction classifier (`ContradictionClassifierService`, 5-way MLP head) with a deterministic 27-concept LUT engine inside `data_graph_service.store()`
 - LUT lives at `backend/services/data_graph/assets/concept_lut.yaml` (27 hand-curated concepts: 3 immutable, 7 temporal, 17 coexist) with pre-shipped sqlite-vec embeddings at `concept_lut.sqlite` (~490 KB, 768-dim gte-modernbert)
@@ -89,7 +95,6 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ### Memory Observability
 - Brain dashboard observability tab: autobiography, traits, routing, memory, tools, identity, tasks
 - `GET /system/observability/*` endpoints for all cognitive dimensions
-- `DELETE /system/observability/traits/<key>` for user-driven trait correction
 
 ### Moments
 - Pin meaningful Chalie responses as permanent searchable memories
