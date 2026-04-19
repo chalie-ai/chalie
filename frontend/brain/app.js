@@ -123,7 +123,7 @@ function showToast(message, type = 'info', options = {}) {
 // Init
 // ==========================================
 async function init() {
-    const gate = await window.chalieGateReady;
+    const gate = await globalThis.chalieGateReady;
     if (!gate.stay) return;
 
     if (gate.providersOnly) applyProvidersOnlyMode();

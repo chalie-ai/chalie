@@ -1,8 +1,8 @@
 // ==========================================
 // Shared auth gate — loaded by every page before app code.
 //
-// Pages set `window.__chaliePage` ∈ {'chat','brain','onboarding','login'}
-// then load this script. It exposes `window.chalieGateReady`, a Promise
+// Pages set `globalThis.__chaliePage` ∈ {'chat','brain','onboarding','login'}
+// then load this script. It exposes `globalThis.chalieGateReady`, a Promise
 // resolving to `{ stay, status, providersOnly }`:
 //   • stay=false  → a redirect has been issued; app code must return.
 //   • providersOnly=true (brain only) → render providers tab only.
@@ -14,7 +14,7 @@
 //   login      : session  →/
 // ==========================================
 (() => {
-    const page = window.__chaliePage;
+    const page = globalThis.__chaliePage;
 
     async function run() {
         let status;
@@ -30,7 +30,7 @@
 
         if (page === 'onboarding') {
             if (has_master_account) {
-                window.location.replace('/login/');
+                globalThis.location.replace('/login/');
                 return { stay: false, status, providersOnly: false };
             }
             return { stay: true, status, providersOnly: false };
@@ -38,25 +38,25 @@
 
         if (page === 'login') {
             if (has_session) {
-                window.location.replace('/');
+                globalThis.location.replace('/');
                 return { stay: false, status, providersOnly: false };
             }
             return { stay: true, status, providersOnly: false };
         }
 
         if (!has_master_account) {
-            window.location.replace('/on-boarding/');
+            globalThis.location.replace('/on-boarding/');
             return { stay: false, status, providersOnly: false };
         }
         if (!has_session) {
-            const next = window.location.pathname + window.location.search;
-            window.location.replace('/login/?next=' + encodeURIComponent(next));
+            const next = globalThis.location.pathname + globalThis.location.search;
+            globalThis.location.replace('/login/?next=' + encodeURIComponent(next));
             return { stay: false, status, providersOnly: false };
         }
 
         if (page === 'chat') {
             if (!has_providers) {
-                window.location.replace('/brain/');
+                globalThis.location.replace('/brain/');
                 return { stay: false, status, providersOnly: false };
             }
             return { stay: true, status, providersOnly: false };
@@ -70,9 +70,9 @@
     }
 
     if (!page) {
-        console.warn('[auth-gate] window.__chaliePage not set; gate skipped');
-        window.chalieGateReady = Promise.resolve({ stay: true, status: null, providersOnly: false });
+        console.warn('[auth-gate] globalThis.__chaliePage not set; gate skipped');
+        globalThis.chalieGateReady = Promise.resolve({ stay: true, status: null, providersOnly: false });
         return;
     }
-    window.chalieGateReady = run();
+    globalThis.chalieGateReady = run();
 })();

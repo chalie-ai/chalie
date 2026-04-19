@@ -36,7 +36,7 @@ async function readErrorMessage(res, fallback) {
 // Initialization — shared gate decides if we stay or redirect.
 // ==========================================
 async function init() {
-    const gate = await window.chalieGateReady;
+    const gate = await globalThis.chalieGateReady;
     if (!gate.stay) return;
 
     document.getElementById('accountPhase').style.display = '';
@@ -79,7 +79,7 @@ async function submitAccountForm() {
         });
 
         if (res.ok) {
-            window.location.replace('/brain/');
+            globalThis.location.replace('/brain/');
         } else if (res.status === 409) {
             showToast('Account already exists', 'error');
             btn.disabled = false;

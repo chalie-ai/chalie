@@ -46,7 +46,7 @@ class ChalieApp {
     }
 
     // Auth + provider gate — shared across all pages.
-    const gate = await window.chalieGateReady;
+    const gate = await globalThis.chalieGateReady;
     if (!gate.stay) return;
 
     this._registerServiceWorker();
