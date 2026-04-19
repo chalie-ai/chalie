@@ -2157,7 +2157,6 @@ function loadCognitionSubtab(subtab) {
         memory: loadMemoryObs,
         tools: loadToolsObs,
         tasks: loadTasksObs,
-        understanding: loadUnderstandingObs,
         worldstate: loadWorldStateObs,
     };
     if (loaders[subtab]) loaders[subtab]();
@@ -2366,96 +2365,6 @@ async function loadTasksObs() {
     }
 }
 
-// ── Understanding (Autobiography + Traits) ──
-
-const TRAIT_CATEGORY_LABELS = {
-    core: 'About You',
-    communication_style: 'How You Communicate',
-    relationship: 'Our Relationship',
-    preference: 'Your Preferences',
-    physical: 'Physical',
-    general: 'General',
-    micro_preference: 'Small Preferences',
-};
-
-async function loadUnderstandingObs() {
-    const el = document.getElementById('understandingContent');
-    el.innerHTML = obsSkeletonBlock(60) + obsSkeletonBlock(120) + obsSkeletonBlock(80);
-
-    try {
-        const traitsRes = await apiFetch('/system/observability/traits');
-
-        const traitsData = traitsRes.ok ? await traitsRes.json() : {};
-
-        obsData.understanding = { traits: traitsData };
-        obsLoaded.understanding = true;
-        obsSetTimestamp(traitsData.generated_at);
-
-        let html = '';
-
-        // ── Traits section ──
-        html += '<div class="obs-section-title">What I\'ve Learned About You</div>';
-
-        const categories = traitsData.categories || {};
-        const catKeys = Object.keys(categories);
-
-        if (catKeys.length > 0) {
-            for (const cat of catKeys) {
-                const label = TRAIT_CATEGORY_LABELS[cat] || humanizeSlug(cat);
-                const traits = categories[cat];
-
-                html += `<div class="obs-trait-category">
-                    <div class="obs-trait-category__label">${escapeHtml(label)}</div>`;
-
-                for (const t of traits) {
-                    const conf = Math.round((t.confidence || 0) * 100);
-                    const confClass = conf >= 70 ? '--high' : conf >= 40 ? '--mid' : '--low';
-                    const keyLabel = escapeHtml(humanizeSlug(t.key || ''));
-                    const reinforcements = t.reinforcement_count || 0;
-
-                    html += `<div class="obs-trait-item">
-                        <div class="obs-trait-item__content">
-                            <span class="obs-trait-item__key">${keyLabel}</span>
-                            <span class="obs-trait-item__value">${escapeHtml(t.value || '')}</span>
-                        </div>
-                        <span class="obs-trait-item__confidence ${confClass}" title="${conf}% confidence">${conf}%</span>
-                        <span class="obs-trait-item__reinforcements" title="${reinforcements} reinforcements">${reinforcements}x</span>
-                        <button class="obs-trait-item__delete" data-trait-key="${escapeHtml(t.key)}" title="Remove this">×</button>
-                    </div>`;
-                }
-
-                html += '</div>';
-            }
-        } else {
-            html += '<div class="obs-empty">No traits learned yet. Chalie picks these up naturally from conversations.</div>';
-        }
-
-        el.innerHTML = html;
-
-        // Wire up delete buttons
-        el.querySelectorAll('.obs-trait-item__delete').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = e.target.dataset.traitKey;
-                if (!key) return;
-                if (!confirm(`Remove "${key.replace(/_/g, ' ')}"?`)) return;
-
-                try {
-                    const res = await apiFetch(`/system/observability/traits/${encodeURIComponent(key)}`, { method: 'DELETE' });
-                    if (res.ok) {
-                        showToast("Got it — I'll adjust.");
-                        e.target.closest('.obs-trait-item').remove();
-                    } else {
-                        showToast('Could not remove trait.');
-                    }
-                } catch {
-                    showToast('Could not remove trait.');
-                }
-            });
-        });
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load understanding data.</div>';
-    }
-}
 
 async function loadWorldStateObs() {
     const el = document.getElementById('worldStateContent');

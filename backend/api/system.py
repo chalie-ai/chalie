@@ -382,56 +382,6 @@ def observability_tasks():
         return jsonify({"error": "Failed to retrieve task data"}), 500
 
 
-@system_bp.route('/system/observability/traits', methods=['GET'])
-@require_session
-def observability_traits():
-    """User traits grouped by kind."""
-    try:
-        from services.data_graph_service import get_data_graph_service
-
-        rows = get_data_graph_service().fetch(
-            kinds=['user_specific'],
-            order_by='retrieval_weight DESC',
-        )
-        categories = {}
-        for row in rows:
-            cat = 'general'
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append({
-                'key': row.get('key'),
-                'value': row.get('value'),
-                'confidence': round(float(row.get('retrieval_weight') or 0), 3),
-                'reinforcement_count': row.get('evidence_count') or 0,
-                'updated_at': row.get('last_confirmed_at'),
-            })
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'categories': categories,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/traits error: {e}")
-        return jsonify({"error": "Failed to retrieve traits data"}), 500
-
-
-@system_bp.route('/system/observability/traits/<trait_key>', methods=['DELETE'])
-@require_session
-def observability_delete_trait(trait_key):
-    """Delete a specific user trait by key."""
-    try:
-        from services.data_graph_service import get_data_graph_service
-        dgs = get_data_graph_service()
-        rows = dgs.fetch(kinds=['user_specific'])
-        match = next((r for r in rows if r.get('key') == trait_key), None)
-        if not match:
-            return jsonify({'error': 'Trait not found'}), 404
-        dgs.soft_delete_by_id(match['id'])
-        return jsonify({'ok': True, 'deleted': trait_key}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/traits DELETE error: {e}")
-        return jsonify({"error": "Failed to delete trait"}), 500
-
 
 @system_bp.route('/system/observability/world-state', methods=['GET'])
 @require_session
