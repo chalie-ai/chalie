@@ -251,6 +251,107 @@ class TestPostTurn:
         assert rows, "user_summary not written despite valid fenced JSON"
         assert rows[0]['value'] == 'hello'
 
+    def test_post_turn_empty_short_value_writes_nothing(self, db, caplog):
+        """JSON with 'short' present but empty string must be treated as missing.
+
+        The LLM may return {"short": "", "long": "..."} when it has no short
+        synthesis to offer.  The postTurn() guard (``if not short or not long_``)
+        must catch this and skip the write — an empty user_summary row would
+        silently become the user definition in all subsequent turns.
+        """
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        proc = UserSummaryProcessor()
+        proc._last_response = '{"short": "", "long": "a thorough description"}'
+
+        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
+            proc.postTurn()
+
+        dgs = get_data_graph_service()
+        rows = [
+            r for r in dgs.fetch(kinds=['system'])
+            if r.get('key') in ('user_summary', 'user_summary_long')
+        ]
+        assert not rows, (
+            "postTurn() wrote rows despite empty 'short' value — "
+            "empty string would become the user definition"
+        )
+        assert any(
+            'short' in rec.message.lower() or 'long' in rec.message.lower() or 'missing' in rec.message.lower() or 'empty' in rec.message.lower()
+            for rec in caplog.records
+        ), "No warning logged when 'short' value is empty string"
+
+    def test_post_turn_whitespace_only_long_value_writes_nothing(self, db, caplog):
+        """JSON with 'long' as whitespace-only string must be treated as empty.
+
+        After ``.strip()`` the value collapses to '' — the guard triggers and
+        nothing is written.  Verifies the strip() is applied before the emptiness
+        check, not after.
+        """
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        proc = UserSummaryProcessor()
+        proc._last_response = '{"short": "Alice is an engineer", "long": "   "}'
+
+        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
+            proc.postTurn()
+
+        dgs = get_data_graph_service()
+        rows = [
+            r for r in dgs.fetch(kinds=['system'])
+            if r.get('key') in ('user_summary', 'user_summary_long')
+        ]
+        assert not rows, (
+            "postTurn() wrote rows despite whitespace-only 'long' value"
+        )
+
+
+# ── TestPostTurnStorageFailure ─────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestPostTurnStorageFailure:
+    """Verify that postTurn() is resilient to a DataGraphService write failure.
+
+    The DB table is deliberately dropped after the fixture sets up the schema
+    so that ``dgs.store()`` raises ``OperationalError: no such table: data_graph``.
+    The production ``except`` block must catch it, log a warning, and return
+    without propagating — protecting any caller (worker or lazy daemon).
+    """
+
+    def test_post_turn_store_raises_does_not_propagate_and_warns(self, db, caplog):
+        """Valid JSON + broken DB write: postTurn() must not raise; must log a warning.
+
+        Pre-existing user_summary content must survive — the broken write for the
+        new synthesis must not corrupt what was already there.
+        """
+        from services.user_summary_processor import UserSummaryProcessor
+
+        # Drop the table so dgs.store() will raise OperationalError on the
+        # INSERT — the real production failure mode when the DB is closed or
+        # the schema diverges mid-run.
+        db.execute("DROP TABLE IF EXISTS data_graph")
+        db.commit()
+
+        proc = UserSummaryProcessor()
+        proc._last_response = '{"short": "Alice is a tester", "long": "Alice works in QA"}'
+
+        # Must not raise — caller must never see the storage error.
+        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
+            try:
+                proc.postTurn()
+            except Exception as exc:
+                raise AssertionError(
+                    f"postTurn() must not propagate storage exceptions to callers, "
+                    f"but raised: {type(exc).__name__}: {exc}"
+                ) from exc
+
+        assert any(
+            'write failed' in rec.message.lower() or 'failed' in rec.message.lower()
+            for rec in caplog.records
+        ), "No warning logged when data_graph write fails"
+
 
 # ── TestClassAttributes ────────────────────────────────────────────────────────
 

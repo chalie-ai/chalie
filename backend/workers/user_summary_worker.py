@@ -77,8 +77,20 @@ def _should_synthesise() -> bool:
 
         from services.time_utils import parse_utc
 
-        trait_dt = parse_utc(latest_trait_ts)
-        summary_dt = parse_utc(summary_row[0])
+        try:
+            trait_dt = parse_utc(latest_trait_ts)
+            summary_dt = parse_utc(summary_row[0])
+        except Exception as exc:
+            # Un-parseable timestamp → schema drift or corrupted row. Loud log
+            # so the worker doesn't silently starve re-synthesis forever.
+            logger.error(
+                "[USER SUMMARY WORKER] parse_utc failed on trait_ts=%r summary_ts=%r: %s",
+                latest_trait_ts,
+                summary_row[0],
+                exc,
+            )
+            return False
+
         return trait_dt > summary_dt
 
     except Exception as exc:

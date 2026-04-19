@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 # ── Lazy-synthesis concurrency guard ─────────────────────────────────────────
 # Prevents multiple concurrent getUserDefinition() calls from each spawning a
 # synthesis daemon when the user_summary row is missing.  The flag is cleared
-# in a ``finally`` block so a failed synthesis re-arms on the next call.
+# in a ``finally`` block so the next call — whether prior synthesis succeeded,
+# failed, or raised — re-arms the guard cleanly.
 _lazy_fire_lock = threading.Lock()
 _lazy_fire_in_flight = False
 
@@ -46,8 +47,9 @@ def _fire_lazy_synthesis() -> None:
 
     Guards against concurrent calls with a module-level flag + lock.
     If synthesis is already in flight the call is a no-op.
-    The flag is cleared in a ``finally`` block so a failed synthesis
-    re-arms for subsequent turns.
+    The flag is cleared in a ``finally`` block on every daemon exit path
+    (success, exception, or early return) so the guard re-arms for the
+    next call regardless of outcome.
     """
     global _lazy_fire_in_flight
 

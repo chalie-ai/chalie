@@ -11,6 +11,7 @@ North star: /Volumes/llm/chalie-plans/message-processing.md
 
 import json
 import logging
+import re
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UserSummarySystemPrompt
@@ -101,7 +102,6 @@ class UserSummaryProcessor(MessageProcessor):
             return
 
         # Strip markdown code fences if the model wrapped the JSON.
-        import re
         stripped = re.sub(r'^```(?:json)?\s*', '', text)
         stripped = re.sub(r'\s*```$', '', stripped).strip()
 
@@ -134,16 +134,24 @@ class UserSummaryProcessor(MessageProcessor):
             from services.data_graph_service import get_data_graph_service
 
             dgs = get_data_graph_service()
-            dgs.store(
-                kind='system',
-                key='user_summary',
-                value=short,
-                source='user_summary_processor',
-            )
+            # Write order matters for crash recovery. `_should_synthesise()` in
+            # user_summary_worker compares latest user_specific trait timestamp
+            # against the `user_summary` (short) row only. Writing `user_summary_long`
+            # FIRST means: if the process crashes between these two calls the short
+            # row's last_confirmed_at stays stale, _should_synthesise() returns True,
+            # and the next tick re-synthesises both. Reverse order would mark the
+            # short row fresh while user_summary_long was never written — a permanent
+            # split-brain with no retry trigger.
             dgs.store(
                 kind='system',
                 key='user_summary_long',
                 value=long_,
+                source='user_summary_processor',
+            )
+            dgs.store(
+                kind='system',
+                key='user_summary',
+                value=short,
                 source='user_summary_processor',
             )
             logger.info(

@@ -127,59 +127,45 @@ class TestLazyFallbackConcurrencyGuard:
     def test_lazy_fallback_concurrency_guard_single_daemon(self, db):
         """Two concurrent calls to _fire_lazy_synthesis spawn only ONE daemon.
 
-        Calls _fire_lazy_synthesis directly from two threads simultaneously.
-        Patches UserSummaryProcessor.send (the ONE permitted patch) to count
-        invocations instead of hitting the LLM.  The module-level lock inside
-        _fire_lazy_synthesis must allow only one thread to spawn a daemon.
-
-        A hold_event makes the patched send() block until both test threads
-        have called _fire_lazy_synthesis() — ensuring thread 2 tries to spawn
-        while thread 1's daemon is still in-flight (flag is True).
+        Real-stack (no mocks): swap the module's UserSummaryProcessor class
+        with a counting subclass whose send() blocks on a hold_event so the
+        in-flight flag stays True while the second thread tries to enter.
         """
         import services.user_message_processor as mod
-        from unittest.mock import patch
+        import services.user_summary_processor as proc_mod
 
         daemon_count = {'n': 0}
-        # Both test threads call _fire_lazy_synthesis simultaneously.
         start_barrier = threading.Barrier(2, timeout=5)
-        # The patched send() holds here until we release it, keeping the flag True.
         hold_event = threading.Event()
 
-        def counting_send(self_proc):
-            daemon_count['n'] += 1
-            hold_event.wait(timeout=5)  # block until test releases
+        class CountingProc(proc_mod.UserSummaryProcessor):
+            def send(self):  # noqa: D401 — test double, blocks intentionally
+                daemon_count['n'] += 1
+                hold_event.wait(timeout=5)
 
         errors = []
-        fire_done = threading.Event()
 
         def fire():
             try:
-                start_barrier.wait()  # both threads start simultaneously
+                start_barrier.wait()
                 mod._fire_lazy_synthesis()
             except Exception as exc:
                 errors.append(exc)
-            finally:
-                fire_done.set()
 
-        with patch(
-            'services.user_summary_processor.UserSummaryProcessor.send',
-            counting_send,
-        ):
+        original_cls = proc_mod.UserSummaryProcessor
+        proc_mod.UserSummaryProcessor = CountingProc
+        try:
             t1 = threading.Thread(target=fire)
             t2 = threading.Thread(target=fire)
             t1.start()
             t2.start()
-
-            # Wait for both test threads to finish calling _fire_lazy_synthesis.
             t1.join(timeout=5)
             t2.join(timeout=5)
-
-            # Now release the held daemon so it can complete.
             hold_event.set()
+        finally:
+            proc_mod.UserSummaryProcessor = original_cls
 
         assert not errors, f"Threads raised: {errors}"
-
-        # Only ONE daemon should have been spawned (the concurrency guard blocked the other)
         assert daemon_count['n'] == 1, (
             f"Expected exactly 1 synthesis daemon call, got {daemon_count['n']}"
         )
