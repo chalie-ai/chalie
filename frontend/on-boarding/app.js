@@ -33,62 +33,21 @@ async function readErrorMessage(res, fallback) {
 }
 
 // ==========================================
-// Phase Management
-// ==========================================
-function showPhase(phaseId) {
-    ['accountPhase', 'loginPhase'].forEach(phase => {
-        const el = document.getElementById(phase);
-        if (el) {
-            el.style.display = phase === phaseId ? '' : 'none';
-        }
-    });
-}
-
-// ==========================================
-// Initialization
+// Initialization — shared gate decides if we stay or redirect.
 // ==========================================
 async function init() {
-    try {
-        const r = await fetch('/auth/status', { credentials: 'same-origin' });
-        if (r.ok) {
-            const data = await r.json();
-            const { has_master_account, has_session } = data;
+    const gate = await window.chalieGateReady;
+    if (!gate.stay) return;
 
-            if (!has_master_account) {
-                showPhase('accountPhase');
-            } else if (!has_session) {
-                showPhase('loginPhase');
-            } else {
-                window.location.replace('/');
-                return;
-            }
-        } else {
-            showPhase('accountPhase');
-        }
-    } catch (e) {
-        showPhase('accountPhase');
-    }
-
-    setupEventListeners();
-}
-
-// ==========================================
-// Event Listeners
-// ==========================================
-function setupEventListeners() {
+    document.getElementById('accountPhase').style.display = '';
     document.getElementById('accountForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         await submitAccountForm();
     });
-
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        await submitLoginForm();
-    });
 }
 
 // ==========================================
-// Form Submission
+// Account Creation
 // ==========================================
 async function submitAccountForm() {
     const username = document.getElementById('accountUsername').value.trim();
@@ -120,7 +79,7 @@ async function submitAccountForm() {
         });
 
         if (res.ok) {
-            window.location.replace('/');
+            window.location.replace('/brain/');
         } else if (res.status === 409) {
             showToast('Account already exists', 'error');
             btn.disabled = false;
@@ -135,45 +94,6 @@ async function submitAccountForm() {
         showToast('Network error', 'error');
         btn.disabled = false;
         btn.textContent = 'Create Account';
-    }
-}
-
-async function submitLoginForm() {
-    const username = document.getElementById('loginUsername').value.trim();
-    const password = document.getElementById('loginPassword').value.trim();
-
-    if (!username || !password) {
-        showToast('Username and password required', 'error');
-        return;
-    }
-
-    const btn = document.querySelector('#loginForm button[type="submit"]');
-    btn.disabled = true;
-    btn.textContent = 'Logging in...';
-
-    try {
-        const res = await fetch('/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-        });
-
-        if (res.ok) {
-            window.location.replace('/');
-        } else if (res.status === 401) {
-            showToast('Invalid credentials', 'error');
-            btn.disabled = false;
-            btn.textContent = 'Login';
-        } else {
-            const msg = await readErrorMessage(res, 'Failed to login');
-            showToast(msg, 'error');
-            btn.disabled = false;
-            btn.textContent = 'Login';
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-        btn.disabled = false;
-        btn.textContent = 'Login';
     }
 }
 

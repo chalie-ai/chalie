@@ -45,24 +45,9 @@ class ChalieApp {
       await new Promise(r => document.addEventListener('DOMContentLoaded', r));
     }
 
-    // Onboarding guard: redirect to on-boarding only for fresh installs (no account)
-    try {
-      const r = await fetch('/auth/status', { credentials: 'same-origin' });
-      if (r.ok) {
-        const data = await r.json();
-        if (!data.has_master_account) {
-          window.location.replace('/on-boarding/');
-          return;
-        }
-        if (!data.has_session) {
-          window.location.replace('/login/');
-          return;
-        }
-      } else {
-        window.location.replace('/on-boarding/');
-        return;
-      }
-    } catch (_) { /* backend unreachable — let the app handle it normally */ }
+    // Auth + provider gate — shared across all pages.
+    const gate = await window.chalieGateReady;
+    if (!gate.stay) return;
 
     this._registerServiceWorker();
     this._initInstallPrompt();

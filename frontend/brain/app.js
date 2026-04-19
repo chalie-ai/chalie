@@ -123,34 +123,30 @@ function showToast(message, type = 'info', options = {}) {
 // Init
 // ==========================================
 async function init() {
-    await resolveApiKey();
-}
+    const gate = await window.chalieGateReady;
+    if (!gate.stay) return;
 
-async function resolveApiKey() {
+    if (gate.providersOnly) applyProvidersOnlyMode();
+
     try {
-        const statusUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}/auth/status` : '/auth/status';
-        const res = await fetch(statusUrl, { credentials: 'same-origin' });
-        const data = res.ok ? await res.json() : {};
-
-        // Only redirect to on-boarding for a completely fresh install (no account yet)
-        if (!data.has_master_account) {
-            window.location.replace('/on-boarding/');
-            return;
-        }
-        // No session — redirect to main interface for login
-        if (!data.has_session) {
-            window.location.replace('/login/?next=/brain/');
-            return;
-        }
-        // Logged in — load dashboard regardless of provider state
         await loadData();
-        // Start the background session heartbeat so a vault lock (server
-        // restart, session expiry) kicks the user back to login without
-        // requiring a manual refresh.
         startSessionHeartbeat();
     } catch (err) {
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
+}
+
+// ==========================================
+// Providers-only mode — no providers configured yet, hide everything else.
+// ==========================================
+function applyProvidersOnlyMode() {
+    document.querySelectorAll('#mainTabs .nav-link[data-tab]').forEach(btn => {
+        if (btn.dataset.tab !== 'providers') btn.style.display = 'none';
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        if (panel.id !== 'tab-providers') panel.style.display = 'none';
+    });
+    showToast('Configure a provider to start using Chalie.', 'info', { duration: 60 * 60 * 1000 });
 }
 
 // ==========================================
