@@ -52,7 +52,7 @@ class DMNMessageProcessor(MessageProcessor):
     def postTurn(self) -> None:
         """DMN post-turn: metrics only.
 
-        No trait extraction, no phase update, no DMNService.on_turn()
+        No phase update, no DMNService.on_turn()
         (that would be re-entrant — DMNService already owns the timer reset).
         """
         try:

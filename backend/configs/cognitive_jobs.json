@@ -19,12 +19,6 @@
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "trait-extraction",
-      "name": "Trait Extraction",
-      "desc": "Extracts user traits from messages via lightweight LLM call. Async, non-blocking.",
-      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
       "id": "document-synthesis",
       "name": "Document Synthesis",
       "desc": "Generates summaries for uploaded documents during processing.",

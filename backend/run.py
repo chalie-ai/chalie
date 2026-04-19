@@ -287,58 +287,16 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
-    # Bootstrap user trait sentence — load from DB or synthesize if traits exist
+    # User-summary cadence worker — 30-min tick; lazy cold-start handled
+    # by UserMessageProcessor.getUserDefinition() fallback instead of boot hook.
     try:
-        def _bootstrap_trait_sentence():
-            try:
-                from services.data_graph_service import get_data_graph_service
-
-                dgs = get_data_graph_service()
-
-                # Already exists — nothing to do
-                existing = dgs.fetch(kinds=['system'], limit=1)
-                summary_row = next((r for r in existing if r.get('key') == 'user_summary'), None)
-                if summary_row and summary_row.get('value'):
-                    logger.info("[Startup] User trait sentence exists")
-                    return
-
-                # No sentence yet — synthesize from user_specific rows
-                traits = dgs.fetch(kinds=['user_specific'], order_by='retrieval_weight DESC', limit=50)
-                if not traits:
-                    return
-
-                trait_lines = [
-                    f"{r['key']}: {r['value']} (weight: {r.get('retrieval_weight', 1.0):.2f})"
-                    for r in traits if r.get('key') and r.get('value')
-                ]
-                if not trait_lines:
-                    return
-
-                import os
-                prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'trait-synthesis.md')
-                with open(prompt_path, 'r') as f:
-                    template = f.read()
-                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
-
-                from services.provider_cache_service import ProviderCacheService
-                provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
-                if not provider_config:
-                    return
-
-                from services.llm_service import create_llm_service
-                llm = create_llm_service(provider_config)
-                resp = llm.send_message(prompt_text, "Output only the sentence. No preamble, no explanation.")
-                sentence = resp.text.strip() if resp and resp.text else None
-                if not sentence:
-                    return
-
-                dgs.store(kind='system', key='user_summary', value=sentence, source='trait_synthesis')
-                logger.info("[Startup] User trait sentence synthesized from %d traits", len(trait_lines))
-            except Exception as e:
-                logger.warning(f"[Startup] Trait sentence bootstrap failed: {e}")
-        threading.Thread(target=_bootstrap_trait_sentence, daemon=True, name="trait-sentence-bootstrap").start()
+        from workers.user_summary_worker import run as _user_summary_run
+        threading.Thread(
+            target=_user_summary_run, daemon=True, name="user-summary-worker"
+        ).start()
+        logger.info("[Startup] User summary worker started")
     except Exception as e:
-        logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
+        logger.warning(f"[Startup] User summary worker start failed: {e}")
 
     # Verify search routing embeddings are present
     try:

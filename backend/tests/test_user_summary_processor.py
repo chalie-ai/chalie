@@ -1,0 +1,302 @@
+"""
+Tests for UserSummaryProcessor and UserSummarySystemPrompt.
+
+Unit tests use in-memory SQLite via the ``db`` fixture from conftest (built from
+schema.sql via SchemaConvergenceService.converge()).  Integration tests require
+a live provider configured for ``frontal-cortex-unified``.
+
+All tests: @pytest.mark.unit or @pytest.mark.integration
+"""
+
+import json
+import logging
+
+import pytest
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _insert_trait(db, key, value, last_confirmed_at=None):
+    """Insert a user_specific row into data_graph."""
+    from services.time_utils import utc_now
+
+    now = utc_now().isoformat()
+    lc = last_confirmed_at or now
+    db.execute(
+        """
+        INSERT INTO data_graph
+            (kind, key, value, active, deleted_at, retrieval_weight,
+             storage_strength, evidence_count, first_seen_at, last_confirmed_at,
+             source)
+        VALUES ('user_specific', ?, ?, 1, NULL, 1.0, 0.5, 1, ?, ?, 'test')
+        """,
+        (key, value, now, lc),
+    )
+    db.commit()
+
+
+def _insert_summary(db, value, key='user_summary', last_confirmed_at=None):
+    """Insert a kind='system' user_summary row into data_graph."""
+    from services.time_utils import utc_now
+
+    now = utc_now().isoformat()
+    lc = last_confirmed_at or now
+    db.execute(
+        """
+        INSERT INTO data_graph
+            (kind, key, value, active, deleted_at, retrieval_weight,
+             storage_strength, evidence_count, first_seen_at, last_confirmed_at,
+             source)
+        VALUES ('system', ?, ?, 1, NULL, 0.7, 0.5, 1, ?, ?, 'user_summary_processor')
+        """,
+        (key, value, now, lc),
+    )
+    db.commit()
+
+
+def _make_fake_response(content: str):
+    """Return a minimal LLMResponse-like object with a text attribute."""
+    from services.llm_service import LLMResponse
+
+    return LLMResponse(text=content, model='test', provider='test')
+
+
+# ── TestUserSummarySystemPrompt ────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestUserSummarySystemPrompt:
+
+    def test_prompt_instantiates_and_returns_string(self):
+        from services.system_message_prompt import UserSummarySystemPrompt
+
+        inst = UserSummarySystemPrompt()
+        body = inst.getPrompt()
+        assert isinstance(body, str)
+        assert len(body) > 0
+
+    def test_prompt_contains_json_schema_keys(self):
+        from services.system_message_prompt import UserSummarySystemPrompt
+
+        body = UserSummarySystemPrompt().getPrompt()
+        assert '"short"' in body
+        assert '"long"' in body
+
+    def test_prompt_instructs_third_person(self):
+        from services.system_message_prompt import UserSummarySystemPrompt
+
+        body = UserSummarySystemPrompt().getPrompt()
+        assert 'third person' in body.lower()
+
+
+# ── TestGetUserPrompt ──────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestGetUserPrompt:
+
+    def test_user_prompt_contains_only_key_value(self, db):
+        """Seeded rows appear as ``key: value`` with NO telemetry tokens."""
+        from services.user_summary_processor import UserSummaryProcessor
+
+        _insert_trait(db, 'name', 'Alice')
+        _insert_trait(db, 'location', 'Malta')
+        _insert_trait(db, 'role', 'Engineer')
+
+        proc = UserSummaryProcessor()
+        prompt = proc.getUserPrompt()
+
+        # Each key: value pair must appear
+        assert 'name: Alice' in prompt
+        assert 'location: Malta' in prompt
+        assert 'role: Engineer' in prompt
+
+        # No telemetry tokens
+        for forbidden in ('weight', 'source=', 'created_at', 'last_confirmed_at', 'retrieval_weight'):
+            assert forbidden not in prompt, f"Telemetry token '{forbidden}' found in prompt"
+
+    def test_user_prompt_starts_with_facts_prefix(self, db):
+        _insert_trait(db, 'hobby', 'cycling')
+
+        from services.user_summary_processor import UserSummaryProcessor
+
+        prompt = UserSummaryProcessor().getUserPrompt()
+        assert prompt.startswith('Facts:')
+
+    def test_user_prompt_no_traits_returns_empty_placeholder(self, db):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        prompt = UserSummaryProcessor().getUserPrompt()
+        assert 'no facts available' in prompt
+
+
+# ── TestGetUserDefinition ──────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestGetUserDefinition:
+
+    def test_returns_static_synthesiser_string(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        proc = UserSummaryProcessor()
+        defn = proc.getUserDefinition()
+        assert 'synthesiser' in defn.lower()
+        assert 'real human' in defn.lower()
+
+
+# ── TestPostTurn ───────────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestPostTurn:
+
+    def test_post_turn_writes_both_rows(self, db):
+        """Valid JSON response writes user_summary and user_summary_long rows."""
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        payload = json.dumps({'short': 'foo', 'long': 'bar baz'})
+
+        proc = UserSummaryProcessor()
+        proc._last_response = payload
+        proc.postTurn()
+
+        dgs = get_data_graph_service()
+
+        short_rows = [
+            r for r in dgs.fetch(kinds=['system'], include_inactive=True)
+            if r.get('key') == 'user_summary' and r.get('source') == 'user_summary_processor'
+        ]
+        long_rows = [
+            r for r in dgs.fetch(kinds=['system'], include_inactive=True)
+            if r.get('key') == 'user_summary_long' and r.get('source') == 'user_summary_processor'
+        ]
+
+        assert short_rows, "user_summary row not written"
+        assert long_rows, "user_summary_long row not written"
+        assert short_rows[0]['value'] == 'foo'
+        assert long_rows[0]['value'] == 'bar baz'
+
+    def test_post_turn_malformed_json_writes_nothing_and_logs_warning(self, db, caplog):
+        """Garbage content: no rows written, warning logged, existing row untouched."""
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        # Seed a pre-existing summary row
+        _insert_summary(db, 'existing summary')
+
+        proc = UserSummaryProcessor()
+        proc._last_response = 'this is definitely not json }{{'
+
+        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
+            proc.postTurn()
+
+        dgs = get_data_graph_service()
+
+        # The pre-existing row must still be there and unchanged
+        rows = [
+            r for r in dgs.fetch(kinds=['system'])
+            if r.get('key') == 'user_summary'
+        ]
+        assert rows, "Pre-existing user_summary row was removed"
+        assert rows[0]['value'] == 'existing summary'
+
+        # No long row written
+        long_rows = [
+            r for r in dgs.fetch(kinds=['system'])
+            if r.get('key') == 'user_summary_long'
+        ]
+        assert not long_rows, "user_summary_long written despite malformed JSON"
+
+        assert any('parse' in rec.message.lower() or 'json' in rec.message.lower()
+                   for rec in caplog.records), "No warning logged for malformed JSON"
+
+    def test_post_turn_missing_short_key_writes_nothing(self, db):
+        """JSON with missing 'short' key writes nothing."""
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        proc = UserSummaryProcessor()
+        proc._last_response = json.dumps({'long': 'some long text'})
+        proc.postTurn()
+
+        dgs = get_data_graph_service()
+        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') == 'user_summary']
+        assert not rows, "user_summary written despite missing 'short' key"
+
+    def test_post_turn_empty_response_writes_nothing(self, db):
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        proc = UserSummaryProcessor()
+        proc._last_response = ''
+        proc.postTurn()
+
+        dgs = get_data_graph_service()
+        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') in ('user_summary', 'user_summary_long')]
+        assert not rows
+
+    def test_post_turn_strips_markdown_code_fences(self, db):
+        """LLM wrapping JSON in ```json ... ``` fences is handled gracefully."""
+        from services.data_graph_service import get_data_graph_service
+        from services.user_summary_processor import UserSummaryProcessor
+
+        fenced = '```json\n{"short": "hello", "long": "world"}\n```'
+
+        proc = UserSummaryProcessor()
+        proc._last_response = fenced
+        proc.postTurn()
+
+        dgs = get_data_graph_service()
+        rows = [
+            r for r in dgs.fetch(kinds=['system'])
+            if r.get('key') == 'user_summary' and r.get('source') == 'user_summary_processor'
+        ]
+        assert rows, "user_summary not written despite valid fenced JSON"
+        assert rows[0]['value'] == 'hello'
+
+
+# ── TestClassAttributes ────────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestClassAttributes:
+
+    def test_skip_transcript_write_is_true(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        assert UserSummaryProcessor.SKIP_TRANSCRIPT_WRITE is True
+
+    def test_max_iterations_is_one(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        assert UserSummaryProcessor.MAX_ITERATIONS == 1
+
+    def test_native_tools_is_empty(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        assert UserSummaryProcessor.NATIVE_TOOLS == []
+
+    def test_job_is_frontal_cortex_unified(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        assert UserSummaryProcessor.JOB == 'frontal-cortex-unified'
+
+
+# ── Integration tests (require live provider) ──────────────────────────────────
+
+@pytest.mark.integration
+class TestUserSummaryProcessorIntegration:
+
+    def test_synthesise_then_should_not_refire(self, db):
+        """Seed traits, run synthesis, then _should_synthesise() must return False.
+
+        Proves no infinite re-synthesis loop.
+        """
+        from services.user_summary_processor import UserSummaryProcessor
+        from workers.user_summary_worker import _should_synthesise
+
+        _insert_trait(db, 'name', 'Bob')
+        _insert_trait(db, 'city', 'Valletta')
+
+        UserSummaryProcessor().send()
+
+        assert not _should_synthesise(), (
+            "_should_synthesise() returned True immediately after synthesis — "
+            "infinite loop risk"
+        )

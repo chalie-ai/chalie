@@ -343,16 +343,16 @@ class TestProvidersAPI:
     def test_assign_job_success(self, client, mock_service, mock_cache):
         """PUT /providers/jobs/<name> assigns provider successfully."""
         mock_service.set_job_assignment.return_value = {
-            "job_name": "trait-extraction",
+            "job_name": "frontal-cortex-unified",
             "provider_id": 3,
         }
 
-        response = client.put('/providers/jobs/trait-extraction', json={
+        response = client.put('/providers/jobs/frontal-cortex-unified', json={
             "provider_id": 3,
         })
 
         assert response.status_code == 200
         data = response.get_json()
-        assert data["assignment"]["job_name"] == "trait-extraction"
+        assert data["assignment"]["job_name"] == "frontal-cortex-unified"
         assert data["assignment"]["provider_id"] == 3
-        mock_service.set_job_assignment.assert_called_once_with("trait-extraction", 3, None)
+        mock_service.set_job_assignment.assert_called_once_with("frontal-cortex-unified", 3, None)
