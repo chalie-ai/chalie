@@ -33,9 +33,10 @@ chalie logs            # Follow the log
 
 Open **http://localhost:8081/on-boarding/** and:
 
-1. **Create an account** — set a password
-2. **Configure an LLM provider** — choose from the options below
-3. **Begin** — you'll be redirected to the chat interface
+1. **Create an account** — set a username and password
+2. **Login** — you'll be redirected to the chat interface
+
+To configure an LLM provider, open **http://localhost:8081/brain/** → **Settings** → **Providers** → **Add Provider**.
 
 ---
 
@@ -43,31 +44,9 @@ Open **http://localhost:8081/on-boarding/** and:
 
 > **Recommended setup:**
 > - **Local / private** — Install [Ollama](https://ollama.ai), run `ollama pull qwen:8b`, point Chalie at `http://localhost:11434`. Free, no data leaves your machine.
-> - **Easiest cloud** — Use OpenAI or Anthropic. Paste an API key during onboarding and you're done.
+> - **Easiest cloud** — Use OpenAI or Anthropic. Paste an API key in Brain → Settings → Providers.
 
-### Ollama (local)
-
-```bash
-# Install from https://ollama.ai, then:
-ollama pull qwen:8b
-```
-
-In onboarding, select **Ollama** and set the endpoint to `http://localhost:11434`.
-
-### OpenAI
-
-1. Get an API key from [platform.openai.com](https://platform.openai.com)
-2. In onboarding, select **OpenAI** and paste your key
-
-### Anthropic
-
-1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
-2. In onboarding, select **Anthropic** and paste your key
-
-### Google Gemini
-
-1. Get an API key from [ai.google.dev](https://ai.google.dev)
-2. In onboarding, select **Gemini** and paste your key
+All provider setup (Ollama, OpenAI, Anthropic, Gemini) happens in Brain via the **Add Provider** modal. See [02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md) for per-provider details.
 
 ---
 

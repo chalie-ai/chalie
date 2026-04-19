@@ -16,13 +16,9 @@ python backend/run.py
 
 The web interface will be available at `http://localhost:8081`.
 
-### 2. Configure During Onboarding
+### 2. Configure in Brain
 
-The onboarding wizard at `http://localhost:8081/on-boarding/` walks you through provider setup step by step. This is the easiest path for first-time setup.
-
-### 3. Configure After Onboarding
-
-To add or change providers later:
+After creating your account at `http://localhost:8081/on-boarding/`, configure providers in Brain:
 
 1. Open `http://localhost:8081/brain/`
 2. Go to **Settings** → **Providers**

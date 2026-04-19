@@ -86,8 +86,8 @@ See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the
 
 ## How do I configure an LLM provider?
 
-1. Start Chalie and open `http://localhost:8081/on-boarding/`
-2. Complete onboarding — you'll be asked to configure a provider
+1. Start Chalie, create your account at `http://localhost:8081/on-boarding/`, and log in
+2. Open Brain at `http://localhost:8081/brain/` → **Settings** → **Providers** → **Add Provider**
 3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull gemma4:31b`), set endpoint to `http://localhost:11434`
 4. For cloud providers: paste your API key — it is encrypted and stored locally
 
