@@ -245,7 +245,7 @@ Stage 7 builds the **binding layer**: a continuously updated situation model tha
 
 **What it requires:** SituationModelService (deterministic, <1ms), conversation phase tracking, behavioral adaptation rules, situation-aware prompt injection. Optional: ONNX emotion/engagement/tone models for richer signals. No new external data sources — this stage works with signals Chalie already has.
 
-**Status:** In progress. SituationModelService, ConversationPhaseService, and WorldStateService are implemented.
+**Status:** In progress. SituationModelService, ConversationPhaseService, and WorldState singleton are implemented.
 
 ### Stage 8: Expanded Perception
 

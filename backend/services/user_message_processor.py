@@ -30,6 +30,7 @@ from collections.abc import Callable
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
 from services.innate_skills.registry import ALL_SKILL_NAMES
+from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ class UserMessageProcessor(MessageProcessor):
         parts = []
 
         # 1. World State — injected verbatim (already contains its own header)
-        rendered_world_state = self._get_world_state()
+        rendered_world_state = world_state.render()
         if rendered_world_state:
             logger.info(
                 "[WorldState] injected rendered block into user prompt (%d chars)",
@@ -496,14 +497,6 @@ class UserMessageProcessor(MessageProcessor):
             return min(int(ctx_limit * 0.6), 150_000)
         except Exception:
             return 32_000
-
-    def _get_world_state(self) -> str:
-        """Render the world state block via the WorldState singleton.
-
-        Returns empty string when the render is empty — getUserPrompt() skips the section.
-        """
-        from services.world_state import world_state
-        return world_state.render()
 
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.

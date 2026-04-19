@@ -101,10 +101,7 @@ class ReasoningSignal:
 | `user_message` | User sent a chat message | websocket | 1.0 |
 | `goal_inferred` | Recurring topic pattern detected as potential goal | goal_inference_service | 0.6 |
 
-Note: Signal handlers also update the world model cache in MemoryStore (`world_model:items`).
-`task_state_changed` and `schedule_fired` trigger incremental cache updates via
-`WorldStateService.notify_task_changed()` / `notify_schedule_changed()`. The cache
-is fully refreshed from DB during idle periods.
+Note: `task_state_changed` and `schedule_fired` signals no longer trigger incremental world-model cache updates. The `WorldState` singleton pulls schedule data live from `scheduled_items` inside `render()` on each user turn — no cache, no worker, no notify calls needed.
 
 New signal types require:
 1. Addition to this table

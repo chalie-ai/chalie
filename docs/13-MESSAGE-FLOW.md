@@ -116,7 +116,7 @@ Runs inside every `MessageProcessor` subclass. Shown here for `UserMessageProces
 │  │  ACT iteration body (up to MAX_ITERATIONS, MAX_TIMEOUT):    │   │
 │  │                                                              │   │
 │  │  getUserPrompt()                         ⚡ DET  <5ms        │   │
-│  │    World State block (WorldStateService)    📥 M             │   │
+│  │    World State block (world_state.render())  📥 M+DB         │   │
 │  │    System Awareness block (SelfModelService)                 │   │
 │  │    ## Previous Messages (getPreviousMessages())  📥 DB       │   │
 │  │      ← compaction watermark + transcript rows               │   │

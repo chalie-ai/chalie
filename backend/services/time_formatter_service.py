@@ -5,7 +5,11 @@ Replaces open-coded ``_relative_time()`` helpers scattered across the codebase.
 All duration values in WorldState, news, and introspect output pass through here.
 """
 
+import logging
+
 from services.time_utils import utc_now, parse_utc
+
+logger = logging.getLogger(__name__)
 
 
 class TimeFormatterService:
@@ -24,17 +28,19 @@ class TimeFormatterService:
           3600– 86399s → '{X}h {Y}m' e.g. '1h 0m', '23h 59m'
           86400+s      → '{X}d {Y}h' e.g. '1d 0h', '3d 12h'
 
-        Always non-negative — caller takes the absolute value before calling
-        and adds directional context ('ago' / 'in') in its own template.
-        Fractional seconds are floored at each unit boundary.
+        Always non-negative — caller adds directional context ('ago' / 'in')
+        in its own template. Negative input clamps to ``'0s'`` (defensive;
+        matches the ``ago()`` contract). Fractional seconds are floored at
+        each unit boundary.
 
         Args:
-            seconds: Duration in seconds, may be fractional.
+            seconds: Duration in seconds, may be fractional. Negative values
+                clamp to zero.
 
         Returns:
             Compact formatted string, e.g. '2h 30m'.
         """
-        secs = abs(int(seconds))
+        secs = max(0, int(seconds))
         if secs <= 60:
             return f"{secs}s"
         if secs < 3600:
@@ -71,6 +77,7 @@ class TimeFormatterService:
                 dt = parse_utc(past)
                 delta = utc_now() - dt
                 secs = max(0.0, delta.total_seconds())
-            except Exception:
+            except Exception as e:
+                logger.debug("[TimeFormatter] unparseable input %r → '0s ago': %s", past, e)
                 secs = 0.0
         return f"{TimeFormatterService.duration(secs)} ago"

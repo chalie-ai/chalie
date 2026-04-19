@@ -47,7 +47,7 @@ WHERE (
     (status = 'pending' AND due_at <= datetime('now', '+7 days'))
     OR (status = 'fired' AND last_fired_at >= datetime('now', '-24 hours'))
 ) AND hidden = 0
-ORDER BY due_at ASC
+ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, due_at ASC
 LIMIT 20
 """
 
@@ -234,13 +234,17 @@ class WorldState:
                 except Exception:
                     pass
 
-            # recurrence
+            # recurrence — schema stores TEXT; we expect a numeric seconds
+            # string. Non-numeric values (e.g. 'daily') are dropped silently
+            # from the render but logged so the drop is visible.
             if recurrence_str:
                 try:
                     rec_secs = float(recurrence_str)
                     fields.append(f"repeats:every {TimeFormatterService.duration(rec_secs)}")
                 except (ValueError, TypeError):
-                    pass
+                    logger.debug(
+                        "[WorldState] unparseable recurrence dropped: %r", recurrence_str
+                    )
 
             lines.append(f"* {message} ({','.join(fields)})")
 

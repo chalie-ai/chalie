@@ -76,7 +76,8 @@ _USER_MSG_MARKER = "## User Message\n"
 
 # Assembly markers that indicate this is a wrapped prompt, not raw text
 _ASSEMBLY_MARKERS = (
-    "## World State",
+    "## World State",  # legacy (pre-0.3.3)
+    "### Background Telemetry,Processes & Signals",  # post-0.3.3 WorldState header
     "# Current Turn",
     "### Related Memories",
     "## System Awareness",
