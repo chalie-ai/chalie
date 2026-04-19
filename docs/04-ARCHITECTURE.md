@@ -182,6 +182,7 @@ Built-in cognitive skills always available to the LLM:
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
 - **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds
 - **Moment Worker** — Reads recent transcript turns and writes `kind='moment'` rows into `data_graph` (6h poll)
+- **User Summary Worker** — 30-min cadence; compares `MAX(last_confirmed_at)` of active `kind='user_specific'` rows against the current `user_summary` (`kind='system'`) row and, when traits are newer or the summary is missing, constructs `UserSummaryProcessor().send()` to re-synthesise `user_summary` + `user_summary_long`. No boot fire — cold-start synthesis is handled by the lazy fallback inside `UserMessageProcessor.getUserDefinition()`
 - **World Awareness Service** — Pulls ambient world context (weather, news, calendar events) for `WorldStateService`
 - **Folder Watcher** — Watches configured local folder for new documents; triggers ingestion pipeline
 - **Interface Health Monitor** — Pings all paired interfaces every 30s; marks offline after 3 consecutive failures
@@ -446,7 +447,7 @@ A daemon thread pings all paired interfaces every 30 seconds. After 3 consecutiv
 
 ## Glossary
 
-- **MessageProcessor**: Abstract base class for all LLM turns. Defines the tool-calling loop, transcript persistence, and context window reconstruction. Subclasses: `UserMessageProcessor`, `DMNMessageProcessor`, `ScheduledMessageProcessor`, `GoalPursuitProcessor`, `EpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`), `SuperEpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`).
+- **MessageProcessor**: Abstract base class for all LLM turns. Defines the tool-calling loop, transcript persistence, and context window reconstruction. Subclasses: `UserMessageProcessor`, `DMNMessageProcessor`, `ScheduledMessageProcessor`, `GoalPursuitProcessor`, `EpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`), `SuperEpisodeEncoderProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`), `UserSummaryProcessor` (internal, `SKIP_TRANSCRIPT_WRITE=True`, synthesises stored `user_specific` facts into `user_summary` + `user_summary_long` rows; 30-min cadence worker + lazy fallback from `UserMessageProcessor.getUserDefinition()`).
 - **Channel**: Stable string identifier scoping a conversation context in the `transcript` and `compactions` tables. Replaced the former topic/thread distinction.
 - **Block Protocol**: Universal content format — all LLM-to-client content is JSON arrays of typed block objects. `blocks_render_service.py` (backend) → `blocks.js` (frontend). No HTML over the wire.
 - **DMN (Default Mode Network)**: Timer-based proactive intelligence; fires after 60min idle (recent context) and every 6h (salience); uses `DMNMessageProcessor`; exits on `DMN_NO_ACTION`.
