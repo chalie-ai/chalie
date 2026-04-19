@@ -2426,46 +2426,32 @@ async function loadWorldStateObs() {
         const data = await res.json();
         obsData.worldstate = data;
         obsLoaded.worldstate = true;
-        obsSetTimestamp(data.generated_at);
 
-        const summary = data.summary || {};
-        const formatted = data.formatted || '';
+        const rendered = data.rendered || '';
+        const inputs = data.inputs || {};
 
         let html = '';
 
-        // ── Formatted prompt block (what the LLM sees) ──
-        html += '<div class="obs-section-title">Prompt Injection (what the LLM sees)</div>';
-        if (formatted) {
-            html += `<pre class="obs-world-state-raw">${escapeHtml(formatted)}</pre>`;
+        // ── Rendered block (literal text the LLM sees) ──
+        html += '<div class="obs-section-title">Rendered (what the LLM sees)</div>';
+        if (rendered) {
+            html += `<pre class="obs-world-state-raw" style="font-family:monospace;white-space:pre-wrap">${escapeHtml(rendered)}</pre>`;
         } else {
             html += '<div class="obs-empty">World state is empty — nothing salient right now.</div>';
         }
 
-        // ── Breakdown by category ──
-        const categories = [
-            { key: 'scheduled', label: 'Scheduled Items', icon: '⏰' },
-            { key: 'tasks', label: 'Persistent Tasks', icon: '⚡' },
-            { key: 'lists', label: 'Lists', icon: '📋' },
-            { key: 'topics', label: 'Active Topics', icon: '💬' },
-            { key: 'reasoning_focus', label: 'Reasoning Focus', icon: '🧠' },
-            { key: 'ambient', label: 'Ambient Context', icon: '🌐' },
-            { key: 'external_signals', label: 'External Signals', icon: '📡' },
-        ];
-
-        html += '<div class="obs-section-title">Breakdown</div>';
-        let hasAny = false;
-        for (const cat of categories) {
-            const items = summary[cat.key] || [];
-            if (items.length === 0) continue;
-            hasAny = true;
-            html += `<div class="obs-section-title" style="font-size:13px;margin-top:16px">${cat.label} (${items.length})</div>`;
-            for (const item of items) {
-                html += `<div class="obs-world-state-item">${escapeHtml(item)}</div>`;
-            }
+        // ── Raw inputs table ──
+        html += '<div class="obs-section-title" style="margin-top:20px">Raw Inputs</div>';
+        const inputKeys = ['telemetry', 'signals', 'schedule', 'bg_processes'];
+        html += '<table class="obs-inputs-table" style="width:100%;border-collapse:collapse;font-size:12px">';
+        html += '<thead><tr><th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Source</th><th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Data</th></tr></thead><tbody>';
+        for (const key of inputKeys) {
+            const val = inputs[key];
+            const isEmpty = val == null || (typeof val === 'object' && Object.keys(val).length === 0) || (Array.isArray(val) && val.length === 0);
+            const display = isEmpty ? '<em style="opacity:0.4">empty</em>' : `<pre style="margin:0;white-space:pre-wrap;font-size:11px">${escapeHtml(JSON.stringify(val, null, 2))}</pre>`;
+            html += `<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;white-space:nowrap">${key}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">${display}</td></tr>`;
         }
-        if (!hasAny) {
-            html += '<div class="obs-empty">No items in any category.</div>';
-        }
+        html += '</tbody></table>';
 
         el.innerHTML = html;
     } catch (e) {

@@ -3,7 +3,7 @@ Signal Ingestion API — external signals update world state directly (zero LLM)
 
 Signals represent passive world knowledge — things Chalie overheard, not
 things directed at Chalie.  They bypass the reasoning loop entirely and
-write to the WorldStateService's external signals slot.  The reasoning
+write to the world state singleton's signals slot.  The reasoning
 loop picks them up naturally during idle cycles via world state context.
 
 For direct communication (messages that should trigger reasoning), use
@@ -158,20 +158,12 @@ def _build_and_emit(validated: dict, wrapper_id: str) -> str:
     Returns:
         A new UUID string identifying the stored signal.
     """
-    from services.world_state_service import WorldStateService
+    from services.world_state import world_state
 
     signal_id = str(uuid.uuid4())
     source = validated["source"] or wrapper_id
 
-    svc = WorldStateService()
-    svc.notify_external_signal(
-        signal_type=validated["signal_type"],
-        source=source,
-        content=validated["content"],
-        topic=validated["topic"],
-        activation_energy=validated["activation_energy"],
-        metadata=validated["metadata"],
-    )
+    world_state.push_signal(source, validated["content"], ttl=3600)
 
     logger.debug(
         "[Signals API] External signal %s from %s → world_state",

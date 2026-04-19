@@ -5,7 +5,7 @@ News Tool — search news articles across global sources.
 import logging
 
 from services import news_sources
-from services.time_utils import utc_now, parse_utc
+from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
@@ -74,26 +74,8 @@ def _format_articles(articles) -> str:
     lines = []
     for a in articles:
         lines.append(f"\u2022 {a.title}")
-        lines.append(f"  {a.source} \u00b7 {_relative_time(a.published_at)}")
+        lines.append(f"  {a.source} \u00b7 {TimeFormatterService.ago(a.published_at)}")
         if a.description:
             lines.append(f"  {a.description[:150]}")
         lines.append("")
     return "\n".join(lines)
-
-
-def _relative_time(iso_str: str) -> str:
-    try:
-        dt = parse_utc(iso_str)
-        delta = utc_now() - dt
-        mins = int(delta.total_seconds() / 60)
-        if mins < 1:
-            return "just now"
-        if mins < 60:
-            return f"{mins}m ago"
-        hours = mins // 60
-        if hours < 24:
-            return f"{hours}h ago"
-        days = hours // 24
-        return f"{days}d ago"
-    except Exception:
-        return ""

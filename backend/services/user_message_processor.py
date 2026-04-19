@@ -183,10 +183,14 @@ class UserMessageProcessor(MessageProcessor):
         """
         parts = []
 
-        # 1. World State
-        world_state = self._get_world_state()
-        if world_state:
-            parts.append(f"## World State\n{world_state}")
+        # 1. World State — injected verbatim (already contains its own header)
+        rendered_world_state = self._get_world_state()
+        if rendered_world_state:
+            logger.info(
+                "[WorldState] injected rendered block into user prompt (%d chars)",
+                len(rendered_world_state),
+            )
+            parts.append(rendered_world_state)
 
         # 1b. Voice mode instruction (per-turn — user may switch mode)
         if self._metadata.get('source') == 'voice':
@@ -494,16 +498,12 @@ class UserMessageProcessor(MessageProcessor):
             return 32_000
 
     def _get_world_state(self) -> str:
-        """Get world state string from WorldStateService.
+        """Render the world state block via the WorldState singleton.
 
-        Returns empty string on error — getUserPrompt() skips the section.
+        Returns empty string when the render is empty — getUserPrompt() skips the section.
         """
-        try:
-            from services.world_state_service import WorldStateService
-            return WorldStateService().get_world_state(self.CHANNEL)
-        except Exception as e:
-            logger.debug(f"[USER MSG] World state unavailable: {e}")
-            return ''
+        from services.world_state import world_state
+        return world_state.render()
 
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.

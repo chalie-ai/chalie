@@ -375,22 +375,18 @@ def observability_tasks():
 @system_bp.route('/system/observability/world-state', methods=['GET'])
 @require_session
 def observability_world_state():
-    """World state as seen by the ACT loop — same data the LLM receives."""
-    try:
-        from services.world_state_service import WorldStateService
+    """World state as seen by the ACT loop — rendered block + raw inputs."""
+    from services.world_state import world_state, _fetch_schedule_rows, _fetch_bg_process_rows
 
-        svc = WorldStateService()
-        summary = svc.get_world_model_summary()
-        formatted = svc.get_world_state(topic='', message_embedding=None)
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'summary': summary,
-            'formatted': formatted,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/world-state error: {e}")
-        return jsonify({"error": "Failed to retrieve world state"}), 500
+    return jsonify({
+        "rendered": world_state.render(),
+        "inputs": {
+            "telemetry": world_state.get("telemetry"),
+            "signals": world_state.get("signals"),
+            "schedule": _fetch_schedule_rows(),
+            "bg_processes": _fetch_bg_process_rows(),
+        },
+    }), 200
 
 
 @system_bp.route('/system/observability/self-model', methods=['GET'])

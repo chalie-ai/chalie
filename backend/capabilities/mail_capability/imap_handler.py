@@ -172,7 +172,7 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def inject_inbox_hint(self, client, *, owns_client: bool = False) -> None:
-        """Push a compact unseen-inbox summary into WorldStateService.
+        """Push a compact unseen-inbox summary into the world state singleton.
 
         If owns_client is True the client is closed in the finally block.
         """
@@ -205,11 +205,8 @@ class ImapHandler:
             if informational:
                 parts.append(f"{informational} informational")
             hint = f"Inbox: {', '.join(parts)}."
-            from services.world_state_service import WorldStateService
-            WorldStateService().notify_external_signal(
-                signal_type="capability:imap", source="imap", content=hint,
-                activation_energy=0.8 if actionable else 0.4,
-            )
+            from services.world_state import world_state
+            world_state.push_signal("inbox", hint, ttl=3600)
             logger.info("[imap_handler] inbox hint: %s", hint)
         except Exception as exc:
             logger.error("[imap_handler] inject_inbox_hint: %s", exc)

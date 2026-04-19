@@ -264,31 +264,6 @@ class SituationModelService:
             # SparkStateService not yet available — use default
             return defaults
 
-    def _collect_world_state(self) -> dict:
-        """Read salient world state items from WorldStateService."""
-        defaults = {
-            "items": [],
-            "updated_at": utc_now().isoformat(),
-        }
-        try:
-            # Use cached model items to avoid heavy DB queries on every message
-            store = self._get_store()
-            raw = store.get("world_model:items")
-            items = []
-            if raw:
-                payload = json.loads(raw)
-                # Flatten all item types into summary dicts
-                for item in payload.get("scheduled_items", []):
-                    items.append({"type": "scheduled", "label": item.get("message", "")})
-                for item in payload.get("lists", []):
-                    items.append({"type": "list", "label": item.get("name", "")})
-            return {
-                "items": items[:5],
-                "updated_at": utc_now().isoformat(),
-            }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} World state signal failed: {e}")
-            return defaults
 
     def _collect_thread(self) -> dict:
         """Read exchange count from the transcript table."""
@@ -660,7 +635,6 @@ class SituationModelService:
             topic = self._collect_topic()
             engagement = self._collect_engagement()
             spark = self._collect_spark()
-            world_state = self._collect_world_state()
             thread = self._collect_thread()
             phase = self._collect_phase()
         else:
@@ -670,7 +644,6 @@ class SituationModelService:
             topic = cached.get("topic", {"name": None, "confidence": 0.5, "is_new": False, "updated_at": now_iso})
             engagement = cached.get("engagement", self._collect_engagement())
             spark = cached.get("spark", self._collect_spark())
-            world_state = cached.get("world_state", {"items": [], "updated_at": now_iso})
             thread = cached.get("thread", {"exchange_count": 0, "age_minutes": 0.0, "updated_at": now_iso})
             phase = cached.get("phase", {"current": "unknown", "momentum": 0.5, "direction": "sustaining", "updated_at": now_iso})
 
@@ -681,7 +654,6 @@ class SituationModelService:
             "client": client,
             "engagement": engagement,
             "spark": spark,
-            "world_state": world_state,
             "thread": thread,
         }
 

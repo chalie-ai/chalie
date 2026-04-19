@@ -79,7 +79,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["memorize"] = lambda channel, action: handle_memory(channel, action)
     dispatcher.handlers["memory_query"] = lambda channel, action: handle_memory(channel, action)
     dispatcher.handlers["memory_write"] = lambda channel, action: handle_memory(channel, action)
-    dispatcher.handlers["world_state_read"] = lambda channel, action: handle_introspect(channel, action)
     dispatcher.handlers["internal_reasoning"] = lambda channel, action: handle_memory(channel, action)
     dispatcher.handlers["semantic_query"] = lambda channel, action: handle_memory(channel, action)
 

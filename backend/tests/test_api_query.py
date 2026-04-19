@@ -123,20 +123,6 @@ def _make_situation_service_mock(
     return instance
 
 
-def _make_world_service_mock():
-    """Return a mock WorldStateService *instance*."""
-    instance = MagicMock()
-    instance.get_world_model_summary.return_value = {
-        "scheduled": ["[in 2h] Team standup"],
-        "tasks": ["[ACTIVE] Refactor auth module"],
-        "lists": ["Shopping"],
-        "ambient": [],
-        "topics": ["development"],
-        "reasoning_focus": [],
-    }
-    return instance
-
-
 def _make_retrieval_module_mock(results=None):
     """Return a mock episodic_retrieval_service *module*.
 
@@ -425,87 +411,6 @@ class TestRelevanceEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# World-state endpoint tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestWorldStateEndpoint:
-    def _patch_world_service(self, svc_instance=None):
-        if svc_instance is None:
-            svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_world_state_service", return_value=cls_mock)
-
-    def test_returns_200(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        assert resp.status_code == 200
-
-    def test_response_has_items_key(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        data = resp.get_json()
-        assert "items" in data
-        assert isinstance(data["items"], list)
-
-    def test_items_have_type_and_label(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        items = resp.get_json()["items"]
-        assert len(items) > 0
-        for item in items:
-            assert "type" in item
-            assert "label" in item
-
-    def test_item_types_come_from_summary_keys(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        item_types = {i["type"] for i in resp.get_json()["items"]}
-        # The mock has scheduled, tasks, lists, topics
-        assert "scheduled" in item_types
-        assert "task" in item_types
-
-    def test_optional_q_param_accepted(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state?q=meetings")
-        assert resp.status_code == 200
-
-    def test_service_unavailable_returns_empty(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_world_state_service", side_effect=Exception("unavailable")):
-                resp = client.get("/api/query/world-state")
-        assert resp.status_code == 200
-        assert resp.get_json()["items"] == []
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.get("/api/query/world-state")
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.get(
-                        "/api/query/world-state",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
 # Identity endpoint tests
 # ---------------------------------------------------------------------------
 
@@ -629,12 +534,6 @@ class TestCompositeEndpoint:
         cls_mock = MagicMock(return_value=svc_instance)
         return patch("api.query._get_situation_model_service", return_value=cls_mock)
 
-    def _patch_world(self, svc_instance=None):
-        if svc_instance is None:
-            svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_world_state_service", return_value=cls_mock)
-
     def _patch_episodic(self, results=None):
         retrieval_mod = _make_retrieval_module_mock(results or [])
         stack = ExitStack()
@@ -669,15 +568,14 @@ class TestCompositeEndpoint:
 
     def test_multiple_slices_returned(self, cookie_app):
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(), self._patch_world():
+            with _patch_cookie_auth(), self._patch_situation():
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation", "world-state"]},
+                    json={"slices": ["situation"]},
                     content_type="application/json",
                 )
         data = resp.get_json()
         assert "situation" in data["results"]
-        assert "world-state" in data["results"]
 
     def test_parameterised_relevance_slice(self, cookie_app):
         ep_stack = self._patch_episodic()
@@ -891,22 +789,6 @@ class TestDispatchSlice:
         result = _dispatch_slice("does_not_exist")
         assert "error" in result
         assert "does_not_exist" in result["error"]
-
-    def test_world_state_hyphen_alias(self):
-        from api.query import _dispatch_slice
-        svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        with patch("api.query._get_world_state_service", return_value=cls_mock):
-            result = _dispatch_slice("world-state")
-        assert "items" in result
-
-    def test_world_state_underscore_alias(self):
-        from api.query import _dispatch_slice
-        svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        with patch("api.query._get_world_state_service", return_value=cls_mock):
-            result = _dispatch_slice("world_state")
-        assert "items" in result
 
     def test_parameterised_relevance(self):
         from api.query import _dispatch_slice

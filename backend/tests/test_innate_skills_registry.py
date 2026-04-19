@@ -44,7 +44,7 @@ class TestSkillRegistry:
             register_innate_skills(mock_dispatcher)
 
         # Exclude backward-compatibility aliases
-        aliases = {'memory_query', 'memory_write', 'world_state_read', 'internal_reasoning', 'semantic_query', 'notes', 'recall', 'memorize'}
+        aliases = {'memory_query', 'memory_write', 'internal_reasoning', 'semantic_query', 'notes', 'recall', 'memorize'}
         registered = set(mock_dispatcher.handlers.keys()) - aliases
         assert registered == ALL_SKILL_NAMES
 

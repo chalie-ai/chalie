@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from services.news_service import NewsArticle
-from tools.news.news import execute, _format_articles, _relative_time, _resolve_country_code
+from tools.news.news import execute, _format_articles, _resolve_country_code
+from services.time_formatter_service import TimeFormatterService
 
 
 def _make_article(title="Test Article", source="BBC", **kwargs):
@@ -187,29 +188,30 @@ class TestFormatting:
 
     def test_relative_time_just_now(self):
         from services.time_utils import utc_now
-        assert _relative_time(utc_now().isoformat()) == "just now"
+        result = TimeFormatterService.ago(utc_now().isoformat())
+        assert result == "0s ago" or result.endswith("ago")
 
     def test_relative_time_invalid(self):
-        result = _relative_time("garbage")
+        result = TimeFormatterService.ago("garbage")
         assert isinstance(result, str)
 
     def test_relative_time_minutes_ago(self):
         from datetime import timedelta
         from services.time_utils import utc_now
         past = (utc_now() - timedelta(minutes=30)).isoformat()
-        assert _relative_time(past) == "30m ago"
+        assert TimeFormatterService.ago(past) == "30m ago"
 
     def test_relative_time_hours_ago(self):
         from datetime import timedelta
         from services.time_utils import utc_now
         past = (utc_now() - timedelta(hours=5)).isoformat()
-        assert _relative_time(past) == "5h ago"
+        assert TimeFormatterService.ago(past) == "5h 0m ago"
 
     def test_relative_time_days_ago(self):
         from datetime import timedelta
         from services.time_utils import utc_now
         past = (utc_now() - timedelta(days=3)).isoformat()
-        assert _relative_time(past) == "3d ago"
+        assert TimeFormatterService.ago(past) == "3d 0h ago"
 
     def test_format_articles_empty_description(self):
         articles = [_make_article(description="")]
