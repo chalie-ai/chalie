@@ -40,32 +40,29 @@ done
 #   5. ~/.chalie/venv — installed user running from a source clone
 #   6. None found — create .venv/ in repo root
 
+# Docker detection is separate from venv selection. Since install.sh creates a
+# venv in the container too, Docker no longer implies system-python; it only
+# determines where the dep-sync stamp lives (image layer vs ephemeral /tmp).
+_IN_DOCKER=false
+[[ -f "/.dockerenv" ]] && _IN_DOCKER=true
+
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   PYTHON="$VIRTUAL_ENV/bin/python"
   PIP="$VIRTUAL_ENV/bin/pip"
-  _IN_DOCKER=false
 elif [[ -n "${CHALIE_VENV:-}" ]] && [[ -d "$CHALIE_VENV" ]]; then
   PYTHON="$CHALIE_VENV/bin/python"
   PIP="$CHALIE_VENV/bin/pip"
-  _IN_DOCKER=false
-elif [[ -f "/.dockerenv" ]]; then
-  PYTHON="$(command -v python3)"
-  PIP="$(command -v pip3)"
-  _IN_DOCKER=true
 elif [[ -d "$SCRIPT_DIR/.venv" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
   PIP="$SCRIPT_DIR/.venv/bin/pip"
-  _IN_DOCKER=false
 elif [[ -d "$HOME/.chalie/venv" ]]; then
   PYTHON="$HOME/.chalie/venv/bin/python"
   PIP="$HOME/.chalie/venv/bin/pip"
-  _IN_DOCKER=false
 else
   echo "→ No virtual environment found. Creating .venv/ …"
   python3 -m venv "$SCRIPT_DIR/.venv"
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
   PIP="$SCRIPT_DIR/.venv/bin/pip"
-  _IN_DOCKER=false
 fi
 
 # ─── Incremental Dep Sync ────────────────────────────────────────────────────
