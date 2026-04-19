@@ -40,62 +40,6 @@ body::before {
     padding: 0;
 }
 
-/* Platform tabs */
-.platform-tabs {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-}
-
-.platform-tab {
-    flex: 1;
-    min-width: 80px;
-    padding: 8px 12px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-}
-
-.platform-tab:hover {
-    background: rgba(138, 92, 255, 0.06);
-    border-color: rgba(138, 92, 255, 0.25);
-    color: var(--text-primary);
-}
-
-.platform-tab.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: #fff;
-}
-
-/* Platform description box */
-.platform-desc {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px;
-    margin-bottom: 24px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-}
-
-.platform-desc a {
-    color: var(--accent-primary);
-    text-decoration: none;
-}
-
-.platform-desc a:hover {
-    text-decoration: underline;
-}
-
 /* Warning box — custom danger callout */
 .warning-box {
     background: rgba(251, 113, 133, 0.08);
@@ -130,17 +74,6 @@ body::before {
     box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
 }
 
-/* Connection status indicator */
-#connectionStatus {
-    display: block;
-    margin-top: 6px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-#connectionStatus.status-ok  { color: var(--success); }
-#connectionStatus.status-err { color: var(--error); }
-
 /* Form actions row */
 .form-actions {
     display: flex;
@@ -149,32 +82,6 @@ body::before {
 }
 
 .btn-primary { flex: 1; }
-
-/* Completion cards grid */
-.completion-cards {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-}
-
-.completion-card {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 24px;
-    text-align: center;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.completion-card:hover {
-    border-color: rgba(138, 92, 255, 0.25);
-    box-shadow: 0 0 12px rgba(138, 92, 255, 0.06);
-}
-
-.completion-icon {
-    font-size: 36px;
-    margin-bottom: 12px;
-}
 
 /* Toast system */
 .toast-container {
@@ -209,147 +116,9 @@ body::before {
     to   { transform: translateX(0);     opacity: 1; }
 }
 
-/* Capability connection steps */
-.provider-info {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin-bottom: 20px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-}
-
-.provider-note {
-    display: block;
-    margin-top: 4px;
-    color: var(--text-secondary);
-    opacity: 0.8;
-}
-
-.cap-progress {
-    margin-bottom: 16px;
-}
-
-.cap-step {
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    margin-bottom: 6px;
-    color: var(--text-secondary);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    transition: all 0.3s ease;
-}
-
-.cap-step.active {
-    border-color: rgba(138, 92, 255, 0.35);
-    color: var(--text-primary);
-}
-
-.cap-step.done {
-    border-color: var(--success);
-    color: var(--success);
-}
-
-.cap-step.failed {
-    border-color: var(--error);
-    color: var(--error);
-}
-
-/* Host input row (host field + Refresh button side-by-side) */
-.host-input-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-.host-input-row input {
-    flex: 1;
-}
-
-/* Refresh status line below the host row */
-#ollamaRefreshStatus {
-    display: block;
-    margin-top: 6px;
-    font-size: 12px;
-    font-weight: 600;
-}
-#ollamaRefreshStatus.status-ok  { color: var(--success); }
-#ollamaRefreshStatus.status-err { color: var(--error); }
-
-/* Ollama model picker */
-.ollama-model-picker {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 10px;
-    min-height: 44px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-}
-
-.ollama-model-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 5px 12px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
-}
-.ollama-model-chip:hover {
-    border-color: rgba(138, 92, 255, 0.4);
-    color: var(--text-primary);
-}
-.ollama-model-chip.selected {
-    background: rgba(138, 92, 255, 0.15);
-    border-color: rgba(138, 92, 255, 0.55);
-    color: var(--accent-primary);
-}
-
-.ollama-empty-state {
-    font-size: 12px;
-    color: var(--text-secondary);
-    padding: 4px 2px;
-    line-height: 1.5;
-}
-.ollama-empty-state strong { color: var(--text-primary); }
-
-.btn-retry {
-    display: inline-block;
-    margin-top: 8px;
-    padding: 5px 12px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--accent-primary);
-    transition: border-color 150ms ease;
-}
-.btn-retry:hover { border-color: rgba(138, 92, 255, 0.45); }
-
-.btn-sm {
-    padding: 6px 12px;
-    font-size: 12px;
-    white-space: nowrap;
-}
-
 /* Responsive */
 @media (max-width: 600px) {
     .card { padding: 24px; }
-
-    .platform-tabs { flex-direction: column; }
-    .platform-tab  { min-width: auto; }
-
-    .completion-cards { grid-template-columns: 1fr; }
 
     .toast-container { left: 10px; right: 10px; bottom: 10px; }
     .toast { font-size: 12px; }

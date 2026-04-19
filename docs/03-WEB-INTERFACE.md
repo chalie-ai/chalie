@@ -167,12 +167,10 @@ All cards use the same design language: dark surfaces, violet accents, thin bord
 - Settings and configuration
 - Tool management interface
 
-### 3. `frontend/on-boarding/` — Account Setup Wizard
-- Multi-step account creation
-- LLM provider configuration
-- Voice endpoint setup (optional)
-- Tool configuration
-- Welcome screen after setup
+### 3. `frontend/on-boarding/` — Account Setup
+- Create master account (username + password)
+- Login for existing users
+- Redirects to `/` after auth; provider/voice/tool setup lives in Brain
 
 ## Responsive Design
 
