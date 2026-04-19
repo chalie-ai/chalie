@@ -53,6 +53,7 @@ class ChalieApp {
     this._initInstallPrompt();
     this._initPresence();
     this._initRenderer();
+    this._checkVaultReinit();
 
     // Notifications module
     this._notifications = new Notifications({ getHost: () => this._backendHost });
@@ -190,6 +191,26 @@ class ChalieApp {
     navigator.serviceWorker.register('/sw.js').catch(err =>
       console.warn('SW registration failed:', err)
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Vault Reinit Warning
+  // ---------------------------------------------------------------------------
+
+  async _checkVaultReinit() {
+    try {
+      const r = await fetch('/auth/vault-status', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const { reinitialized_at } = await r.json();
+      if (!reinitialized_at) return;
+      const banner = document.getElementById('vaultReinitBanner');
+      if (!banner) return;
+      banner.classList.remove('hidden');
+      document.getElementById('vaultReinitDismiss')?.addEventListener('click', async () => {
+        banner.classList.add('hidden');
+        await fetch('/auth/vault-status/dismiss', { method: 'POST', credentials: 'same-origin' });
+      }, { once: true });
+    } catch (_) { /* non-fatal */ }
   }
 
   // ---------------------------------------------------------------------------

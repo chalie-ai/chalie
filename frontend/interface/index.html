@@ -35,6 +35,12 @@
     <span>Retrying...</span>
   </div>
 
+  <!-- Vault re-initialized warning banner -->
+  <div id="vaultReinitBanner" class="update-banner vault-reinit-banner hidden">
+    <span class="update-banner__text">Vault was re-initialized. Stored credentials may be invalid. Visit the <strong>brain dashboard providers panel</strong> to re-enter.</span>
+    <button id="vaultReinitDismiss" class="update-banner__dismiss" aria-label="Dismiss">&#x2715;</button>
+  </div>
+
   <!-- Capability alert banner -->
   <div id="capabilityAlertBanner" class="capability-alert-banner hidden">
     <span id="capabilityAlertText"></span>

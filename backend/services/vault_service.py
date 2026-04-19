@@ -18,7 +18,6 @@ module-level singleton that is safe for a single-process, single-account
 architecture.  It is cleared on ``lock()`` or server restart.
 """
 
-import base64
 import logging
 import os
 from dataclasses import dataclass, field
@@ -156,19 +155,13 @@ class VaultService:
     """
 
     def __init__(self, database_service):
-        """Initialise the service with an injected database dependency.
-
-        Args:
-            database_service: The :class:`~services.database_service.DatabaseService`
-                instance to use for all ``vault_config`` reads and writes.
-        """
         self._db = database_service
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def initialize(self, password: str) -> None:
+    def initialize(self, password: str, mark_reinit: bool = False) -> None:
         """Generate a new DEK, wrap it with a password-derived KEK, and persist.
 
         Called **once** when the master account is first registered.  If a
@@ -180,23 +173,24 @@ class VaultService:
         needed at registration time.
 
         Args:
-            password: The user's chosen master password (UTF-8 string).
+            password:    The user's chosen master password (UTF-8 string).
+            mark_reinit: When True, sets ``reinitialized_at`` to the current
+                UTC time so the UI can warn that existing sealed data is orphaned.
 
         Raises:
             Exception: Propagates any database or cryptography error so the
                 caller (registration endpoint) can roll back the account row.
         """
-        # Generate fresh cryptographic material
         dek = os.urandom(_DEK_SIZE)
         salt = os.urandom(_KDF_SALT_SIZE)
         nonce = os.urandom(_NONCE_SIZE)
 
-        # Derive KEK and wrap the DEK
         kek = _derive_kek(password, salt)
         wrapped_dek = _aesgcm_encrypt(kek, nonce, dek)
 
         from services.time_utils import utc_now
         now_iso = utc_now().isoformat()
+        reinit_at = now_iso if mark_reinit else None
 
         with self._db.connection() as conn:
             conn.execute("DELETE FROM vault_config WHERE id = 1")
@@ -204,12 +198,13 @@ class VaultService:
                 """
                 INSERT INTO vault_config
                     (id, kdf_salt, kdf_algorithm, kdf_iterations,
-                     wrapped_dek, dek_nonce, created_at, updated_at)
+                     wrapped_dek, dek_nonce, created_at, updated_at,
+                     reinitialized_at)
                 VALUES
-                    (1, ?, ?, ?, ?, ?, ?, ?)
+                    (1, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce,
-                 now_iso, now_iso),
+                 now_iso, now_iso, reinit_at),
             )
 
         logger.info(
@@ -223,13 +218,6 @@ class VaultService:
         On success the cached DEK allows :meth:`encrypt` and :meth:`decrypt`
         to operate.  On failure (wrong password) the vault remains sealed and
         ``False`` is returned without raising.
-
-        After a successful unlock, if the ``encryption_keys`` table contains a
-        legacy Fernet key row (migration window is open), attempts to
-        transparently re-encrypt all legacy Fernet-encrypted consumer rows with
-        the new AES-256-GCM vault DEK via :meth:`_run_legacy_migration`.
-        The migration is best-effort: a failure leaves the fallback decryption
-        path active for the affected tables and is retried on the next unlock.
 
         Args:
             password: The user's master password to verify.
@@ -267,20 +255,10 @@ class VaultService:
 
         _vault_state.dek = dek
         logger.info("[Vault] Vault unlocked — DEK cached in memory")
-
-        # Attempt to run the one-time legacy Fernet → AES-GCM migration.
-        # _run_legacy_migration() is a no-op when encryption_keys is absent.
-        self._run_legacy_migration()
-
         return True
 
     def is_unlocked(self) -> bool:
-        """Return ``True`` if the vault has been unlocked and the DEK is in memory.
-
-        Returns:
-            ``True`` when :meth:`unlock` has been called successfully since the
-            last :meth:`lock` call or server restart, ``False`` otherwise.
-        """
+        """Return ``True`` if the vault has been unlocked and the DEK is in memory."""
         return _vault_state.dek is not None
 
     def get_state(self) -> str:
@@ -301,11 +279,7 @@ class VaultService:
             return "uninitialized"
 
     def lock(self) -> None:
-        """Seal the vault by clearing the in-memory DEK.
-
-        After this call :meth:`encrypt` and :meth:`decrypt` will raise
-        :exc:`VaultLockedError` until :meth:`unlock` is called again.
-        """
+        """Seal the vault by clearing the in-memory DEK."""
         _vault_state.dek = None
         logger.info("[Vault] Vault locked — DEK cleared from memory")
 
@@ -316,18 +290,7 @@ class VaultService:
     def encrypt(self, plaintext: bytes) -> bytes:
         """Encrypt *plaintext* with the cached DEK using AES-256-GCM.
 
-        A fresh 12-byte random nonce is generated for every call so that
-        encrypting the same value twice produces different ciphertexts.
-
-        Output wire format::
-
-            nonce (12 bytes) || AES-GCM ciphertext+tag
-
-        Args:
-            plaintext: Arbitrary bytes to encrypt.
-
-        Returns:
-            Encrypted blob: ``nonce (12 B) + ciphertext + tag (16 B)``.
+        Output wire format: ``nonce (12 B) || AES-GCM ciphertext+tag``
 
         Raises:
             :exc:`VaultLockedError`: If the vault has not been unlocked.
@@ -341,15 +304,7 @@ class VaultService:
     def decrypt(self, blob: bytes) -> bytes:
         """Decrypt an encrypted blob produced by :meth:`encrypt`.
 
-        Splits the blob into ``nonce || ciphertext+tag`` and decrypts with the
-        cached DEK.  Legacy Fernet data is migrated on first unlock — this
-        method only handles AES-256-GCM.
-
-        Args:
-            blob: Encrypted blob as returned by :meth:`encrypt`.
-
-        Returns:
-            Decrypted plaintext bytes.
+        Supports ONLY the current wire format: ``nonce (12 B) || AES-GCM ciphertext+tag``.
 
         Raises:
             :exc:`VaultLockedError`: If the vault has not been unlocked.
@@ -365,33 +320,11 @@ class VaultService:
             raise ValueError(f"Decryption failed: {exc}") from exc
 
     def encrypt_str(self, s: str) -> bytes:
-        """UTF-8–encode *s* and encrypt it with :meth:`encrypt`.
-
-        Args:
-            s: Plaintext string to encrypt.
-
-        Returns:
-            Encrypted blob (see :meth:`encrypt` for wire format).
-
-        Raises:
-            :exc:`VaultLockedError`: If the vault has not been unlocked.
-        """
+        """UTF-8–encode *s* and encrypt it with :meth:`encrypt`."""
         return self.encrypt(s.encode("utf-8"))
 
     def decrypt_str(self, blob: bytes) -> str:
-        """Decrypt *blob* with :meth:`decrypt` and UTF-8–decode the result.
-
-        Args:
-            blob: Encrypted blob as returned by :meth:`encrypt_str`.
-
-        Returns:
-            Decrypted plaintext string.
-
-        Raises:
-            :exc:`VaultLockedError`:  If the vault has not been unlocked.
-            :exc:`ValueError`:        If decryption fails.
-            :exc:`UnicodeDecodeError`: If the decrypted bytes are not valid UTF-8.
-        """
+        """Decrypt *blob* with :meth:`decrypt` and UTF-8–decode the result."""
         return self.decrypt(blob).decode("utf-8")
 
     # ------------------------------------------------------------------
@@ -403,15 +336,7 @@ class VaultService:
 
         Verifies *old_password* by attempting to unwrap the current DEK, then
         derives a fresh KEK from *new_password* with a new random salt and
-        re-wraps the **same** DEK.  The ``vault_config`` row is updated
-        atomically in a single database transaction.
-
-        Consumer-table ciphertext is **not** touched — the DEK itself does not
-        change, so all existing encrypted values remain valid.
-
-        Args:
-            old_password: The current master password (used to verify identity).
-            new_password: The desired new master password.
+        re-wraps the **same** DEK.  Consumer-table ciphertext is NOT touched.
 
         Returns:
             ``True`` if the password was changed successfully,
@@ -434,7 +359,6 @@ class VaultService:
         old_wrapped_dek = bytes(row["wrapped_dek"])
         iterations = row["kdf_iterations"]
 
-        # Verify old password
         old_kek = _derive_kek(old_password, old_salt, iterations)
         try:
             dek = _aesgcm_decrypt(old_kek, old_nonce, old_wrapped_dek)
@@ -442,7 +366,6 @@ class VaultService:
             logger.warning("[Vault] change_password() failed — incorrect old password")
             return False
 
-        # Wrap DEK under new KEK
         new_salt = os.urandom(_KDF_SALT_SIZE)
         new_nonce = os.urandom(_NONCE_SIZE)
         new_kek = _derive_kek(new_password, new_salt)
@@ -466,7 +389,6 @@ class VaultService:
                  new_nonce, utc_now().isoformat()),
             )
 
-        # Update in-memory DEK cache if the vault was already unlocked
         if _vault_state.dek is not None:
             _vault_state.dek = dek
 
@@ -474,162 +396,43 @@ class VaultService:
         return True
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Reinit tracking
     # ------------------------------------------------------------------
 
-    def _run_legacy_migration(self) -> None:
-        """One-shot re-encryption of legacy Fernet data to AES-256-GCM.
-
-        Runs on first unlock when the ``encryption_keys`` table still has a
-        row.  Reads the old Fernet key, decrypts every encrypted value across
-        the four consumer tables, re-encrypts with the vault DEK, and deletes
-        the ``encryption_keys`` row.  Rows that fail Fernet decryption were
-        already broken before migration — they are logged and skipped.
-
-        If the ``encryption_keys`` table is absent or empty, this is a no-op.
-        """
-        import hashlib
-        from cryptography.fernet import Fernet, InvalidToken
-
-        # ── Fetch legacy key (no-op if absent) ───────────────────────────
-        try:
-            with self._db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT key_value FROM encryption_keys WHERE id = 1")
-                row = cursor.fetchone()
-                cursor.close()
-        except Exception as exc:
-            # Likely: table doesn't exist. Check for v0.1.0 .key file.
-            logger.debug(
-                "[Vault] encryption_keys lookup failed: %s", exc,
-            )
-            row = self._migrate_legacy_key_file()
-            if row is None:
-                return  # Truly fresh install, nothing to migrate
-
+    def get_reinitialized_at(self) -> Optional[str]:
+        """Return the ISO timestamp of the last auto-reinit, or None."""
+        row = self._load_vault_config()
         if row is None:
-            return  # Already migrated on a previous boot
-
-        raw_key: str = row[0]
-        key_bytes = hashlib.sha256(raw_key.encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_bytes)
-        f = Fernet(fernet_key)
-
-        logger.info(
-            "[Vault] Legacy Fernet key found — migrating "
-            "encrypted data to AES-256-GCM"
-        )
-
-        # ── Migrate each table ───────────────────────────────────────────
-        _TABLES = [
-            ("SELECT id, api_key FROM providers WHERE api_key IS NOT NULL",
-             "UPDATE providers SET api_key = ? WHERE id = ?"),
-            ("SELECT id, encrypted_value FROM settings "
-             "WHERE is_sensitive = 1 AND encrypted_value IS NOT NULL",
-             "UPDATE settings SET encrypted_value = ? WHERE id = ?"),
-            ("SELECT id, config_value FROM tool_configs WHERE config_value IS NOT NULL",
-             "UPDATE tool_configs SET config_value = ? WHERE id = ?"),
-            ("SELECT id, encrypted_data FROM browser_credentials "
-             "WHERE encrypted_data IS NOT NULL",
-             "UPDATE browser_credentials SET encrypted_data = ? WHERE id = ?"),
-        ]
-
-        total = 0
-        for select_sql, update_sql in _TABLES:
-            try:
-                with self._db.connection() as conn:
-                    rows = conn.execute(select_sql).fetchall()
-                    for row_id, encrypted_val in rows:
-                        if encrypted_val is None:
-                            continue
-                        if isinstance(encrypted_val, (bytes, memoryview)):
-                            token = bytes(encrypted_val)
-                        else:
-                            token = encrypted_val.encode("utf-8")
-                        try:
-                            plaintext = f.decrypt(token)
-                        except (InvalidToken, Exception):
-                            logger.warning(
-                                "[Vault] Skipping row %s — "
-                                "Fernet decrypt failed "
-                                "(was already broken)",
-                                row_id,
-                            )
-                            continue
-                        new_val = base64.b64encode(self.encrypt(plaintext)).decode()
-                        conn.execute(update_sql, (new_val, row_id))
-                        total += 1
-            except Exception as exc:
-                logger.warning(
-                    "[Vault] Migration query failed: %s — %s",
-                    select_sql[:50], exc,
-                )
-
-        # ── Delete the legacy key — migration is done ────────────────────
-        with self._db.connection() as conn:
-            conn.execute("DELETE FROM encryption_keys WHERE id = 1")
-
-        logger.info("[Vault] Legacy migration complete — %d row(s) re-encrypted, "
-                    "encryption_keys row deleted", total)
-
-    def _migrate_legacy_key_file(self) -> Optional[tuple]:
-        """Migrate a v0.1.0 ``.key`` file into ``encryption_keys`` so the
-        Fernet migration can proceed.  Returns the row tuple or None."""
-        import os
-        from pathlib import Path
-
-        db_path = os.environ.get("CHALIE_DB_PATH")
-        if db_path:
-            key_path = Path(db_path).resolve().parent / ".key"
-        else:
-            key_path = Path(__file__).resolve().parent.parent / "data" / ".key"
-
-        if not key_path.exists():
             return None
-
         try:
-            key_value = key_path.read_text().strip()
-            if not key_value:
-                return None
-        except Exception as exc:
-            logger.warning(
-                "[Vault] Failed to read legacy .key file %s: %s",
-                key_path, exc,
-            )
+            return row["reinitialized_at"]
+        except (IndexError, KeyError):
             return None
 
-        logger.info(
-            "[Vault] Found legacy .key file at %s — "
-            "seeding encryption_keys table", key_path,
-        )
+    def clear_reinitialized_at(self) -> None:
+        """Clear the reinitialized_at flag (user dismissed the warning)."""
         with self._db.connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS encryption_keys (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    key_value TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now'))
-                )
-            """)
             conn.execute(
-                "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
-                (key_value,),
+                "UPDATE vault_config SET reinitialized_at = NULL WHERE id = 1"
             )
-        return (key_value,)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _load_vault_config(self) -> Optional[dict]:
         """Read the singleton ``vault_config`` row (id=1) from the database.
 
         Returns:
-            A dict-like row with columns ``kdf_salt``, ``kdf_algorithm``,
-            ``kdf_iterations``, ``wrapped_dek``, ``dek_nonce``,
-            ``created_at``, ``updated_at``; or ``None`` if the table is empty.
+            A dict-like row or ``None`` if the table is empty.
         """
         with self._db.connection() as conn:
             conn.row_factory = __import__("sqlite3").Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT kdf_salt, kdf_algorithm, kdf_iterations, "
-                "wrapped_dek, dek_nonce, created_at, updated_at "
+                "wrapped_dek, dek_nonce, created_at, updated_at, "
+                "reinitialized_at "
                 "FROM vault_config WHERE id = 1"
             )
             row = cursor.fetchone()
@@ -648,10 +451,6 @@ def get_vault_service() -> VaultService:
     Uses deferred import of :func:`~services.database_service.get_shared_db_service`
     to avoid circular import issues at module load time.  The instance is
     cached after first creation so every call site shares the same object.
-
-    Returns:
-        The cached :class:`VaultService` singleton backed by the process-wide
-        :class:`~services.database_service.DatabaseService` singleton.
     """
     global _vault_service_instance
     if _vault_service_instance is None:

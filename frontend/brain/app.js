@@ -400,10 +400,13 @@ function renderProviders() {
     el.innerHTML = providers.map(p => {
         const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
         const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        const warnIcon = p.decrypt_failed
+            ? `<span class="provider-warn" title="Provider is misconfigured. Re-enter credentials">&#9888;</span>`
+            : '';
         return `
         <div class="provider-card" data-id="${p.id}">
             <div class="provider-info">
-                <div class="provider-name">${escapeHtml(p.name)}</div>
+                <div class="provider-name">${escapeHtml(p.name)}${warnIcon}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
                     ${modelsDisplay}
