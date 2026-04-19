@@ -1,6 +1,20 @@
 # Chalie Web Interface Specification
 
-The Chalie web interface is a collection of three single-page applications: the main chat interface, the cognitive dashboard ("Brain"), and the onboarding wizard. All follow the **Radiant design system** for a cinematic, restrained dark UI.
+The Chalie web interface is a collection of four single-page applications: the main chat interface, the cognitive dashboard ("Brain"), the onboarding wizard, and the login page. All follow the **Radiant design system** for a cinematic, restrained dark UI.
+
+## Auth + Provider Gate
+
+Every page loads `/shared/auth-gate.js` before its own bootstrap. The gate calls `/auth/status` once and decides whether the user may stay or must redirect:
+
+| Page | No account | No session | No providers | All good |
+|---|---|---|---|---|
+| chat (`/`) | → `/on-boarding/` | → `/login/?next=/` | → `/brain/` | enter chat |
+| brain (`/brain/`) | → `/on-boarding/` | → `/login/?next=/brain/` | providers tab only | full dashboard |
+| onboarding (`/on-boarding/`) | stay | — | — | — |
+| onboarding (`/on-boarding/`, account exists) | — | → `/login/` | → `/login/` | → `/login/` |
+| login (`/login/`) | stay | stay | — | → `/` |
+
+Brain's **providers-only** mode hides every tab button and panel except Providers and surfaces a persistent toast prompting provider setup. App code awaits `window.chalieGateReady` and aborts if the gate redirected.
 
 ## Design System: Radiant
 
@@ -169,8 +183,13 @@ All cards use the same design language: dark surfaces, violet accents, thin bord
 
 ### 3. `frontend/on-boarding/` — Account Setup
 - Create master account (username + password)
-- Login for existing users
-- Redirects to `/` after auth; provider/voice/tool setup lives in Brain
+- Bounces to `/login/` if an account already exists
+- After account creation redirects to `/brain/` so the user can add a provider
+
+### 4. `frontend/login/` — Sign In
+- Dedicated login form so macOS Keychain / browser autofill can offer credentials
+- Accepts `?next=` to resume the original destination after sign-in
+- Bounces to `/` when a live session is already present
 
 ## Responsive Design
 

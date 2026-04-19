@@ -61,14 +61,18 @@ frontend/
 │   ├── activity_panel.js  # Activity/tool-call trace panel
 │   └── sw.js          # Service worker (caching, push, share target)
 ├── brain/             # Admin/cognitive dashboard
-└── on-boarding/       # Account setup wizard
+├── on-boarding/       # Account setup wizard
+├── login/             # Dedicated login form (Keychain-friendly)
+└── shared/            # Cross-SPA assets: theme.css, auth-gate.js
 ```
 
 **Module communication**: Constructor injection for shared services, callback registration for cross-module events, custom DOM events (`chalie:action`, `chalie:speak`, `chalie:pin-moment`) for loose coupling. Modules never reference each other directly — `app.js` wires all connections.
 
 **Asset versioning**: Flask injects a `<script type="importmap">` into `index.html` at serve time, mapping all module imports to `?v=VERSION` URLs. The `VERSION` file is the single source of truth. Service worker uses network-first for JS/CSS (localhost = 0ms latency) with cache fallback for offline/PWA.
 
-**IMPORTANT**: UI code must exist under `/interface/`, `/brain/`, or `/on-boarding/` only.
+**Shared auth gate**: `frontend/shared/auth-gate.js` is the single choke-point for redirect logic. Each SPA sets `window.__chaliePage` and loads the gate; app code awaits `window.chalieGateReady` before bootstrapping. See `docs/03-WEB-INTERFACE.md` for the rule table.
+
+**IMPORTANT**: UI code must exist under `/interface/`, `/brain/`, `/on-boarding/`, `/login/`, or `/shared/` only.
 
 ## Key Services
 
