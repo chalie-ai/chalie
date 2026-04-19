@@ -6,7 +6,6 @@ Marked as integration because they require the sqlite-vec extension.
 """
 
 import os
-import sqlite3
 
 import pytest
 

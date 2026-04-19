@@ -18,7 +18,6 @@ Each test:
 """
 
 import base64
-import shutil
 import pytest
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -26,8 +25,7 @@ from werkzeug.security import generate_password_hash
 import services.database_service as _db_mod
 import services.vault_service as _vault_mod
 from api.user_auth import user_auth_bp
-from services.vault_service import VaultService, _vault_state
-from services.database_service import DatabaseService
+from services.vault_service import _vault_state
 from services.provider_db_service import ProviderDbService
 
 
