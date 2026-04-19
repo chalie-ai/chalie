@@ -2,7 +2,7 @@
 Test data factories — produce realistic row tuples matching actual DB column orders.
 
 Usage:
-    from tests.helpers import make_scheduled_item, make_trait_row
+    from tests.helpers import make_scheduled_item
 
 All factories return tuples (matching cursor.fetchone/fetchall) unless
 noted otherwise.  Override any field via keyword argument.
@@ -35,19 +35,6 @@ def make_scheduled_item(
         window_start, window_end, topic, created_by_session, group_id,
         is_prompt,
     )
-
-
-# ─── user_traits ─────────────────────────────────────────────────────
-# Column order matches: SELECT trait_key, trait_value, confidence, category
-
-def make_trait_row(
-    trait_key="name",
-    trait_value="Dylan",
-    confidence=0.9,
-    category="core",
-):
-    """Return a 4-element tuple matching user_traits SELECT order."""
-    return (trait_key, trait_value, confidence, category)
 
 
 # ─── episodes ────────────────────────────────────────────────────────

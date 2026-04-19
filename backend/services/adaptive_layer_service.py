@@ -316,10 +316,11 @@ class AdaptiveLayerService:
 
     def _get_micro_preferences(self) -> List[str]:
         """
-        Query user_traits for micro-preference rows and return natural-language labels.
+        Query data_graph user_specific rows for micro-preference keys and return natural-language labels.
 
-        Selects WHERE category='micro_preference' AND confidence > 0.4,
-        ordered by confidence DESC, limited to 3.
+        Selects kind='user_specific' rows whose key is a known micro-preference
+        and whose retrieval_weight > 0.4, ordered by retrieval_weight DESC,
+        limited to 3.
 
         Returns:
             List of human-readable preference strings (may be empty).
@@ -346,7 +347,7 @@ class AdaptiveLayerService:
 
     def _get_challenge_tolerance(self) -> Optional[float]:
         """
-        Retrieve explicit challenge tolerance float (1-10) from user_traits.
+        Retrieve explicit challenge tolerance float (1-10) from data_graph.
 
         Stored as key='challenge_tolerance' in data_graph user_specific.
 
