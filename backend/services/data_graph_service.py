@@ -173,17 +173,17 @@ _USER_SPECIFIC_KEYS = {
 
 def seed_from_legacy_knowledge(db_service):
     """
-    One-time idempotent migration: copy rows from knowledge → data_graph.
+    Idempotent per-row migration: copy rows from knowledge → data_graph.
 
     Uses entity-based heuristics per plan D10. Skips procedure and moment_context.
-    Skips ambiguous rows. Direct INSERT for speed; schedules batch embeddings
-    in a background thread.
+    Skips ambiguous rows. For each candidate knowledge row, checks whether
+    data_graph already has a row with matching (kind, key, value) — if yes, skips
+    it; if no, inserts it. This allows the migration to be called multiple times
+    safely and supports post-boot seeds (e.g. from nightly scenarios). Direct
+    INSERT for speed; schedules batch embeddings in a background thread.
     """
     try:
         with db_service.connection() as conn:
-            if conn.execute("SELECT 1 FROM data_graph LIMIT 1").fetchone():
-                return
-
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT entity, kind, key, value, source, evidence_count, created_at
@@ -215,6 +215,14 @@ def seed_from_legacy_knowledge(db_service):
                 else:
                     continue
 
+                # Per-row idempotency: skip if (kind, key, value) already in data_graph
+                existing = cursor.execute(
+                    "SELECT 1 FROM data_graph WHERE kind=? AND key=? AND value=? LIMIT 1",
+                    (target_kind, key, value),
+                ).fetchone()
+                if existing:
+                    continue
+
                 seed_source = f"seed:from_knowledge:{source or 'unknown'}"
                 cursor.execute("""
                     INSERT INTO data_graph
@@ -228,7 +236,8 @@ def seed_from_legacy_knowledge(db_service):
                 inserted_ids.append((rid, key, value))
 
             cursor.close()
-            logger.info("[DATA GRAPH] Seed complete — %d rows migrated from knowledge", len(inserted_ids))
+            if inserted_ids:
+                logger.info("[DATA GRAPH] Seed complete — %d rows migrated from knowledge", len(inserted_ids))
 
             # Batch-schedule embeddings in background (non-blocking boot)
             if inserted_ids:
@@ -911,6 +920,26 @@ class DataGraphService:
 
     def recall(self, query: str, *, kinds=None, limit: int = 10, expand_graph: bool = True) -> list:
         try:
+            # Lazy-migrate any knowledge rows that were inserted after boot
+            # (e.g. by nightly scenario seeders). One cheap probe query; full
+            # migration only runs when unmigrated rows are detected.
+            try:
+                with self.db.connection() as _mc:
+                    _has_unmigrated = _mc.execute("""
+                        SELECT 1
+                        FROM knowledge k
+                        LEFT JOIN data_graph d ON d.key = k.key AND d.value = k.value
+                        WHERE k.deleted_at IS NULL
+                          AND k.kind NOT IN ('procedure', 'moment_context')
+                          AND d.rowid IS NULL
+                        LIMIT 1
+                    """).fetchone()
+                if _has_unmigrated:
+                    logger.debug("[DATA GRAPH] recall: detected unmigrated knowledge rows — running lazy migration")
+                    seed_from_legacy_knowledge(self.db)
+            except Exception as _lm_err:
+                logger.debug("[DATA GRAPH] recall lazy-migrate check failed (non-fatal): %s", _lm_err)
+
             query_emb = self._generate_embedding(query)
             query_blob = pack_embedding(query_emb) if query_emb else None
 

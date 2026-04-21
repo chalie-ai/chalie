@@ -1182,12 +1182,12 @@ class TestSeed:
         assert row is None
 
     def test_seed_idempotent_does_not_duplicate(self, svc, db_service):
-        """Running seed twice exits early on second call — no duplicate rows created."""
+        """Running seed twice with the same knowledge row produces exactly one data_graph row."""
         self._insert_knowledge(db_service, entity='user', kind='trait',
                                key='email', value='dylan@example.com')
 
         seed_from_legacy_knowledge(db_service)
-        seed_from_legacy_knowledge(db_service)  # second call must be a no-op
+        seed_from_legacy_knowledge(db_service)  # second call must skip already-migrated rows
 
         with db_service.connection() as conn:
             count = conn.execute(
@@ -1222,6 +1222,80 @@ class TestSeed:
                 "SELECT 1 FROM data_graph WHERE key='temperature_format'"
             ).fetchone()
         assert row is None
+
+    def test_seed_idempotent_adds_only_new_rows(self, db_service):
+        """Per-row idempotency: second call inserts only the rows not yet in data_graph."""
+        # Insert 3 knowledge rows and run first migration
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='hobby', value='running')
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='hobby2', value='cycling')
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='hobby3', value='swimming')
+
+        seed_from_legacy_knowledge(db_service)
+
+        with db_service.connection() as conn:
+            count_after_first = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
+        assert count_after_first == 3
+
+        # Add 2 more knowledge rows (distinct keys)
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='hobby4', value='hiking')
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='hobby5', value='reading')
+
+        seed_from_legacy_knowledge(db_service)
+
+        with db_service.connection() as conn:
+            count_after_second = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
+        # Only the 2 new rows added; original 3 are not duplicated
+        assert count_after_second == 5
+
+    def test_seed_no_longer_empty_guarded(self, db_service):
+        """Migration runs even when data_graph already has rows (old guard is gone).
+
+        Pre-populate data_graph with a synthetic row, then seed 2 knowledge rows.
+        Under the old empty-guard the migration would be skipped entirely.
+        With per-row idempotency both knowledge rows must be migrated.
+        """
+        # Insert a synthetic data_graph row that does NOT match the knowledge rows below
+        with db_service.connection() as conn:
+            conn.execute("""
+                INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at)
+                VALUES ('system', 'preexisting_key', 'preexisting_value', datetime('now'), datetime('now'))
+            """)
+
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='sport', value='football')
+        self._insert_knowledge(db_service, entity='user', kind='trait', key='diet', value='vegan')
+
+        seed_from_legacy_knowledge(db_service)
+
+        with db_service.connection() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM data_graph WHERE key IN ('sport', 'diet')"
+            ).fetchone()[0]
+        assert count == 2, "Both knowledge rows must be migrated even when data_graph is non-empty"
+
+    def test_recall_triggers_lazy_migration(self, db_service):
+        """recall() detects unmigrated knowledge rows and runs the migration inline.
+
+        Seeds knowledge rows AFTER a no-op boot (data_graph empty), then calls
+        recall(). The lazy-migrate probe must detect the gap and migrate rows so
+        that data_graph is populated before the embedding/FTS searches run.
+        Embeddings are async — just assert the rows landed in data_graph.
+        """
+        self._insert_knowledge(db_service, entity='user', kind='trait',
+                               key='exercise', value='running')
+        self._insert_knowledge(db_service, entity='user', kind='trait',
+                               key='stress_relief', value='running helps with stress')
+
+        svc = DataGraphService(db_service)
+        svc._generate_embedding = MagicMock(return_value=None)
+        svc._schedule_embeddings = MagicMock()
+        svc._schedule_doc2query = MagicMock()
+
+        # recall() should trigger lazy migration internally
+        svc.recall("running stress")
+
+        with db_service.connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
+        assert count == 2, "recall() must have triggered lazy migration of knowledge rows"
 
 
 # ══════════════════════════════════════════════════════════════════
