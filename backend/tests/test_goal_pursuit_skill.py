@@ -11,9 +11,27 @@ from contextlib import contextmanager
 import pytest
 from unittest.mock import MagicMock, patch
 
-from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit
+from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit, TOOL_SCHEMA
 
 pytestmark = pytest.mark.unit
+
+
+# ── TOOL_SCHEMA description contract ──────────────────────────────────────────
+
+class TestToolSchemaDescription:
+    def test_description_contains_deep(self):
+        """Description must mention 'deep' to signal deep-research trigger."""
+        assert 'deep' in TOOL_SCHEMA['description'].lower()
+
+    def test_description_contains_research(self):
+        """Description must mention 'research' to signal research trigger."""
+        assert 'research' in TOOL_SCHEMA['description'].lower()
+
+    def test_description_length_within_bounds(self):
+        """Description must be at least 100 chars and no more than 800 chars."""
+        length = len(TOOL_SCHEMA['description'])
+        assert length > 100, f"Description too short: {length} chars"
+        assert length < 800, f"Description too long: {length} chars"
 
 
 # ── Input validation ───────────────────────────────────────────────────────────
