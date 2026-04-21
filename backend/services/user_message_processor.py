@@ -260,7 +260,11 @@ class UserMessageProcessor(MessageProcessor):
         return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
 
     def getTools(self) -> list[dict]:
-        """Narrow native tools for voice mode (exclude rich_render).
+        """Narrow native tools based on thinking_level and source.
+
+        Low-thinking turns are conversational-only. Zero tool surface prevents
+        the model from hallucinating tool use (e.g. fake reminders) on pure
+        acknowledgments. Scenario 016 § step 4 enforces this contract.
 
         Voice responses are spoken aloud via TTS — rich_render output is not
         speakable, so it is excluded for voice-source turns. All other native
@@ -269,6 +273,9 @@ class UserMessageProcessor(MessageProcessor):
         Out-of-scope §11 preservation: keeps the voice filter logic that was
         in the old UserMessageProcessor.process() at lines 69-73.
         """
+        if self._thinking_level == 'low':
+            return []
+
         if self._metadata.get('source') == 'voice':
             from services.tool_schema_service import get_skill_schemas
 
