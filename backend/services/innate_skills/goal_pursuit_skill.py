@@ -17,9 +17,12 @@ LOG_PREFIX = "[GOAL PURSUIT SKILL]"
 TOOL_SCHEMA = {
     "name": "goal_pursuit",
     "description": (
-        "Use this tool to launch a separate instance of yourself with unconstrained limits "
-        "to research or perform long running tasks. Only use this if you expect a request to "
-        "take longer than 2 minutes to complete. If not, use other tools to resolve the request."
+        "Launch a background copy of yourself for deep, long-running research or multi-source investigation. "
+        "Fire this tool FIRST (before answering inline) when the user asks for: deep research, comprehensive analysis, "
+        "multi-source comparison, deep dive, extended investigation, or anything requiring 2+ minutes of work across many sources. "
+        "Signal phrases: 'deep dive', 'research', 'analyze multiple', 'compare X and Y', 'comprehensive study', "
+        "'competitive analysis', 'find out about', 'investigate thoroughly'. "
+        "When unsure if a request is heavy enough, prefer this tool — surface-level answers to deep-research asks waste the user's time."
     ),
     "input_schema": {
         "type": "object",
