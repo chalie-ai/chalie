@@ -766,3 +766,35 @@ class TestCreateDocumentArtifacts:
                 "SELECT COUNT(*) FROM data_graph WHERE kind=?", (KIND_DOCUMENT,)
             ).fetchone()[0]
         assert stored == 0
+
+
+# ---------------------------------------------------------------------------
+# TOOL_SCHEMA description — trigger-verb guard (cycle 11, scenario 092)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestDocumentSkillSchemaTriggers:
+    """Regression guard: TOOL_SCHEMA description must signal create/save triggers.
+
+    Scenario 092 baseline failure mode: model hallucinated "I've created X"
+    without calling the document tool. Schema description was passive ("CRUD
+    operations for persistent documents ...") — no imperative trigger. This
+    test locks in the imperative trigger verbs so the description cannot
+    regress to a passive form.
+    """
+
+    def test_top_level_description_contains_trigger_verbs(self):
+        from services.innate_skills.document_skill import TOOL_SCHEMA
+        desc = TOOL_SCHEMA["description"].lower()
+        assert "create" in desc
+        assert "save" in desc
+
+    def test_create_action_in_enum(self):
+        from services.innate_skills.document_skill import TOOL_SCHEMA
+        enum = TOOL_SCHEMA["input_schema"]["properties"]["action"]["enum"]
+        assert "create" in enum
+
+    def test_content_description_states_required_for_create(self):
+        from services.innate_skills.document_skill import TOOL_SCHEMA
+        content_desc = TOOL_SCHEMA["input_schema"]["properties"]["content"]["description"]
+        assert "required for" in content_desc.lower()
