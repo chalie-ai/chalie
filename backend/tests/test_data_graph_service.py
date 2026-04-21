@@ -1630,3 +1630,114 @@ class TestForget:
 
         assert result is not None
         assert result['status'] == 'not_found'
+
+
+# ══════════════════════════════════════════════════════════════════
+# TestBackfillMissingEmbeddings
+# ══════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestBackfillMissingEmbeddings:
+    """Verify that recall() triggers lazy backfill for rows inserted via raw SQL.
+
+    The test environment uses plain tables for data_graph_key_vec and
+    data_graph_value_vec (not sqlite-vec virtuals), so INSERT OR REPLACE works
+    identically to production — only the MATCH KNN syntax is absent, which is
+    why backfill-seeded rows are surfaced via FTS rather than vec search here.
+    """
+
+    _FAKE_EMB = [0.1, 0.2, 0.3]
+
+    def _bare_insert(self, db_service, *, kind='user_specific',
+                     key='sister_name', value='Sofia') -> int:
+        """Insert a data_graph row with NO vec or FTS entries — mirrors raw-SQL seeder."""
+        now = utc_now().isoformat()
+        with db_service.connection() as conn:
+            conn.execute("""
+                INSERT INTO data_graph
+                    (kind, key, value, active, first_seen_at, last_confirmed_at)
+                VALUES (?, ?, ?, 1, ?, ?)
+            """, (kind, key, value, now, now))
+            return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def test_backfill_populates_key_vec_on_recall(self, svc, db_service):
+        """Recall triggers backfill: key_vec gains a row for a bare-inserted id."""
+        row_id = self._bare_insert(db_service, key='sisters_name', value='Sofia')
+
+        # Baseline: key_vec must be empty for this id before recall
+        with db_service.connection() as conn:
+            count_before = conn.execute(
+                "SELECT COUNT(*) FROM data_graph_key_vec WHERE rowid=?", (row_id,)
+            ).fetchone()[0]
+        assert count_before == 0, "key_vec must have no entry before backfill"
+
+        # Override _generate_embedding so backfill actually stores a blob
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+
+        svc.recall("sisters name Sofia")
+
+        # After recall, key_vec must contain the backfilled row
+        with db_service.connection() as conn:
+            count_after = conn.execute(
+                "SELECT COUNT(*) FROM data_graph_key_vec WHERE rowid=?", (row_id,)
+            ).fetchone()[0]
+        assert count_after == 1, "key_vec must have an entry after backfill"
+
+    def test_backfill_surfaces_bare_inserted_row_via_recall(self, svc, db_service):
+        """After backfill, the bare-inserted row is returned by recall via FTS."""
+        self._bare_insert(db_service, key='sisters_name', value='Sofia')
+
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+
+        results = svc.recall("sisters_name Sofia")
+
+        keys = [r['key'] for r in results]
+        assert 'sisters_name' in keys, "Backfilled row must appear in recall results"
+
+    def test_backfill_skips_rows_with_all_indices_present(self, svc, db_service):
+        """Rows fully indexed (vec + FTS) are not re-processed by a second recall."""
+        # First recall: bare-inserted row triggers backfill and gets fully indexed.
+        row_id = self._bare_insert(db_service, key='city', value='Valletta')
+        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        svc.recall("city Valletta")
+
+        # Verify all three indices are now populated.
+        with db_service.connection() as conn:
+            kv = conn.execute(
+                "SELECT COUNT(*) FROM data_graph_key_vec WHERE rowid=?", (row_id,)
+            ).fetchone()[0]
+            vv = conn.execute(
+                "SELECT COUNT(*) FROM data_graph_value_vec WHERE rowid=?", (row_id,)
+            ).fetchone()[0]
+            fts = conn.execute(
+                "SELECT COUNT(*) FROM data_graph_fts WHERE rowid=?", (row_id,)
+            ).fetchone()[0]
+        assert kv == 1
+        assert vv == 1
+        assert fts == 1
+
+        # Second recall: backfill must find no missing rows, so _generate_embedding
+        # is only called once for the query itself — not for the already-indexed row.
+        call_log = []
+
+        def _tracking_emb(text):
+            call_log.append(text)
+            return self._FAKE_EMB
+
+        svc._generate_embedding = _tracking_emb
+        svc.recall("city Valletta")
+
+        query_calls = [c for c in call_log if c == "city Valletta"]
+        assert len(query_calls) == 1, "Exactly one call for the query on second recall"
+        row_calls = [c for c in call_log if c in ('city', 'Valletta')]
+        assert len(row_calls) == 0, "No extra calls — fully-indexed row skipped by backfill"
+
+    def test_backfill_handles_embedding_failure_gracefully(self, svc, db_service):
+        """If _generate_embedding raises for one row, backfill continues and recall returns."""
+        self._bare_insert(db_service, key='allergy', value='peanuts')
+
+        svc._generate_embedding = MagicMock(side_effect=RuntimeError("emb down"))
+
+        # Must not raise — backfill swallows per-row errors
+        results = svc.recall("peanuts allergy")
+        assert isinstance(results, list)

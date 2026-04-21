@@ -907,10 +907,57 @@ class DataGraphService:
         logger.info("[DATA GRAPH] Stored new %s '%s'='%s' (source=%s)", req.kind, req.key, (req.value or '')[:60], req.source)
         return self._fetch_row_by_id(conn, new_id), (new_id, req.key, req.value), (new_id, req.key, req.value)
 
+    # ── backfill ──────────────────────────────────────────────────────
+
+    def _backfill_missing_embeddings(self) -> None:
+        """Embed and FTS-index rows that were inserted outside DataGraphService.store().
+
+        Finds active, non-deleted rows whose id is absent from either vec table
+        or the FTS index, then generates embeddings and syncs FTS for each.
+        One row failure never aborts the rest.
+        """
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, key, value, kind
+                    FROM data_graph
+                    WHERE active = 1 AND deleted_at IS NULL
+                      AND (
+                          id NOT IN (SELECT rowid FROM data_graph_key_vec)
+                          OR id NOT IN (SELECT rowid FROM data_graph_value_vec)
+                          OR id NOT IN (SELECT rowid FROM data_graph_fts)
+                      )
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+            if not rows:
+                return
+
+            logger.info("[DATA GRAPH] Backfilling embeddings for %d row(s)", len(rows))
+
+            for row in rows:
+                row_id, key, value, kind = row[0], row[1], row[2], row[3]
+                try:
+                    key_emb = self._generate_embedding(key) if key else None
+                    value_emb = self._generate_embedding(value) if value else None
+                    with self.db.connection() as conn:
+                        self._store_key_vec(conn, row_id, key_emb)
+                        self._store_value_vec(conn, row_id, value_emb)
+                        self._sync_fts(conn, row_id, key, value, kind)
+                except Exception as e:
+                    logger.warning(
+                        "[DATA GRAPH] Backfill failed for rowid=%s: %s", row_id, e
+                    )
+        except Exception as e:
+            logger.warning("[DATA GRAPH] _backfill_missing_embeddings error: %s", e)
+
     # ── recall() ─────────────────────────────────────────────────────
 
     def recall(self, query: str, *, kinds=None, limit: int = 10, expand_graph: bool = True) -> list:
         try:
+            self._backfill_missing_embeddings()
             query_emb = self._generate_embedding(query)
             query_blob = pack_embedding(query_emb) if query_emb else None
 
