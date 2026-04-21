@@ -2153,6 +2153,7 @@ document.getElementById('obsRefreshBtn').addEventListener('click', () => {
 function loadCognitionSubtab(subtab) {
     if (subtab === 'jobs') return; // Jobs panel uses existing renderCognition()
     if (subtab === 'memory') { loadRecordsObs(); return; }
+    if (subtab === 'personality') { loadPersonality(); return; }
     if (obsLoaded[subtab]) return; // Already cached
 
     const loaders = {
@@ -3454,6 +3455,87 @@ async function disconnectCapability(capId) {
         showToast('Network error', 'error');
     }
 }
+
+// ==========================================
+// Personality
+// ==========================================
+
+const PERSONALITY_SLIDERS = ['warmth', 'mood', 'expressiveness', 'curiosity', 'humor'];
+
+let _personalityDebounceTimer = null;
+
+function _getPersonalitySliderValues() {
+    return PERSONALITY_SLIDERS.map(name => {
+        const el = document.querySelector(`[data-slider="${name}"]`);
+        return el ? parseInt(el.value, 10) : 0;
+    });
+}
+
+function _renderPersonalityVoice(voice) {
+    const preview = document.getElementById('personalityVoicePreview');
+    if (!preview) return;
+    preview.textContent = voice || '';
+}
+
+function _applyPersonalityTuple(tup) {
+    PERSONALITY_SLIDERS.forEach((name, i) => {
+        const el = document.querySelector(`[data-slider="${name}"]`);
+        if (el) el.value = tup[i] ?? 0;
+    });
+}
+
+async function loadPersonality() {
+    try {
+        const res = await apiFetch('/settings/personality');
+        if (!res.ok) {
+            _renderPersonalityVoice('Failed to load personality settings.');
+            return;
+        }
+        const data = await res.json();
+        _applyPersonalityTuple(data.tuple);
+        _renderPersonalityVoice(data.voice);
+    } catch (_err) {
+        _renderPersonalityVoice('Network error loading personality settings.');
+    }
+}
+
+async function _savePersonality(tup) {
+    try {
+        const res = await apiFetch('/settings/personality', {
+            method: 'PUT',
+            body: JSON.stringify({ tuple: tup }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            _renderPersonalityVoice(data.voice);
+        } else {
+            showToast(data.error || 'Failed to save personality', 'error');
+        }
+    } catch (_err) {
+        showToast('Network error saving personality', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Save button
+    const saveBtn = document.getElementById('savePersonalityBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            await _savePersonality(_getPersonalitySliderValues());
+            showToast('Personality saved', 'success');
+        });
+    }
+
+    // Live preview on slider drag (debounced 250 ms)
+    document.querySelectorAll('.personality-range').forEach(slider => {
+        slider.addEventListener('input', () => {
+            clearTimeout(_personalityDebounceTimer);
+            _personalityDebounceTimer = setTimeout(() => {
+                _savePersonality(_getPersonalitySliderValues());
+            }, 250);
+        });
+    });
+});
 
 // ==========================================
 // Start

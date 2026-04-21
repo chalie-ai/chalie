@@ -236,13 +236,13 @@ class MessageProcessor:
         **Zero-arg construction is the contract.** Every `SystemMessagePrompt`
         subclass takes no constructor parameters — its `getPrompt()` returns
         either a static body or a template string with placeholder tokens
-        (e.g. `UnifiedSystemMessagePrompt` exposes `{{voice_modulation}}` and
-        `{{adaptive_directives}}`). That keeps this base-class call site pure —
-        no knowledge of subclass-specific args leaks up. Subclasses of
-        `MessageProcessor` that need richer system-prompt inputs (voice
-        modulation, adaptive directives bound to real metadata, …) override
-        `getSystemPrompt()` themselves and weave their own placeholder values
-        into the template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
+        (e.g. `UnifiedSystemMessagePrompt` exposes `{{adaptive_directives}}`).
+        That keeps this base-class call site pure — no knowledge of
+        subclass-specific args leaks up. Subclasses of `MessageProcessor` that
+        need richer system-prompt inputs (adaptive directives bound to real
+        metadata, personality voice, …) override `getSystemPrompt()` themselves
+        and weave their own placeholder values into the template returned by
+        `SYSTEM_PROMPT_CLASS().getPrompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
@@ -322,6 +322,7 @@ class MessageProcessor:
 
         Returns '' when the channel has no transcript rows and no compaction.
         """
+        del token_budget  # forward-compat placeholder; see docstring above
         from services import compaction_service, transcript_service
         from services.tool_call_service import ToolCallService
         from services.tool_render_and_record_service import ToolRenderAndRecordService

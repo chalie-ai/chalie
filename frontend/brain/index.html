@@ -74,6 +74,7 @@
                 <button class="filter-tab" data-subtab="tools">Tools</button>
                 <button class="filter-tab" data-subtab="tasks">Working On</button>
                 <button class="filter-tab" data-subtab="worldstate">World State</button>
+                <button class="filter-tab" data-subtab="personality">Personality</button>
             </div>
 
             <!-- Jobs sub-panel (existing content, unchanged) -->
@@ -124,6 +125,57 @@
             <!-- World State sub-panel -->
             <div class="cognition-subpanel" id="subtab-worldstate">
                 <div id="worldStateContent"></div>
+            </div>
+
+            <!-- Personality sub-panel -->
+            <div class="cognition-subpanel" id="subtab-personality">
+                <p class="panel-desc">Adjust how Chalie communicates. Changes take effect on the next message.</p>
+                <div class="personality-sliders" id="personalitySliders">
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Cool</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label">Warmth</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="warmth" class="personality-range">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Warm</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Level-headed</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label">Mood</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="mood" class="personality-range">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Moody</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Reserved</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label">Expressiveness</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="expressiveness" class="personality-range">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Vocal</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Matter-of-fact</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label">Curiosity</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="curiosity" class="personality-range">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Inquisitive</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Dry</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label">Humor</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="humor" class="personality-range">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Playful</span>
+                    </div>
+                </div>
+                <div class="personality-voice-preview" id="personalityVoicePreview"></div>
+                <div class="personality-actions">
+                    <button class="btn btn-primary btn-save-personality" id="savePersonalityBtn">Save</button>
+                </div>
             </div>
         </div>
 

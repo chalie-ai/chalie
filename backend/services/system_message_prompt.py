@@ -29,9 +29,9 @@ non-instantiable (Python's ABC machinery raises ``TypeError`` at
 construction time). Setting ``_SYSTEM_PROMPT = "..."`` as a plain class
 attribute on a subclass is enough to satisfy the abstract contract.
 
-Placeholders that survive into the prompt (``{{voice_modulation}}``,
-``{{adaptive_directives}}``) are woven in per-turn by the owning
-``MessageProcessor`` subclass — see ``UserMessageProcessor.getSystemPrompt()``.
+Placeholders that survive into the prompt (``{{adaptive_directives}}``)
+are woven in per-turn by the owning ``MessageProcessor`` subclass —
+see ``UserMessageProcessor.getSystemPrompt()``.
 """
 
 from abc import ABC, abstractmethod
@@ -61,14 +61,12 @@ class UnifiedSystemMessagePrompt(SystemMessagePrompt):
 
     **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
     parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim,
-    leaving both ``{{voice_modulation}}`` and ``{{adaptive_directives}}`` as
-    literal placeholders for ``UserMessageProcessor.getSystemPrompt()`` to
-    weave in per-turn.
+    leaving ``{{adaptive_directives}}`` as a literal placeholder for
+    ``UserMessageProcessor.getSystemPrompt()`` to weave in per-turn.
 
     The identity/boundaries/principles prefix is stable across turns so
-    provider-side prompt caching keeps it hot. ``{{voice_modulation}}``
-    sits mid-prompt in the Voice section; ``{{adaptive_directives}}`` sits
-    at the bottom as the per-turn cache-busting suffix.
+    provider-side prompt caching keeps it hot. ``{{adaptive_directives}}``
+    sits at the bottom as the per-turn cache-busting suffix.
     """
 
     _SYSTEM_PROMPT = """\
@@ -96,12 +94,6 @@ Guiding framework for all interactions (internalize, do not recite):
 - Notice when your actions drift from these values
 
 **Show these principles through your behavior, not by stating them explicitly.**
-
-## Voice
-
-{{voice_modulation}}
-
-────────────────────────────────
 
 ## Operational Principles
 

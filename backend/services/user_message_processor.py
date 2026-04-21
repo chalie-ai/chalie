@@ -114,8 +114,6 @@ class UserMessageProcessor(MessageProcessor):
         # without this cache each iteration would re-read KnowledgeService DB rows.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
-        # Cached voice modulation string. Per-turn cache — same reasoning as above.
-        # Consumed only by getSystemPrompt() during {{voice_modulation}} weave.
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -238,28 +236,28 @@ class UserMessageProcessor(MessageProcessor):
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
     def getSystemPrompt(self) -> str:
-        """Override to weave both dynamic placeholders into the UNIFIED prompt body.
+        """Build the final system prompt for this turn.
 
-        UnifiedSystemMessagePrompt.getPrompt() returns _UNIFIED_PROMPT, an
-        inlined Python constant with two placeholders:
-          - {{voice_modulation}} — mid-prompt in the Voice section; per-turn
-            cached; supplied by _get_voice_modulation().
-          - {{adaptive_directives}} — bottom of prompt; per-turn; supplied by
-            _get_adaptive_directives().
+        Assembly order:
+          1. Voice line — ``"When responding; <personality voice paragraph>"``
+             drawn fresh from PersonalityService (O(1) dict lookup + one
+             SQLite SELECT).
+          2. getUserDefinition() — the user synthesis line prepended below the
+             voice line.
+          3. Template — UnifiedSystemMessagePrompt body with
+             ``{{adaptive_directives}}`` filled in.
 
-        After both are filled, getUserDefinition() (the user synthesis line) is
-        prepended as the first line of the final system prompt.
-
-        Weave order: voice first (mid-prompt), adaptive second (bottom), then
-        prepend user definition. This preserves the stable Identity/Boundaries/
-        Principles prefix for provider-side prompt caching.
+        The voice line sits at the very top so the LLM sees it first.  The
+        stable Identity/Boundaries/Principles prefix follows, keeping the bulk
+        of the prompt hot in the provider's prompt cache.
         """
-        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        from services.personality.personality_service import get_current_voice
 
-        template = template.replace('{{voice_modulation}}', self._get_voice_modulation())
+        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
         template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
-        return f"{self.getUserDefinition()}\n\n{template}"
+        voice_line = f"When responding; {get_current_voice()}"
+        return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
 
     def getTools(self) -> list[dict]:
         """Narrow native tools for voice mode (exclude rich_render).
@@ -510,10 +508,6 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
-
-    def _get_voice_modulation(self) -> str:
-        """Static voice modulation string for the system prompt."""
-        return "Engage naturally as a peer."
 
     def _get_adaptive_directives(self) -> str:
         """Get adaptive response directives for system prompt placeholder injection.

@@ -128,9 +128,9 @@ class TestUnifiedSystemMessagePrompt:
     """Unified prompt is an inlined Python constant (Decision Y1).
 
     ``getPrompt()`` returns ``_SYSTEM_PROMPT`` directly — no file reads,
-    no config loading, no turn-specific state. ``{{voice_modulation}}``
-    and ``{{adaptive_directives}}`` ride through as literal placeholders;
-    ``UserMessageProcessor.getSystemPrompt()`` weaves the per-turn values
+    no config loading, no turn-specific state. ``{{adaptive_directives}}``
+    rides through as a literal placeholder;
+    ``UserMessageProcessor.getSystemPrompt()`` weaves the per-turn value
     in before the prompt is sent.
     """
 
@@ -200,18 +200,6 @@ class TestUnifiedSystemMessagePrompt:
         result = UnifiedSystemMessagePrompt().getPrompt()
         assert '## Core Principles' in result
 
-    def test_voice_section_present(self):
-        """Voice section is inlined in the unified prompt."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        assert '## Voice' in result
-
-    def test_voice_modulation_placeholder_present(self):
-        """``{{voice_modulation}}`` is present for UserMessageProcessor to weave in."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        assert '{{voice_modulation}}' in result
-
     def test_adaptive_directives_placeholder_present(self):
         """``{{adaptive_directives}}`` is present for UserMessageProcessor to weave in."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
@@ -226,15 +214,6 @@ class TestUnifiedSystemMessagePrompt:
         assert idx != -1
         assert result[idx + len('{{adaptive_directives}}'):].strip() == ''
 
-    def test_voice_modulation_precedes_adaptive_directives(self):
-        """Voice modulation sits mid-prompt; adaptive directives at the bottom."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        voice_idx = result.find('{{voice_modulation}}')
-        adaptive_idx = result.rfind('{{adaptive_directives}}')
-        assert voice_idx != -1 and adaptive_idx != -1
-        assert voice_idx < adaptive_idx
-
     def test_no_identity_modulation_placeholder(self):
         """``{{identity_modulation}}`` must not appear — identity is inlined,
         not injected via template substitution."""
@@ -243,17 +222,17 @@ class TestUnifiedSystemMessagePrompt:
         assert '{{identity_modulation}}' not in result
 
     def test_no_dead_placeholders(self):
-        """No stale {{...}} placeholders other than the two live ones.
+        """No stale {{...}} placeholders other than the one live one.
 
-        {{voice_modulation}} and {{adaptive_directives}} are intentionally live —
-        UserMessageProcessor.getSystemPrompt() weaves them in per-turn.
-        Any other {{...}} is a bug.
+        ``{{adaptive_directives}}`` is intentionally live —
+        UserMessageProcessor.getSystemPrompt() weaves it in per-turn.
+        Any other ``{{...}}`` is a bug.
         """
         import re
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         result = UnifiedSystemMessagePrompt().getPrompt()
         placeholders = set(re.findall(r'\{\{(\w+)\}\}', result))
-        allowed = {'adaptive_directives', 'voice_modulation'}
+        allowed = {'adaptive_directives'}
         unexpected = placeholders - allowed
         assert not unexpected, (
             f"Unexpected dead placeholders in _SYSTEM_PROMPT: {unexpected}"
