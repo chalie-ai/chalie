@@ -18,6 +18,7 @@ at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 import hashlib
 import json
 import logging
+import platform
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -57,6 +58,23 @@ def _model_dir() -> Path:
     base = Path(__file__).parent.parent / "data" / "models" / _MODEL_SUBDIR
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _select_providers(ort_module) -> List[str]:
+    """Pick ONNX Runtime providers. Opt into CoreML only on Apple Silicon macOS outside Docker."""
+    try:
+        is_apple_silicon_native = (
+            platform.system() == "Darwin"
+            and platform.machine() == "arm64"
+            and not Path("/.dockerenv").exists()
+        )
+        if is_apple_silicon_native:
+            available = ort_module.get_available_providers()
+            if "CoreMLExecutionProvider" in available:
+                return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    except Exception as e:
+        logger.warning(f"[EMBEDDING] CoreML provider detection failed, falling back to CPU: {e}")
+    return ["CPUExecutionProvider"]
 
 
 def _get_session_and_tokenizer():
@@ -111,11 +129,25 @@ def _get_session_and_tokenizer():
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             opts.optimized_model_filepath = str(optimized_path)
 
-        session = ort.InferenceSession(
-            str(load_path),
-            sess_options=opts,
-            providers=["CPUExecutionProvider"],
-        )
+        providers = _select_providers(ort)
+        try:
+            session = ort.InferenceSession(
+                str(load_path),
+                sess_options=opts,
+                providers=providers,
+            )
+        except Exception as e:
+            if providers != ["CPUExecutionProvider"]:
+                logger.warning(f"[EMBEDDING] Provider init failed ({providers}): {e}. Falling back to CPU.")
+                providers = ["CPUExecutionProvider"]
+                session = ort.InferenceSession(
+                    str(load_path),
+                    sess_options=opts,
+                    providers=providers,
+                )
+            else:
+                raise
+        logger.info(f"[EMBEDDING] Providers: {session.get_providers()}")
 
         _output_names = [o.name for o in session.get_outputs()]
         _input_names = [i.name for i in session.get_inputs()]
