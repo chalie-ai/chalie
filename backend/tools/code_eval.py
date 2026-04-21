@@ -66,14 +66,18 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
 
     # Fresh globals copy per call so state never leaks between executions.
     exec_globals = dict(_RESTRICTED_GLOBALS)
+    # RestrictedPython binds the _print instance to exec locals, not globals.
+    exec_locals: dict = {}
 
     try:
-        exec(byte_code, exec_globals)
+        exec(byte_code, exec_globals, exec_locals)
     except Exception as exc:
-        captured = str(exec_globals.get("_print", PrintCollector()))
+        collector = exec_locals.get("_print")
+        captured = collector() if collector is not None else ""
         error_msg = f"{type(exc).__name__}: {exc}"
-        text = f"{captured}\n{error_msg}".strip() if captured else error_msg
+        text = f"{captured}{error_msg}".strip() if captured else error_msg
         return {"text": text, "error": error_msg}
 
-    captured = str(exec_globals.get("_print", PrintCollector()))
+    collector = exec_locals.get("_print")
+    captured = collector() if collector is not None else ""
     return {"text": captured, "error": ""}
