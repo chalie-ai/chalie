@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 TOOL_SCHEMA = {
     "name": "document",
     "description": (
-        "CRUD operations for persistent documents. Each document is a file "
-        "on the system which you can create, read, search, and delete."
+        "Use this tool when the user asks to create, save, write, store, search, view, list, or delete "
+        "a document or note — all persistent documents and notes live here."
     ),
     "input_schema": {
         "type": "object",
@@ -22,7 +22,10 @@ TOOL_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": ["search", "list", "view", "delete", "restore", "create"],
-                "description": "Document operation to perform.",
+                "description": (
+                    "Document operation to perform; use `create` when the user asks you to "
+                    "create, save, write, or store a note or document."
+                ),
             },
             "query": {
                 "type": "string",
@@ -34,11 +37,14 @@ TOOL_SCHEMA = {
             },
             "name": {
                 "type": "string",
-                "description": "Document filename (e.g. 'research-notes.md'). Required for create; optional fuzzy match for view/delete/restore.",
+                "description": (
+                    "Required for `create`; use a filename like 'research-notes.md' if the user "
+                    "didn't give one. Optional fuzzy match for view/delete/restore."
+                ),
             },
             "content": {
                 "type": "string",
-                "description": "The text content to store. Required for create.",
+                "description": "The full text body to write. Required for `create`.",
             },
             "source_type": {
                 "type": "string",
