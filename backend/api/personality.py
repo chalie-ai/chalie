@@ -59,7 +59,7 @@ def set_personality():
             return jsonify({"error": "Missing required field: tuple"}), 400
         if not isinstance(raw, list) or len(raw) != 5:
             return jsonify({"error": "Field 'tuple' must be a list of exactly 5 integers"}), 400
-        if not all(isinstance(v, int) for v in raw):
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in raw):
             return jsonify({"error": "All tuple elements must be integers"}), 400
 
         from services.personality.personality_service import set_current_tuple

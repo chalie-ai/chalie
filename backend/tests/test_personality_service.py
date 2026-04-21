@@ -205,3 +205,10 @@ class TestSetCurrentTupleValidation:
 
         with pytest.raises(ValueError):
             set_current_tuple(())
+
+    def test_set_current_tuple_rejects_bool_masquerading_as_int(self, db):
+        """Booleans satisfy ``isinstance(x, int)`` in Python — reject them explicitly."""
+        from services.personality.personality_service import set_current_tuple
+
+        with pytest.raises(ValueError):
+            set_current_tuple((True, False, 0, 0, 0))

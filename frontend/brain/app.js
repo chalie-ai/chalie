@@ -3508,11 +3508,13 @@ async function _savePersonality(tup) {
         const data = await res.json();
         if (res.ok) {
             _renderPersonalityVoice(data.voice);
-        } else {
-            showToast(data.error || 'Failed to save personality', 'error');
+            return true;
         }
+        showToast(data.error || 'Failed to save personality', 'error');
+        return false;
     } catch (_err) {
         showToast('Network error saving personality', 'error');
+        return false;
     }
 }
 
@@ -3521,8 +3523,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveBtn = document.getElementById('savePersonalityBtn');
     if (saveBtn) {
         saveBtn.addEventListener('click', async () => {
-            await _savePersonality(_getPersonalitySliderValues());
-            showToast('Personality saved', 'success');
+            if (await _savePersonality(_getPersonalitySliderValues())) {
+                showToast('Personality saved', 'success');
+            }
         });
     }
 

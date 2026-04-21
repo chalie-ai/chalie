@@ -94,7 +94,7 @@ class TestPersonalityAPIPut:
             f"GET after PUT returned wrong tuple: {get_data['tuple']!r}"
         )
         assert get_data['voice'] == expected_voice, (
-            f"GET after PUT returned wrong voice"
+            "GET after PUT returned wrong voice"
         )
 
 
@@ -151,4 +151,16 @@ class TestPersonalityAPIPutValidation:
         )
         assert resp.status_code == 400, (
             f"Expected 400 for missing 'tuple' field, got {resp.status_code}"
+        )
+
+    def test_put_rejects_bools_as_integers(self, authed_client):
+        """``[true, false, 0, 0, 0]`` would satisfy ``isinstance(v, int)`` — reject explicitly."""
+        client, _db, _store = authed_client
+        resp = client.put(
+            '/settings/personality',
+            json={'tuple': [True, False, 0, 0, 0]},
+            content_type='application/json',
+        )
+        assert resp.status_code == 400, (
+            f"Expected 400 for bool elements, got {resp.status_code}"
         )

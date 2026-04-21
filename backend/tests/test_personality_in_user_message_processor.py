@@ -9,7 +9,6 @@ Verifies:
     EpisodeEncoder, SuperEpisodeEncoder) do NOT emit the personality voice.
 """
 
-import itertools
 import json
 import os
 

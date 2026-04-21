@@ -57,7 +57,13 @@ def _load_voices() -> None:
 
 
 def _get_index() -> dict[tuple[int, int, int, int, int], str]:
-    """Return the voice index, loading it on the first call."""
+    """Return the voice index, loading it on the first call.
+
+    A successful load marks the module loaded and future calls skip the lock.
+    A failed load (missing file, permission error, empty corpus) leaves
+    ``_voices_loaded`` False so the next call retries — operators who notice
+    the warning in logs can fix the asset and resume without restarting.
+    """
     global _voices_loaded
     if _voices_loaded:
         return _voices_index or {}
@@ -65,7 +71,10 @@ def _get_index() -> dict[tuple[int, int, int, int, int], str]:
         if _voices_loaded:
             return _voices_index or {}
         _load_voices()
-        _voices_loaded = True
+        if _voices_index:
+            _voices_loaded = True
+        else:
+            logger.error("[PERSONALITY] voices.jsonl produced an empty index — will retry on next call")
     return _voices_index or {}
 
 
@@ -128,7 +137,7 @@ def set_current_tuple(tup: tuple[int, int, int, int, int]) -> str:
     if len(tup) != 5:
         raise ValueError(f"Personality tuple must have exactly 5 elements, got {len(tup)}")
     for i, step in enumerate(tup):
-        if step not in (-2, -1, 0, 1, 2):
+        if isinstance(step, bool) or not isinstance(step, int) or step not in (-2, -1, 0, 1, 2):
             raise ValueError(
                 f"Step {i} ({SLIDER_ORDER[i]}) = {step!r} is out of range; "
                 f"must be one of -2, -1, 0, 1, 2"
