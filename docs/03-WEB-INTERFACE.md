@@ -180,6 +180,7 @@ All cards use the same design language: dark surfaces, violet accents, thin bord
 - Tool execution history
 - Settings and configuration
 - Tool management interface
+- **Cognition → Personality** — 5 sliders (warmth, mood, expressiveness, curiosity, humor), each with 5 steps (-2..+2). Live preview reads the corresponding paragraph from the 3,125-row `voices.jsonl` corpus via `GET /settings/personality`; Save commits the tuple via `PUT /settings/personality`. Default is neutral `(0,0,0,0,0)`. The selected voice is prepended to `UserMessageProcessor`'s system prompt as `When responding; <voice>` — background processors (DMN, goal-pursuit, scheduled, encoders) are unaffected.
 
 ### 3. `frontend/on-boarding/` — Account Setup
 - Create master account (username + password)
