@@ -386,6 +386,7 @@ _install_playwright_browsers() {
 
   "${pw_cmd[@]}"
   _ok "Playwright Chromium ready"
+  return 0
 }
 
 # ─── Deno Runtime (for interface daemons) ──────────────────────────────────

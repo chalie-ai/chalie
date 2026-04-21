@@ -20,7 +20,6 @@ export class VoiceIO {
     this._mediaRecorder = null;
     this._audioChunks = [];
     this._isRecording = false;
-    this._currentAudio = null;
     this._speaking = false;
     this._available = false;
     this._audioCtx = null;
@@ -28,6 +27,20 @@ export class VoiceIO {
     this._analyserData = null;
     this._vizTarget = null;
     this._vizRaf = null;
+
+    // TTS playback state (Web Audio — iOS Safari autoplay-safe)
+    this._bufferQueue = [];
+    this._chunkTexts = [];
+    this._chunkIdx = 0;
+    this._streamDone = false;
+    this._cumulativeTime = 0;
+    this._currentSource = null;
+    this._currentBuffer = null;
+    this._sourceStartCtxTime = 0;
+    this._sourceStartOffset = 0;
+    this._paused = false;
+    this._pausedOffset = 0;
+    this._decodeChain = Promise.resolve();
   }
 
   /**
@@ -227,13 +240,25 @@ export class VoiceIO {
     // Stop any current playback and reset stream state
     this.stopAudio();
 
+    // AudioContext must already be unlocked by a prior user gesture (iOS Safari).
+    // Every entry point that leads here (orb click, pause button, speak-message)
+    // calls unlockAudio() first — if we got here without one, bail loudly.
+    if (!this._audioCtx || this._audioCtx.state === 'suspended') {
+      console.error('TTS blocked: AudioContext not unlocked — user gesture required');
+      document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err: new Error('AudioContext not unlocked') } }));
+      return;
+    }
+
     // Set _speaking AFTER stopAudio() (which resets it to false)
     this._speaking = true;
-    this._chunkQueue = [];
+    this._bufferQueue = [];
     this._chunkTexts = [];
     this._chunkIdx = 0;
     this._streamDone = false;
     this._cumulativeTime = 0;
+    this._paused = false;
+    this._pausedOffset = 0;
+    this._decodeChain = Promise.resolve();
 
     try {
       const response = await fetch(this._buildUrl(_TTS_PATH), {
@@ -246,27 +271,50 @@ export class VoiceIO {
       // Chunks will arrive via WebSocket — nothing more to do here
     } catch (err) {
       this._speaking = false;
+      console.error('TTS request failed:', err);
       document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
     }
   }
 
   /**
    * Handle a TTS chunk pushed via WebSocket.
+   * Decodes via AudioContext and queues an AudioBuffer for playback.
    * @param {{audio: string, index: number, total: number, text?: string}} data
    */
   handleTtsChunk(data) {
     if (!this._speaking) return;
+    if (!this._audioCtx) {
+      console.error('TTS chunk dropped: AudioContext missing');
+      return;
+    }
 
     const raw = atob(data.audio);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
-    const blob = new Blob([bytes], { type: 'audio/wav' });
-    this._chunkQueue.push(URL.createObjectURL(blob));
-    this._chunkTexts.push(data.text || '');
-
-    // Start playback as soon as first chunk arrives
-    if (this._chunkQueue.length === 1) this._playNextChunk();
+    // Serialize decodes so chunks land in the queue in arrival order.
+    // Safari's decodeAudioData uses callbacks — wrap it in a promise for
+    // cross-browser consistency.
+    const text = data.text || '';
+    this._decodeChain = this._decodeChain.then(() => new Promise((resolve) => {
+      if (!this._speaking) { resolve(); return; }
+      this._audioCtx.decodeAudioData(
+        bytes.buffer,
+        (buffer) => {
+          if (!this._speaking) { resolve(); return; }
+          this._bufferQueue.push(buffer);
+          this._chunkTexts.push(text);
+          if (!this._currentSource && !this._paused && this._chunkIdx < this._bufferQueue.length) {
+            this._playNextChunk();
+          }
+          resolve();
+        },
+        (err) => {
+          console.error('TTS decode failed:', err);
+          resolve();
+        },
+      );
+    }));
   }
 
   /**
@@ -283,29 +331,28 @@ export class VoiceIO {
 
   /** Skip to next chunk. */
   skipForward() {
-    if (!this._speaking || !this._currentAudio) return;
-    this._cumulativeTime += this._currentAudio.currentTime;
-    this._currentAudio.pause();
-    URL.revokeObjectURL(this._chunkQueue[this._chunkIdx]);
-    if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
+    if (!this._speaking || !this._currentSource) return;
+    this._cumulativeTime += this._currentBuffer.duration;
+    this._stopCurrentSource();
     this._chunkIdx++;
     this._playNextChunk();
   }
 
   /** Restart current chunk, or go to previous if near the start. */
   skipBack() {
-    if (!this._speaking || !this._currentAudio) return;
+    if (!this._speaking) return;
+    if (!this._currentSource && !this._paused) return;
 
-    // If more than 2s in, just restart current chunk
-    if (this._currentAudio.currentTime > 2) {
-      this._currentAudio.currentTime = 0;
+    const position = this._currentPosition();
+    if (position > 2) {
+      // Restart current chunk from the beginning
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, 0);
       return;
     }
 
-    // Otherwise go to previous chunk
     if (this._chunkIdx > 0) {
-      this._currentAudio.pause();
-      if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
+      this._stopCurrentSource();
       this._chunkIdx--;
       this._cumulativeTime = 0;
       this._playNextChunk();
@@ -314,85 +361,121 @@ export class VoiceIO {
 
   /** Toggle pause/resume on current chunk. Returns true if now playing. */
   togglePause() {
-    if (!this._speaking || !this._currentAudio) return false;
-    if (this._currentAudio.paused) {
-      this._currentAudio.play();
+    if (!this._speaking) return false;
+
+    if (this._paused) {
+      if (!this._currentBuffer) return false;
+      this._playBufferFrom(this._currentBuffer, this._pausedOffset);
       return true;
-    } else {
-      this._currentAudio.pause();
-      return false;
     }
+
+    if (!this._currentSource) return false;
+    this._pausedOffset = this._currentPosition();
+    this._stopCurrentSource();
+    this._paused = true;
+    return false;
   }
 
   // ---------------------------------------------------------------------------
   // Private
   // ---------------------------------------------------------------------------
 
-  /** Play the next queued WAV chunk. */
+  /** Play the next queued buffer. */
   _playNextChunk() {
-    if (this._chunkIdx >= this._chunkQueue.length) {
+    if (this._chunkIdx >= this._bufferQueue.length) {
       this._checkStreamDone();
       return;
     }
 
-    const url = this._chunkQueue[this._chunkIdx];
+    const buffer = this._bufferQueue[this._chunkIdx];
     const text = this._chunkTexts[this._chunkIdx] || '';
-    const audio = new Audio(url);
-    // crossOrigin not needed for blob URLs but harmless
-    document.body.appendChild(audio);
-    this._currentAudio = audio;
-
-    // Route through AnalyserNode for visualizer
-    if (this._audioCtx && this._analyser) {
-      try {
-        const source = this._audioCtx.createMediaElementSource(audio);
-        source.connect(this._analyser);
-      } catch (_) { /* already connected or no context */ }
-    }
+    this._currentBuffer = buffer;
+    this._paused = false;
+    this._pausedOffset = 0;
 
     document.dispatchEvent(new CustomEvent('chalie:speak:chunk', { detail: { text, index: this._chunkIdx } }));
 
-    audio.addEventListener('ended', () => {
-      this._cumulativeTime += audio.duration;
-      URL.revokeObjectURL(url);
-      if (audio.parentNode) audio.parentNode.removeChild(audio);
+    this._playBufferFrom(buffer, 0);
+  }
+
+  /**
+   * Create a fresh AudioBufferSourceNode for the given buffer and start it.
+   * Used for initial play, resume-after-pause, and skipBack replay.
+   */
+  _playBufferFrom(buffer, offset) {
+    if (!this._audioCtx || !this._analyser) {
+      console.error('TTS play blocked: AudioContext missing');
+      this._speaking = false;
+      document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err: new Error('AudioContext missing') } }));
+      return;
+    }
+
+    const source = this._audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this._analyser);
+
+    source.onended = () => {
+      // Ignore if this source was replaced (pause/skip/stop).
+      if (source !== this._currentSource) return;
+      this._currentSource = null;
+      if (!this._speaking || this._paused) return;
+      this._cumulativeTime += buffer.duration;
       this._chunkIdx++;
       this._playNextChunk();
-    });
+    };
 
-    audio.play().catch(err => {
+    try {
+      source.start(0, offset);
+    } catch (err) {
+      console.error('TTS source.start failed:', err);
       this._speaking = false;
       document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
-    });
+      return;
+    }
+
+    this._currentSource = source;
+    this._currentBuffer = buffer;
+    this._sourceStartCtxTime = this._audioCtx.currentTime;
+    this._sourceStartOffset = offset;
+    this._paused = false;
+  }
+
+  /** Stop current source without triggering onended advance. */
+  _stopCurrentSource() {
+    if (!this._currentSource) return;
+    this._currentSource.onended = null;
+    try { this._currentSource.stop(); } catch (_) { /* already stopped */ }
+    try { this._currentSource.disconnect(); } catch (_) { /* already disconnected */ }
+    this._currentSource = null;
+  }
+
+  /** Seconds into the current buffer at the moment of call. */
+  _currentPosition() {
+    if (this._paused) return this._pausedOffset;
+    if (!this._currentSource || !this._audioCtx) return 0;
+    return this._sourceStartOffset + (this._audioCtx.currentTime - this._sourceStartCtxTime);
   }
 
   /** Fire the done event once the stream is exhausted and all chunks played. */
   _checkStreamDone() {
-    if (this._streamDone && this._chunkIdx >= this._chunkQueue.length) {
+    if (this._streamDone && this._chunkIdx >= this._bufferQueue.length) {
       this._speaking = false;
       document.dispatchEvent(new CustomEvent('chalie:speak:done'));
     }
   }
 
   stopAudio() {
-    if (this._currentAudio) {
-      this._currentAudio.pause();
-      if (this._currentAudio.src) URL.revokeObjectURL(this._currentAudio.src);
-      if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
-      this._currentAudio = null;
-    }
-
-    // Release any remaining queued blob URLs
-    if (this._chunkQueue) {
-      for (let i = (this._chunkIdx || 0) + 1; i < this._chunkQueue.length; i++) {
-        URL.revokeObjectURL(this._chunkQueue[i]);
-      }
-    }
-    this._chunkQueue = [];
+    this._stopCurrentSource();
+    this._currentBuffer = null;
+    this._bufferQueue = [];
+    this._chunkTexts = [];
     this._chunkIdx = 0;
     this._streamDone = false;
     this._cumulativeTime = 0;
+    this._paused = false;
+    this._pausedOffset = 0;
     this._speaking = false;
+    this._decodeChain = Promise.resolve();
   }
 
   /**

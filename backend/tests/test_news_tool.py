@@ -333,3 +333,17 @@ class TestResolveCountryCodeEdgeCases:
         assert _resolve_country_code("Australia") == "AU"
         assert _resolve_country_code("South Korea") == "KR"
         assert _resolve_country_code("United Arab Emirates") == "AE"
+
+
+# ── Integration smoke ─────────────────────────────────────────
+#
+# Real outbound HTTP to Google News RSS. Mirrors the contract the nightly
+# scenario (053-tool-news.yaml) asserts at the routing level: the news tool
+# itself must successfully resolve a plain query without raising. Isolated
+# from the ACT loop and the ONNX stack.
+
+
+@pytest.mark.integration
+def test_news_ai_returns_without_error():
+    result = execute('test', params={'query': 'artificial intelligence'})
+    assert 'error' not in result, result

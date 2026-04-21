@@ -18,6 +18,7 @@ Each test:
 """
 
 import base64
+import secrets
 import pytest
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -66,7 +67,7 @@ def auth_client(db, store):
     ``store`` fixture (isolated MemoryStore).  No mocks of production code.
     """
     app = Flask(__name__)
-    app.secret_key = "test-only-secret"
+    app.secret_key = secrets.token_hex(32)
     app.config["TESTING"] = True
     app.register_blueprint(user_auth_bp)
     with app.test_client() as client:

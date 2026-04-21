@@ -1454,7 +1454,7 @@ class TestFindMatchingGoals:
 class TestMotiveAlignment:
 
     @patch('services.goal_ecology_service.GoalEcologyService._store_goal_embedding')
-    def test_motive_alignment_increases_salience(self, mock_embed):
+    def test_motive_alignment_increases_salience(self, _mock_embed):
         """Goals with core motive alignment should have higher salience."""
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)

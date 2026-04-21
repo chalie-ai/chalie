@@ -189,7 +189,7 @@ def test_parse_vcard_org_list_flattened():
 
 
 @pytest.mark.unit
-def test_index_contacts_calls_index_person(mock_contacts_patch=None):
+def test_index_contacts_calls_index_person():
     """index_contacts delegates to contact_resolver.index_person per email."""
     handler = _make_handler()
     contacts = [{"fn": "Sarah Chen", "emails": ["s.chen@acme.com"], "phones": [], "org": "", "title": "", "given_name": "", "family_name": ""}]

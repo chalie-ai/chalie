@@ -44,9 +44,12 @@ class TestProvidersAPI:
             mock_factory.return_value = svc
             yield svc
 
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def mock_cache(self):
-        """Patch ProviderCacheService.invalidate so it does not error."""
+        """Patch ProviderCacheService.invalidate so it does not error.
+
+        autouse so individual tests do not need to take it as a parameter.
+        """
         with patch(
             'services.provider_cache_service.ProviderCacheService.invalidate'
         ):
@@ -86,7 +89,7 @@ class TestProvidersAPI:
         assert "error" in data
         assert "model" in data["error"]
 
-    def test_create_provider_success(self, client, mock_service, mock_cache):
+    def test_create_provider_success(self, client, mock_service):
         """POST /providers creates provider and returns 201 with masked api_key."""
         mock_service.list_providers_summary.return_value = [
             {"id": 99, "name": "existing"}
@@ -113,7 +116,7 @@ class TestProvidersAPI:
         mock_service.create_provider.assert_called_once()
 
     def test_create_first_provider_auto_assigns_all_jobs(
-        self, client, mock_service, mock_cache
+        self, client, mock_service
     ):
         """POST /providers for the first provider auto-assigns all jobs."""
         mock_service.list_providers_summary.return_value = []  # no existing
@@ -149,7 +152,7 @@ class TestProvidersAPI:
             assert c.args[1] == 1
 
     def test_create_second_provider_does_not_auto_assign(
-        self, client, mock_service, mock_cache
+        self, client, mock_service
     ):
         """POST /providers when providers already exist does not auto-assign jobs."""
         mock_service.list_providers_summary.return_value = [
@@ -210,7 +213,7 @@ class TestProvidersAPI:
     # PUT /providers/<id>
     # ------------------------------------------------------------------
 
-    def test_update_provider_returns_masked_key(self, client, mock_service, mock_cache):
+    def test_update_provider_returns_masked_key(self, client, mock_service):
         """PUT /providers/<id> updates and returns provider with masked api_key."""
         mock_service.update_provider.return_value = {
             "id": 3,
@@ -238,7 +241,7 @@ class TestProvidersAPI:
     # DELETE /providers/<id>
     # ------------------------------------------------------------------
 
-    def test_delete_provider_success(self, client, mock_service, mock_cache):
+    def test_delete_provider_success(self, client, mock_service):
         """DELETE /providers/<id> returns status deleted on success."""
         mock_service.delete_provider.return_value = None
 
@@ -340,7 +343,7 @@ class TestProvidersAPI:
         data = response.get_json()
         assert "provider_id" in data["error"]
 
-    def test_assign_job_success(self, client, mock_service, mock_cache):
+    def test_assign_job_success(self, client, mock_service):
         """PUT /providers/jobs/<name> assigns provider successfully."""
         mock_service.set_job_assignment.return_value = {
             "job_name": "frontal-cortex-unified",

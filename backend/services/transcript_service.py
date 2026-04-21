@@ -839,7 +839,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
     cluster of 3+ apex episodes with all-pairwise cosine >= SUPER_EPISODE_THRESHOLD:
 
     1. Fetches raw transcript spans for the cluster.
-    2. Calls SuperEpisodeEncoderProcessor to synthesise a consolidated gist.
+    2. Calls super_episode_encoder_cls to synthesise a consolidated gist.
     3. Embeds the gist, computes novelty + salience.
     4. Stores the super-episode via EpisodicService.
     5. Sets consolidated_into back-pointers on each source episode.
@@ -849,7 +849,9 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
     from services.episodic_service import find_super_candidates, _fetch_novelty_comparison_set, compute_novelty
     from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER
     from services.salience_service import compute_salience
-    from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
+    from services.super_episode_encoder_processor import (
+        SuperEpisodeEncoderProcessor as super_episode_encoder_cls,
+    )
 
     try:
         clusters = find_super_candidates(channel)
@@ -873,7 +875,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
         try:
             _process_super_cluster(
                 cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
-                SuperEpisodeEncoderProcessor, compute_novelty, compute_salience,
+                super_episode_encoder_cls, compute_novelty, compute_salience,
                 SUPER_EPISODE_MIN_CLUSTER,
             )
         except Exception as exc:
@@ -884,7 +886,7 @@ def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> Non
 
 def _process_super_cluster(
     cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
-    SuperEpisodeEncoderProcessor, compute_novelty, compute_salience, min_cluster,
+    super_episode_encoder_cls, compute_novelty, compute_salience, min_cluster,
 ) -> None:
     """Assemble sources, invoke encoder, compute salience, and persist one super-episode."""
     sources = [ep for ep in (episodic_svc.get_episode_by_id(eid) for eid in cluster_ids) if ep]
@@ -892,7 +894,7 @@ def _process_super_cluster(
         return
 
     transcript_spans = _fetch_transcript_spans(sources, db)
-    response = SuperEpisodeEncoderProcessor(sources, transcript_spans).send()
+    response = super_episode_encoder_cls(sources, transcript_spans).send()
     if not response:
         logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response for cluster {cluster_ids}")
         return

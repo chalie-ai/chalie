@@ -210,7 +210,9 @@ class ChalieApp {
         banner.classList.add('hidden');
         await fetch('/auth/vault-status/dismiss', { method: 'POST', credentials: 'same-origin' });
       }, { once: true });
-    } catch (_) { /* non-fatal */ }
+    } catch (err) {
+      console.debug('[vault-reinit] check failed (non-fatal):', err);
+    }
   }
 
   // ---------------------------------------------------------------------------

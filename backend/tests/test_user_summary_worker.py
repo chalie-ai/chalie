@@ -139,7 +139,9 @@ class TestLazyFallbackConcurrencyGuard:
         hold_event = threading.Event()
 
         class CountingProc(proc_mod.UserSummaryProcessor):
-            def send(self):  # noqa: D401 — test double, blocks intentionally
+            def send(self, request_id: str | None = None):  # noqa: D401
+                # Test double, blocks intentionally to keep in-flight flag True.
+                del request_id
                 daemon_count['n'] += 1
                 hold_event.wait(timeout=5)
 

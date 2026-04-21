@@ -98,7 +98,7 @@ def _should_synthesise() -> bool:
         return False
 
 
-def run(shared_state=None):
+def run():
     """Entry point registered with run.py.
 
     Runs indefinitely.  Sleeps ``_TICK_INTERVAL`` seconds between ticks so

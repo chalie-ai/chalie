@@ -107,7 +107,7 @@ class UserSummaryProcessor(MessageProcessor):
 
         try:
             parsed = json.loads(stripped)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except json.JSONDecodeError as exc:
             logger.warning(
                 "[USER SUMMARY] postTurn: JSON parse failed (%s) — skipping write. raw=%r",
                 exc,
