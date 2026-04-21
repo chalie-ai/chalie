@@ -3467,7 +3467,7 @@ let _personalityDebounceTimer = null;
 function _getPersonalitySliderValues() {
     return PERSONALITY_SLIDERS.map(name => {
         const el = document.querySelector(`[data-slider="${name}"]`);
-        return el ? parseInt(el.value, 10) : 0;
+        return el ? Number.parseInt(el.value, 10) : 0;
     });
 }
 
@@ -3494,7 +3494,8 @@ async function loadPersonality() {
         const data = await res.json();
         _applyPersonalityTuple(data.tuple);
         _renderPersonalityVoice(data.voice);
-    } catch (_err) {
+    } catch (err) {
+        console.error('[personality] load failed', err);
         _renderPersonalityVoice('Network error loading personality settings.');
     }
 }
@@ -3512,7 +3513,8 @@ async function _savePersonality(tup) {
         }
         showToast(data.error || 'Failed to save personality', 'error');
         return false;
-    } catch (_err) {
+    } catch (err) {
+        console.error('[personality] save failed', err);
         showToast('Network error saving personality', 'error');
         return false;
     }
