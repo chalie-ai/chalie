@@ -10,7 +10,8 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 _MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'models', 'doc2query-small')
-_IDLE_TIMEOUT = 600  # 10 minutes
+_IDLE_TIMEOUT = 120  # 2 minutes — aggressive release for bursty workloads
+_WATCHDOG_POLL_INTERVAL = 30  # seconds between idle checks
 
 
 class Doc2QueryService:
@@ -23,6 +24,7 @@ class Doc2QueryService:
         self._lock = threading.Lock()
         self._available = None
         self._last_used = 0.0
+        self._watchdog_thread = None
 
     def is_available(self) -> bool:
         if self._available is None:
@@ -68,6 +70,7 @@ class Doc2QueryService:
                 self._available = True
                 self._last_used = time.time()
                 logger.info("[DOC2QUERY] Model loaded (3 ONNX sessions)")
+                self._spawn_watchdog_unlocked()
             except (ImportError, ModuleNotFoundError) as e:
                 logger.warning("[DOC2QUERY] Permanently unavailable (missing dependency): %s", e)
                 self._available = False
@@ -88,7 +91,36 @@ class Doc2QueryService:
         self._tokenizer = None
         self._available = None
         self._last_used = 0.0
-        logger.info("[DOC2QUERY] Unloaded (idle timeout)")
+        logger.info("[DOC2QUERY] Sessions unloaded (idle)")
+
+    def _spawn_watchdog_unlocked(self):
+        """Spawn an idle watchdog thread. Caller must hold self._lock.
+
+        The watchdog polls every _WATCHDOG_POLL_INTERVAL seconds and unloads
+        sessions once they have been idle for _IDLE_TIMEOUT seconds. It exits
+        after a successful unload; a new one is spawned on the next load.
+        """
+        if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
+            return
+        t = threading.Thread(
+            target=self._watchdog_loop,
+            name="doc2query-idle-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread = t
+        t.start()
+
+    def _watchdog_loop(self):
+        while True:
+            time.sleep(_WATCHDOG_POLL_INTERVAL)
+            with self._lock:
+                if self._encoder is None:
+                    self._watchdog_thread = None
+                    return
+                if self._last_used > 0 and time.time() - self._last_used > _IDLE_TIMEOUT:
+                    self._unload_unlocked()
+                    self._watchdog_thread = None
+                    return
 
     def _unload(self):
         with self._lock:
