@@ -746,79 +746,6 @@ class TestFtsStopWordFiltering:
         assert 'python_concept' in keys
 
 
-# ── Doc2Query wiring tests ───────────────────────────────────────────
-
-class TestDoc2QueryWiring:
-    """Verify doc2query service is wired into store() and _sync_fts."""
-
-    def test_store_schedules_doc2query_when_available(self, svc, db_service):
-        """When doc2query is available, store() calls _schedule_doc2query for new entries."""
-        scheduled = []
-        original_schedule = svc._schedule_doc2query
-
-        def _track(*args, **kwargs):
-            scheduled.append(args)
-
-        svc._schedule_doc2query = _track
-
-        try:
-            result = svc.store(
-                kind='fact', entity='user', key='sister_doc2query_test',
-                value='Elena',
-            )
-        finally:
-            svc._schedule_doc2query = original_schedule
-
-        assert result is not None
-        # doc2query was scheduled exactly once for the new entry
-        assert len(scheduled) == 1
-
-    def test_store_does_not_crash_when_doc2query_unavailable(self, svc, db_service):
-        """store() completes normally when doc2query model is unavailable."""
-        from unittest.mock import patch, MagicMock
-
-        mock_d2q = MagicMock()
-        mock_d2q.is_available.return_value = False
-
-        with patch('services.doc2query_service.get_doc2query_service', return_value=mock_d2q):
-            result = svc.store(
-                kind='fact', entity='user', key='no_doc2query_test',
-                value='some value here',
-            )
-
-        assert result is not None
-        assert result['key'] == 'no_doc2query_test'
-
-    def test_sync_fts_includes_search_queries(self, svc, db_service):
-        """_sync_fts correctly includes search_queries in the FTS index."""
-        import json
-
-        svc.store(
-            kind='fact', entity='user', key='fts_sq_test',
-            value='original value',
-        )
-
-        # Manually set search_queries on the row (mirrors doc2query flow)
-        with db_service.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT rowid FROM knowledge WHERE key = ? AND entity = ?", ('fts_sq_test', 'user'))
-            row = cursor.fetchone()
-            cursor.close()
-            rowid = row[0]
-            # Remove old FTS entry BEFORE updating content table
-            svc._remove_fts(conn, rowid)
-            conn.execute(
-                "UPDATE knowledge SET search_queries = ? WHERE key = ? AND entity = ?",
-                (json.dumps(['query about this fact', 'what is fts sq test']), 'fts_sq_test', 'user'),
-            )
-            svc._sync_fts(conn, rowid)
-
-        # Verify the generated query text is findable via FTS
-        fts_rows = _raw_fts_search(db_service, 'query')
-        found = any(r['key'] == 'fts_sq_test' for r in fts_rows)
-        assert found
-
-
 # ── _get_stop_words() unit tests ─────────────────────────────────────────────
 
 class TestGetStopWords:
@@ -1199,119 +1126,72 @@ class TestDoc2QueryService:
         assert len({id(i) for i in instances}) == 1
 
 
-# ── Doc2Query wiring — additional store() paths ───────────────────────────────
+# ── SearchExpanderService wiring — doc2query work now runs in SES daemon ─────
 
-class TestDoc2QueryWiringAdditional:
-    """Cover store() paths not exercised by TestDoc2QueryWiring."""
+class TestSearchExpanderWiring:
+    """store() now enqueues (table, rowid) to SES. doc2query + FTS sync run in the
+    SES worker, not the knowledge service. Verify the enqueue contract and the
+    _sync_fts behaviour that the SES worker relies on."""
 
-    def test_store_schedules_doc2query_on_new_and_value_overwrite(self, svc, db_service):
-        """doc2query is scheduled on new entry creation AND on value overwrites,
-        but NOT on same-value reinforcements."""
-        launched = []
-        original_schedule = svc._schedule_doc2query
+    def test_store_enqueues_rowid_to_search_expander(self, svc, db_service, monkeypatch):
+        """New-value writes push (table, rowid) onto the SES queue."""
+        import services.knowledge_service as ks_mod
 
-        def _track(*args, **kwargs):
-            launched.append(args)
-            return None
+        enqueued = []
+        monkeypatch.setattr(ks_mod._ses, 'enqueue',
+                            lambda table, rowid: enqueued.append((table, rowid)))
 
-        svc._schedule_doc2query = _track
+        result = svc.store(
+            kind='fact', entity='user', key='ses_enqueue_test',
+            value='Elena',
+        )
 
-        try:
-            # First store — new entry: should schedule once
-            svc.store(kind='fact', entity='user', key='d2q_once_test',
-                      value='initial value with content', confidence=0.2)
-            assert len(launched) == 1, "Expected exactly one doc2query schedule for new entry"
+        assert result is not None
+        assert len(enqueued) == 1
+        table, rowid = enqueued[0]
+        assert table == ks_mod._TABLE_KNOWLEDGE
+        assert rowid == result['id']
 
-            # Reinforce with same value — no new entry, no new schedule
-            svc.store(kind='fact', entity='user', key='d2q_once_test',
-                      value='initial value with content', confidence=0.3)
-            assert len(launched) == 1, "No new schedule on reinforcement"
+    def test_store_does_not_enqueue_when_no_value(self, svc, db_service, monkeypatch):
+        """Value-less writes skip the SES queue (nothing to expand)."""
+        import services.knowledge_service as ks_mod
 
-            # Value overwrite — should re-schedule doc2query for new value
-            svc.store(kind='fact', entity='user', key='d2q_once_test',
-                      value='completely different updated value', confidence=0.9)
-            assert len(launched) == 2, "Should schedule doc2query on value overwrite"
-        finally:
-            svc._schedule_doc2query = original_schedule
+        enqueued = []
+        monkeypatch.setattr(ks_mod._ses, 'enqueue',
+                            lambda table, rowid: enqueued.append((table, rowid)))
 
-    def test_store_does_not_schedule_doc2query_when_no_value(self, svc, db_service):
-        """Entries stored without a value string do not trigger doc2query."""
-        scheduled = []
-        original_schedule = svc._schedule_doc2query
+        svc.store(kind='fact', entity='user', key='no_value_key',
+                  value=None, data={'meta': True})
 
-        def _track(*args, **kwargs):
-            scheduled.append(args)
+        assert enqueued == []
 
-        svc._schedule_doc2query = _track
+    def test_sync_fts_includes_search_queries(self, svc, db_service):
+        """_sync_fts correctly merges search_queries into the FTS index.
 
-        try:
-            svc.store(kind='fact', entity='user', key='no_value_key',
-                      value=None, data={'meta': True})
-        finally:
-            svc._schedule_doc2query = original_schedule
-
-        assert scheduled == [], "doc2query must not be scheduled when value is None"
-
-    def test_schedule_doc2query_persists_queries_and_resyncs_fts(self, svc, db_service):
-        """The background thread writes search_queries to DB and calls _sync_fts."""
+        This is the surface the SES worker calls after writing expanded variants.
+        """
         import json
 
-        # Store a real entry so a rowid exists
-        result = svc.store(
-            kind='fact', entity='user', key='d2q_persist_test',
-            value='user has a dog named Rex',
+        svc.store(
+            kind='fact', entity='user', key='fts_sq_test',
+            value='original value',
         )
-        assert result is not None
-        rowid = result['id']
 
-        # Capture _sync_fts calls
-        sync_calls = []
-        original_sync = svc._sync_fts
-
-        def _track_sync(conn, rid, *args, **kwargs):
-            sync_calls.append(rid)
-            return original_sync(conn, rid, *args, **kwargs)
-
-        svc._sync_fts = _track_sync
-
-        # Mock doc2query service to return predictable queries
-        from unittest.mock import patch, MagicMock
-        mock_d2q = MagicMock()
-        mock_d2q.is_available.return_value = True
-        mock_d2q.generate_queries.return_value = ['what is the dog name', 'dog named rex']
-
-        with patch('services.doc2query_service.get_doc2query_service', return_value=mock_d2q):
-            # Call _schedule_doc2query directly and run the background function inline
-            # by re-implementing its fire-and-forget in-thread for test predictability
-            svc._schedule_doc2query.__func__  # verify it's a bound method
-            # Run synchronously by calling the inner _run logic directly:
-            queries = mock_d2q.generate_queries("d2q_persist_test: user has a dog named Rex")
-            with db_service.connection() as conn:
-                conn.execute(
-                    "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
-                    (json.dumps(queries), rowid),
-                )
-                svc._sync_fts(conn, rowid)
-
-        svc._sync_fts = original_sync
-
-        # Verify search_queries was persisted
         with db_service.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT search_queries FROM knowledge WHERE rowid = ?", (rowid,)
-            )
+            cursor.execute("SELECT rowid FROM knowledge WHERE key = ? AND entity = ?", ('fts_sq_test', 'user'))
             row = cursor.fetchone()
             cursor.close()
+            rowid = row[0]
+            svc._remove_fts(conn, rowid)
+            conn.execute(
+                "UPDATE knowledge SET search_queries = ? WHERE key = ? AND entity = ?",
+                (json.dumps(['query about this fact', 'what is fts sq test']), 'fts_sq_test', 'user'),
+            )
+            svc._sync_fts(conn, rowid)
 
-        assert row is not None
-        stored_queries = json.loads(row[0])
-        assert 'what is the dog name' in stored_queries
-        assert 'dog named rex' in stored_queries
-
-        # Verify FTS now finds entry via injected query terms
-        fts_rows = _raw_fts_search(db_service, 'named')
-        found = any(r['key'] == 'd2q_persist_test' for r in fts_rows)
+        fts_rows = _raw_fts_search(db_service, 'query')
+        found = any(r['key'] == 'fts_sq_test' for r in fts_rows)
         assert found
 
     def test_sync_fts_with_only_rowid_reads_from_db(self, svc, db_service):
@@ -1331,9 +1211,7 @@ class TestDoc2QueryWiringAdditional:
             cursor.close()
             rowid = row[0]
 
-            # Delete from FTS first so we can confirm re-sync works
             conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
-            # Sync with rowid only (no key/value/kind/entity args)
             svc._sync_fts(conn, rowid)
 
         fts_rows = _raw_fts_search(db_service, 'synced')

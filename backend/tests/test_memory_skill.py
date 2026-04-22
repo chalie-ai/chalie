@@ -106,8 +106,6 @@ def _doc_svc(_doc_db):
     """DataGraphService with real SQLite, embeddings disabled."""
     svc = DataGraphService(_doc_db)
     svc._generate_embedding = MagicMock(return_value=None)
-    svc._schedule_embeddings = MagicMock()
-    svc._schedule_doc2query = MagicMock()
     return svc
 
 

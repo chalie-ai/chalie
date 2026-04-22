@@ -657,8 +657,6 @@ def _dg_svc(_dg_db):
     from unittest.mock import MagicMock
     svc = DataGraphService(_dg_db)
     svc._generate_embedding = MagicMock(return_value=None)
-    svc._schedule_embeddings = MagicMock()
-    svc._schedule_doc2query = MagicMock()
     return svc
 
 

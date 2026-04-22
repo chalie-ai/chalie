@@ -188,13 +188,10 @@ def svc(db_service):
     """DataGraphService with real SQLite backend, embedding generation disabled.
 
     _generate_embedding returns None so vec0 operations are skipped (graceful
-    degradation path in the service). Background thread scheduling also mocked
-    to keep tests deterministic.
+    degradation path in the service).
     """
     service = DataGraphService(db_service)
     service._generate_embedding = MagicMock(return_value=None)
-    service._schedule_embeddings = MagicMock()
-    service._schedule_doc2query = MagicMock()
     return service
 
 
