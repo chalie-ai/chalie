@@ -143,7 +143,7 @@ class TestPrivacyAPI:
         db.execute(
             "INSERT INTO documents (id, original_name, mime_type, file_path) "
             "VALUES (?, ?, ?, ?)",
-            ("doc-1", "notes.txt", "text/plain", "/tmp/notes.txt"),
+            ("doc-1", "notes.txt", "text/plain", "data/uploads/notes.txt"),
         )
 
         # ── Seed place_fingerprints ───────────────────────────────────────────
