@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import platform
-import re
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -98,8 +97,7 @@ def _get_session_and_tokenizer():
 
         model_dir = _model_dir()
         onnx_path = model_dir / "onnx" / "model.onnx"
-        ort_version_tag = re.sub(r"[^A-Za-z0-9]", "_", ort.__version__)
-        optimized_path = model_dir / "onnx" / f"model.optimized.{ort_version_tag}.onnx"
+        optimized_path = model_dir / "onnx" / "model.optimized.onnx"
 
         # Download ONNX model if not cached locally
         if not onnx_path.exists():
@@ -115,7 +113,7 @@ def _get_session_and_tokenizer():
                 logger.error(f"[EMBEDDING] Failed to download model: {e}")
                 raise
 
-        # Load ONNX session — prefer pre-optimized model matching the current ORT version
+        # Load ONNX session — prefer pre-optimized model if available
         import os
 
         def _resolve_thread_count(env_var: str, auto_value: int) -> tuple[int, str]:
@@ -142,7 +140,6 @@ def _get_session_and_tokenizer():
         inter_threads, inter_source = _resolve_thread_count("CHALIE_ONNX_INTER_OP_THREADS", auto_inter)
         thread_source = "env" if "env" in (intra_source, inter_source) else "auto"
 
-
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = intra_threads
         opts.inter_op_num_threads = inter_threads
@@ -155,15 +152,11 @@ def _get_session_and_tokenizer():
         if optimized_path.exists():
             load_path = optimized_path
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-            logger.info(f"[EMBEDDING] Using pre-optimized model (ORT v{ort.__version__})")
+            logger.info("[EMBEDDING] Loading pre-optimized model")
         else:
             load_path = onnx_path
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             opts.optimized_model_filepath = str(optimized_path)
-            logger.info(
-                f"[EMBEDDING] Producing optimized model at ORT_ENABLE_EXTENDED "
-                f"(ORT v{ort.__version__}) -> {optimized_path.name}"
-            )
 
         providers = _select_providers(ort)
         try:
