@@ -201,8 +201,11 @@ def _format_store_response(result: dict) -> str:
     if status == "conflict":
         old = result.get("old_value", "")
         return (
-            f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
-            f"New value '{value}' rejected. Use 'forget' first if you're sure."
+            f"{key_display} is IMMUTABLE — this fact is permanent and cannot be changed. "
+            f"Existing value '{old}' (set {date}) kept. New value '{value}' rejected. "
+            f"Do NOT call forget to overwrite an immutable fact — immutable facts "
+            f"(birth_date, birth_place, biological_parents) are set once and cannot be modified. "
+            f"Tell the user the fact is locked and cannot be changed."
         )
 
     if status == "appended":
@@ -238,6 +241,15 @@ def _handle_forget(params: dict) -> str:
     from services.data_graph_service import get_data_graph_service
 
     dgs = get_data_graph_service()
+
+    if kind == "user_specific":
+        canonical, rule = dgs._resolve_lut_key(kind, key)
+        if rule == "immutable":
+            return (
+                f"{LOG_PREFIX} Forget rejected — '{canonical}' is immutable and cannot be "
+                f"deleted via forget. Immutable facts are permanent."
+            )
+
     result = dgs.forget(kind=kind, key=key, value=value)
 
     if result is None:
