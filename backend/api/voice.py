@@ -294,15 +294,6 @@ def _split_sentences(text: str) -> list[str]:
     return chunks or [text]
 
 
-def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
-    """Encode a numpy audio array as PCM WAV bytes."""
-    import soundfile as sf
-    buf = io.BytesIO()
-    sf.write(buf, audio_array, sample_rate, format="WAV", subtype="PCM_16")
-    buf.seek(0)
-    return buf.read()
-
-
 def _transcribe_sync(data: bytes) -> str:
     """Run Moonshine transcription on raw WAV bytes (blocking)."""
     import moonshine_voice as mv
@@ -335,20 +326,22 @@ def voice_health():
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Generate speech from text.
+    """Generate speech from text and return a single WAV blob.
 
-    Synthesizes sentence-by-sentence in a background thread and pushes each
-    WAV chunk as a ``tts_chunk`` event through the ``output:events`` pub/sub
-    channel (picked up by the WebSocket and forwarded to the client).
-
-    Returns immediately with ``{"ok": true, "total": N}`` so the caller knows
-    how many chunks to expect.
+    Synthesizes all sentences in sequence, concatenates the numpy arrays, and
+    returns the complete audio as ``audio/wav``.  The caller (VoicePlayer in
+    the frontend) creates an object URL from the blob and plays it directly via
+    an ``<audio>`` element — no streaming, no pub/sub, no WebSocket coordination.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
+
+    sem = _tts_sem
+    if sem is None:
+        return jsonify({"error": "Voice models not ready"}), 503
 
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
@@ -362,52 +355,48 @@ def voice_synthesize():
         return jsonify({"error": "Text is required"}), 400
 
     chunks = _split_sentences(text)
-    total = len(chunks)
 
-    if not _tts_sem.acquire(blocking=False):
+    if not sem.acquire(blocking=True, timeout=30):
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
-    def _synthesize_and_push():
-        """Synthesize each sentence and publish WAV chunks via pub/sub."""
-        import base64
-        import json
+    try:
         import numpy as np
-        from services.memory_client import MemoryClientService
+        import soundfile as sf
 
-        store = MemoryClientService.create_connection()
         silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
-        try:
-            for i, chunk in enumerate(chunks):
-                try:
-                    samples, _sr = _tts_model.create(
-                        chunk, voice=KOKORO_VOICE, lang="en-us"
-                    )
-                    # Inter-sentence pause (skip on last chunk)
-                    if i < len(chunks) - 1:
-                        samples = np.concatenate([samples, silence])
-                    wav_bytes = _audio_to_wav_bytes(samples)
-                    store.publish("output:events", json.dumps({
-                        "type": "tts_chunk",
-                        "index": i,
-                        "total": total,
-                        "text": chunk,
-                        "audio": base64.b64encode(wav_bytes).decode("ascii"),
-                    }))
-                except Exception as chunk_err:
-                    logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
-                                   len(chunk), chunk_err, chunk)
-                    continue
-            # End-of-stream marker
-            store.publish("output:events", json.dumps({
-                "type": "tts_done",
-            }))
-        finally:
-            _tts_sem.release()
+        segments: list[np.ndarray] = []
 
-    thread = threading.Thread(target=_synthesize_and_push, daemon=True)
-    thread.start()
+        for i, chunk in enumerate(chunks):
+            try:
+                samples, _sr = _tts_model.create(chunk, voice=KOKORO_VOICE, lang="en-us")
+                segments.append(samples)
+                # Inter-sentence pause (skip on last chunk)
+                if i < len(chunks) - 1:
+                    segments.append(silence)
+            except Exception as chunk_err:
+                logger.warning(
+                    "[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
+                    len(chunk), chunk_err, chunk,
+                )
+                continue
 
-    return jsonify({"ok": True, "total": total})
+        if not segments:
+            return jsonify({"error": "Synthesis produced no audio"}), 500
+
+        combined = np.concatenate(segments)
+        buf = io.BytesIO()
+        sf.write(buf, combined, 24000, format="WAV", subtype="PCM_16")
+        buf.seek(0)
+        wav_bytes = buf.read()
+
+    except Exception as e:
+        logger.error("[Voice] TTS synthesis error: %s", e)
+        return jsonify({"error": "Synthesis failed"}), 500
+    finally:
+        sem.release()
+
+    from flask import Response
+    return Response(wav_bytes, status=200, mimetype="audio/wav")
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
@@ -418,6 +407,10 @@ def voice_transcribe():
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
+
+    sem = _stt_sem
+    if sem is None:
+        return jsonify({"error": "Voice models not ready"}), 503
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -434,7 +427,7 @@ def voice_transcribe():
             "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
         }), 400
 
-    if not _stt_sem.acquire(blocking=False):
+    if not sem.acquire(blocking=False):
         return jsonify({"error": "STT busy — try again shortly"}), 503
 
     try:
@@ -444,4 +437,4 @@ def voice_transcribe():
         logger.error("[Voice] STT error: %s", e)
         return jsonify({"error": "Transcription failed"}), 500
     finally:
-        _stt_sem.release()
+        sem.release()

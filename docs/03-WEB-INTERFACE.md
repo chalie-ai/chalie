@@ -150,17 +150,19 @@ All cards use the same design language: dark surfaces, violet accents, thin bord
 ## Voice I/O (Optional)
 
 ### Speech-to-Text (Microphone Button)
-- Click to start/stop recording
-- Visual feedback during recording (waveform animation)
-- Transcribed text appears in prompt box
-- User clicks send to submit (not automatic)
+- Inline mic button to the left of the chat input box (`#voiceRecBtn`)
+- Click to start recording; click again to stop and transcribe
+- Visual feedback: button data-state cycles `idle → recording → uploading`
+- Transcribed text is pasted into the prompt box; user clicks Send
+- Mic track is released immediately after each recording
 
 ### Text-to-Speech (Speaker Icon)
-- Speaker icon appears below Chalie messages
-- Click opens audio player in title bar
-- Player shows: play/pause, close
-- Audio plays immediately
-- Allows listening while multitasking
+- Speaker icon appears in the meta row below each Chalie message
+- Click dispatches `chalie:speak-message` and opens the overlay player
+- iOS Safari: an `Audio` element is created and unlocked synchronously inside the click gesture before any async fetch, so autoplay is permitted
+- Overlay player (centered modal) shows: play/pause, seek −10s, seek +10s, progress bar, time display, close
+- Only one message plays at a time; opening a new one aborts the previous fetch and revokes its object URL
+- If `/voice/health` reports `unavailable`, the mic button and all speaker icons are hidden via `body.voice-unavailable`; if `loading`, availability is polled every 2s for up to 60s
 
 ## Applications
 

@@ -89,8 +89,7 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All innate skills available for user turns; voice mode may narrow this
-    # at runtime via metadata['source']=='voice' inside getTools().
+    # All innate skills available for user turns.
     # Sorted for deterministic ordering — ALL_SKILL_NAMES is a frozenset.
     NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
 
@@ -169,7 +168,6 @@ class UserMessageProcessor(MessageProcessor):
 
         Section order (north star §"Body structure of getUserPrompt()"):
           1. World State block
-          (1b. Voice-mode instruction if source == 'voice')
           2. System Awareness block
           3. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
@@ -190,14 +188,6 @@ class UserMessageProcessor(MessageProcessor):
                 len(rendered_world_state),
             )
             parts.append(rendered_world_state)
-
-        # 1b. Voice mode instruction (per-turn — user may switch mode)
-        if self._metadata.get('source') == 'voice':
-            parts.append(
-                'IMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
-                'Respond in plain conversational text only. No markdown formatting, code blocks, '
-                'tables, bullet lists, links, or structured formatting. Write as you would speak.'
-            )
 
         # 2. System Awareness (degradation signals)
         self_awareness = self._get_self_awareness()
@@ -258,36 +248,6 @@ class UserMessageProcessor(MessageProcessor):
 
         voice_line = f"When responding; {get_current_voice()}"
         return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
-
-    def getTools(self) -> list[dict]:
-        """Narrow native tools for voice mode (exclude rich_render).
-
-        Voice responses are spoken aloud via TTS — rich_render output is not
-        speakable, so it is excluded for voice-source turns. All other native
-        tools are kept unchanged.
-
-        Out-of-scope §11 preservation: keeps the voice filter logic that was
-        in the old UserMessageProcessor.process() at lines 69-73.
-        """
-        if self._metadata.get('source') == 'voice':
-            from services.tool_schema_service import get_skill_schemas
-
-            voice_tools = get_skill_schemas(
-                [s for s in self.NATIVE_TOOLS if s != 'rich_render']
-            )
-            dynamic = self.getDynamicTools()
-
-            seen: set[str] = set()
-            result: list[dict] = []
-            for schema in voice_tools + dynamic:
-                name = schema.get('name')
-                if name and name not in seen:
-                    seen.add(name)
-                    result.append(schema)
-            return result
-
-        # Non-voice: standard base resolution
-        return super().getTools()
 
     def _run_memory_seed(self) -> None:
         """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
