@@ -28,16 +28,43 @@ _SHARED_DIR = _FRONTEND_DIR / 'shared'
 # ---------------------------------------------------------------------------
 # Asset version injection
 #
-# Every <script src="…">, <link href="…">, <img src="…">, <source src="…"> that
-# points at a same-origin file gets `?v=<mtime>` appended when the containing
-# HTML page is served. The query string changes whenever the asset file is
-# touched, so browsers (and any intermediate HTTP cache) treat each deploy as
-# a fresh URL and never serve stale bytes.
+# Every <script src="…">, <link href="…">, <img src="…">, <source src="…"> in a
+# served HTML page is rewritten so the filename itself carries the current app
+# version — e.g. `app.js` → `app-0.3.3.js`, `style.css` → `style-0.3.3.css`.
+#
+# Static file routes transparently strip the `-{VERSION}` suffix before looking
+# the file up on disk, so the on-disk filenames stay clean.
+#
+# Versioned *paths* (not query strings) are chosen because some intermediate
+# caches and Service Workers treat `foo.js?v=1` and `foo.js?v=2` as the same
+# entry; a distinct filename is universally treated as a new resource.
 # ---------------------------------------------------------------------------
+
+_VERSION_FILE = _BACKEND_DIR.parent / 'VERSION'
+
+
+def _read_asset_version() -> str:
+    """Return the version string used in asset filenames. Falls back to 'dev'."""
+    try:
+        value = _VERSION_FILE.read_text(encoding='utf-8').strip()
+        return value or 'dev'
+    except OSError:
+        return 'dev'
+
+
+_ASSET_VERSION = _read_asset_version()
 
 _ASSET_REF_RE = re.compile(
     r'''(<(?:script|link|img|source)\b[^>]*?\s(?:src|href)\s*=\s*)(["'])([^"']+?)\2''',
     re.IGNORECASE,
+)
+
+# Extension that receives `-{version}` injection. Bare paths (no extension) and
+# HTML itself are left alone.
+_VERSIONABLE_EXT_RE = re.compile(r'^(.*?)(\.[^./]+)$')
+
+_VERSION_SUFFIX_RE = re.compile(
+    rf'(.+?)-{re.escape(_ASSET_VERSION)}(\.[^./]+)$'
 )
 
 
@@ -52,8 +79,24 @@ def _resolve_same_origin_asset(url: str, base_dir: Path) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _inject_version_into_url(url: str) -> str:
+    """Insert `-{VERSION}` before the final extension. Returns url unchanged if it has none."""
+    if not _ASSET_VERSION or _ASSET_VERSION == 'dev':
+        return url
+    match = _VERSIONABLE_EXT_RE.match(url)
+    if not match:
+        return url
+    return f"{match.group(1)}-{_ASSET_VERSION}{match.group(2)}"
+
+
+def _strip_version_from_path(path: str) -> str:
+    """Inverse of _inject_version_into_url — remove `-{VERSION}` before the extension."""
+    match = _VERSION_SUFFIX_RE.match(path)
+    return f"{match.group(1)}{match.group(2)}" if match else path
+
+
 def _version_html(html: str, base_dir: Path) -> str:
-    """Append `?v=<mtime>` to every resolvable same-origin asset reference."""
+    """Rewrite every same-origin asset reference to carry the version in its filename."""
     def repl(match: re.Match) -> str:
         prefix, quote, url = match.group(1), match.group(2), match.group(3)
         if '?' in url:
@@ -61,11 +104,15 @@ def _version_html(html: str, base_dir: Path) -> str:
         asset = _resolve_same_origin_asset(url, base_dir)
         if asset is None:
             return match.group(0)
-        try:
-            mtime = int(asset.stat().st_mtime)
-        except OSError:
+        # Service-worker script must stay at its registration URL — browsers
+        # identify SW registrations by scriptURL. Renaming would orphan the
+        # existing registration and install a second, conflicting SW.
+        if asset.name == 'sw.js':
             return match.group(0)
-        return f"{prefix}{quote}{url}?v={mtime}{quote}"
+        versioned = _inject_version_into_url(url)
+        if versioned == url:
+            return match.group(0)
+        return f"{prefix}{quote}{versioned}{quote}"
 
     return _ASSET_REF_RE.sub(repl, html)
 
@@ -77,7 +124,7 @@ def _serve_versioned_html(directory: Path, filename: str = 'index.html') -> Resp
     versioned = _version_html(html, directory)
     resp = Response(versioned, mimetype='text/html; charset=utf-8')
     # HTML itself must never be cached — otherwise the browser would keep
-    # serving an old doc that points at old ?v= query strings forever.
+    # serving an old doc that points at old versioned URLs forever.
     resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     return resp
 
@@ -270,15 +317,21 @@ def create_app():
     @app.route('/shared/<path:filename>')
     def shared_static(filename):
         """Serve shared frontend assets (theme.css, etc.)."""
-        return send_from_directory(str(_SHARED_DIR), filename)
+        real = _strip_version_from_path(filename)
+        return send_from_directory(str(_SHARED_DIR), real)
 
     def _serve_spa(directory: Path, filename: str):
-        """Serve a static file, or fall back to a versioned index.html."""
-        filepath = directory / filename
+        """Serve a static file, or fall back to a versioned index.html.
+
+        Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
+        rewriter; strip it so the request resolves to the real on-disk file.
+        """
+        real = _strip_version_from_path(filename)
+        filepath = directory / real
         if filepath.is_file():
             if filepath.suffix.lower() in ('.html', '.htm'):
-                return _serve_versioned_html(directory, filename)
-            return send_from_directory(str(directory), filename)
+                return _serve_versioned_html(directory, real)
+            return send_from_directory(str(directory), real)
         return _serve_versioned_html(directory)
 
     @app.route('/brain/<path:filename>')
