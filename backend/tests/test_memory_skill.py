@@ -283,8 +283,8 @@ class TestHandleMemoryStore:
 
         assert 'immutable' in result
         assert 'Malta' in result
-        assert 'London' in result
         assert 'forget' in result
+        assert 'ask the user for confirmation' in result.lower()
 
     def test_store_created_returns_saved_message(self):
         created_result = {
@@ -811,15 +811,13 @@ class TestSearchDocumentArtifacts:
         assert 'Battery storage complements solar installations.' in result
 
 
-# ── Immutable no-forget guard (real DataGraphService) ────────────────
+# ── Immutable conflict confirmation-flow message ─────────────────────
 
-class TestImmutableNoForgetGuard:
-    """End-to-end guard tests using real DataGraphService + real SQLite.
-
-    _generate_embedding and _lookup_concept_lut are patched via patch.object
-    because they touch the ONNX model and sqlite-vec extension, neither of
-    which is available in the unit test environment.  All DB reads/writes run
-    against the real SQLite fixture.
+class TestImmutableConfirmationFlow:
+    """The conflict message on an immutable store must:
+      - name no hardcoded keys (no token bloat),
+      - instruct the LLM to ask the user for confirmation,
+      - explain the two-step forget-then-store flow.
     """
 
     _FAKE_EMB = [0.1] * 768
@@ -828,55 +826,46 @@ class TestImmutableNoForgetGuard:
         return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
 
     @pytest.mark.unit
-    def test_immutable_conflict_message_does_not_suggest_forget(self, _doc_svc):
-        """Second store on an immutable key must mention 'immutable', say
-        'Do NOT call forget' or 'cannot be modified', and must NOT say
-        "Use 'forget'" in any apostrophe variant."""
+    def test_immutable_conflict_message_instructs_confirmation_flow(self, _doc_svc):
         _doc_svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         immutable_hit = self._lut_hit('birth_date', 'immutable')
 
-        # First store — inserts the row
         with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
              patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
             _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1990-01-01'})
 
-        # Second store — different value triggers the conflict path
         with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
              patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
             result = _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1991-05-20'})
 
-        assert 'immutable' in result.lower()
-        assert "use 'forget'" not in result.lower()
-        assert "use \u2018forget\u2019" not in result.lower()
-        assert (
-            'do not call forget' in result.lower()
-            or 'cannot be modified' in result.lower()
-        )
+        lowered = result.lower()
+        assert 'immutable' in lowered
+        assert 'ask the user for confirmation' in lowered
+        assert 'forget' in lowered
+        assert 'store' in lowered
+
+        # No hardcoded key enumeration — the canonical key in play is fine,
+        # but we must not spill the full immutable set into every response.
+        assert 'birth_place' not in lowered
+        assert 'biological_parents' not in lowered
 
     @pytest.mark.unit
-    def test_forget_rejects_immutable_keys(self, _doc_svc, _doc_db):
-        """_handle_forget must reject a birth_date forget attempt and leave the row intact."""
+    def test_forget_allows_immutable_keys(self, _doc_svc, _doc_db):
+        """Forget must succeed on an immutable key so the confirmation flow works."""
         _doc_svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         immutable_hit = self._lut_hit('birth_date', 'immutable')
 
-        # Seed the birth_date row via the real service
         with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
              patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
             _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1990-01-01'})
 
-        # Attempt to forget the immutable key
         with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
              patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
-            result = _handle_forget({'kind': 'user_specific', 'key': 'birth_date'})
+            _handle_forget({'kind': 'user_specific', 'key': 'birth_date'})
 
-        assert 'immutable' in result.lower()
-        assert any(word in result.lower() for word in ('reject', 'cannot', 'permanent'))
-
-        # The birth_date row must still be active in data_graph
         with _doc_db.connection() as conn:
             rows = conn.execute(
                 "SELECT value FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL",
                 (KIND_USER_SPECIFIC, 'birth_date'),
             ).fetchall()
-        assert len(rows) == 1
-        assert rows[0][0] == '1990-01-01'
+        assert rows == []
