@@ -114,40 +114,11 @@ def _get_session_and_tokenizer():
                 raise
 
         # Load ONNX session — prefer pre-optimized model if available
-        import os
-
-        def _resolve_thread_count(env_var: str, auto_value: int) -> tuple[int, str]:
-            raw = os.environ.get(env_var)
-            if raw is None or raw == "":
-                return auto_value, "auto"
-            try:
-                parsed = int(raw)
-                if parsed > 0:
-                    return parsed, "env"
-                logger.warning(
-                    f"[EMBEDDING] Ignoring non-positive {env_var}={raw!r}, using auto={auto_value}"
-                )
-            except (TypeError, ValueError):
-                logger.warning(
-                    f"[EMBEDDING] Ignoring invalid {env_var}={raw!r}, using auto={auto_value}"
-                )
-            return auto_value, "auto"
-
-        cpu_count = os.cpu_count() or 2
-        auto_intra = min(4, max(2, cpu_count // 2))
-        auto_inter = 1
-        intra_threads, intra_source = _resolve_thread_count("CHALIE_ONNX_INTRA_OP_THREADS", auto_intra)
-        inter_threads, inter_source = _resolve_thread_count("CHALIE_ONNX_INTER_OP_THREADS", auto_inter)
-        thread_source = "env" if "env" in (intra_source, inter_source) else "auto"
-
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads = intra_threads
-        opts.inter_op_num_threads = inter_threads
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
         opts.enable_mem_pattern = True
         opts.enable_cpu_mem_arena = True
-        logger.info(
-            f"[EMBEDDING] Thread config: intra={intra_threads}, inter={inter_threads} ({thread_source})"
-        )
 
         if optimized_path.exists():
             load_path = optimized_path
