@@ -12,8 +12,10 @@ from services.innate_skills.memory_skill import (
     _relevance_label,
     _search_data_graph,
     _search_document_artifacts,
+    _handle_store,
+    _handle_forget,
 )
-from services.data_graph_service import DataGraphService, KIND_DOCUMENT
+from services.data_graph_service import DataGraphService, KIND_DOCUMENT, KIND_USER_SPECIFIC
 from services.database_service import DatabaseService
 
 
@@ -807,3 +809,74 @@ class TestSearchDocumentArtifacts:
             result = handle_memory('topic', {'action': 'recall', 'query': 'battery storage solar'})
 
         assert 'Battery storage complements solar installations.' in result
+
+
+# ── Immutable no-forget guard (real DataGraphService) ────────────────
+
+class TestImmutableNoForgetGuard:
+    """End-to-end guard tests using real DataGraphService + real SQLite.
+
+    _generate_embedding and _lookup_concept_lut are patched via patch.object
+    because they touch the ONNX model and sqlite-vec extension, neither of
+    which is available in the unit test environment.  All DB reads/writes run
+    against the real SQLite fixture.
+    """
+
+    _FAKE_EMB = [0.1] * 768
+
+    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
+        return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
+
+    @pytest.mark.unit
+    def test_immutable_conflict_message_does_not_suggest_forget(self, _doc_svc):
+        """Second store on an immutable key must mention 'immutable', say
+        'Do NOT call forget' or 'cannot be modified', and must NOT say
+        "Use 'forget'" in any apostrophe variant."""
+        _doc_svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        immutable_hit = self._lut_hit('birth_date', 'immutable')
+
+        # First store — inserts the row
+        with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
+             patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
+            _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1990-01-01'})
+
+        # Second store — different value triggers the conflict path
+        with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
+             patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
+            result = _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1991-05-20'})
+
+        assert 'immutable' in result.lower()
+        assert "use 'forget'" not in result.lower()
+        assert "use \u2018forget\u2019" not in result.lower()
+        assert (
+            'do not call forget' in result.lower()
+            or 'cannot be modified' in result.lower()
+        )
+
+    @pytest.mark.unit
+    def test_forget_rejects_immutable_keys(self, _doc_svc, _doc_db):
+        """_handle_forget must reject a birth_date forget attempt and leave the row intact."""
+        _doc_svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        immutable_hit = self._lut_hit('birth_date', 'immutable')
+
+        # Seed the birth_date row via the real service
+        with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
+             patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
+            _handle_store('topic', {'kind': 'user_specific', 'key': 'birth_date', 'value': '1990-01-01'})
+
+        # Attempt to forget the immutable key
+        with patch('services.data_graph_service.get_data_graph_service', return_value=_doc_svc), \
+             patch.object(_doc_svc, '_lookup_concept_lut', return_value=immutable_hit):
+            result = _handle_forget({'kind': 'user_specific', 'key': 'birth_date'})
+
+        assert 'immutable' in result.lower()
+        assert any(word in result.lower() for word in ('reject', 'cannot', 'permanent'))
+
+        # The birth_date row must still be active in data_graph
+        with _doc_db.connection() as conn:
+            rows = conn.execute(
+                "SELECT value FROM data_graph WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL",
+                (KIND_USER_SPECIFIC, 'birth_date'),
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == '1990-01-01'
