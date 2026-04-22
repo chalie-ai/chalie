@@ -33,12 +33,12 @@ _MODEL_ID = "Alibaba-NLP/gte-modernbert-base"
 _MODEL_SUBDIR = "gte-modernbert-base"
 _ONNX_FILENAME = "onnx/model.onnx"
 
-# Default context window. Short inputs (queries, keys, gists, titles, messages)
-# dominate our workload; padding to 8192 wastes attention compute on <512-token
-# content. Callers that embed long-form documents (full tool profiles, articles,
-# book chunks) can opt in via max_length=_MAX_LEN_LONG.
-_MAX_LEN_DEFAULT = 512
-_MAX_LEN_LONG = 8192
+# Hard ceiling = ModernBERT's positional-embedding limit. The tokenizer's own
+# model_max_length is the HuggingFace "no limit" sentinel (~1e30), so we must
+# enforce the architectural cap here to guard against pathological inputs.
+# Tokeniser uses padding=True so short inputs pay no extra compute for a high
+# ceiling — the tensor is sized to the actual token count, not to this value.
+_MODEL_MAX_TOKENS = 8192
 
 # Singleton (lazy loaded, thread-safe)
 _session = None
@@ -151,15 +151,13 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     return embeddings / norms
 
 
-def _encode_batch(texts: List[str], max_length: int = _MAX_LEN_DEFAULT) -> np.ndarray:
+def _encode_batch(texts: List[str]) -> np.ndarray:
     """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized.
 
-    max_length caps the tokenised sequence length. Padding scales to the longest
-    item in the batch (bounded by this cap), and ModernBERT attention is
-    quadratic in sequence length — so shorter caps make short-input workloads
-    dramatically cheaper. Default 512 suits single-sentence queries, keys,
-    gists, titles, and chat messages. Use _MAX_LEN_LONG (8192) for full-document
-    ingestion.
+    Sequence length is set dynamically by the tokenizer (padding=True pads each
+    batch to its longest item). _MODEL_MAX_TOKENS only bites for truly
+    oversized inputs — it prevents position_ids from exceeding the model's
+    positional-embedding range.
     """
     session, tokenizer = _get_session_and_tokenizer()
 
@@ -168,7 +166,7 @@ def _encode_batch(texts: List[str], max_length: int = _MAX_LEN_DEFAULT) -> np.nd
         return_tensors="np",
         padding=True,
         truncation=True,
-        max_length=max_length,
+        max_length=_MODEL_MAX_TOKENS,
     )
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
@@ -248,14 +246,8 @@ class EmbeddingService:
         except Exception:
             pass
 
-    def generate_embedding(self, text: str, max_length: int = _MAX_LEN_DEFAULT) -> list:
+    def generate_embedding(self, text: str) -> list:
         """Generate a single L2-normalized embedding vector as a list. Cached.
-
-        Args:
-            text: Input text to embed.
-            max_length: Tokeniser truncation cap. Default 512 (short inputs —
-                queries, keys, gists, messages). Pass ``_MAX_LEN_LONG`` (8192)
-                for long-form document ingestion.
 
         Returns:
             Embedding as a plain Python list of floats suitable for SQLite storage.
@@ -265,19 +257,15 @@ class EmbeddingService:
             return cached
 
         try:
-            embedding = _encode_batch([text], max_length=max_length)[0].tolist()
+            embedding = _encode_batch([text])[0].tolist()
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embedding_np(self, text: str, max_length: int = _MAX_LEN_DEFAULT) -> np.ndarray:
+    def generate_embedding_np(self, text: str) -> np.ndarray:
         """Generate a single L2-normalized embedding vector as a numpy array. Cached.
-
-        Args:
-            text: Input text to embed.
-            max_length: Tokeniser truncation cap. Default 512.
 
         Returns:
             Embedding as a float32 numpy array for cosine similarity math.
@@ -287,23 +275,19 @@ class EmbeddingService:
             return np.array(cached, dtype=np.float32)
 
         try:
-            embedding = _encode_batch([text], max_length=max_length)[0]
+            embedding = _encode_batch([text])[0]
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embeddings_batch(self, texts: List[str], max_length: int = _MAX_LEN_DEFAULT) -> List[np.ndarray]:
+    def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
         """Generate L2-normalized embeddings for a batch of texts.
 
         Batch operations (document chunking, bulk consolidation) bypass per-text
         caching — the overhead of N cache lookups + JSON serialization would negate
         the benefit for large batches.
-
-        Args:
-            texts: Sequence of input texts.
-            max_length: Tokeniser truncation cap. Default 512.
 
         Returns:
             List of float32 numpy arrays, one per input text.
@@ -317,7 +301,7 @@ class EmbeddingService:
             chunk_size = 32
             for i in range(0, len(texts), chunk_size):
                 chunk = texts[i:i + chunk_size]
-                embeddings = _encode_batch(chunk, max_length=max_length)
+                embeddings = _encode_batch(chunk)
                 results.extend(embeddings)
             return results
         except Exception as e:
