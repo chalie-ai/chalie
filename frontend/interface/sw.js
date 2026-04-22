@@ -10,7 +10,7 @@ const CDN_CACHE = `chalie-cdn-${CACHE_VERSION}`;
 const SHELL_ASSETS = [
   '/', '/index.html', '/manifest.json',
   '/app.js', '/api.js', '/ws.js', '/renderer.js',
-  '/presence.js', '/voice.js', '/tools.js', '/style.css',
+  '/presence.js', '/voice_recorder.js', '/voice_player.js', '/tools.js', '/style.css',
   '/ambient.js',
   '/icons/icon.png',
 ];

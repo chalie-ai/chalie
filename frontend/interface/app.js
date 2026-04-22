@@ -8,7 +8,8 @@ import { ApiClient } from './api.js';
 import { WSClient } from './ws.js';
 import { Presence } from './presence.js';
 import { Renderer } from './renderer.js';
-import { VoiceIO, VoiceMode } from './voice.js';
+import { VoiceRecorder } from './voice_recorder.js';
+import { VoicePlayer } from './voice_player.js';
 import { ClientHeartbeat } from './heartbeat.js';
 import { AmbientSensor } from './ambient.js';
 import { AmbientCanvas } from './ambient_canvas.js';
@@ -62,10 +63,14 @@ class ChalieApp {
     this._imageAttach = new ImageAttach({ getHost: () => this._backendHost });
     this._imageAttach.init();
 
-    // Voice I/O + Voice Mode
-    this._voice = new VoiceIO(() => this._backendHost);
-    this._voiceMode = new VoiceMode({ voice: this._voice });
-    this._wireVoiceMode();
+    // Voice recorder (mic → STT → paste into input)
+    this._voiceRecorder = new VoiceRecorder({
+      getHost: () => this._backendHost,
+      onTranscript: (text) => this._pasteVoiceTranscript(text),
+    });
+
+    // Voice player (speaker button → overlay audio player)
+    this._voicePlayer = new VoicePlayer({ getHost: () => this._backendHost });
 
     // Chat module (send + history)
     this._chat = new Chat({
@@ -279,13 +284,12 @@ class ChalieApp {
       this._dismissLoadingOverlay();
       this.presence.setState('resting');
 
-      // Voice availability check
-      const voiceReady = await this._voice.init();
-      if (voiceReady.stt) {
-        document.body.classList.add('voice-available');
-        document.getElementById('voiceModeBtn')?.classList.remove('hidden');
-        if (lsGet('chalie_voice_mode')) this._voiceMode.enterMode();
-      }
+      // Voice recorder + player — init DOM bindings now that DOM is stable
+      this._voiceRecorder.init();
+      this._voicePlayer.init();
+
+      // Check voice availability and hide controls if the service is unavailable.
+      this._initVoiceAvailability();
 
       // First-visit welcome message — shown exactly once via a localStorage flag.
       // Rendered before history so it appears at the top of the conversation spine.
@@ -318,6 +322,7 @@ class ChalieApp {
       window.addEventListener('beforeunload', () => {
         this.ws.close();
         this._taskStrip.destroy();
+        this._voiceRecorder.destroy();
       }, { once: true });
 
       this._notifications.requestPushSubscription();
@@ -350,61 +355,56 @@ class ChalieApp {
   }
 
   // ---------------------------------------------------------------------------
-  // Voice Mode Wiring
+  // Voice Availability
   // ---------------------------------------------------------------------------
 
-  _wireVoiceMode() {
-    this._voiceMode.init();
+  _initVoiceAvailability() {
+    const POLL_INTERVAL_MS = 2000;
+    const MAX_POLL_MS = 60_000;
+    const deadline = Date.now() + MAX_POLL_MS;
 
-    this._voiceMode.onModeExit(() => {
-      this._taskStrip?.loadActiveTasks();
-    });
+    const hide = () => {
+      document.getElementById('voiceRecBtn')?.classList.add('hidden');
+      document.body.classList.add('voice-unavailable');
+    };
 
-    this._voiceMode.onSendMessage((text) => {
-      this._sendVoiceMessage(text);
-    });
+    const check = async () => {
+      try {
+        const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
+        const resp = await fetch(base + '/voice/health', { credentials: 'same-origin' });
+        const data = resp.ok ? await resp.json().catch(() => ({})) : {};
+        const status = data.status;
+        if (status === 'ok') return; // controls stay visible
+        if (status === 'unavailable') { hide(); return; }
+        // 'loading' — re-poll until deadline
+        if (Date.now() < deadline) {
+          setTimeout(check, POLL_INTERVAL_MS);
+        } else {
+          hide(); // timeout — treat as unavailable
+        }
+      } catch (_) {
+        hide(); // unreachable endpoint — treat as unavailable
+      }
+    };
+
+    check();
   }
 
-  _sendVoiceMessage(text) {
-    this.presence.setState('processing');
+  // ---------------------------------------------------------------------------
+  // Voice Transcript Paste
+  // ---------------------------------------------------------------------------
 
-    // Render user message in the hidden spine (preserves history)
-    const ts = new Date();
-    this.renderer.appendUserForm(text, ts);
-
-    let responseBlocks = [];
-
-    this.ws.send(text, 'voice', {
-      onStatus: (stage) => {
-        this.presence.setState(stage);
-      },
-      onNarration: (data) => {
-        this.renderer.appendNarrationBubble?.(data.text, data.step);
-      },
-      onMessage: (data) => {
-        responseBlocks = data.blocks || [];
-      },
-      onError: () => {
-        this._voiceMode.setOrbIdle();
-      },
-      onDone: (data) => {
-        // Render to spine for history
-        if (responseBlocks.length) {
-          this.renderer.appendChalieForm(responseBlocks, {
-            topic: '', mode: '', confidence: 0, ts, duration_ms: data.duration_ms,
-          });
-        }
-        this.presence.setState('resting');
-
-        // Auto-TTS
-        const plainText = this.renderer._extractPlainText(responseBlocks);
-        if (plainText) {
-          this._voiceMode.startSpeaking(plainText);
-        } else {
-          this._voiceMode.setOrbIdle();
-        }
-      },
-    });
+  _pasteVoiceTranscript(text) {
+    const textarea = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (!textarea) return;
+    textarea.value = text;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    if (sendBtn) sendBtn.disabled = !text.trim();
+    textarea.focus();
+    // Move cursor to end
+    textarea.selectionStart = textarea.selectionEnd = text.length;
   }
 
   // ---------------------------------------------------------------------------
@@ -433,14 +433,6 @@ class ChalieApp {
 
     this._eventRouter.onBackgroundContent((text) => {
       this._notifications.notifyBackground(text);
-    });
-
-    this._eventRouter.onTtsChunk((data) => {
-      this._voice.handleTtsChunk(data);
-    });
-
-    this._eventRouter.onTtsDone(() => {
-      this._voice.handleTtsDone();
     });
 
     this._eventRouter.onCapabilityAlert((data) => {
