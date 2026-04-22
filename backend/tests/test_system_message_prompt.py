@@ -253,6 +253,25 @@ class TestUnifiedSystemMessagePrompt:
         result = UnifiedSystemMessagePrompt().getPrompt()
         assert isinstance(result, str) and len(result) > 0
 
+    def test_unified_prompt_proactive_recall_covers_recommendations(self):
+        """Proactive-recall rule must explicitly gate recommendations/suggestions.
+
+        Locks the wording that triggers scenario 025 step-5 (Thai food
+        recommendation phrasing) — the rule must contain both "recommendations"
+        and "mandatory" so the model knows recall is required before offering
+        advice on any topic.
+        """
+        from services.system_message_prompt import UnifiedSystemMessagePrompt
+        result = UnifiedSystemMessagePrompt().getPrompt()
+        assert 'recommendations' in result.lower(), (
+            "'recommendations' missing from UnifiedSystemMessagePrompt — "
+            "proactive-recall rule must explicitly cover recommendation queries"
+        )
+        assert 'mandatory' in result.lower(), (
+            "'mandatory' missing from UnifiedSystemMessagePrompt — "
+            "proactive-recall rule must state that recall is mandatory before recommendations"
+        )
+
     # ── Subclassing contract ──────────────────────────────────────────────────
 
     def test_is_subclass_of_system_message_prompt(self):
