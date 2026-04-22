@@ -129,6 +129,11 @@ def create_app():
     # Upload limit (50MB for document uploads)
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
+    # Static assets: force browser to revalidate on every request via ETag/Last-Modified.
+    # Flask returns 304 when unchanged, so bandwidth cost is minimal, but a simple
+    # refresh always picks up redeployed assets. Paired with a no-cache Service Worker.
+    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
     # Reverse proxy support: trust X-Forwarded-For, X-Forwarded-Proto, etc.
     # This ensures request.remote_addr, request.host, and request.scheme
     # reflect the client's values when behind nginx/caddy/cloudflare.
