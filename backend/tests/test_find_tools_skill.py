@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from services.innate_skills.find_tools_skill import (
     handle_find_tools,
     _filter_available,
+    TOOL_SCHEMA,
 )
 
 
@@ -477,3 +478,15 @@ class TestFilterAvailableQueryPassthrough:
         assert isinstance(result, dict)
         # Both tools should appear; weather should rank first (lower score)
         assert 'weather' in result['_discovered_tools']
+
+
+class TestToolSchemaDescription:
+    """Lock the invoke-now directive into TOOL_SCHEMA['description']."""
+
+    def test_tool_schema_description_requires_invocation(self):
+        """TOOL_SCHEMA description must instruct the model to invoke the returned tool
+        in the same turn — prevents the model from treating find_tools as informational
+        and responding without calling the discovered tool."""
+        desc = TOOL_SCHEMA["description"].lower()
+        assert "invoke" in desc, "Description must contain 'invoke' directive"
+        assert "same turn" in desc, "Description must contain 'same turn' directive"

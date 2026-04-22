@@ -24,7 +24,13 @@ LOG_PREFIX = "[FIND_TOOLS]"
 
 TOOL_SCHEMA = {
     "name": "find_tools",
-    "description": "Find tools for tasks your built-in skills can't handle. Returns usable tools.",
+    "description": (
+        "Find tools for tasks your built-in skills can't handle. "
+        "Returns a list of tools that are now available to you. "
+        "IMPORTANT: after this returns, if any listed tool matches the user's request, "
+        "INVOKE it in the same turn to complete the task. Do not respond to the user "
+        "without invoking the matching tool first."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
