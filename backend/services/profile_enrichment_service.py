@@ -90,14 +90,9 @@ class ProfileEnrichmentService:
         # Pull recent episodes since last enrichment with cosine > 0.5
         since = profile_row['last_enriched_at'] or datetime.now(timezone.utc) - timedelta(days=30)
 
-        from services.embedding_service import _MAX_LEN_LONG, get_embedding_service
+        from services.embedding_service import get_embedding_service
         emb_service = get_embedding_service()
-        # full_profile is a multi-paragraph tool capability description — opt into
-        # the long context window so we don't truncate meaningful detail.
-        profile_embedding = emb_service.generate_embedding(
-            profile_row.get('full_profile', tool_name),
-            max_length=_MAX_LEN_LONG,
-        )
+        profile_embedding = emb_service.generate_embedding(profile_row.get('full_profile', tool_name))
         embedding_blob = _pack_embedding(profile_embedding)
 
         if embedding_blob is None:
