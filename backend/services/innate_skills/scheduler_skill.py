@@ -8,9 +8,11 @@ All DB access via get_shared_db_service() (lazy import inside function).
 import json
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+_PAST_DUE_GRACE_SECONDS = 120
 
 TOOL_SCHEMA = {
     "name": "schedule",
@@ -45,7 +47,7 @@ TOOL_SCHEMA = {
                 "description": (
                     "Required for create: ISO 8601 timestamp with timezone offset "
                     "(e.g. '2026-03-20T09:00:00+02:00'). Use the user's timezone offset. "
-                    "Must be in the future."
+                    "Must be in the future. If off by a few seconds, the scheduler will auto-correct."
                 ),
             },
             "item_type": {
@@ -149,14 +151,23 @@ def _create(channel: str, params: dict) -> dict:
         if due_at == _SENTINEL:
             return {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
 
-        # Validate in future
+        # Validate in future (with grace window for slight natural-language-math errors)
         now = datetime.now(timezone.utc)
         if due_at <= now:
-            logger.warning(
-                f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future "
-                f"(now={now.isoformat()})"
-            )
-            return {"status": "error", "error": f"due_at must be in the future (current time: {now.isoformat()})"}
+            past_seconds = (now - due_at).total_seconds()
+            if past_seconds <= _PAST_DUE_GRACE_SECONDS:
+                original_due_at_iso = due_at.isoformat()
+                due_at = now + timedelta(seconds=5)
+                logger.info(
+                    f"{LOG_PREFIX} _create: past-due {original_due_at_iso} bumped to "
+                    f"{due_at.isoformat()} (grace)"
+                )
+            else:
+                logger.warning(
+                    f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future "
+                    f"(now={now.isoformat()})"
+                )
+                return {"status": "error", "error": f"due_at must be in the future (current time: {now.isoformat()})"}
 
         item_type = params.get("item_type", "notification").lower()
         if item_type not in ("notification", "prompt"):
