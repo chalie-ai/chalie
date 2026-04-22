@@ -60,7 +60,7 @@ frontend/
 │   ├── moment_search.js   # Recall search overlay
 │   ├── blocks.js      # Universal block-format renderer (JSON block arrays → DOM)
 │   ├── activity_panel.js  # Activity/tool-call trace panel
-│   └── sw.js          # Service worker (caching, push, share target)
+│   └── sw.js          # Service worker (push, share target — no asset caching)
 ├── brain/             # Admin/cognitive dashboard
 ├── on-boarding/       # Account setup wizard
 ├── login/             # Dedicated login form (Keychain-friendly)
@@ -69,7 +69,7 @@ frontend/
 
 **Module communication**: Constructor injection for shared services, callback registration for cross-module events, custom DOM events (`chalie:action`, `chalie:speak-message`, `chalie:pin-moment`) for loose coupling. Modules never reference each other directly — `app.js` wires all connections.
 
-**Asset versioning**: Flask injects a `<script type="importmap">` into `index.html` at serve time, mapping all module imports to `?v=VERSION` URLs. The `VERSION` file is the single source of truth. Service worker uses network-first for JS/CSS (localhost = 0ms latency) with cache fallback for offline/PWA.
+**Asset freshness**: Flask sets `SEND_FILE_MAX_AGE_DEFAULT = 0` so browsers must revalidate every static asset via ETag/Last-Modified — Flask returns `304 Not Modified` when unchanged, so bandwidth stays near zero while a simple refresh always reflects the latest deploy. The Service Worker does **not** precache assets; it only hosts the share-target redirect and Web Push handlers, and its `activate` step wipes any legacy caches left by earlier versions. The `VERSION` file + `<script type="importmap">` versioning stays in place for module-import bust-through when modules are renamed.
 
 **Shared auth gate**: `frontend/shared/auth-gate.js` is the single choke-point for redirect logic. Each SPA sets `window.__chaliePage` and loads the gate; app code awaits `window.chalieGateReady` before bootstrapping. See `docs/03-WEB-INTERFACE.md` for the rule table.
 
