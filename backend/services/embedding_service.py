@@ -18,6 +18,7 @@ at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 import hashlib
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -59,19 +60,46 @@ def _model_dir() -> Path:
     return base
 
 
+def _resolve_thread_count() -> int:
+    """Pick ``intra_op_num_threads``. Env override wins, else ``min(4, max(2, cpu//2))``.
+
+    The hardcoded ``2`` left cycles on the table on 8+ core hosts. Cap of 4 avoids
+    oversubscribing shared workers (memory pipeline, DMN, goal pursuit all share the
+    same CPU). Env override (``CHALIE_ORT_INTRA_THREADS``) is the escape hatch for
+    container CPU limits that ``os.cpu_count()`` cannot see.
+    """
+    override = os.environ.get("CHALIE_ORT_INTRA_THREADS")
+    if override:
+        try:
+            n = int(override)
+            if n >= 1:
+                return n
+        except ValueError:
+            logger.warning(f"[EMBEDDING] Ignoring non-integer CHALIE_ORT_INTRA_THREADS={override!r}")
+    cpu = os.cpu_count() or 2
+    return min(4, max(2, cpu // 2))
+
+
 def _build_session(providers: Optional[List[str]] = None):
     """Construct an ONNX InferenceSession with the chosen providers.
 
     If ``providers`` is None, uses ``ort.get_available_providers()`` — the
     runtime returns accelerators (CUDA/CoreML/ROCm/…) first and CPU last, so
     whatever is installed gets picked automatically.
+
+    The pre-optimized graph is cached with the ORT version baked into the filename
+    (``model.optimized.<ort_version>.onnx``). Optimized graphs are not forward-
+    compatible across ORT upgrades — a stale ``.optimized.onnx`` from an older ORT
+    can load but silently degrade, or worse, fail to run specific op kernels. Pin
+    the version so every upgrade forces a fresh optimize pass.
     """
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
 
     model_dir = _model_dir()
     onnx_path = model_dir / "onnx" / "model.onnx"
-    optimized_path = model_dir / "onnx" / "model.optimized.onnx"
+    ort_ver = ort.__version__.replace(".", "_")
+    optimized_path = model_dir / "onnx" / f"model.optimized.{ort_ver}.onnx"
 
     if not onnx_path.exists():
         logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
@@ -83,7 +111,7 @@ def _build_session(providers: Optional[List[str]] = None):
             raise
 
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 2
+    opts.intra_op_num_threads = _resolve_thread_count()
     opts.inter_op_num_threads = 1
     opts.enable_mem_pattern = True
     opts.enable_cpu_mem_arena = True
@@ -91,15 +119,18 @@ def _build_session(providers: Optional[List[str]] = None):
     if optimized_path.exists():
         load_path = optimized_path
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-        logger.info("[EMBEDDING] Loading pre-optimized model")
+        logger.info(f"[EMBEDDING] Loading pre-optimized model (ORT {ort.__version__})")
     else:
         load_path = onnx_path
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
         opts.optimized_model_filepath = str(optimized_path)
 
     chosen = providers if providers is not None else ort.get_available_providers()
     session = ort.InferenceSession(str(load_path), sess_options=opts, providers=chosen)
-    logger.info(f"[EMBEDDING] Providers: {session.get_providers()}")
+    logger.info(
+        f"[EMBEDDING] Providers: {session.get_providers()}, "
+        f"intra_op_num_threads={opts.intra_op_num_threads}"
+    )
     return session, onnx_path
 
 
