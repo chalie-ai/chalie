@@ -370,8 +370,8 @@ class ChalieApp {
 
     const check = async () => {
       try {
-        const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
-        const resp = await fetch(base + '/voice/health', { credentials: 'same-origin' });
+        // Same-origin relative path — no host concatenation, no taint concerns.
+        const resp = await fetch('/voice/health', { credentials: 'same-origin' });
         const data = resp.ok ? await resp.json().catch(() => ({})) : {};
         const status = data.status;
         if (status === 'ok') return; // controls stay visible
@@ -382,8 +382,9 @@ class ChalieApp {
         } else {
           hide(); // timeout — treat as unavailable
         }
-      } catch (_) {
-        hide(); // unreachable endpoint — treat as unavailable
+      } catch (err) {
+        console.warn('[voice] health check unreachable:', err);
+        hide();
       }
     };
 

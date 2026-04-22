@@ -53,7 +53,7 @@ export class VoiceRecorder {
   }
 
   async _startRecording() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       this._showError('Microphone not available (requires HTTPS)');
       return;
     }
@@ -108,7 +108,12 @@ export class VoiceRecorder {
         // a small defer lets the event queue flush first.
         setTimeout(() => resolve([...this._audioChunks]), 100);
       };
-      try { recorder.requestData(); } catch (_) { /* not all browsers support it */ }
+      try {
+        recorder.requestData();
+      } catch (err) {
+        // requestData() not supported on some browsers — recorder.stop() still flushes the last chunk.
+        console.debug('[voice] requestData unsupported:', err);
+      }
       recorder.stop();
     });
 
@@ -133,11 +138,11 @@ export class VoiceRecorder {
   _setButtonState(state) {
     if (!this._btn) return;
     this._btn.dataset.state = state;
-    this._btn.setAttribute('aria-label',
-      state === 'recording' ? 'Stop recording'
-        : state === 'uploading' ? 'Uploading...'
-          : 'Record voice message'
-    );
+    let label;
+    if (state === 'recording') label = 'Stop recording';
+    else if (state === 'uploading') label = 'Uploading...';
+    else label = 'Record voice message';
+    this._btn.setAttribute('aria-label', label);
   }
 
   _showError(msg) {
@@ -166,7 +171,7 @@ export class VoiceRecorder {
   async _convertToWav(chunks, mimeType) {
     const blob = new Blob(chunks, { type: mimeType });
     const arrayBuffer = await blob.arrayBuffer();
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const audioCtx = new (globalThis.AudioContext || globalThis.webkitAudioContext)();
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
     audioCtx.close();
     return this._audioBufferToWav(audioBuffer);
@@ -181,7 +186,7 @@ export class VoiceRecorder {
     const view = new DataView(buffer);
 
     const writeStr = (offset, str) => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.codePointAt(i));
     };
 
     writeStr(0, 'RIFF');
@@ -219,7 +224,11 @@ export class VoiceRecorder {
     clearTimeout(this._maxRecordTimer);
     this._maxRecordTimer = null;
     if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
-      try { this._mediaRecorder.stop(); } catch (_) {}
+      try {
+        this._mediaRecorder.stop();
+      } catch (err) {
+        console.debug('[voice] recorder.stop on destroy:', err);
+      }
     }
     if (this._mediaRecorder?.stream) {
       this._mediaRecorder.stream.getTracks().forEach(t => t.stop());

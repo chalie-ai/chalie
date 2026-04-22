@@ -3501,6 +3501,13 @@ details.block-section[open] > summary.block-section__title::before {
   position: fixed;
   inset: 0;
   z-index: 100;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3508,6 +3515,10 @@ details.block-section[open] > summary.block-section__title::before {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   animation: fadeIn var(--duration-fast) var(--ease-out);
+}
+
+.voice-player-overlay:not([open]) {
+  display: none;
 }
 
 .voice-player {

@@ -228,7 +228,7 @@
   </footer>
 
   <!-- Voice player overlay — modal audio player for Chalie message playback -->
-  <div id="voicePlayerOverlay" class="voice-player-overlay hidden" role="dialog" aria-modal="true" aria-label="Audio player">
+  <dialog id="voicePlayerOverlay" class="voice-player-overlay" aria-label="Audio player">
     <div class="voice-player">
       <p class="voice-player__title" id="vpTitle"></p>
       <!-- Loading state -->
@@ -271,7 +271,7 @@
         </svg>
       </button>
     </div>
-  </div>
+  </dialog>
 
   <!-- Upload dialog -->
   <dialog id="uploadDialog" class="api-key-dialog">

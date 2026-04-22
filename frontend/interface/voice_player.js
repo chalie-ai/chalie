@@ -78,7 +78,7 @@ export class VoicePlayer {
     });
 
     this._progress?.addEventListener('input', () => {
-      if (this._audio) this._audio.currentTime = parseFloat(this._progress.value);
+      if (this._audio) this._audio.currentTime = Number.parseFloat(this._progress.value);
     });
 
     // Listen for speak-message events from renderer.js speaker buttons.
@@ -191,7 +191,7 @@ export class VoicePlayer {
     // Cancel any in-flight fetch before releasing audio.
     if (this._fetchAbort) this._fetchAbort.abort();
     this._releaseAudio();
-    this._overlay?.classList.add('hidden');
+    if (this._overlay?.open) this._overlay.close();
     this._unbindKeyboard();
   }
 
@@ -213,7 +213,7 @@ export class VoicePlayer {
   }
 
   _showOverlay() {
-    this._overlay?.classList.remove('hidden');
+    if (this._overlay && !this._overlay.open) this._overlay.show();
   }
 
   _showLoading(loading) {
@@ -265,7 +265,7 @@ export class VoicePlayer {
     if (!audio) return;
     const cur = audio.currentTime || 0;
     const dur = audio.duration || 0;
-    if (this._progress && !isNaN(dur)) {
+    if (this._progress && !Number.isNaN(dur)) {
       this._progress.max = dur;
       this._progress.value = cur;
     }
@@ -275,7 +275,7 @@ export class VoicePlayer {
   }
 
   _fmt(s) {
-    if (isNaN(s) || !isFinite(s)) return '0:00';
+    if (Number.isNaN(s) || !Number.isFinite(s)) return '0:00';
     const m = Math.floor(s / 60);
     const sec = String(Math.floor(s % 60)).padStart(2, '0');
     return `${m}:${sec}`;
@@ -284,11 +284,11 @@ export class VoicePlayer {
   _bindKeyboard() {
     this._unbindKeyboard();
     this._boundKeydown = (e) => {
-      if (this._overlay?.classList.contains('hidden')) return;
+      if (!this._overlay?.open) return;
       if (e.key === 'Escape') { this._close(); return; }
       if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); this._togglePlayPause(); return; }
       if (e.key === 'ArrowRight') { this._seek(+10); return; }
-      if (e.key === 'ArrowLeft') { this._seek(-10); return; }
+      if (e.key === 'ArrowLeft') this._seek(-10);
     };
     document.addEventListener('keydown', this._boundKeydown);
   }
