@@ -183,6 +183,24 @@ class TestToolSchema:
         assert 'value' in props
         assert 'query' in props
 
+    def test_schema_description_includes_recall_triggers(self):
+        desc = TOOL_SCHEMA['description'].lower()
+        trigger_phrases = [
+            "what do i know about",
+            "what do you know about me",
+            "what was that thing about",
+            "didn't i tell you about",
+            "what did i say about",
+            "i told you about",
+        ]
+        matched = sum(1 for phrase in trigger_phrases if phrase in desc)
+        assert matched >= 3, (
+            f"Expected at least 3 recall trigger phrases in description, found {matched}"
+        )
+        assert "scheduler" in desc, (
+            "Description must include 'scheduler' to disambiguate recall from scheduling"
+        )
+
 
 # ── Store ────────────────────────────────────────────────────────────
 
