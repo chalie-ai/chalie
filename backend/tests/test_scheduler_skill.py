@@ -8,7 +8,7 @@ than the grace window are still hard-rejected.
 
 import json
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from services.innate_skills.scheduler_skill import handle_scheduler
