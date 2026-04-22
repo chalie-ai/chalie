@@ -40,10 +40,6 @@ Every other AI tool is a fresh conversation. Chalie is a **continuous reasoning 
 <tr><td><b>Model-agnostic by design</b></td><td>Different cognitive functions can use different models. Local classifier + cloud reasoner + local voice — mix and match. No vendor lock-in.</td></tr>
 </table>
 
-<p align="center">
-  <img src="docs/images/memory-frontend.png" alt="Chalie — memory, goals, scheduler" width="90%">
-</p>
-
 ---
 
 ## Install
