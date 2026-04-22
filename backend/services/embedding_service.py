@@ -59,10 +59,66 @@ def _model_dir() -> Path:
     return base
 
 
+def _build_session(providers: Optional[List[str]] = None):
+    """Construct an ONNX InferenceSession with the chosen providers.
+
+    If ``providers`` is None, uses ``ort.get_available_providers()`` — the
+    runtime returns accelerators (CUDA/CoreML/ROCm/…) first and CPU last, so
+    whatever is installed gets picked automatically.
+    """
+    import onnxruntime as ort
+    from huggingface_hub import hf_hub_download
+
+    model_dir = _model_dir()
+    onnx_path = model_dir / "onnx" / "model.onnx"
+    optimized_path = model_dir / "onnx" / "model.optimized.onnx"
+
+    if not onnx_path.exists():
+        logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
+        try:
+            hf_hub_download(repo_id=_MODEL_ID, filename=_ONNX_FILENAME, local_dir=str(model_dir))
+            logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
+        except Exception as e:
+            logger.error(f"[EMBEDDING] Failed to download model: {e}")
+            raise
+
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 2
+    opts.inter_op_num_threads = 1
+    opts.enable_mem_pattern = True
+    opts.enable_cpu_mem_arena = True
+
+    if optimized_path.exists():
+        load_path = optimized_path
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        logger.info("[EMBEDDING] Loading pre-optimized model")
+    else:
+        load_path = onnx_path
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.optimized_model_filepath = str(optimized_path)
+
+    chosen = providers if providers is not None else ort.get_available_providers()
+    session = ort.InferenceSession(str(load_path), sess_options=opts, providers=chosen)
+    logger.info(f"[EMBEDDING] Providers: {session.get_providers()}")
+    return session, onnx_path
+
+
+def _rebuild_session_cpu_only():
+    """Rebuild the module-level session as CPU-only. Called when an accelerator fails at runtime."""
+    global _session
+    with _model_lock:
+        session, _ = _build_session(providers=["CPUExecutionProvider"])
+        _session = session
+        return session
+
+
 def _get_session_and_tokenizer():
     """Return (ort.InferenceSession, AutoTokenizer), loading on first call.
 
     Uses double-checked locking so only one thread triggers the model load.
+    Some providers (notably CoreML on ModernBERT variants) init cleanly but
+    fail on certain runtime shapes/token-ids. The inference path in
+    _encode_batch catches that and calls _rebuild_session_cpu_only.
     """
     global _session, _tokenizer, _output_names, _input_names
 
@@ -73,49 +129,9 @@ def _get_session_and_tokenizer():
         if _session is not None and _tokenizer is not None:
             return _session, _tokenizer
 
-        import onnxruntime as ort
         from transformers import AutoTokenizer
-        from huggingface_hub import hf_hub_download
 
-        model_dir = _model_dir()
-        onnx_path = model_dir / "onnx" / "model.onnx"
-        optimized_path = model_dir / "onnx" / "model.optimized.onnx"
-
-        # Download ONNX model if not cached locally
-        if not onnx_path.exists():
-            logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
-            try:
-                hf_hub_download(
-                    repo_id=_MODEL_ID,
-                    filename=_ONNX_FILENAME,
-                    local_dir=str(model_dir),
-                )
-                logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
-            except Exception as e:
-                logger.error(f"[EMBEDDING] Failed to download model: {e}")
-                raise
-
-        # Load ONNX session — prefer pre-optimized model if available
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 2
-        opts.inter_op_num_threads = 1
-        opts.enable_mem_pattern = True
-        opts.enable_cpu_mem_arena = True
-
-        if optimized_path.exists():
-            load_path = optimized_path
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-            logger.info("[EMBEDDING] Loading pre-optimized model")
-        else:
-            load_path = onnx_path
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            opts.optimized_model_filepath = str(optimized_path)
-
-        session = ort.InferenceSession(
-            str(load_path),
-            sess_options=opts,
-            providers=["CPUExecutionProvider"],
-        )
+        session, onnx_path = _build_session()
 
         _output_names = [o.name for o in session.get_outputs()]
         _input_names = [i.name for i in session.get_inputs()]
@@ -175,7 +191,20 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
     if "token_type_ids" in _input_names:
         feed["token_type_ids"] = np.zeros_like(input_ids)
 
-    outputs = session.run(None, feed)
+    try:
+        outputs = session.run(None, feed)
+    except Exception as e:
+        # Accelerated providers (CoreML, CUDA, etc.) can init cleanly but fail
+        # on specific runtime shapes/tokens. Rebuild once as CPU-only and retry.
+        if session.get_providers() != ["CPUExecutionProvider"]:
+            logger.warning(
+                f"[EMBEDDING] Inference failed on {session.get_providers()}: {e}. "
+                f"Rebuilding session as CPU-only for the rest of this process."
+            )
+            session = _rebuild_session_cpu_only()
+            outputs = session.run(None, feed)
+        else:
+            raise
 
     # Use pre-pooled output if available, otherwise mean pool last_hidden_state
     if "sentence_embedding" in _output_names:

@@ -117,6 +117,37 @@ No. Docker is optional — it's only used for deploying Chalie itself (via the p
 
 ---
 
+## Can Chalie use my GPU?
+
+Yes. The embedding model runs on ONNX Runtime, which auto-selects the best available execution provider at startup: **CUDA** on NVIDIA GPUs, **CoreML** on Apple Silicon, **CPU** as the fallback. No configuration needed — whatever hardware ORT detects, it uses.
+
+**Running Chalie in Docker with an NVIDIA GPU?** You must pass the GPU through to the container. Two prerequisites on the host:
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html):
+   ```bash
+   sudo apt install nvidia-container-toolkit
+   sudo systemctl restart docker
+   ```
+2. Add a GPU reservation to your service in `docker-compose.yml`:
+   ```yaml
+   services:
+     chalie:
+       image: chalieai/chalie:latest
+       deploy:
+         resources:
+           reservations:
+             devices:
+               - driver: nvidia
+                 device_ids: ["0"]    # use GPU 0; change index to pick another
+                 capabilities: [gpu]
+   ```
+
+Verify with `nvidia-smi` inside the container, or check the Chalie log on startup — look for `[EMBEDDING] Providers: ['CUDAExecutionProvider', 'CPUExecutionProvider']`. If it says CPU only, the passthrough isn't wired up.
+
+Without passthrough the container falls back to CPU inference silently — Chalie still works, just slower.
+
+---
+
 ## Does Chalie support voice?
 
 Yes — native speech-to-text (Moonshine Voice, ONNX) and text-to-speech (Kokoro 82M, ONNX) are built in and auto-detect their dependencies on startup. No Docker required. The voice service degrades gracefully (returns 503) if dependencies aren't installed.
