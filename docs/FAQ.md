@@ -14,7 +14,7 @@ The key distinction: most AI tools respond to what you ask. Chalie runs continuo
 |---|---|---|
 | **Memory** | Persistent, decaying, cross-session | None (or per-session only) |
 | **Identity** | Evolves through experience | Stateless |
-| **Background activity** | Yes — cognitive drift, curiosity threads, persistent tasks | No |
+| **Background activity** | Yes — cognitive drift, proactive thoughts, persistent tasks | No |
 | **Attention protection** | Core design principle | Not a concern |
 | **Runs on your machine** | Yes — local-first, no cloud required | Cloud-dependent |
 | **Multiple LLM providers** | Yes — Ollama, Anthropic, OpenAI, Gemini | Single provider |
@@ -54,11 +54,11 @@ You can assign different providers to different cognitive functions (e.g., use a
 
 Several things, depending on configuration and activity level:
 
-- **Cognitive drift** — During idle periods, Chalie generates spontaneous thoughts via its Default Mode Network (DMN). These may surface as proactive messages, curiosity threads, or background plan proposals.
+- **Cognitive drift** — During idle periods, Chalie generates spontaneous thoughts via its Default Mode Network (DMN). These may surface as proactive messages or background plan proposals.
 - **Memory consolidation** — Episodes are compressed into semantic concepts; memories are decayed.
-- **Curiosity pursuit** — Active curiosity threads are explored via the ACT loop (6h cycle).
-- **Persistent tasks** — Background tasks continue executing (30min cycles).
-- **Autobiography synthesis** — A running narrative of who you are and what matters to you is updated (6h cycle).
+- **User summary** — A running synthesis of who you are and what matters to you is updated periodically.
+- **Persistent tasks** — Background tasks continue executing.
+- **World awareness** — Weather, news, and other ambient signals are refreshed in the background.
 
 All background activity is attention-gated: if you're in deep focus, Chalie stays silent.
 
@@ -69,7 +69,7 @@ All background activity is attention-gated: if you're in deep focus, Chalie stay
 Yes, within hard limits. Chalie can:
 - Execute tasks via its ACT loop using tools
 - Schedule reminders and manage lists
-- Research topics via curiosity threads
+- Research topics autonomously via the goal pursuit system
 - Generate proactive suggestions and follow-ups
 
 Chalie will **not** take irreversible or destructive actions autonomously. Consequential actions (anything that affects external systems or requires user identity) are paused for confirmation. Silent autonomous handling is the default only for safe, reversible, or informational actions.
@@ -78,7 +78,7 @@ Chalie will **not** take irreversible or destructive actions autonomously. Conse
 
 ## What are "tools" in Chalie?
 
-Tools extend Chalie's ability to take action in the world: web search, weather, code execution, etc. First-party tools are simple Python modules invoked directly in-process. External apps can also expose tools via the interface protocol. Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
+Tools extend Chalie's ability to take action in the world: search, news, weather, code execution, and more. First-party tools are simple Python modules invoked directly in-process. External apps can also expose tools via the interface protocol. Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
 
 See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the tools installed by default.
 
@@ -159,9 +159,8 @@ Yes — native speech-to-text (Moonshine Voice, ONNX) and text-to-speech (Kokoro
 The Brain dashboard (`http://localhost:8081/brain/`) is the admin and observability interface. It shows:
 - Routing decision distribution
 - Memory layer health
-- Active curiosity threads and persistent tasks
 - User traits and data graph
 - Tool performance metrics
-- Identity vector states
+- Personality controls and provider settings
 
-It is read-only — it does not modify Chalie's state.
+It is read-only for observability panels — settings panels write to Chalie's configuration.

@@ -18,7 +18,7 @@ Inside `send()`:
 2. **Thinking gate** — a lightweight ONNX classifier reads the message and assigns a deliberation depth: low (conversational), medium, or high. High depth triggers a one-shot pre-reasoning pass before the tool loop begins.
 3. **ACT loop** — the processor assembles a single user message containing the literal conversation history, world state, memory seed, and the current input, then calls the LLM. If the LLM invokes a tool, the result is appended to the trail and the loop continues. This repeats until the LLM returns a plain text response or hits the iteration cap.
 4. **Atomic write** — one SQLite transaction commits the user turn, every tool call from the loop, and the assistant response. Nothing is written to the database mid-loop.
-5. **Post-turn fan-out** — services that react to a completed turn (trait extraction, episode trigger check, metrics, world-state refresh) run as daemon threads after the atomic write. The response is already on its way to the client before fan-out begins.
+5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, situation model refresh, adaptive signals, DMN timer reset, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins.
 
 ```
 WebSocket frame
@@ -82,7 +82,7 @@ Chalie keeps thinking when you are not typing. Background workers run as daemon 
 - **DMN (Default Mode Network)** — after a period of idle time, Chalie initiates a proactive thought using recent or high-salience episodes as context. Uses its own `MessageProcessor` subclass; exits silently when nothing warrants a response.
 - **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate skill. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
-- **Supporting workers** — user summary synthesis, world awareness (weather, news, calendar), moment extraction, document purge, folder watcher, interface health monitor, tool profile enrichment, self-model health signals.
+- **Supporting workers** — user summary synthesis, world awareness (weather, news), moment context enrichment, document purge, folder watcher, interface health monitor, self-model health signals, and optional profile enrichment.
 
 No worker shares its processor instance with another. Each channel is fully isolated.
 

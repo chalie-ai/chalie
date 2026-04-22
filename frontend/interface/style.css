@@ -3499,26 +3499,26 @@ details.block-section[open] > summary.block-section__title::before {
 
 .voice-player-overlay {
   position: fixed;
-  inset: 0;
+  top: var(--space-md);
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 100;
-  width: 100vw;
-  height: 100vh;
+  width: min(420px, calc(100vw - 32px));
   max-width: none;
   max-height: none;
   margin: 0;
   padding: 0;
   border: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(3, 4, 8, 0.75);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: transparent;
   animation: fadeIn var(--duration-fast) var(--ease-out);
 }
 
 .voice-player-overlay:not([open]) {
   display: none;
+}
+
+.voice-player-overlay::backdrop {
+  background: transparent;
 }
 
 .voice-player {
@@ -3675,17 +3675,9 @@ details.block-section[open] > summary.block-section__title::before {
 }
 
 @media (max-width: 480px) {
-  .voice-player {
-    width: calc(100vw - 24px);
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    margin: 0;
-  }
   .voice-player-overlay {
-    align-items: flex-end;
+    width: calc(100vw - 16px);
+    top: var(--space-sm);
   }
 }
 

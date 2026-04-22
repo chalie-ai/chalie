@@ -2,9 +2,9 @@
 
 Three capability tiers exist in Chalie, each with a different scope and lifecycle.
 
-**Innate skills** are core cognitive capabilities — recall, memorize, schedule, find_tools, reflect, and a handful of others. They are always loaded into LLM context and have direct access to Chalie's services and memory.
+**Innate skills** are core cognitive capabilities — memory, introspect, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They are always loaded into LLM context and have direct access to Chalie's services and memory.
 
-**First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: live weather, web search, sandboxed code execution. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
+**First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
 
 **Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They extend what Chalie can act on without being committed to this repo. See [15-INTERFACES.md](15-INTERFACES.md).
 

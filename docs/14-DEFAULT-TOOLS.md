@@ -1,14 +1,18 @@
 # First-Party Tools
 
-These tools ship with Chalie and are invoked in-process via the ACT loop. The LLM discovers them through `find_tools` (semantic search) — they are not pre-loaded into context.
+These tools ship with Chalie and are invoked in-process via the ACT loop. The LLM discovers them through `find_tools` (semantic search) — they are not pre-loaded into context. A `browser` tool is also available when Playwright dependencies are installed.
 
 ## Weather
 
 Fetches current conditions and tomorrow's forecast using Open-Meteo and wttr.in. No API key required. Results include temperature, precipitation, and wind at the user's location when telemetry is available.
 
-## Web Search
+## Search
 
-Searches the web via DuckDuckGo. Privacy-focused and requires no API key. Returns a ranked list of results with titles, URLs, and snippets that the LLM can reason over or follow up on.
+Searches across multiple sources — Wikipedia, GitHub, Reddit, arXiv, Google News, Stack Overflow, Open Library, and more — using plain natural language. Semantic routing selects the best provider(s) automatically. Returns results with titles, URLs, snippets, and provenance. No API key required.
+
+## News
+
+Searches news articles across global sources including Google News and curated RSS feeds in seven categories: tech, business, sports, science, entertainment, US, UK. Use for current events, headlines, and what's happening now. No API key required.
 
 ## Code Eval
 
