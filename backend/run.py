@@ -264,6 +264,12 @@ def main():
                   "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
+    # SearchExpanderService: centralised doc2query + embedding daemon.
+    # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
+    # in KnowledgeService and DataGraphService. Falls back gracefully when the
+    # doc2query ONNX model files are absent.
+    _try_register(manager, "search-expander-service",
+                  "services.search_expander_service", "search_expander_worker")
     # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService

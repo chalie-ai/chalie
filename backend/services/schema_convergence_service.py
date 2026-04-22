@@ -92,6 +92,7 @@ class SchemaConvergenceService:
             desired_tables = self._introspect_tables(desired_conn)
             desired_indexes = self._introspect_indexes(desired_conn)
             desired_virtual = self._introspect_virtual_tables(desired_conn)
+            desired_triggers = self._introspect_triggers(desired_conn)
         finally:
             desired_conn.close()
 
@@ -103,6 +104,7 @@ class SchemaConvergenceService:
             live_tables = self._introspect_tables(conn)
             live_indexes = self._introspect_indexes(conn)
             live_virtual = self._introspect_virtual_tables(conn)
+            live_triggers = self._introspect_triggers(conn)
 
             # Additive pass first — ensures new shape is in place before any
             # destructive change runs.  If a destructive op fails we still end
@@ -114,6 +116,7 @@ class SchemaConvergenceService:
             virtual_tables_created = self._converge_virtual_tables(
                 desired_virtual, live_virtual, conn, schema_sql
             )
+            triggers_synced = self._converge_triggers(desired_triggers, live_triggers, conn, schema_sql)
 
             # Destructive pass (gated).  Safety: if the desired state looks
             # suspiciously empty or truncated, refuse to drop anything — the
@@ -137,8 +140,10 @@ class SchemaConvergenceService:
                 tables_dropped = self._drop_stale_tables(
                     desired_tables, live_tables, live_virtual, conn
                 )
+                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
             else:
                 virtual_tables_dropped = indexes_dropped = columns_dropped = tables_dropped = 0
+                triggers_dropped = 0
                 self._log_stale(desired_tables, live_tables, desired_indexes, live_indexes,
                                 desired_virtual, live_virtual)
 
@@ -155,6 +160,7 @@ class SchemaConvergenceService:
             f"+{columns_added} columns / -{columns_dropped}, "
             f"+{indexes_synced} indexes / -{indexes_dropped}, "
             f"+{virtual_tables_created} virtual tables / -{virtual_tables_dropped}, "
+            f"+{triggers_synced} triggers / -{triggers_dropped}, "
             f"-{orphan_jobs_pruned} orphan jobs"
         )
 
@@ -169,6 +175,10 @@ class SchemaConvergenceService:
         a single failing statement (e.g. vec0 when sqlite-vec is unavailable)
         does not prevent all subsequent tables from being created in the desired
         state.
+
+        Trigger bodies contain semicolons inside BEGIN...END; the simple
+        split(";") approach breaks them into fragments.  ``_split_statements``
+        tracks BEGIN/END nesting so trigger bodies survive intact.
         """
         conn = sqlite3.connect(":memory:")
         _load_sqlite_vec(conn)
@@ -176,15 +186,54 @@ class SchemaConvergenceService:
         sql = schema_sql
         if self._embedding_dimensions != 768:
             sql = sql.replace("float[768]", f"float[{self._embedding_dimensions}]")
-        # Strip comments, then split on semicolons and execute one at a time.
+        # Strip single-line comments, then split respecting BEGIN...END blocks.
         sql_no_comments = re.sub(r"--[^\n]*", "", sql)
-        statements = [s.strip() for s in sql_no_comments.split(";") if s.strip()]
-        for stmt in statements:
+        for stmt in self._split_statements(sql_no_comments):
             try:
                 conn.execute(stmt)
             except Exception as exc:
                 logger.debug(f"[convergence] Skipping desired-state statement: {exc}")
         return conn
+
+    def _split_statements(self, sql: str) -> list:
+        """Split SQL text on semicolons while keeping BEGIN...END blocks intact.
+
+        SQLite trigger bodies use the form ``BEGIN <stmt>; <stmt>; END;``.
+        A naive split(";") breaks these into fragments.  This method counts
+        BEGIN/END depth and only treats a semicolon at depth 0 as a statement
+        terminator.
+
+        Returns a list of non-empty, stripped statement strings.
+        """
+        statements = []
+        current: list = []
+        depth = 0
+
+        for token in re.split(r"(\bBEGIN\b|\bEND\b|;)", sql, flags=re.IGNORECASE):
+            upper = token.strip().upper()
+            if upper == "BEGIN":
+                depth += 1
+                current.append(token)
+            elif upper == "END":
+                depth = max(0, depth - 1)
+                current.append(token)
+            elif token == ";":
+                if depth == 0:
+                    stmt = "".join(current).strip()
+                    if stmt:
+                        statements.append(stmt)
+                    current = []
+                else:
+                    current.append(token)
+            else:
+                current.append(token)
+
+        # Handle any trailing content without a final semicolon
+        remainder = "".join(current).strip()
+        if remainder:
+            statements.append(remainder)
+
+        return statements
 
     # ──────────────────────────────────────────────────────────────────────────
     # Introspection helpers
@@ -228,6 +277,18 @@ class SchemaConvergenceService:
             if ddl and ddl.strip().upper().startswith("CREATE VIRTUAL TABLE"):
                 result[name] = self._normalize_ddl(ddl)
         return result
+
+    def _introspect_triggers(self, conn: sqlite3.Connection) -> dict:
+        """Return {trigger_name: normalized_ddl} for all user-defined triggers.
+
+        Auto-created triggers from FTS5 and sqlite-vec internals store NULL in
+        the sql column of sqlite_master and are excluded by the IS NOT NULL
+        filter.  Only triggers the schema explicitly declares come through.
+        """
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL"
+        ).fetchall()
+        return {name: self._normalize_ddl(ddl) for name, ddl in rows}
 
     def _normalize_ddl(self, ddl) -> str:
         """Lowercase, collapse whitespace, strip IF NOT EXISTS for comparison."""
@@ -601,6 +662,74 @@ class SchemaConvergenceService:
 
         return created
 
+    def _converge_triggers(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+        schema_sql: str,
+    ) -> int:
+        """Create missing triggers; drop and recreate triggers whose DDL has changed.
+
+        Mirrors ``_converge_indexes``: compare normalized DDL, CREATE if absent,
+        DROP+CREATE if the body changed.
+        """
+        synced = 0
+
+        for trigger_name, desired_ddl in desired.items():
+            if trigger_name not in actual:
+                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                if not raw_ddl:
+                    logger.warning(
+                        f"[convergence] No DDL found for missing trigger: {trigger_name}"
+                    )
+                    continue
+                try:
+                    live_conn.execute(raw_ddl)
+                    logger.info(f"[convergence] Created trigger: {trigger_name}")
+                    synced += 1
+                except Exception as exc:
+                    logger.error(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
+            elif actual[trigger_name] != desired_ddl:
+                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                if not raw_ddl:
+                    logger.warning(
+                        f"[convergence] No DDL found for changed trigger: {trigger_name}"
+                    )
+                    continue
+                try:
+                    live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                    live_conn.execute(raw_ddl)
+                    logger.info(f"[convergence] Recreated trigger (DDL changed): {trigger_name}")
+                    synced += 1
+                except Exception as exc:
+                    logger.error(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
+
+        return synced
+
+    def _drop_stale_triggers(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop triggers present in the live DB but absent from schema.sql.
+
+        Mirrors ``_drop_stale_indexes``.  Only runs when destructive ops are
+        permitted and the safety check has passed.
+        """
+        dropped = 0
+        for trigger_name in actual:
+            if trigger_name in desired:
+                continue
+            try:
+                live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                logger.warning(f"[convergence] DROPPED trigger: {trigger_name}")
+                dropped += 1
+            except Exception as exc:
+                logger.error(f"[convergence] Failed to drop stale trigger {trigger_name}: {exc}")
+        return dropped
+
     def _create_virtual_table(self, conn: sqlite3.Connection, table_name: str, ddl: str) -> bool:
         """Attempt to CREATE VIRTUAL TABLE; handle orphaned shadow tables for vec0."""
         try:
@@ -750,6 +879,22 @@ class SchemaConvergenceService:
         if self._embedding_dimensions != 768 and "vec0" in ddl.lower():
             ddl = ddl.replace("float[768]", f"float[{self._embedding_dimensions}]")
         return ddl
+
+    def _extract_trigger_ddl(self, schema_sql: str, trigger_name: str) -> str | None:
+        """Extract the CREATE TRIGGER ... END ; block for a trigger from schema.sql.
+
+        SQLite trigger bodies contain semicolons inside the BEGIN...END block, so
+        we cannot rely on the simple split-on-semicolon approach used elsewhere.
+        Instead we match from CREATE TRIGGER <name> through the END keyword that
+        closes the outermost block, then consume the trailing semicolon.
+        """
+        stripped = re.sub(r"--[^\n]*", "", schema_sql)
+        pattern = re.compile(
+            r"(CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(trigger_name) + r"\b.+?END\s*;)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = pattern.search(stripped)
+        return match.group(1).strip() if match else None
 
     def _restore_if_not_exists(self, normalized_ddl: str, obj_type: str) -> str:
         """Re-insert IF NOT EXISTS into a normalized DDL string."""

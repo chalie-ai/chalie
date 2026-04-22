@@ -1,57 +1,40 @@
 # Testing Guide
 
-## Philosophy — FEATURE TESTS, ZERO MOCKS, REAL-WORLD ONLY
+## Philosophy
 
 Every test answers one question: **does this service do what it claims?**
 
-- Given **real** input X
-- Through the **real** production stack (real DB, real services, real models, real cache, real config)
-- Assert **real** observable output Y
-
-If a test does not fit that shape, it does not belong in the suite. Delete it.
+Given real input X, through the real production stack, assert real observable output Y. If a test does not fit that shape, delete it.
 
 ### Hard rules
 
-1. **ZERO MOCKS.** No `MagicMock`, `Mock`, `patch`, `monkeypatch` of production code, stubs, spies, or fakes. The real production stack runs. In-memory SQLite is allowed because it is still SQLite, not a mock.
+1. **Zero mocks.** No `MagicMock`, `Mock`, `patch`, `monkeypatch`, stubs, spies, or fakes against production code. In-memory SQLite is allowed — it is still SQLite, not a mock.
+2. **3–10 feature tests per service. Hard cap.** More than 10 is a design smell. Escalate; do not write the 11th test.
+3. **Real-world scenarios only.** Test what the service is responsible for, not how it is wired internally.
+4. **No contract or plumbing tests.** No field-list, call-count, version-pin, shape, or enum-membership assertions. A real feature test catches those failures with better signal.
+5. **No unit tests unless the function is pure.** Pure means: no IO, no collaborators, no state. Everything else is a feature test.
+6. **The coder agent never writes or modifies tests.** The tester agent has exclusive ownership.
 
-2. **3–10 feature tests per service. Hard cap.** More than 10 is a design smell — the service is doing too much. Escalate as a system design issue; do not write the 11th test.
+## Markers
 
-3. **Real-world scenarios only.** Test what the service is responsible for, not how it is wired. Contradiction service → does it detect contradictions? Thinking-level classifier → does it route turns to the right level? Memory recall → does it return relevant memories?
+| Marker | When to use |
+|---|---|
+| `@pytest.mark.unit` | Pure functions only — no IO, no collaborators, deterministic |
+| `@pytest.mark.integration` | Anything touching a service, DB, model, or network — the default |
 
-4. **No contract / plumbing / version-pin / shape / field-list / call-count / enum-membership tests.** If the behaviour matters, a feature test catches it for free with a better signal. Delete these on sight.
+`integration` is the default. Apply `unit` only when all three pure-function criteria hold.
 
-5. **No unit tests unless the unit is pure.** A pure function (no IO, no collaborators, no state — e.g. math helpers, deterministic formatters) may have unit tests. Everything else is a feature test.
-
-6. **The coder agent never writes or modifies tests.** The tester agent has exclusive ownership. See `~/.claude/agents/` for the full agent contracts.
-
-## Quick Start
+## Running the Suite
 
 ```bash
 cd backend
 
-# Unit tests (pure functions only — fast, in-memory, no external deps)
-pytest -m unit
-
-# Feature tests (real production stack — slow, loads real models/services)
-pytest -m integration
-
-# A specific test file
-pytest tests/test_classifier_features.py
-
-# Verbose output
-pytest -m unit -v
+pytest -m unit          # fast — pure functions, in-memory, ~1 second
+pytest -m integration   # slow — real stack, real models
+pytest                  # both
 ```
 
-## Markers
-
-```python
-@pytest.mark.unit          # Pure-function tests only — no IO, no collaborators
-@pytest.mark.integration   # Real services, real DB, real models — the feature tests
-```
-
-**Integration is the default** for anything touching a service, the DB, a model, or the network. The unit marker is reserved for genuinely pure helpers.
-
-## Anatomy of a Feature Test
+## Example Feature Test
 
 ```python
 # backend/tests/test_classifier_features.py
@@ -66,7 +49,6 @@ _MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
 
 @pytest.fixture(scope="module")
 def onnx_svc():
-    """Real OnnxInferenceService pointed at production models."""
     from services.onnx_inference_service import OnnxInferenceService
     return OnnxInferenceService(_MODELS_DIR)
 
@@ -74,9 +56,7 @@ def onnx_svc():
 class TestThinkingLevelClassifier:
 
     def test_architecture_question_routes_to_high(self, onnx_svc):
-        """Complex distributed systems question → 'high' deliberation level."""
         import numpy as np
-
         onehot = np.zeros((1, 4), dtype=np.float32)
         onehot[0, 0] = 1.0  # none → index 0
 
@@ -91,160 +71,36 @@ class TestThinkingLevelClassifier:
         assert confidence > 0.4
 ```
 
-What this test does:
-- Loads the **real** 596 MB `gte-modernbert-base` encoder
-- Loads the **real** thinking-level MLP head from disk (`.npz`)
-- Feeds **real** text
-- Asserts a **real** classification
-
-What it does not do:
-- Mock the ONNX service
-- Assert the output dict has fields `{"label", "confidence"}` (that is a contract test)
-- Assert the version pin is right (a real feature test catches misconfig faster)
-
-## Naming
-
-```
-test_{behavior}_{condition_if_needed}
-```
-
-Names describe the **real-world scenario**, not the code path.
-
-```python
-# Good — describes what the feature does
-def test_simple_factual_lookup_routes_to_low(self):
-def test_architecture_question_routes_to_high(self):
-def test_lut_temporal_rule_supersedes_old_value(self):
-
-# Bad — describes the plumbing
-def test_build_onnx_input_returns_dict(self):
-def test_sha256_mismatch_raises_error(self):
-def test_all_valid_labels_pass_through(self):
-```
-
-## Structure — Arrange / Act / Assert
-
-```python
-def test_architecture_question_routes_to_high(self, onnx_svc):
-    # Arrange — real user turn, no mocks
-    import numpy as np
-    onehot = np.zeros((1, 4), dtype=np.float32)
-    onehot[0, 0] = 1.0  # none
-
-    # Act — run the real thinking-level classifier
-    label, confidence = onnx_svc.predict(
-        "thinking_level",
-        "Design a fault-tolerant multi-region distributed system.",
-        extra_features=onehot,
-    )
-
-    # Assert — observable output
-    assert label == "high"
-    assert confidence > 0.4
-```
+Names describe the real-world scenario: `test_architecture_question_routes_to_high`, not `test_predict_returns_dict`.
 
 ## Banned Patterns
 
 - `assert True` — tests nothing
-- `assert isinstance(x, dict)` as sole assertion — type checks
-- `assert x is not None` without content check — truthiness theatre
+- `assert isinstance(x, dict)` as the sole assertion
+- `assert x is not None` without a content check
 - Tests with zero assertions
-- Any `MagicMock`, `Mock`, `patch`, `monkeypatch` of production code
-- Parametrised label pass-throughs (`@pytest.mark.parametrize("label", [...])` where the test just asserts the mock returned the label)
-- Tests that assert version strings, SHA pins, weight shapes, field lists, or `.called_with(...)`
+- Any `MagicMock`, `Mock`, `patch`, or `monkeypatch` of production code
+- Parametrised label pass-throughs where the test only asserts the mock returned what it was given
+- Assertions on version strings, SHA pins, weight shapes, field lists, or `.called_with(...)`
 
-## Nightly Scenarios — the Primary Feature Tests
+## Three Testing Tiers
 
-The black-box YAML scenarios at `/Volumes/llm/chalie-nightly-test/scenarios/` are the **primary feature tests** for Chalie. They exercise the entire stack: HTTP → auth → message processing → LLM → memory → response.
+| Tier | Location | Purpose |
+|---|---|---|
+| Python feature tests | `backend/tests/` | Fast-feedback for individual service behaviour |
+| Nightly YAML scenarios | `chalie-nightly-test/scenarios/` | Primary system tests — full stack, HTTP to response |
+| Benchmarks | `chalie-nightly-test/benchmark_tasks/` | Scored quality measurement, not pass/fail |
 
-Python-level feature tests are a **fast-feedback supplement** for behaviours you want to catch before running a full nightly. They do not replace the nightly scenarios.
-
-See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
-
-### LUT Canonicalization Scenarios (096–100)
-
-These five scenarios cover the deterministic 27-concept LUT engine shipped in `data_graph_service`:
-
-| File | What it tests |
-|---|---|
-| `096-lut-canonicalize-residence-temporal.yaml` | Non-canonical key (`residency`) → LUT hit → `residence` canonical → temporal supersession; asserts supersedes edge present and `[CONTRADICTION] MLP classification` log line absent |
-| `097-lut-coexist-favorite-foods.yaml` | `food_and_drink` coexist rule — two foods in two turns both remain active; no supersedes edge |
-| `098-job-title-temporal-supersedes.yaml` | `employment` temporal rule — CEO → CTO supersession across 3 recall angles; all return CTO |
-| `099-lut-miss-recorded.yaml` | Key not in LUT stored as-is; `concept_lut_misses` row created with `count=1`; repeat increments to `count=2` |
-| `100-contradiction-classifier-removed.yaml` | Structural check: `pending_contradictions` table absent from `sqlite_master`; `concept_lut_misses` present; `concept_lut.sqlite` path logged on boot |
+Python-level tests are a fast-feedback supplement. They do not replace the nightly scenarios. See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
 
 ## What If a Service Cannot Be Tested Without Mocks?
 
-**STOP.** Do not write the test. Escalate.
+**Stop. Do not write the test. Escalate.**
 
-If the only way to test a service is to mock its collaborators, the code is too coupled to test in production shape. That is a design signal worth surfacing, not hiding behind a mock.
+If the only way to test a service is to mock its collaborators, the code is too coupled to test in production shape. Possible resolutions:
 
-Possible outcomes:
 - Add a legitimate dependency-injection seam (via the coder agent, not the tester)
-- Test the service at a higher level where real collaborators can run
-- Accept that the behaviour is only covered by a nightly scenario, and leave the Python-level test unwritten
+- Test the behaviour at a higher level where real collaborators can run
+- Accept that the behaviour is covered by a nightly scenario and leave the Python-level test unwritten
 
 The wrong answer is always: write a mock-heavy test that proves nothing.
-
-## Service Size — the 10-Test Cap
-
-If a service needs more than 10 feature tests to cover its behaviour, it is doing too much. Break it up.
-
-Typical cap:
-- Simple services: 3–5 feature tests
-- Complex services: 6–10 feature tests
-- More than 10: system design problem — escalate
-
-Feature tests are expensive (they load real models and DBs). The cap is not a suggestion — it is a forcing function that keeps services small and focused.
-
-## Pure-Function Unit Tests
-
-The one exception to "feature tests only" — pure functions may have unit tests:
-
-```python
-# backend/tests/test_concept_lut_lookup.py
-
-import pytest
-pytestmark = pytest.mark.unit
-
-from services.data_graph.lut_engine import _cosine_sim
-
-
-class TestCosineSim:
-
-    def test_identical_vectors_return_one(self):
-        assert _cosine_sim([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
-
-    def test_orthogonal_vectors_return_zero(self):
-        assert _cosine_sim([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
-```
-
-Criteria for a legitimate unit test:
-- No IO (no disk, no network, no DB)
-- No collaborators (no other service instances)
-- No state (same input → same output, always)
-
-If any of those are false, it is not a unit test — it is a feature test disguised as one. Write it under `@pytest.mark.integration`.
-
-## Running the Suite
-
-```bash
-# Fast — pure functions only (~1 second)
-pytest -m unit
-
-# Slow — real stack, real models (loads 596 MB encoder once per module)
-pytest -m integration
-
-# Both
-pytest
-
-# Parallel (if using pytest-xdist)
-pytest -m integration -n 4
-```
-
-## Examples in the Codebase
-
-- `backend/tests/test_classifier_features.py` — reference feature test file (real encoder, real thinking-level head, zero mocks)
-- `backend/tests/test_concept_lut_lookup.py` — reference pure-function file (LUT KNN, threshold gates)
-
-Study these before writing a new test file. Match the pattern.

@@ -782,3 +782,44 @@ CREATE TABLE IF NOT EXISTS data_graph_edges (
 
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_from ON data_graph_edges(from_id, edge_type);
 CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, edge_type);
+
+-- ────────────────────────────────────────────────────────────────
+-- EXPANDED SEMANTIC — variant query strings + embeddings for KNN recall
+-- Populated by SearchExpanderService (search_expander_service.py) after
+-- every knowledge / data_graph write. Each row is one doc2query variant
+-- whose embedding lives in the companion vec0 table, keyed by this row's id.
+-- Callers: knowledge_service.recall() and data_graph_service.recall() join
+--          expanded_semantic_vec → expanded_semantic to surface variant hits.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS expanded_semantic (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    relates_to_table TEXT NOT NULL,   -- 'knowledge' or 'data_graph'
+    related_to_id   INTEGER NOT NULL, -- rowid of the source row
+    str             TEXT NOT NULL     -- the variant query string
+);
+
+CREATE INDEX IF NOT EXISTS idx_expanded_semantic_lookup
+    ON expanded_semantic(relates_to_table, related_to_id);
+
+-- One vec row per expanded_semantic row; rowid matches expanded_semantic.id.
+CREATE VIRTUAL TABLE IF NOT EXISTS expanded_semantic_vec USING vec0(embedding float[768]);
+
+-- Cascade: DELETE knowledge row → purge its expanded_semantic rows.
+CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_knowledge
+    AFTER DELETE ON knowledge BEGIN
+    DELETE FROM expanded_semantic
+        WHERE relates_to_table = 'knowledge' AND related_to_id = OLD.rowid;
+END;
+
+-- Cascade: DELETE data_graph row → purge its expanded_semantic rows.
+CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_data_graph
+    AFTER DELETE ON data_graph BEGIN
+    DELETE FROM expanded_semantic
+        WHERE relates_to_table = 'data_graph' AND related_to_id = OLD.id;
+END;
+
+-- Cascade: DELETE expanded_semantic row → purge its vec row.
+CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
+    AFTER DELETE ON expanded_semantic BEGIN
+    DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
+END;

@@ -1,4 +1,3 @@
-import json
 import logging
 import math
 import os
@@ -11,6 +10,9 @@ from typing import Optional
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now, parse_utc
+# SearchExpanderService: generates doc2query variants + embeds them for KNN recall.
+# Replaces _schedule_embeddings and _schedule_doc2query fire-and-forget threads.
+import services.search_expander_service as _ses
 
 logger = logging.getLogger(__name__)
 
@@ -230,12 +232,13 @@ def seed_from_legacy_knowledge(db_service):
             cursor.close()
             logger.info("[DATA GRAPH] Seed complete — %d rows migrated from knowledge", len(inserted_ids))
 
-            # Batch-schedule embeddings in background (non-blocking boot)
+            # Batch-enqueue seeded rows into SearchExpanderService (non-blocking).
+            # SES handles key_vec/value_vec backfill + doc2query + expanded_semantic.
             if inserted_ids:
-                def _batch_embed():
-                    for rid, k, v in inserted_ids:
-                        svc._schedule_embeddings(rid, k, v)
-                threading.Thread(target=_batch_embed, daemon=True).start()
+                def _batch_enqueue():
+                    for rid, _k, _v in inserted_ids:
+                        _ses.enqueue("data_graph", rid)
+                threading.Thread(target=_batch_enqueue, daemon=True).start()
 
     except Exception as e:
         logger.warning("[DATA GRAPH] seed_from_legacy_knowledge failed: %s", e)
@@ -362,48 +365,6 @@ class DataGraphService:
                 self._delete_fts(conn, rowid, row[0], row[1], row[2], row[3] or '')
         except Exception as e:
             logger.warning("[DATA GRAPH] FTS removal failed for rowid=%s: %s", rowid, e)
-
-    def _schedule_embeddings(self, rowid: int, key: str, value: str):
-        def _run():
-            try:
-                key_emb = self._generate_embedding(key)
-                value_emb = self._generate_embedding(value or key)
-                with self.db.connection() as conn:
-                    if key_emb:
-                        self._store_key_vec(conn, rowid, key_emb)
-                    if value_emb:
-                        self._store_value_vec(conn, rowid, value_emb)
-            except Exception as e:
-                logger.warning("[DATA GRAPH] Embedding generation failed for rowid=%s: %s", rowid, e)
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _schedule_doc2query(self, rowid: int, key: str, value: str):
-        def _run():
-            try:
-                from services.doc2query_service import get_doc2query_service
-                d2q = get_doc2query_service()
-                if not d2q.is_available():
-                    return
-                queries = d2q.generate_queries(f"{key}: {value}")
-                if not queries:
-                    return
-                with self.db.connection() as conn:
-                    # Read old values BEFORE update for correct FTS delete
-                    old = conn.execute(
-                        "SELECT key, value, kind, search_queries FROM data_graph WHERE rowid = ?",
-                        (rowid,)
-                    ).fetchone()
-                    if not old:
-                        return
-                    self._delete_fts(conn, rowid, old[0], old[1], old[2], old[3] or '')
-                    conn.execute(
-                        "UPDATE data_graph SET search_queries = ? WHERE rowid = ?",
-                        (json.dumps(queries), rowid)
-                    )
-                    self._sync_fts(conn, rowid)
-            except Exception as e:
-                logger.warning("[DATA GRAPH] doc2query failed for rowid=%s: %s", rowid, e)
-        threading.Thread(target=_run, daemon=True).start()
 
     def _reinforce_row(self, conn, row_id: int, existing_dict: dict, now_iso: str):
         old_evidence = existing_dict.get('evidence_count', 1)
@@ -671,10 +632,13 @@ class DataGraphService:
                             "created", key, key, None, value, None, None, None, row,
                         )
 
-            if _schedule_emb_args:
-                self._schedule_embeddings(*_schedule_emb_args)
-            if _schedule_d2q_args:
-                self._schedule_doc2query(*_schedule_d2q_args)
+            # Enqueue for SearchExpanderService AFTER connection exits (row committed).
+            # SES absorbs both _schedule_embeddings (key_vec/value_vec backfill) and
+            # _schedule_doc2query (variant generation + FTS sync + expanded_semantic writes).
+            # Either arg being set means a new or superseded row was written.
+            if _schedule_emb_args or _schedule_d2q_args:
+                rowid = (_schedule_emb_args or _schedule_d2q_args)[0]
+                _ses.enqueue("data_graph", rowid)
 
             return result
 
@@ -1037,11 +1001,41 @@ class DataGraphService:
                 except Exception as e:
                     logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
 
+                # ── Variant vec search (expanded_semantic_vec) ──────────
+                # doc2query variants written by SearchExpanderService.  Hits
+                # join back to data_graph via expanded_semantic.related_to_id.
+                if query_blob:
+                    try:
+                        variant_k = min(k, 50)
+                        cursor.execute("""
+                            SELECT CAST(es.related_to_id AS INTEGER) AS source_id,
+                                   v.distance
+                            FROM expanded_semantic_vec v
+                            JOIN expanded_semantic es ON es.id = v.rowid
+                            WHERE v.embedding MATCH ? AND k = ?
+                              AND es.relates_to_table = 'data_graph'
+                            ORDER BY v.distance
+                        """, (query_blob, variant_k))
+                        for source_id, dist in cursor.fetchall():
+                            cos = _l2_dist_to_cosine(dist)
+                            if source_id not in candidates:
+                                candidates[source_id] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0, 'variant_cos': 0.0}
+                            candidates[source_id]['variant_cos'] = max(
+                                candidates[source_id].get('variant_cos', 0.0), cos
+                            )
+                    except Exception as e:
+                        logger.debug("[DATA GRAPH] Variant vec search failed (non-fatal): %s", e)
+
+                # Ensure all existing candidates have the variant_cos key.
+                for sigs in candidates.values():
+                    sigs.setdefault('variant_cos', 0.0)
+
                 # ── Relevance floor — drop candidates with no strong signal ──
                 candidates = {
                     rid: sigs for rid, sigs in candidates.items()
                     if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
                     or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
+                    or sigs.get('variant_cos', 0.0) >= _RECALL_COSINE_FLOOR
                     or sigs['fts_bonus'] > 0
                 }
 
@@ -1063,6 +1057,7 @@ class DataGraphService:
                         2.0 * sigs['key_cos']
                         + 1.0 * sigs['value_cos']
                         + 0.3 * sigs['fts_bonus']
+                        + 0.8 * sigs.get('variant_cos', 0.0)
                     )
 
                     ref_ts_str = d.get('last_accessed_at') or d.get('last_confirmed_at')

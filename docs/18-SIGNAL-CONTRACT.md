@@ -1,286 +1,127 @@
 # Signal Contract — Continuous Reasoning Spine
 
-This document defines the contract that governs Chalie's transition from independent timer-based services to a unified signal-driven architecture. It is the governing spec for all migration work.
-
-**Status:** Active — governs all service migration decisions.
+This document defines the contract governing Chalie's signal-driven architecture. It is the governing spec for all service integration decisions.
 
 ---
 
-## 1. Governing Principles
+## Governing Principles
 
-### 1.1 Simplicity Over Cleverness
+### Simplicity Over Cleverness
 
-Every service must be as minimal as possible. Complexity compounds across 40+ services — a 10% increase in complexity per service is a 40x increase in system debugging difficulty. When in doubt, do less.
+Every service must be as minimal as possible. Complexity compounds across 40+ services. When in doubt, do less.
 
-### 1.2 Graceful Isolation
+### Graceful Isolation
 
 **"Forgetting my name for a split-second doesn't put me in a vegetative state."**
 
 No service failure may cascade into other services. Every signal consumer must operate under the assumption that any signal source may be dead, delayed, or producing garbage. The system degrades gracefully — individual capabilities may temporarily weaken, but the core reasoning loop never stops.
 
 Concrete rules:
+
 - Every signal consumption is wrapped in try/except at the boundary
-- Every service has a **fail-open** default: if it can't do its job, it returns a neutral result (empty string, no-op, skip), never raises into the caller
+- Every service has a fail-open default: if it cannot do its job, it returns a neutral result (empty string, no-op, skip), never raises into the caller
 - No service holds locks that other services need
-- No service writes state that another service must read to function (MemoryStore state is advisory, never mandatory)
-- A service being dead means its signals stop arriving — consumers treat "no signal" as "nothing interesting happened", not as an error
+- No service writes state that another service must read to function — MemoryStore state is advisory, never mandatory
+- "No signal" means "nothing interesting happened", not "something is broken"
 
-### 1.3 Independent Testability
+### Independent Testability
 
-Every service must be testable in complete isolation:
-- Unit tests use in-memory MemoryStore and `:memory:` SQLite — no shared state
-- No test may depend on another service being initialized
-- Every service is covered by at least one `chalie-nightly-test` blackbox scenario
-- Integration between services is tested by the nightly suite, not by unit tests
+Every service must be testable in complete isolation. Unit tests use in-memory storage with no shared state and no dependency on another service being initialized. Integration between services is tested by the nightly suite, not by unit tests.
 
-### 1.4 Service Layers (Fault Domains)
+---
+
+## Service Layers
 
 Every service belongs to exactly one of three layers. Failures are contained within a layer — they never cascade across layer boundaries.
 
 | Layer | Analogy | What it does | If it fails... |
-|---|---|---|---|
-| **Cognitive** | Brain | Reasoning, memory formation, consolidation, decay, planning, reflection | ...you stop reasoning well, but you still perceive and can still use tools |
-| **Embodiment** | Body/Senses | Perception, ambient awareness, place learning, context tracking, voice I/O | ...you lose awareness of surroundings, but you can still think and act on what you know |
+|-------|---------|--------------|----------------|
+| **Cognitive** | Brain | Memory formation, consolidation, decay, planning, reflection, reasoning | ...you stop reasoning well, but you can still perceive and use tools |
+| **Embodiment** | Body/Senses | Ambient awareness, place learning, context tracking, voice I/O, session events | ...you lose situational awareness, but the reasoning loop continues on what it knows |
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
-**Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, LUTCanonicalization, IdleConsolidation, GrowthPattern, AutobiographySynthesis, GoalInference, SelfModel
+Cross-layer rules:
 
-**Embodiment services:**
-AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, EpisodicMemoryObserver, ThreadExpiry
-
-**Capability services:**
-ToolRegistry, ToolWorker, ToolSubprocess, ToolConfig, ToolProfile, ToolPerformance, ACTLoop, ACTDispatcher, DocumentService, DocumentProcessing, DocumentPurge, SchedulerService, ListService, PersistentTaskWorker, MomentEnrichment, ProfileEnrichment
-
-**Cross-layer rules:**
-- Cognitive services never import embodiment or capability services at module level (lazy imports only)
-- Embodiment services write to MemoryStore; cognitive services read from MemoryStore. Never direct calls.
+- Cognitive services never import embodiment or capability services at module level — lazy imports only
+- Embodiment services write to MemoryStore; cognitive services read from MemoryStore. No direct calls between layers.
 - Capability failures surface as "tool unavailable" — the cognitive layer plans around them, never crashes
-- A full embodiment outage means ambient signals stop arriving. The cognitive layer treats this as "nothing interesting is happening" (idle), not as an error
-
-### 1.5 Minimal Surface Area
-
-Each service exposes the minimum interface needed:
-- One public method for its primary job (e.g., `process()`, `consolidate()`, `decay()`)
-- Signal emission is a side-effect, not the primary interface
-- No service exposes internal state to other services except through MemoryStore advisory keys
+- A full embodiment outage means ambient signals stop arriving; the cognitive layer treats this as idle, not as an error
 
 ---
 
-## 2. Signal Envelope
+## Signal Envelope
 
-All signals flowing through the spine use this format:
+Signals carry references and summaries, not fat payloads. Every signal includes:
 
-```python
-@dataclasses.dataclass
-class ReasoningSignal:
-    signal_type: str          # What happened (see §3)
-    source: str               # Who emitted it (service name)
-    concept_id: int | None    # Direct concept reference (fast path)
-    concept_name: str | None  # Human-readable label
-    topic: str | None         # Domain/topic context
-    content: str | None       # Freeform payload (< 200 chars)
-    activation_energy: float  # 0.0–1.0, how important/urgent
-    timestamp: float          # When emitted (epoch)
-```
+- `signal_type` — what happened (see registered types below)
+- `source` — which service emitted it
+- `concept_id` / `concept_name` — direct reference to the relevant knowledge node
+- `topic` — domain context
+- `content` — freeform summary, under 200 characters
+- `activation_energy` — 0.0–1.0, how important or urgent
+- `timestamp` — when emitted
 
-### 2.1 Signal Types (Registered)
-
-| Signal Type | Meaning | Emitter(s) | Energy Range |
-|---|---|---|---|
-| `memory_pressure` | Knowledge is fading or contradicted | decay_engine, semantic_consolidation | 0.5–0.7 |
-| `new_knowledge` | New concept formed from experience | semantic_consolidation | 0.6 |
-| `novel_observation` | Surprising tool output stored to data_graph | — | 0.6 |
-| `ambient_context` | Environment changed (place, attention, energy) | event_bridge | From confidence |
-| `idle_discovery` | Nothing happened, engine self-seeds | reasoning_loop (internal) | 0.4–0.5 |
-| `episode_created` | New narrative episode consolidated | episodic_memory_worker | 0.5 |
-| `trait_changed` | User trait created, updated, or corrected | knowledge_service | 0.3–0.7 |
-| `task_state_changed` | Persistent task state transition | persistent_task_service | 0.5–0.6 |
-| `schedule_fired` | Scheduled reminder/task fired | scheduler_service | 0.5 |
-| `thread_expired` | Conversation thread expired | thread_expiry_service | 0.3 |
-| `user_message` | User sent a chat message | websocket | 1.0 |
-| `goal_inferred` | Recurring topic pattern detected as potential goal | goal_inference_service | 0.6 |
-
-Note: `task_state_changed` and `schedule_fired` signals no longer trigger incremental world-model cache updates. The `WorldState` singleton pulls schedule data live from `scheduled_items` inside `render()` on each user turn — no cache, no worker, no notify calls needed.
-
-New signal types require:
-1. Addition to this table
-2. A nightly test scenario
-3. Documentation of what the consumer should do with it
-
-### 2.2 Signal Transport
-
-- **Priority queue:** `reasoning:priority` (user messages — processed first)
-- **Background queue:** `reasoning:signals` (all other signal types)
-- **Pop:** `blpop([priority, signals], timeout=idle_timeout)` — tries priority first
-- **Push:** `rpush(key, signal.to_json())`
-- **Max depth:** 50 signals (oldest dropped on overflow, background queue only)
-- **Debounce:** 30s minimum between processed background signals (user messages bypass)
-- **Serialization:** JSON via `dataclasses.asdict()`
-- **Yield points:** Background signal processing checks priority queue before expensive operations (LLM calls); if a user message is waiting, background reasoning aborts and the loop picks up the priority signal
-
-### 2.3 Emission Rules
-
-- Emission is always **fire-and-forget** — the emitter never waits for a response
-- Emission is always **wrapped in try/except** — a failed emit is logged at DEBUG, never raised
-- Emission uses **lazy imports** (`from services.reasoning_loop_service import emit_reasoning_signal, ReasoningSignal`) to avoid import cycles
-- Emitters never instantiate the consumer — they push to the queue and forget
+Emission is always fire-and-forget. Emitters never wait for a response and never instantiate the consumer. A failed emit is logged at DEBUG level and never raised.
 
 ---
 
-## 3. Service Lifecycle Contract
+## Registered Signal Types
 
-### 3.1 Registration
+| Signal Type | Meaning | Energy Range |
+|-------------|---------|--------------|
+| `memory_pressure` | Knowledge is fading or contradicted | 0.5–0.7 |
+| `new_knowledge` | New concept formed from experience | 0.6 |
+| `novel_observation` | Surprising tool output stored to data graph | 0.6 |
+| `ambient_context` | Environment changed (place, attention, energy) | From confidence |
+| `idle_discovery` | Nothing happened; engine self-seeds | 0.4–0.5 |
+| `episode_created` | New narrative episode consolidated | 0.5 |
+| `trait_changed` | User trait created, updated, or corrected | 0.3–0.7 |
+| `task_state_changed` | Persistent task state transition | 0.5–0.6 |
+| `schedule_fired` | Scheduled reminder or task fired | 0.5 |
+| `thread_expired` | Conversation thread expired | 0.3 |
+| `user_message` | User sent a chat message | 1.0 |
+| `goal_inferred` | Recurring topic pattern detected as potential goal | 0.6 |
 
-Every spine-connected service declares in its module docstring:
-```
-Emits: signal_type_1, signal_type_2
-Consumes: signal_type_3 (via reasoning:signals queue)
-Trigger: <timer Ns | signal-driven | request-driven | one-shot>
-Fail mode: <fail-open description>
-```
-
-### 3.2 Health
-
-Every long-running service writes a heartbeat:
-```python
-store.set(f"health:{service_name}", str(time.time()), ex=ttl)
-```
-
-Where `ttl` is 2x the expected cycle time. The `SelfModelService` (30s cycle) reads these heartbeats and includes dead services in its `noteworthy[]` list. No automated restart — health is observational, not coercive.
-
-### 3.3 Startup Order
-
-Services start in dependency order (managed by `run.py`), but **no service assumes another service is running**. If a dependency isn't ready:
-- Queue-based: messages accumulate, processed when consumer starts
-- Signal-based: signals accumulate (up to queue cap), processed when consumer starts
-- Direct call: try/except, return neutral default
+Adding a new signal type requires: an entry in this table, a nightly test scenario, and documentation of what the consumer should do with it.
 
 ---
 
-## 4. Migration Pattern
+## Signal Transport
 
-### 4.1 Converting a Timer Service to Signal-Responsive
-
-For a service that currently runs on `time.sleep(N)`:
-
-**Before:**
-```python
-def run(self):
-    while True:
-        time.sleep(self.interval)
-        self._do_work()
-```
-
-**After (Phase 1 — emit signals, keep timer):**
-```python
-def run(self):
-    while True:
-        time.sleep(self.interval)
-        self._do_work()
-        # NEW: emit signal if something interesting happened
-        if result.is_interesting:
-            emit_reasoning_signal(ReasoningSignal(...))
-```
-
-**After (Phase 2 — consume signals, remove timer):**
-```python
-def run_signal_loop(self):
-    while True:
-        signal = self.store.blpop("service:signals", timeout=self.max_idle)
-        if signal:
-            self._process_signal(signal)
-        else:
-            self._idle_maintenance()
-```
-
-**Phase 1 is always safe to ship independently.** Phase 2 requires the spine to route signals to the service.
-
-### 4.2 Migration Checklist (Per Service)
-
-- [ ] Service docstring updated with Emits/Consumes/Trigger/Fail-mode
-- [ ] Signal emission added (Phase 1)
-- [ ] Unit tests pass in isolation
-- [ ] Nightly scenario created/updated
-- [ ] Timer removed, signal consumption added (Phase 2)
-- [ ] Fail-open verified (service killed → system continues)
-- [ ] Documented in this file's migration tracker (§5)
+- **Priority queue** — user messages are processed first
+- **Background queue** — all other signal types
+- **Max depth** — 50 signals; oldest dropped on overflow (background queue only)
+- **Debounce** — 30s minimum between processed background signals; user messages bypass
+- **Yield points** — background signal processing checks the priority queue before expensive operations; if a user message is waiting, background reasoning aborts
 
 ---
 
-## 5. Migration Tracker
+## Service Health
 
-### Phase 1 Complete (Emits Signals, Keeps Timer)
-
-| Service | Signals Emitted | Timer | Nightly Scenario |
-|---|---|---|---|
-| **DecayEngineService** | `memory_pressure` | 30min | 966 |
-| **SemanticConsolidationService** | `new_knowledge`, `memory_pressure` | Queue-driven | 967 |
-| **EventBridgeService** | `ambient_context` | Event-driven | 968 |
-| **EpisodicMemoryWorker** | `episode_created` | Queue-driven | 971 |
-| **KnowledgeService** | `trait_changed` | Request-driven | 972 |
-| **PersistentTaskService** | `task_state_changed` | Request/timer | 973 |
-| **SchedulerService** | `schedule_fired` | 60s timer | 974 |
-| **ThreadExpiryService** | `thread_expired` | 5min timer | 975 |
-| **EpisodicMemoryWorker** | `goal_emerged` | Post-episode clustering + LLM | — |
-
-### Phase 2 Complete (Signal-Driven, No Timer)
-
-| Service | Signals Consumed | Idle Fallback | Nightly Scenario |
-|---|---|---|---|
-| **ReasoningLoopService** | All signal types | 10min → salient/insight | 965, 968, 969 |
-
-### Not Yet Started
-
-| Service | Current Trigger | Priority | Notes |
-|---|---|---|---|
-| EpisodicMemoryObserver | 60s timer | — | Could react to gist-stored signals |
-| IdleConsolidationService | 5min timer | — | Could react to queue-drain signals |
-| GrowthPatternService | 30min timer | — | Could react to trait-change signals |
-| AutobiographySynthesis | 6h timer | Low | Long cycle, timer is fine for now |
-| PersistentTaskWorker | 30min timer | — | Could react to plan-ready signals |
-| ProfileEnrichmentService | 6h timer | Low | Long cycle, timer is fine |
-| TemporalPatternService | 6h timer | Low | Long cycle, timer is fine |
-| SelfModelService | 30s timer | — | Heartbeat aggregator, timer is natural |
-| DocumentPurgeService | 6h timer | Low | Maintenance, timer is fine |
-| MomentEnrichmentService | 5min timer | Low | Polling for status, timer is fine |
-| FolderWatcherService | 30s timer | Low | OS-level polling, timer is natural |
+Services write periodic heartbeats keyed by service name with a TTL of 2x their expected cycle time. The self-model aggregates these and includes dead services in its noteworthy list. Health is observational, not coercive — no automated restart.
 
 ---
 
-## 6. Anti-Patterns
+## Migration State
 
-### 6.1 Signal Cascades
-**Bad:** Service A emits signal → Service B processes it and emits signal → Service C processes it and emits signal → Service A processes it.
-**Rule:** No circular signal paths. If A emits to B, B must never emit back to A through any chain. Draw the signal graph before adding a new emission point.
-
-### 6.2 Signal as RPC
-**Bad:** Service A emits a signal and waits for a response.
-**Rule:** Signals are fire-and-forget. If you need a response, use a direct function call or a dedicated result queue (like `bg_llm:result:{job_id}`).
-
-### 6.3 Mandatory Signals
-**Bad:** Service B crashes if it doesn't receive a signal from Service A within N seconds.
-**Rule:** No signal is mandatory. "No signal" means "nothing interesting happened", never "something is broken". Timeouts trigger idle/maintenance behavior, not error states.
-
-### 6.4 Fat Signals
-**Bad:** Signal payload contains the full episode text, embeddings, or large data structures.
-**Rule:** Signals carry references (concept_id, topic) and summaries (content < 200 chars). The consumer looks up full data from SQLite/MemoryStore if needed.
-
-### 6.5 Signal-Driven Configuration
-**Bad:** Using signals to propagate config changes across services.
-**Rule:** Config is read from files/DB at service init or on a slow reload cycle. Signals carry cognitive events, not infrastructure state.
+Migration from timer-based to signal-driven architecture is partial. The reasoning loop is fully signal-driven. Most other services still run on timers and emit signals on relevant events. Services that run on long natural cycles (6h, 30min) are good candidates to remain timer-driven indefinitely.
 
 ---
 
-## 7. The Spine (Future)
+## Anti-Patterns
 
-The current architecture has a single consumer (ReasoningLoopService) reading from a single queue (`reasoning:signals`). The future spine will:
+**Signal cascades** — Service A emits a signal, B processes it and emits, C processes it and emits back toward A. No circular signal paths. Draw the signal graph before adding a new emission point.
 
-1. **Route signals to multiple consumers** — each service registers interest in specific signal types
-2. **Priority scheduling** — user-facing signals preempt background maintenance
-3. **Backpressure** — slow consumers don't cause queue overflow for fast consumers
-4. **Observability** — signal flow is logged and queryable for debugging
+**Signal as RPC** — emitting a signal and waiting for a response. Signals are fire-and-forget. If a response is needed, use a direct function call or a dedicated result queue.
 
-This is explicitly **not built yet**. The current single-queue model is sufficient for Phase 1 (emit signals) and the initial Phase 2 conversions. The spine emerges when enough services are signal-driven that routing becomes necessary.
+**Mandatory signals** — a service that crashes or errors if it does not receive a signal within N seconds. Timeouts trigger idle or maintenance behavior, not error states.
 
-**Build the spine when you need it, not before.**
+**Fat signals** — payloads containing full episode text, embeddings, or large data structures. Signals carry references and short summaries; consumers look up full data from storage.
+
+**Signal-driven configuration** — using signals to propagate config changes. Config is read from files or the database at service init or on a slow reload cycle. Signals carry cognitive events, not infrastructure state.
+
+---
+
+## The Spine
+
+Current design: single consumer, single queue. Multi-consumer routing — where each service registers interest in specific signal types — is deferred until enough services are signal-driven that routing becomes necessary. Build it when you need it.
