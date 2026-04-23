@@ -41,6 +41,7 @@ def track(
             success=success,
             latency_ms=float(latency_ms),
             cost=0.0,
+            channel=channel,
         )
     except Exception as e:
         logger.debug(f"[TRACKER] Performance metric failed for {name}: {e}")

@@ -49,6 +49,7 @@ class ToolPerformanceService:
         success: bool,
         latency_ms: float,
         cost: float = 0.0,
+        channel: str = '',
     ) -> None:
         """Called after each tool execution to record performance metrics."""
         db = self._get_db()
@@ -57,10 +58,10 @@ class ToolPerformanceService:
             db.execute(
                 """
                 INSERT INTO tool_performance_metrics
-                    (tool_name, exchange_id, invocation_success, latency_ms, cost_estimate)
-                VALUES (?, ?, ?, ?, ?)
+                    (tool_name, exchange_id, channel, invocation_success, latency_ms, cost_estimate)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (tool_name, exchange_id or '', 1 if success else 0, latency_ms, cost)
+                (tool_name, exchange_id or '', channel or '', 1 if success else 0, latency_ms, cost)
             )
 
             # Update user preferences: usage_count++, success_count if success

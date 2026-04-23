@@ -358,6 +358,7 @@ CREATE TABLE IF NOT EXISTS tool_performance_metrics (
     id TEXT PRIMARY KEY,
     tool_name TEXT NOT NULL,
     exchange_id TEXT,
+    channel TEXT DEFAULT '',                  -- 'user', 'dmn', 'goal_pursuit', 'scheduled', ...
     invocation_success INTEGER NOT NULL,      -- BOOLEAN
     latency_ms REAL,
     cost_estimate REAL DEFAULT 0,
@@ -366,6 +367,7 @@ CREATE TABLE IF NOT EXISTS tool_performance_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tpm_tool_created ON tool_performance_metrics(tool_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tpm_channel_created ON tool_performance_metrics(channel, created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- USER TOOL PREFERENCES
