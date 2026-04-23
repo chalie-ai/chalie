@@ -553,7 +553,7 @@ def update_apply():
 def reset_thread():
     """Clear conversation context and advance the thread ID.
 
-    Does two things:
+    Does three things:
     1. Deletes all transcript rows (and their linked tool_calls + compaction watermark)
        for the given processor channel (default 'user'). This empties the Previous
        Messages block so the next turn starts genuinely fresh — recall must come from
@@ -561,6 +561,10 @@ def reset_thread():
     2. Advances the active_channel MemoryStore key (web:default:N → N+1) so postTurn
        services (adaptive directives, phase, situation model) scope their writes to the
        new thread_id.
+    3. Clears the notifications:recent MemoryStore list. On every /ws connect the
+       client drains this list to replay missed background events (goal_pursuit
+       completions, etc.). Without this clear, stale task events from a previous
+       scenario bleed into the next scenario's event stream.
 
     In the persistent-context architecture, getPreviousMessages() reads from the
     transcript table filtered by the hardcoded CHANNEL value ('user'). The MemoryStore
@@ -615,15 +619,21 @@ def reset_thread():
             new_thread = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
             store.set('active_channel:default', new_thread, ex=604800)
 
+        # ── 3. Clear stale background-event notifications ──────────────────────
+        notifications_count = store.llen('notifications:recent')
+        store.delete('notifications:recent')
+
         logger.info(
             f"[RESET-THREAD] channel='{channel}': cleared {cleared} transcript rows, "
-            f"thread {current!r} → {new_thread!r}"
+            f"thread {current!r} → {new_thread!r}, "
+            f"notifications_cleared={notifications_count}"
         )
         return jsonify({
             'ok': True,
             'channel': channel,
             'transcript_rows_cleared': cleared,
             'new_thread': new_thread,
+            'notifications_cleared': notifications_count,
         }), 200
 
     except Exception as e:
