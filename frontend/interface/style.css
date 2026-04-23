@@ -1431,13 +1431,13 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .image-preview__warn {
-  background: rgba(176, 112, 0, 0.85);  /* amber tint */
-  color: #ffd580;
+  background: rgba(120, 70, 0, 0.95);  /* deep amber — readable vs white text */
+  color: #ffffff;
 }
 
 .image-preview__error {
-  background: rgba(180, 30, 30, 0.88);  /* destructive red */
-  color: #fca5a5;
+  background: rgba(140, 20, 20, 0.95);  /* deep red — readable vs white text */
+  color: #ffffff;
 }
 
 /* ---- Global drag-over overlay ------------------------------------------- */

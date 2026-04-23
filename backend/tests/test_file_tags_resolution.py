@@ -205,7 +205,7 @@ def test_ready_image_emits_ocr_tag(_ft_db):
     analysis completes before the user hits send, and the LLM receives the
     extracted text.
     """
-    db_service, seed_conn = _ft_db
+    _, seed_conn = _ft_db
     _insert_doc(
         seed_conn,
         "img00001",
@@ -229,7 +229,7 @@ def test_failed_image_emits_status_failed_tag(_ft_db):
     [image id=... status=failed] so the LLM knows the image was attached
     but could not be read — rather than silently dropping it.
     """
-    db_service, seed_conn = _ft_db
+    _, seed_conn = _ft_db
     _insert_doc(
         seed_conn,
         "img00002",
@@ -270,7 +270,7 @@ def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
     alongside their message, and even though no explicit image_ids are sent,
     the file context is injected automatically.
     """
-    db_service, seed_conn = _ft_db
+    _, seed_conn = _ft_db
     _insert_doc(
         seed_conn,
         "doc00001",
@@ -302,7 +302,7 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
     before the upload XHR has had a chance to attach the image_id to the
     message payload.
     """
-    db_service, seed_conn = _ft_db
+    _, seed_conn = _ft_db
     _insert_doc(
         seed_conn,
         "img00003",
