@@ -189,6 +189,12 @@ class TestWorldStateBgProcessRendering:
         client, db_conn, _ = authed_client
         _reset_world_state()
 
+        # Rendered bg_process is gated on an active goal — seed one.
+        db_conn.execute(
+            "INSERT INTO goals (id, description, type, status) "
+            "VALUES (?, 'test goal', 'stated', 'active')",
+            (str(uuid.uuid4()),),
+        )
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Booking holiday flights', ?)",
@@ -255,7 +261,12 @@ class TestWorldStateFullLifecycle:
             (item_id, "Call Mum", _future_iso(120)),
         )
 
-        # bg_process
+        # bg_process — gated on active goal, seed one first
+        db_conn.execute(
+            "INSERT INTO goals (id, description, type, status) "
+            "VALUES (?, 'test goal', 'stated', 'active')",
+            (str(uuid.uuid4()),),
+        )
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Booking holiday flights', ?)",
