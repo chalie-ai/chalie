@@ -62,7 +62,7 @@ Voice is optional. If the voice service is unavailable, the mic button and all s
 
 **Microphone (speech-to-text)** — the mic button sits left of the prompt box. Click to record, click again to stop. The transcript is pasted into the prompt box; the user reviews it and sends. The mic track is released immediately after each recording.
 
-**Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. On iOS Safari, the audio element is unlocked synchronously inside the click gesture before any async fetch, satisfying the browser's autoplay policy.
+**Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. Playback streams: `/voice/synthesize` returns `{ok, total}` immediately and the backend publishes each sentence-sized WAV chunk on the `output:events` pub/sub channel (as `tts_chunk`, terminated by `tts_done`). The WebSocket forwards those frames to the client; VoicePlayer decodes each chunk into an `AudioBuffer` and chains playback via `AudioBufferSourceNode.onended`, so audio starts as soon as the first chunk is ready rather than waiting for the full blob. `AudioContext.resume()` runs synchronously inside the click handler, satisfying iOS Safari's autoplay policy.
 
 ## Applications
 
