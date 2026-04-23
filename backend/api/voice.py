@@ -338,14 +338,28 @@ def voice_health():
     return jsonify({"status": "loading"}), 200
 
 
+def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
+    """Encode a numpy audio array as PCM WAV bytes."""
+    import soundfile as sf
+    buf = io.BytesIO()
+    sf.write(buf, audio_array, sample_rate, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+    return buf.read()
+
+
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Generate speech from text and return a single WAV blob.
+    """Generate speech from text, streaming chunks via WebSocket pub/sub.
 
-    Synthesizes all sentences in sequence, concatenates the numpy arrays, and
-    returns the complete audio as ``audio/wav``.  The caller (VoicePlayer in
-    the frontend) creates an object URL from the blob and plays it directly via
-    an ``<audio>`` element — no streaming, no pub/sub, no WebSocket coordination.
+    Returns ``{"ok": true, "total": N}`` immediately so the client knows how
+    many chunks to expect. The actual synthesis runs in a daemon thread and
+    publishes each WAV chunk as a ``tts_chunk`` event on the ``output:events``
+    channel (picked up by the WebSocket and forwarded to the client for
+    progressive playback). End-of-stream is signalled with ``tts_done``.
+
+    This replaces the prior single-blob response: on CPU-only hosts the
+    whole-blob path took minutes for long messages and hit client timeouts.
+    Streaming lets playback start as soon as the first chunk is ready.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
@@ -369,48 +383,55 @@ def voice_synthesize():
         return jsonify({"error": "Text is required"}), 400
 
     chunks = _split_sentences(text)
+    total = len(chunks)
 
-    if not sem.acquire(blocking=True, timeout=30):
+    if not sem.acquire(blocking=False):
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
-    try:
-        import numpy as np
-        import soundfile as sf
+    def _synthesize_and_push():
+        """Synthesize each sentence and publish WAV chunks via pub/sub.
 
-        silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
-        segments: list[np.ndarray] = []
+        The whole body runs under a single try/finally so that any failure
+        — an import error, a store-connection failure, a synth crash —
+        still releases the semaphore. A leak here previously locked the
+        TTS service permanently at 503 'busy' until process restart.
+        """
+        try:
+            import base64
+            import json
+            from services.memory_client import MemoryClientService
 
-        for i, chunk in enumerate(chunks):
-            try:
-                samples, _sr = _tts_model.create(chunk, voice=KOKORO_VOICE, lang="en-us")
-                segments.append(samples)
-                # Inter-sentence pause (skip on last chunk)
-                if i < len(chunks) - 1:
-                    segments.append(silence)
-            except Exception as chunk_err:
-                logger.warning(
-                    "[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
-                    len(chunk), chunk_err, chunk,
-                )
-                continue
+            store = MemoryClientService.create_connection()
+            for i, chunk in enumerate(chunks):
+                try:
+                    samples, _sr = _tts_model.create(
+                        chunk, voice=KOKORO_VOICE, lang="en-us"
+                    )
+                    wav_bytes = _audio_to_wav_bytes(samples)
+                    store.publish("output:events", json.dumps({
+                        "type": "tts_chunk",
+                        "index": i,
+                        "total": total,
+                        "text": chunk,
+                        "audio": base64.b64encode(wav_bytes).decode("ascii"),
+                    }))
+                except Exception as chunk_err:
+                    logger.warning(
+                        "[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
+                        len(chunk), chunk_err, chunk,
+                    )
+                    continue
+            store.publish("output:events", json.dumps({
+                "type": "tts_done",
+                "total": total,
+            }))
+        except Exception as e:
+            logger.exception("[Voice] Synth thread crashed before completion: %s", e)
+        finally:
+            sem.release()
 
-        if not segments:
-            return jsonify({"error": "Synthesis produced no audio"}), 500
-
-        combined = np.concatenate(segments)
-        buf = io.BytesIO()
-        sf.write(buf, combined, 24000, format="WAV", subtype="PCM_16")
-        buf.seek(0)
-        wav_bytes = buf.read()
-
-    except Exception as e:
-        logger.error("[Voice] TTS synthesis error: %s", e)
-        return jsonify({"error": "Synthesis failed"}), 500
-    finally:
-        sem.release()
-
-    from flask import Response
-    return Response(wav_bytes, status=200, mimetype="audio/wav")
+    threading.Thread(target=_synthesize_and_push, daemon=True).start()
+    return jsonify({"ok": True, "total": total})
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])

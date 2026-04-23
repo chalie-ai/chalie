@@ -333,13 +333,11 @@ export class Renderer {
       speakBtn.setAttribute('aria-label', 'Listen to this message');
       speakBtn.innerHTML = SPEAK_ICON;
       speakBtn.addEventListener('click', () => {
-        // Synchronously create and unlock an Audio element inside the gesture.
-        // iOS Safari breaks the user-gesture chain on any await, so the unlock
-        // must happen before dispatching the event (which triggers an async fetch).
-        const unlockedAudio = new Audio();
-        unlockedAudio.play().catch(() => {});
+        // Dispatch synchronously inside the click gesture so VoicePlayer
+        // can call AudioContext.resume() within the same user-activation
+        // window (iOS Safari autoplay gate).
         document.dispatchEvent(new CustomEvent('chalie:speak-message', {
-          detail: { text, audio: unlockedAudio }
+          detail: { text }
         }));
       });
       metaRow.appendChild(speakBtn);

@@ -1,27 +1,26 @@
 /**
- * VoicePlayer — per-message audio overlay player.
+ * VoicePlayer — per-message streaming audio overlay.
  *
- * Listens for `chalie:speak-message` custom events dispatched by renderer.js.
- * On each event: fetches the full audio WAV blob from /voice/synthesize via
- * a single HTTP request, creates an object URL, and plays it via a pre-unlocked
- * <audio> element created synchronously inside the speaker-button click handler.
+ * Listens for `chalie:speak-message` dispatched by renderer.js speaker
+ * buttons. On each event it POSTs /voice/synthesize (which returns
+ * `{ok, total}` immediately), then consumes `chalie:tts-chunk` /
+ * `chalie:tts-done` CustomEvents forwarded by event_router.js from the
+ * `output:events` pub/sub channel.
  *
- * iOS Safari autoplay: renderer.js creates `new Audio()` and calls `.play()`
- * SYNCHRONOUSLY inside the click handler (before any await), unlocking the
- * audio context for iOS. That element is passed as `event.detail.audio` and
- * reused here — so `.play()` on the fetched blob is permitted by iOS even
- * though it occurs after an async fetch.
+ * Each tts_chunk carries a base64-encoded WAV. The player decodes via
+ * AudioContext and appends the resulting AudioBuffer to a queue; buffers
+ * play in order by chaining source.onended → _playNextChunk.
  *
- * Race / concurrency: each `_open()` increments `_openGeneration`. Any
- * in-flight fetch from a prior open is aborted via AbortController, and
- * every `await` checks the generation counter before proceeding. This
- * ensures only the most-recently requested message plays.
+ * iOS Safari autoplay: AudioContext.resume() runs synchronously inside
+ * the `chalie:speak-message` handler, which is itself dispatched inside
+ * the click gesture. That satisfies the user-activation requirement.
  *
- * Only one audio plays at a time — opening a new one aborts any previous fetch
- * and releases the previous object URL.
+ * Only one session plays at a time — opening a new message supersedes the
+ * previous stream via `_openGeneration`.
  */
 
 const _TTS_PATH = '/voice/synthesize';
+const _SKIP_SECONDS = 10;
 
 export class VoicePlayer {
   /**
@@ -42,16 +41,34 @@ export class VoicePlayer {
     this._loadingEl = null;
     this._controlsEl = null;
 
-    this._audio = null;
-    this._objectUrl = null;
     this._boundKeydown = null;
 
-    // Race-safety: generation counter + AbortController
+    // Generation counter so stale chunk events from a previous session
+    // can be discarded. Incremented on every _open() and _close().
     this._openGeneration = 0;
     this._fetchAbort = null;
+
+    // AudioContext — created lazily on first open, reused after.
+    this._audioCtx = null;
+
+    // Per-session playback state
+    this._bufferQueue = [];
+    this._chunkTexts = [];
+    this._chunkIdx = 0;
+    this._expectedTotal = 0;
+    this._streamDone = false;
+    this._cumulativeTime = 0;
+    this._currentSource = null;
+    this._currentBuffer = null;
+    this._sourceStartCtxTime = 0;
+    this._sourceStartOffset = 0;
+    this._paused = false;
+    this._pausedOffset = 0;
+    this._decodeChain = Promise.resolve();
+    this._progressTimer = null;
   }
 
-  /** Bind overlay DOM and speak-message listener. Must be called after DOM ready. */
+  /** Bind overlay DOM + listeners. Must be called after DOM ready. */
   init() {
     this._overlay = document.getElementById('voicePlayerOverlay');
     if (!this._overlay) return;
@@ -68,8 +85,8 @@ export class VoicePlayer {
     this._controlsEl = this._overlay.querySelector('.voice-player__controls');
 
     this._playBtn?.addEventListener('click', () => this._togglePlayPause());
-    this._bkBtn?.addEventListener('click', () => this._seek(-10));
-    this._ffBtn?.addEventListener('click', () => this._seek(+10));
+    this._bkBtn?.addEventListener('click', () => this._skipBack());
+    this._ffBtn?.addEventListener('click', () => this._skipForward());
     this._closeBtn?.addEventListener('click', () => this._close());
 
     // Backdrop click closes
@@ -77,24 +94,32 @@ export class VoicePlayer {
       if (e.target === this._overlay) this._close();
     });
 
+    // Scrubber seeks within the current chunk only. Cross-chunk seeking
+    // isn't worth the complexity for a speaker-button UX.
     this._progress?.addEventListener('input', () => {
-      if (this._audio) this._audio.currentTime = Number.parseFloat(this._progress.value);
+      if (!this._currentBuffer) return;
+      const offset = Number.parseFloat(this._progress.value) || 0;
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, offset);
     });
 
-    // Listen for speak-message events from renderer.js speaker buttons.
-    // event.detail carries { text, audio } — `audio` is the iOS-unlocked element.
+    // Speaker-button click fires here; handler runs inside the user gesture
+    // so AudioContext.resume() is permitted on iOS Safari.
     document.addEventListener('chalie:speak-message', (e) => {
-      const { text, audio } = e.detail || {};
-      if (text) this._open(text, audio);
+      const { text } = e.detail || {};
+      if (text) this._open(text);
     });
+
+    document.addEventListener('chalie:tts-chunk', (e) => this._handleChunk(e.detail));
+    document.addEventListener('chalie:tts-done', () => this._handleDone());
   }
 
   // ---------------------------------------------------------------------------
-  // Private
+  // Private — session lifecycle
   // ---------------------------------------------------------------------------
 
-  async _open(text, unlockedAudio) {
-    // Increment generation so any concurrent open can detect it was superseded.
+  async _open(text) {
+    // New session supersedes any prior one.
     this._openGeneration += 1;
     const gen = this._openGeneration;
 
@@ -102,14 +127,22 @@ export class VoicePlayer {
     if (this._fetchAbort) this._fetchAbort.abort();
     this._fetchAbort = new AbortController();
 
-    // Release previous audio and reset loading UI.
-    this._releaseAudio();
+    // Stop prior playback, reset state (keeps AudioContext alive).
+    this._resetPlayback();
+
+    // Unlock / create AudioContext synchronously inside the gesture.
+    if (!this._audioCtx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      this._audioCtx = new Ctor();
+    }
+    if (this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
 
     this._showOverlay();
     this._showLoading(true);
     this._showError(null);
 
-    // Truncate title for display — take first 80 chars of the text
     if (this._titleEl) {
       this._titleEl.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
     }
@@ -126,7 +159,6 @@ export class VoicePlayer {
         signal: this._fetchAbort.signal,
       });
 
-      // Another open was triggered while we were awaiting — bail out.
       if (gen !== this._openGeneration) return;
 
       if (!resp.ok) {
@@ -135,82 +167,252 @@ export class VoicePlayer {
         throw new Error(err.error || `HTTP ${resp.status}`);
       }
 
-      const blob = await resp.blob();
+      const body = await resp.json();
       if (gen !== this._openGeneration) return;
 
-      this._objectUrl = URL.createObjectURL(blob);
-
-      // Reuse the iOS-unlocked Audio element if provided; otherwise create fresh.
-      const audio = unlockedAudio || new Audio();
-      this._audio = audio;
-
-      audio.addEventListener('loadedmetadata', () => {
-        if (gen !== this._openGeneration) return;
-        this._showLoading(false);
-        this._updateProgress();
-        if (this._progress) {
-          this._progress.max = audio.duration;
-          this._progress.value = 0;
-        }
-        // `.play()` is allowed on this element because it was unlocked inside
-        // the original click gesture (renderer.js created it synchronously).
-        audio.play().catch((err) => {
-          console.warn('[VoicePlayer] Autoplay blocked:', err);
-          this._setPlayIcon(false);
-        });
-      });
-
-      audio.addEventListener('timeupdate', () => this._updateProgress());
-      audio.addEventListener('play', () => this._setPlayIcon(true));
-      audio.addEventListener('pause', () => this._setPlayIcon(false));
-      audio.addEventListener('ended', () => {
-        this._setPlayIcon(false);
-        if (this._progress) this._progress.value = audio.duration || 0;
-      });
-      audio.addEventListener('error', () => {
-        if (gen !== this._openGeneration) return;
-        this._showLoading(false);
-        this._showError('Playback error');
-      });
-
-      audio.src = this._objectUrl;
-      audio.load();
-
+      this._expectedTotal = body?.total || 0;
+      // Chunks arrive asynchronously via chalie:tts-chunk events.
+      // Keep the loading overlay up until the first buffer is decoded.
     } catch (err) {
-      if (err.name === 'AbortError') return; // Superseded — silently discard
+      if (err.name === 'AbortError') return;
       if (gen !== this._openGeneration) return;
       this._showLoading(false);
-      this._showError(err.message || 'Failed to load audio');
-      console.error('[VoicePlayer] fetch error:', err);
+      this._showError(err.message || 'Failed to start synthesis');
+      console.error('[VoicePlayer] synthesize error:', err);
     }
 
     this._bindKeyboard();
   }
 
   _close() {
-    // Cancel any in-flight fetch before releasing audio.
+    this._openGeneration += 1; // Discard any in-flight chunks
     if (this._fetchAbort) this._fetchAbort.abort();
-    this._releaseAudio();
+    this._resetPlayback();
     if (this._overlay?.open) this._overlay.close();
     this._unbindKeyboard();
   }
 
-  _releaseAudio() {
-    if (this._audio) {
-      this._audio.pause();
-      this._audio.src = '';
-      this._audio = null;
-    }
-    if (this._objectUrl) {
-      URL.revokeObjectURL(this._objectUrl);
-      this._objectUrl = null;
-    }
+  _resetPlayback() {
+    this._stopCurrentSource();
+    this._stopProgressTimer();
+    this._bufferQueue = [];
+    this._chunkTexts = [];
+    this._chunkIdx = 0;
+    this._expectedTotal = 0;
+    this._streamDone = false;
+    this._cumulativeTime = 0;
+    this._currentBuffer = null;
+    this._sourceStartCtxTime = 0;
+    this._sourceStartOffset = 0;
+    this._paused = false;
+    this._pausedOffset = 0;
+    this._decodeChain = Promise.resolve();
     this._setPlayIcon(false);
-    if (this._progress) this._progress.value = 0;
+    if (this._progress) { this._progress.max = 0; this._progress.value = 0; }
     if (this._timeEl) this._timeEl.textContent = '0:00 / 0:00';
-    // Reset loading UI so re-opening a new message starts from a clean state.
     this._showLoading(false);
   }
+
+  // ---------------------------------------------------------------------------
+  // Private — chunk handling
+  // ---------------------------------------------------------------------------
+
+  _handleChunk(data) {
+    if (!data || !this._audioCtx) return;
+    if (!this._overlay?.open) return;
+
+    const audioB64 = data.audio || '';
+    if (!audioB64) return;
+
+    const raw = atob(audioB64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    const text = data.text || '';
+    const gen = this._openGeneration;
+
+    // Serialize decodes so buffers land in arrival order. Safari uses a
+    // callback-style decodeAudioData, so we wrap in a Promise.
+    this._decodeChain = this._decodeChain.then(() => new Promise((resolve) => {
+      if (gen !== this._openGeneration || !this._audioCtx) { resolve(); return; }
+      this._audioCtx.decodeAudioData(
+        bytes.buffer,
+        (buffer) => {
+          if (gen !== this._openGeneration) { resolve(); return; }
+          this._bufferQueue.push(buffer);
+          this._chunkTexts.push(text);
+          // Start playback as soon as the first buffer decodes.
+          if (!this._currentSource && !this._paused
+              && this._chunkIdx < this._bufferQueue.length) {
+            this._showLoading(false);
+            this._playNextChunk();
+          }
+          resolve();
+        },
+        (err) => {
+          console.error('[VoicePlayer] decodeAudioData failed:', err);
+          resolve();
+        },
+      );
+    }));
+  }
+
+  _handleDone() {
+    if (!this._overlay?.open) return;
+    this._streamDone = true;
+    this._checkStreamDone();
+  }
+
+  _checkStreamDone() {
+    if (this._streamDone
+        && this._chunkIdx >= this._bufferQueue.length
+        && !this._currentSource) {
+      // Playback complete
+      this._setPlayIcon(false);
+      if (this._progress && this._currentBuffer) {
+        this._progress.value = this._currentBuffer.duration || 0;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — playback
+  // ---------------------------------------------------------------------------
+
+  _playNextChunk() {
+    if (this._chunkIdx >= this._bufferQueue.length) {
+      this._checkStreamDone();
+      return;
+    }
+
+    const buffer = this._bufferQueue[this._chunkIdx];
+    this._currentBuffer = buffer;
+    this._paused = false;
+    this._pausedOffset = 0;
+
+    if (this._progress) {
+      this._progress.max = buffer.duration || 0;
+      this._progress.value = 0;
+    }
+
+    this._playBufferFrom(buffer, 0);
+  }
+
+  _playBufferFrom(buffer, offset) {
+    if (!this._audioCtx) return;
+
+    const source = this._audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this._audioCtx.destination);
+
+    source.onended = () => {
+      if (source !== this._currentSource) return;
+      this._currentSource = null;
+      if (this._paused) return;
+      this._cumulativeTime += buffer.duration;
+      this._chunkIdx += 1;
+      this._playNextChunk();
+    };
+
+    try {
+      source.start(0, offset);
+    } catch (err) {
+      console.error('[VoicePlayer] source.start failed:', err);
+      this._showError('Playback error');
+      return;
+    }
+
+    this._currentSource = source;
+    this._currentBuffer = buffer;
+    this._sourceStartCtxTime = this._audioCtx.currentTime;
+    this._sourceStartOffset = offset;
+    this._paused = false;
+    this._setPlayIcon(true);
+    this._startProgressTimer();
+  }
+
+  _stopCurrentSource() {
+    if (!this._currentSource) return;
+    this._currentSource.onended = null;
+    try { this._currentSource.stop(); } catch (_) { /* already stopped */ }
+    try { this._currentSource.disconnect(); } catch (_) { /* already disconnected */ }
+    this._currentSource = null;
+  }
+
+  _currentPosition() {
+    if (this._paused) return this._pausedOffset;
+    if (!this._currentSource || !this._audioCtx) return 0;
+    return this._sourceStartOffset + (this._audioCtx.currentTime - this._sourceStartCtxTime);
+  }
+
+  _togglePlayPause() {
+    if (!this._audioCtx) return;
+    if (this._paused) {
+      if (!this._currentBuffer) return;
+      this._playBufferFrom(this._currentBuffer, this._pausedOffset);
+      return;
+    }
+    if (!this._currentSource) {
+      // Nothing playing — maybe we finished. Restart from first buffer.
+      if (this._bufferQueue.length) {
+        this._chunkIdx = 0;
+        this._cumulativeTime = 0;
+        this._playNextChunk();
+      }
+      return;
+    }
+    this._pausedOffset = this._currentPosition();
+    this._stopCurrentSource();
+    this._paused = true;
+    this._setPlayIcon(false);
+    this._stopProgressTimer();
+  }
+
+  _skipForward() {
+    if (!this._currentBuffer || !this._audioCtx) return;
+    const pos = this._currentPosition();
+    const target = pos + _SKIP_SECONDS;
+    if (target < this._currentBuffer.duration) {
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, target);
+      return;
+    }
+    // Past end of current chunk → jump to next
+    this._cumulativeTime += this._currentBuffer.duration;
+    this._stopCurrentSource();
+    this._chunkIdx += 1;
+    this._playNextChunk();
+  }
+
+  _skipBack() {
+    if (!this._currentBuffer || !this._audioCtx) return;
+    const pos = this._currentPosition();
+    const target = pos - _SKIP_SECONDS;
+    if (target > 0) {
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, target);
+      return;
+    }
+    if (pos > 2) {
+      // Restart current chunk
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, 0);
+      return;
+    }
+    if (this._chunkIdx > 0) {
+      this._stopCurrentSource();
+      this._chunkIdx -= 1;
+      // Recompute cumulative — simpler to leave as-is; display handles it.
+      this._playNextChunk();
+    } else {
+      this._stopCurrentSource();
+      this._playBufferFrom(this._currentBuffer, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — UI
+  // ---------------------------------------------------------------------------
 
   _showOverlay() {
     if (this._overlay && !this._overlay.open) this._overlay.show();
@@ -232,21 +434,6 @@ export class VoicePlayer {
     }
   }
 
-  _togglePlayPause() {
-    if (!this._audio) return;
-    if (this._audio.paused) {
-      this._audio.play().catch((err) => this._showError(err.message));
-    } else {
-      this._audio.pause();
-    }
-  }
-
-  _seek(delta) {
-    if (!this._audio) return;
-    const dur = this._audio.duration || 0;
-    this._audio.currentTime = Math.max(0, Math.min(dur, this._audio.currentTime + delta));
-  }
-
   _setPlayIcon(playing) {
     if (!this._playBtn) return;
     this._playBtn.innerHTML = playing
@@ -260,14 +447,26 @@ export class VoicePlayer {
     this._playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
   }
 
+  _startProgressTimer() {
+    this._stopProgressTimer();
+    this._progressTimer = setInterval(() => this._updateProgress(), 200);
+  }
+
+  _stopProgressTimer() {
+    if (this._progressTimer) {
+      clearInterval(this._progressTimer);
+      this._progressTimer = null;
+    }
+  }
+
   _updateProgress() {
-    const audio = this._audio;
-    if (!audio) return;
-    const cur = audio.currentTime || 0;
-    const dur = audio.duration || 0;
+    const buf = this._currentBuffer;
+    if (!buf) return;
+    const cur = this._currentPosition();
+    const dur = buf.duration || 0;
     if (this._progress && !Number.isNaN(dur)) {
       this._progress.max = dur;
-      this._progress.value = cur;
+      this._progress.value = Math.min(cur, dur);
     }
     if (this._timeEl) {
       this._timeEl.textContent = `${this._fmt(cur)} / ${this._fmt(dur)}`;
@@ -287,8 +486,8 @@ export class VoicePlayer {
       if (!this._overlay?.open) return;
       if (e.key === 'Escape') { this._close(); return; }
       if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); this._togglePlayPause(); return; }
-      if (e.key === 'ArrowRight') { this._seek(+10); return; }
-      if (e.key === 'ArrowLeft') this._seek(-10);
+      if (e.key === 'ArrowRight') { this._skipForward(); return; }
+      if (e.key === 'ArrowLeft') this._skipBack();
     };
     document.addEventListener('keydown', this._boundKeydown);
   }
