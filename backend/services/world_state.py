@@ -56,9 +56,15 @@ _BG_PROCESS_SQL = """
 SELECT content, created_at
 FROM transcript
 WHERE channel = 'goal_pursuit'
-  AND created_at >= datetime('now', '-24 hours')
+  AND created_at >= datetime('now', '-5 minutes')
 ORDER BY created_at DESC
 LIMIT 10
+"""
+
+_ACTIVE_GOAL_SQL = """
+SELECT COUNT(*) FROM goals
+WHERE status IN ('actionable', 'active')
+  AND is_muted = 0
 """
 
 
@@ -262,7 +268,14 @@ class WorldState:
         return lines
 
     def _render_bg_process(self) -> list[str]:
-        """Produce [bg_process(...)] lines from goal_pursuit transcript rows."""
+        """Produce [bg_process(...)] lines from goal_pursuit transcript rows.
+
+        Returns an empty list immediately when no unmuted goal is in
+        ('actionable', 'active') status — pursuit output does not belong
+        in the user prompt if no pursuit is running.
+        """
+        if not _has_active_goal():
+            return []
         rows = _fetch_bg_process_rows()
         lines = []
         for row in rows:
@@ -339,6 +352,19 @@ def _fetch_bg_process_rows() -> list[dict]:
             cursor.execute(_BG_PROCESS_SQL)
             cols = [d[0] for d in cursor.description]
             return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+
+def _has_active_goal() -> bool:
+    """Return True when at least one unmuted goal is in ('actionable', 'active') status."""
+    db = _get_db()
+    with db.connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(_ACTIVE_GOAL_SQL)
+            count = cursor.fetchone()[0]
+            return count > 0
         finally:
             cursor.close()
 

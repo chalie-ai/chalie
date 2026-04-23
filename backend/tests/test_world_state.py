@@ -394,9 +394,19 @@ class TestRenderSchedule:
 # render() — bg_process section (requires real DB)
 # ---------------------------------------------------------------------------
 
+def _seed_active_goal(db, goal_id: str = "g-active-001") -> None:
+    """Insert a minimal unmuted active goal row so _render_bg_process passes the gate."""
+    db.execute(
+        "INSERT INTO goals (id, description, status, is_muted) "
+        "VALUES (?, 'Test active goal', 'active', 0)",
+        (goal_id,),
+    )
+
+
 @pytest.mark.unit
 class TestRenderBgProcess:
     def test_recent_goal_pursuit_row_appears(self, db):
+        _seed_active_goal(db)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Researching hotels in Valletta', ?)",
@@ -411,6 +421,7 @@ class TestRenderBgProcess:
         assert "Researching hotels in Valletta" in result
 
     def test_bg_process_format_no_bullet(self, db):
+        _seed_active_goal(db)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Active pursuit', ?)",
@@ -451,6 +462,7 @@ class TestRenderBgProcess:
         assert "regular chat content" not in result
 
     def test_last_update_field_uses_time_formatter(self, db):
+        _seed_active_goal(db)
         # Seed a row from exactly ~2 minutes ago (should render as '2m ago')
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -465,6 +477,7 @@ class TestRenderBgProcess:
         assert "last_update:2m ago" in result
 
     def test_bg_process_truncates_long_content(self, db):
+        _seed_active_goal(db)
         long_content = "word " * 120  # 600 chars, well above 200
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -483,6 +496,7 @@ class TestRenderBgProcess:
         assert bg_line.endswith("…")
 
     def test_bg_process_short_content_not_truncated(self, db):
+        _seed_active_goal(db)
         short_content = "Researching cheap hotels in Valletta"
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -497,6 +511,50 @@ class TestRenderBgProcess:
         bg_line = next((ln for ln in result.splitlines() if "[bg_process(" in ln), None)
         assert bg_line is not None
         assert not bg_line.endswith("…")
+
+    def test_bg_process_empty_when_no_active_goals(self, db):
+        # Transcript row is fresh (1 minute ago) but no goal is active/actionable
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', 'Swimming research', ?)",
+            (_recent_iso(seconds=60),),
+        )
+        db.commit()
+
+        ws = _fresh()
+        result = ws.render()
+        assert "[bg_process(" not in result
+        assert "Swimming research" not in result
+
+    def test_bg_process_empty_when_rows_stale(self, db):
+        # Active goal present, but transcript row is 10 minutes old (>5m window)
+        _seed_active_goal(db, goal_id="g-stale-001")
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', 'Stale pursuit content', ?)",
+            (_past_iso(minutes=10),),
+        )
+        db.commit()
+
+        ws = _fresh()
+        result = ws.render()
+        assert "[bg_process(" not in result
+        assert "Stale pursuit content" not in result
+
+    def test_bg_process_renders_when_active_goal_and_fresh_rows(self, db):
+        # Active goal + transcript row from 30 seconds ago — must render
+        _seed_active_goal(db, goal_id="g-fresh-001")
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', 'Booking hotel in Valletta', ?)",
+            (_recent_iso(seconds=30),),
+        )
+        db.commit()
+
+        ws = _fresh()
+        result = ws.render()
+        assert "[bg_process(" in result
+        assert "Booking hotel in Valletta" in result
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +576,7 @@ class TestRenderFullMix:
             "VALUES (?, ?, ?, 'pending', 0)",
             (item_id, "Team meeting", _future_iso(60)),
         )
+        _seed_active_goal(db, goal_id="g-order-001")
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Active goal', ?)",
