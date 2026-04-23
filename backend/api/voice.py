@@ -114,7 +114,17 @@ def _ensure_models():
         logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
         model_file, voices_file = _download_kokoro_models()
         from kokoro_onnx import Kokoro
-        tts = Kokoro(model_file, voices_file)
+        import onnxruntime as ort
+
+        # Kokoro's default __init__ hardcodes CPUExecutionProvider unless the
+        # separate `onnxruntime-gpu` wheel is installed. Chalie ships standard
+        # `onnxruntime`, which auto-exposes CUDA/CoreML when available — same
+        # path used by embedding_service. Build the session ourselves and hand
+        # it to Kokoro.from_session so accelerated EPs are actually used.
+        providers = ort.get_available_providers()
+        kokoro_sess = ort.InferenceSession(model_file, providers=providers)
+        logger.info("[Voice] Kokoro EP providers: %s", kokoro_sess.get_providers())
+        tts = Kokoro.from_session(kokoro_sess, voices_file)
 
         with _load_lock:
             _stt_model = stt
@@ -275,7 +285,11 @@ def _clean_for_tts(text: str) -> str:
 
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-_MAX_CHUNK_CHARS = 400
+# Kokoro.create() internally re-batches on MAX_PHONEME_LENGTH=510, so this
+# upper bound only controls how much text each outer create() call ingests —
+# fewer calls means less tokenizer + voice-load overhead. 800 halves the call
+# count vs the prior 400 while staying comfortably within phonemizer budget.
+_MAX_CHUNK_CHARS = 800
 
 
 def _split_sentences(text: str) -> list[str]:
