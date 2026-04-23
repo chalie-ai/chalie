@@ -1,6 +1,8 @@
 # First-Party Tools
 
-These tools ship with Chalie and are invoked in-process via the ACT loop. The LLM discovers them through `find_tools` (semantic search) — they are not pre-loaded into context. A `browser` tool is also available when Playwright dependencies are installed.
+These tools ship with Chalie and are invoked in-process via the ACT loop. Most of them are surfaced to the LLM either via the mode gate (when the current user turn activates a cognitive intent they serve) or by the `find_tools` innate skill's semantic search — the full list is never pre-injected into context. A `browser` tool is also available when Playwright dependencies are installed.
+
+The mode-gate mapping at time of writing: `search` and `news` serve `research` and `brainstorm`; `browser` serves `research` and `analyze`; `code_eval` serves `coding` and `math`; `programming_docs_search` serves `coding` and `research`. `weather` is intentionally unmapped and reaches the LLM only through `find_tools`. See `docs/09-TOOLS.md` for how the three loading tiers stack and when each fires.
 
 ## Weather
 

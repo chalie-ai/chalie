@@ -92,11 +92,15 @@ No worker shares its processor instance with another. Each channel is fully isol
 
 ## Tools and Skills
 
-Two tiers:
+Three loading tiers stack on every user turn and are merged first-seen, so the unconditional tier can never be shadowed by a later entry of the same name:
 
-**Innate skills** are always available to the LLM. They cover memory (store, recall, reflect, forget), scheduling, list management, goal pursuit, document search, web reading, introspection, rich rendering, and tool discovery. These are core cognitive capabilities wired directly into every turn.
+**Cognitive primitives (unconditional)** are the three innate skills the LLM must always have: `memory`, `find_tools`, and `review_tool_calls`. They cover recall, discovery, and audit — the foundational operations no turn can proceed without.
 
-**External tools** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. This is not a convenience optimisation — pre-injecting external tool schemas into every turn would bloat context, create staleness bugs, and break tool-agnostic routing.
+**Mode-gated innate + first-party tools (conditional)** are loaded based on what cognitive intents the current user turn activates. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) runs once per turn. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. Each tool's declared `modes` list decides which intents promote it. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. This tier is user-channel only; DMN, scheduled prompts, goal pursuit, and encoder processors never run the gate.
+
+**Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. External tools without a `modes` declaration are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
+
+A single per-turn `[MODE-GATE]` log line records the probability vector, state transition, active modes, and promoted tool list; one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line fires per promoted tool. The gate ships with `shadow_mode: true` in `configs/mode_gate.yaml` — the full pipeline runs and persists state, but no tools are actually promoted until the flag is flipped after nightly verification.
 
 Tool results flow through a single render-and-record path that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 

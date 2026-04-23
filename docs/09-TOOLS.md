@@ -2,15 +2,27 @@
 
 Three capability tiers exist in Chalie, each with a different scope and lifecycle.
 
-**Innate skills** are core cognitive capabilities — memory, introspect, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They are always loaded into LLM context and have direct access to Chalie's services and memory.
+**Innate skills** are core cognitive capabilities — memory, introspect, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory. Three of them (`memory`, `find_tools`, `review_tool_calls`) are **cognitive primitives** and are always loaded on every user turn. The remaining eight are **mode-gated** (see below) and only appear in context when the user turn activates a cognitive mode they serve.
 
 **First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
 
 **Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They extend what Chalie can act on without being committed to this repo. See [15-INTERFACES.md](15-INTERFACES.md).
 
-## How tools are used
+## How tools are loaded on a user turn
 
-The LLM never has the full tool list in context. Instead, when it needs a capability it invokes the `find_tools` innate skill, which runs a semantic search over tool capability profiles and returns the closest matches. The LLM then decides whether to invoke one. The result comes back into context as structured output and the conversation continues. This keeps context lean and makes tool discovery robust to naming variation — matching is by meaning, not keyword.
+Three loading tiers stack on each ACT iteration and are de-duplicated first-seen:
+
+1. **Unconditional** — the three cognitive primitives. Always present.
+2. **Conditional (mode-gated)** — tools whose declared `modes` overlap with the user turn's active cognitive intents. Resolved once per turn by `ModeGateService` and cached on the processor instance; subsequent ACT iterations reuse the cached set. Only the `user` channel opts in — DMN, scheduled prompts, goal pursuit, and encoder processors never run the gate.
+3. **Dynamic (discoverable)** — tools surfaced this turn via the `find_tools` innate skill's semantic search. External tools that never declare `modes` stay reachable exclusively through this path.
+
+The gate classifies each user turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head. Per-mode state follows an asymmetric EMA: a fire snaps state up to the classifier probability, a miss decays by 0.75 per turn (a mode stays "warm" for roughly four subsequent turns before dropping below the activation threshold). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`.
+
+Which innate skills serve which modes is declared at the top of `backend/services/innate_skills/registry.py` (`SKILL_MODES`). External tools declare the same field on their `TOOL_METADATA` entry — the field is stripped before any schema is handed to the LLM. Tools without a `modes` declaration are zero-regression: they behave exactly as they always did (find-tools-only for externals).
+
+Observability: every user turn emits one `[MODE-GATE]` INFO log line with the full probability vector, state before/after, active modes, and the promoted tool list, plus one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line per promoted tool. These are grep-friendly anchors for nightly scenarios.
+
+Shadow rollout: the gate ships with `shadow_mode: true` in `configs/mode_gate.yaml`. The full pipeline runs and persists state, but the returned promoted list is `[]` — so turn behaviour is identical to pre-feature. Flipping `shadow_mode: false` is a post-ship config change once nightly verifies stability.
 
 ## Tool status
 
