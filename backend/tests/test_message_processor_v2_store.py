@@ -1262,3 +1262,35 @@ class TestRunFullCompaction:
             p._run_full_compaction()
 
         assert 'custom-job-name' in captured_jobs
+
+
+# =============================================================================
+# getPreviousMessages() — per-turn snapshot isolation
+# =============================================================================
+
+
+class TestGetPreviousMessagesSnapshotIsolation:
+    """Each turn must only see transcript rows with id <= its own self._uid.
+
+    Concurrent turns (id > self._uid) must be invisible to getPreviousMessages
+    regardless of channel filtering.
+    """
+
+    def test_getPreviousMessages_per_turn_snapshot_isolation(self, db):
+        """uid_a sees only its own row; uid_b's concurrent row is invisible."""
+        from services.transcript_service import write_input_row
+
+        channel = 'test_channel'
+
+        uid_a = write_input_row(channel, 'user', 'What is EUR vs USD?')
+        uid_b = write_input_row(channel, 'user', 'Calculate monthly mortgage payment')
+
+        assert uid_b > uid_a, "uid_b must be a later (higher) rowid than uid_a"
+
+        p = _GPMFakeProcessor.make()
+        p._uid = uid_a
+
+        result = p.getPreviousMessages()
+
+        assert 'EUR vs USD' in result
+        assert 'mortgage' not in result

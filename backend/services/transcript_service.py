@@ -184,13 +184,14 @@ def search(
         return _keyword_search(channel, query, limit, date_from, date_to)
 
 
-def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=None) -> List[Dict]:
+def get_recent(channel: str, limit: int = 20, since_id: int = None, *, until_id: int | None = None, _context=None) -> List[Dict]:
     """Get the most recent transcript entries for a channel.
 
     Args:
         channel: Channel key to retrieve entries for.
         limit: Maximum entries to return (default 20).
         since_id: If provided, only return entries with id > since_id.
+        until_id: If provided, only return entries with id <= until_id (per-turn snapshot cap).
 
     Returns list of dicts with: id, role, content, tool_call_id, tool_name, internal, created_at.
     """
@@ -201,27 +202,51 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
         with db.connection() as conn:
             cursor = conn.cursor()
             if since_id is not None:
-                cursor.execute(
-                    """
-                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at
-                    FROM transcript
-                    WHERE channel = ? AND id > ?
-                    ORDER BY id ASC
-                    LIMIT ?
-                    """,
-                    (channel, since_id, limit),
-                )
+                if until_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                        FROM transcript
+                        WHERE channel = ? AND id > ? AND id <= ?
+                        ORDER BY id ASC
+                        LIMIT ?
+                        """,
+                        (channel, since_id, until_id, limit),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                        FROM transcript
+                        WHERE channel = ? AND id > ?
+                        ORDER BY id ASC
+                        LIMIT ?
+                        """,
+                        (channel, since_id, limit),
+                    )
             else:
-                cursor.execute(
-                    """
-                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at
-                    FROM transcript
-                    WHERE channel = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (channel, limit),
-                )
+                if until_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                        FROM transcript
+                        WHERE channel = ? AND id <= ?
+                        ORDER BY id DESC
+                        LIMIT ?
+                        """,
+                        (channel, until_id, limit),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                        FROM transcript
+                        WHERE channel = ?
+                        ORDER BY id DESC
+                        LIMIT ?
+                        """,
+                        (channel, limit),
+                    )
             rows = cursor.fetchall()
             cursor.close()
 

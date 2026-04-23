@@ -330,8 +330,15 @@ class MessageProcessor:
         compaction = compaction_service.get_compaction(self.CHANNEL)
         watermark = compaction['compacted_up_to_id'] if compaction else 0
 
+        # Pass self._uid as until_id so this turn only sees rows written at or
+        # before its own input row. Concurrent turns (id > self._uid) are
+        # invisible, preventing context drift in parallel-scenario harness runs
+        # and rapid-fire UI messages on the same channel.
         entries = transcript_service.get_recent(
-            self.CHANNEL, limit=self._TRANSCRIPT_FETCH_LIMIT, since_id=watermark
+            self.CHANNEL,
+            limit=self._TRANSCRIPT_FETCH_LIMIT,
+            since_id=watermark,
+            until_id=self._uid if self._uid else None,
         )
 
         if not entries and not (compaction and compaction.get('compacted_text')):

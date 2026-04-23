@@ -69,6 +69,50 @@ class TestAppend:
         assert append('', 'user', 'content') is None
 
 
+class TestGetRecentUntilId:
+    def test_get_recent_until_id_caps_results(self, db):
+        from services.transcript_service import append, get_recent
+
+        id1 = append('ch', 'user', 'Msg1')
+        id2 = append('ch', 'user', 'Msg2')
+        id3 = append('ch', 'user', 'Msg3')
+        append('ch', 'user', 'Msg4')
+        append('ch', 'user', 'Msg5')
+
+        results = get_recent('ch', until_id=id3)
+        assert len(results) == 3
+        returned_ids = [r['id'] for r in results]
+        assert id1 in returned_ids
+        assert id2 in returned_ids
+        assert id3 in returned_ids
+
+    def test_get_recent_until_id_combined_with_since_id(self, db):
+        from services.transcript_service import append, get_recent
+
+        id1 = append('ch2', 'user', 'Msg1')
+        id2 = append('ch2', 'user', 'Msg2')
+        id3 = append('ch2', 'user', 'Msg3')
+        append('ch2', 'user', 'Msg4')
+
+        results = get_recent('ch2', since_id=id1, until_id=id3)
+        assert len(results) == 2
+        returned_ids = [r['id'] for r in results]
+        assert id2 in returned_ids
+        assert id3 in returned_ids
+        assert id1 not in returned_ids
+
+    def test_get_recent_until_id_none_is_noop(self, db):
+        from services.transcript_service import append, get_recent
+
+        append('ch3', 'user', 'A')
+        append('ch3', 'user', 'B')
+        append('ch3', 'user', 'C')
+
+        without_filter = get_recent('ch3')
+        with_none = get_recent('ch3', until_id=None)
+        assert [r['id'] for r in without_filter] == [r['id'] for r in with_none]
+
+
 class TestGetRecent:
     def test_get_recent_returns_ordered(self, db):
         from services.transcript_service import append, get_recent
