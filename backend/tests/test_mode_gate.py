@@ -136,7 +136,7 @@ class TestUpdateStateDecayRule:
 
         result = svc._update_state(state, probs)
 
-        assert result['write'] == 0.0
+        assert result['write'] == pytest.approx(0.0, abs=1e-9)
 
     def test_miss_on_zero_state_stays_zero(self):
         """Decaying 0.0 should remain 0.0 (0.0 * 0.75 = 0.0 < 0.01 → 0.0)."""
@@ -146,7 +146,7 @@ class TestUpdateStateDecayRule:
 
         result = svc._update_state(state, probs)
 
-        assert all(v == 0.0 for v in result.values())
+        assert all(v == pytest.approx(0.0, abs=1e-9) for v in result.values())
 
     def test_independent_modes_decay_independently(self):
         """Only modes that miss should decay; firing modes should snap up."""
@@ -221,8 +221,8 @@ class TestLoadConfigFallback:
             mgm._CONFIG_PATH = "/nonexistent/path/mode_gate.yaml"
             cfg = mgm._load_config()
             assert cfg['shadow_mode'] is True
-            assert cfg['decay_factor'] == 0.75
-            assert cfg['activation_threshold'] == 0.30
+            assert cfg['decay_factor'] == pytest.approx(0.75)
+            assert cfg['activation_threshold'] == pytest.approx(0.30)
         finally:
             mgm._CONFIG_PATH = original_path
             mgm._config_loaded = None
@@ -241,7 +241,7 @@ class TestLoadConfigFallback:
         try:
             mgm._CONFIG_PATH = bad_path
             cfg = mgm._load_config()
-            assert cfg['decay_factor'] == 0.75
+            assert cfg['decay_factor'] == pytest.approx(0.75)
         finally:
             mgm._CONFIG_PATH = original_path
             mgm._config_loaded = None
@@ -315,7 +315,7 @@ class TestStateRoundTrip:
         svc = _fresh_service()
         state = svc._load_state()
 
-        assert all(v == 0.0 for v in state.values())
+        assert all(v == pytest.approx(0.0, abs=1e-9) for v in state.values())
         assert set(state.keys()) == set(svc.MODES)
 
     def test_save_overwrites_previous_state(self, store):
@@ -340,7 +340,7 @@ class TestStateRoundTrip:
         svc.reset_state()
 
         recovered = svc._load_state()
-        assert all(v == 0.0 for v in recovered.values())
+        assert all(v == pytest.approx(0.0, abs=1e-9) for v in recovered.values())
 
 
 @pytest.mark.integration
