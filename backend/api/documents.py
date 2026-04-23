@@ -164,9 +164,19 @@ def _process_upload(doc_id: str):
 
             # Write clean_text so the file_tags heuristic in websocket.py
             # (_resolve_file_tags) can inject document content into the LLM prompt.
+            # Merge with any existing metadata so concurrent synthesis/
+            # classification writes are not clobbered.
+            existing = svc.get_document(doc_id) or {}
+            existing_meta = existing.get('extracted_metadata') or {}
+            if isinstance(existing_meta, str):
+                import json as _json
+                try:
+                    existing_meta = _json.loads(existing_meta)
+                except Exception:
+                    existing_meta = {}
             svc.update_extracted_metadata(
                 doc_id,
-                metadata={},
+                metadata=existing_meta,
                 summary=summary,
                 clean_text=text,
             )

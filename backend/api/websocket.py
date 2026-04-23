@@ -254,6 +254,9 @@ def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
     svc = DocumentService(db)
 
     # --- Images ---------------------------------------------------------------
+    # All images share a single 10 s wall-clock deadline so 3 slow images
+    # can never block the chat turn for 30 s combined.
+    images_deadline = _time.monotonic() + 10.0
     for image_id in image_ids:
         doc = svc.get_document(image_id)
         if not doc:
@@ -265,16 +268,16 @@ def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
             continue
 
         status = doc.get('status', '')
-        deadline = _time.monotonic() + 10.0
 
-        while status not in ('ready', 'failed') and _time.monotonic() < deadline:
+        while status not in ('ready', 'failed') and _time.monotonic() < images_deadline:
             _time.sleep(0.2)
             doc = svc.get_document(image_id)
             if doc:
                 status = doc.get('status', '')
 
         if status == 'ready':
-            meta = doc.get('extracted_metadata') or {}
+            final_doc = svc.get_document(image_id) or doc
+            meta = final_doc.get('extracted_metadata') or {}
             if isinstance(meta, str):
                 import json as _json
                 try:
@@ -327,12 +330,16 @@ def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
                     doc = svc.get_document(doc_id)
                     if doc:
                         doc_status = doc.get('status', '')
-                        clean_text = doc.get('clean_text', '') or clean_text
+
+                tag_kind = 'image' if source_type == 'chat_image' else 'document'
 
                 if doc_status == 'ready':
+                    # Re-read once to get the final committed row — the polled
+                    # clean_text value may be stale if get_document briefly
+                    # returned None mid-processing.
+                    final = svc.get_document(doc_id) or {}
                     if source_type == 'chat_image':
-                        doc = svc.get_document(doc_id) or {}
-                        meta = doc.get('extracted_metadata') or {}
+                        meta = final.get('extracted_metadata') or {}
                         if isinstance(meta, str):
                             import json as _json
                             try:
@@ -345,19 +352,29 @@ def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
                         else:
                             tags.append(f"[image id={doc_id} ocr=<none>]")
                         doc_ids_injected.append(doc_id)
-                    elif clean_text:
-                        content_snippet = clean_text[:2000]
-                        tags.append(
-                            f"[document id={doc_id} name={original_name} "
-                            f"content={content_snippet}]"
-                        )
-                        doc_ids_injected.append(doc_id)
+                    else:
+                        final_text = (final.get('clean_text') or clean_text or '').strip()
+                        if final_text:
+                            tags.append(
+                                f"[document id={doc_id} name={original_name} "
+                                f"content={final_text[:2000]}]"
+                            )
+                            doc_ids_injected.append(doc_id)
+                        else:
+                            tags.append(f"[document id={doc_id} name={original_name} content=<empty>]")
+                            doc_ids_injected.append(doc_id)
                 elif doc_status == 'failed':
                     logger.warning(
                         f"[WS] file_tags recent upload failed doc_id={doc_id} "
                         f"source_type={source_type} request_id={request_id}"
                     )
-                    tags.append(f"[{'image' if source_type == 'chat_image' else 'document'} id={doc_id} status=failed]")
+                    tags.append(f"[{tag_kind} id={doc_id} status=failed]")
+                else:
+                    logger.warning(
+                        f"[WS] file_tags recent upload timed out doc_id={doc_id} "
+                        f"source_type={source_type} status={doc_status} request_id={request_id}"
+                    )
+                    tags.append(f"[{tag_kind} id={doc_id} status=timeout]")
         except Exception as e:
             logger.warning(
                 f"[WS] file_tags recent-upload heuristic error request_id={request_id}: {e}"

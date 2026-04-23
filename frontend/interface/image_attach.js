@@ -192,13 +192,19 @@ export class ImageAttach {
 
     // Drop on the input-dock
     dropzone.addEventListener('drop', (ev) => {
+      ev.preventDefault(); // block browser navigation for dropped links/files
       dropzone.classList.remove('dragover');
       const files = ev.dataTransfer?.files;
       if (!files?.length) return;
-      ev.preventDefault();
+      let dropped = 0;
       for (const file of files) {
         if (file.type.startsWith('image/')) {
+          if (this._attachedImages.length + dropped >= 3) {
+            showToast('Maximum 3 images per message');
+            break;
+          }
           this.handleFile(file);
+          dropped++;
         } else if (this._onDocumentDrop) {
           this._onDocumentDrop(file);
         } else {
@@ -213,10 +219,11 @@ export class ImageAttach {
       if (!items) return;
       for (const item of items) {
         if (item.type.startsWith('image/')) {
-          ev.preventDefault();
           const file = item.getAsFile();
-          if (file) this.handleFile(file);
-          return; // handle one image per paste
+          if (!file) continue; // browser returned null (e.g. Firefox async) — try next item
+          ev.preventDefault();
+          this.handleFile(file);
+          return;
         }
       }
       // Plain text — fall through to native paste behaviour

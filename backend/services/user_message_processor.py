@@ -211,10 +211,10 @@ class UserMessageProcessor(MessageProcessor):
         file_tags = self._metadata.get('file_tags', [])
         nudge_tag = self._metadata.get('nudge_tag')
         if file_tags:
+            kinds = [t.split(' ', 1)[0].lstrip('[') for t in file_tags]
             logger.info(
                 f"[UMP] file_tags present uuid={self._uid} "
-                f"count={len(file_tags)} "
-                f"first={file_tags[0][:120] if file_tags else ''}"
+                f"count={len(file_tags)} kinds={kinds}"
             )
             turn_line += ' ' + ' '.join(file_tags)
         if nudge_tag:
