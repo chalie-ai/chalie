@@ -64,6 +64,14 @@ Voice is optional. If the voice service is unavailable, the mic button and all s
 
 **Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. Playback streams: `/voice/synthesize` returns `{ok, total}` immediately and the backend publishes each sentence-sized WAV chunk on the `output:events` pub/sub channel (as `tts_chunk`, terminated by `tts_done`). The WebSocket forwards those frames to the client; VoicePlayer decodes each chunk into an `AudioBuffer` and chains playback via `AudioBufferSourceNode.onended`, so audio starts as soon as the first chunk is ready rather than waiting for the full blob. `AudioContext.resume()` runs synchronously inside the click handler, satisfying iOS Safari's autoplay policy.
 
+## File Attachments
+
+Images (max 3 per message) attach via three equivalent paths: the `+` menu file picker, **drag-and-drop** onto the input dock or anywhere on the viewport (a full-page overlay lights up on `dragenter`), or **paste** from the clipboard into the prompt box. Non-image files dropped anywhere fall through to the document upload endpoint.
+
+Each attached image renders as a thumbnail in a strip above the prompt box with a cyan spinner and `analyzing` class while the backend runs OCR and scene analysis. The send button unblocks as soon as the upload returns an `image_id` — the user is never made to wait for analysis. A WebSocket `image_ready` event clears the spinner; a 90-second safety timeout replaces it with a warning badge if analysis never completes (the image stays attached, context may be incomplete). Analysis failure surfaces as a red badge.
+
+The global drop overlay uses a refcount on `dragenter` / `dragleave` with `dragend` and `window.blur` fallbacks, so it always clears — even if the browser swallows the `drop` event.
+
 ## Applications
 
 ### Chat (`/`)
