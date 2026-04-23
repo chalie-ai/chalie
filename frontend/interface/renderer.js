@@ -327,7 +327,6 @@ export class Renderer {
     });
     metaRow.appendChild(rememberBtn);
 
-    // Speak button — enters voice mode and plays this message
     if (text) {
       const speakBtn = this._createEl('button', 'speech-form__speak-btn');
       speakBtn.setAttribute('aria-label', 'Listen to this message');
