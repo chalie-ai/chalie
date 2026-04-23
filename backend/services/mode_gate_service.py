@@ -249,13 +249,15 @@ class ModeGateService:
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
             # Emit ONE structured [MODE-GATE] line (spec §6.5)
+            # Booleans are lowercased so log greps use the JSON-canonical form
+            # ("shadow=true" / "bootstrap=false") rather than Python's title-case.
             logger.info(
                 "%s shadow=%s bootstrap=%s turn_id=%s "
                 "probs=%s fires=%s state_before=%s state_after=%s "
                 "active=%s would_promote=%s actually_promoted=%s elapsed_ms=%d",
                 LOG_PREFIX,
-                self._shadow,
-                bootstrapped,
+                str(self._shadow).lower(),
+                str(bootstrapped).lower(),
                 turn_id or "?",
                 json.dumps({m: round(probs.get(m, 0.0), 4) for m in self.MODES}),
                 json.dumps(fires),
