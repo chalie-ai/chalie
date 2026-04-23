@@ -214,7 +214,7 @@ def test_ready_image_emits_ocr_tag(_ft_db):
         extracted_metadata={"ocr_text": "INVOICE #1234", "has_text": True},
     )
 
-    tags = _resolve_file_tags(["img00001"], "What does this say?", "req-001")
+    tags = _resolve_file_tags(["img00001"], "req-001")
 
     assert len(tags) == 1
     assert tags[0].startswith("[image id=img00001 ocr=")
@@ -237,7 +237,7 @@ def test_failed_image_emits_status_failed_tag(_ft_db):
         status="failed",
     )
 
-    tags = _resolve_file_tags(["img00002"], "Can you read this?", "req-002")
+    tags = _resolve_file_tags(["img00002"], "req-002")
 
     assert len(tags) == 1
     assert tags[0] == "[image id=img00002 status=failed]"
@@ -252,7 +252,7 @@ def test_nonexistent_image_emits_not_found_tag(_ft_db):
     from the LLM context.
     """
     # Deliberately do NOT seed any document for this ID.
-    tags = _resolve_file_tags(["ghostid0"], "Here is an image", "req-003")
+    tags = _resolve_file_tags(["ghostid0"], "req-003")
 
     assert len(tags) == 1
     assert tags[0] == "[image id=ghostid0 status=not_found]"
@@ -281,7 +281,7 @@ def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
         clean_text="Quarterly revenue grew 18% year-over-year.",
     )
 
-    tags = _resolve_file_tags([], "Summarise this", "req-004")
+    tags = _resolve_file_tags([], "req-004")
 
     assert len(tags) == 1
     tag = tags[0]
@@ -311,7 +311,7 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
         extracted_metadata={"ocr_text": "Meeting notes: action items", "has_text": True},
     )
 
-    tags = _resolve_file_tags([], "What are the action items?", "req-005")
+    tags = _resolve_file_tags([], "req-005")
 
     assert len(tags) == 1
     assert tags[0].startswith("[image id=img00003 ocr=")

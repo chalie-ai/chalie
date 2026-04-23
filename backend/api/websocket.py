@@ -322,7 +322,7 @@ def _resolve_recent_upload(db, svc, request_id: str):
     return f"[{tag_kind} id={doc_id} status=timeout]", None
 
 
-def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
+def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     """
     Build file_tags for a chat turn. Returns structured strings to be appended
     to metadata['file_tags'] — consumed by UserMessageProcessor.getUserPrompt.
@@ -520,7 +520,7 @@ def _handle_chat(ws, store, msg, active_request=None):
             # and injects a recent-upload document heuristic when applicable.
             # MUST run before UserMessageProcessor is constructed so that
             # getUserPrompt() picks up file_tags on its first call.
-            metadata['file_tags'] = _resolve_file_tags(image_ids, text, request_id)
+            metadata['file_tags'] = _resolve_file_tags(image_ids, request_id)
 
             def _on_narration(text, step=0):
                 """Publish per-iteration synthesis text to the per-request SSE channel."""
