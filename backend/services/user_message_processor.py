@@ -29,7 +29,7 @@ from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
+from services.innate_skills.registry import ALL_SKILL_NAMES, COGNITIVE_PRIMITIVES_ORDERED
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
@@ -89,9 +89,12 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All innate skills available for user turns.
-    # Sorted for deterministic ordering — ALL_SKILL_NAMES is a frozenset.
-    NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
+    # Narrowed to cognitive primitives only — the unconditional tier.
+    # Non-primitive innate skills are promoted via getConditionalTools()
+    # (mode gate) rather than injected on every turn. This reduces prompt
+    # bloat on conversational / chit-chat turns where only primitives are needed.
+    # COGNITIVE_PRIMITIVES_ORDERED preserves insertion order for determinism.
+    NATIVE_TOOLS: list[str] = list(COGNITIVE_PRIMITIVES_ORDERED)
 
     # ── Constructor ───────────────────────────────────────────────────────────
 
@@ -113,6 +116,11 @@ class UserMessageProcessor(MessageProcessor):
         # without this cache each iteration would re-read KnowledgeService DB rows.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
+        # Per-turn cache for getConditionalTools(). Set on first call and reused
+        # on every subsequent ACT iteration — the mode gate runs once per turn.
+        # Stage 2 ACT restart clears _discovered_tools but NOT this cache —
+        # the mode classification was correct for this turn (spec §3.2).
+        self._conditional_tools_cached: list[dict] | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -162,6 +170,42 @@ class UserMessageProcessor(MessageProcessor):
 
         self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
+
+    def getConditionalTools(self) -> list[dict]:
+        """Return mode-gated tool schemas for this turn (cached after first call).
+
+        Consults ModeGateService once per turn. In shadow mode the gate returns
+        [] so tool injection is identical to today. In live mode the gate returns
+        names for tools whose modes are active, which are resolved to schemas here.
+
+        Exceptions are caught: any failure logs at WARN and caches [] so
+        subsequent ACT iterations also get the empty list (consistent state).
+        """
+        if self._conditional_tools_cached is not None:
+            return self._conditional_tools_cached
+
+        from services.mode_gate_service import ModeGateService
+        from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
+
+        try:
+            gate = ModeGateService()
+            names = gate.get_promoted_tool_names(self._raw_input, turn_id=self._uid)
+        except Exception as exc:
+            logger.warning("[MODE-GATE] get_promoted_tool_names failed, returning []: %s", exc)
+            self._conditional_tools_cached = []
+            return []
+
+        innate_names = [n for n in names if n in ALL_SKILL_NAMES]
+        external_names = [n for n in names if n not in ALL_SKILL_NAMES]
+
+        schemas: list[dict] = []
+        if innate_names:
+            schemas.extend(get_skill_schemas(innate_names))
+        if external_names:
+            schemas.extend(get_external_tool_schemas(external_names))
+
+        self._conditional_tools_cached = schemas
+        return schemas
 
     def getUserPrompt(self) -> str:
         """Build the user-message body for one ACT iteration.

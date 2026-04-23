@@ -147,6 +147,7 @@ TOOL_METADATA: dict = {
 
     "search": {
         "name": "search",
+        "modes": ["research", "brainstorm"],
         "description": (
             "Search Wikipedia, GitHub, Reddit, arXiv, news, books, and more using "
             "plain natural language. Automatically routes to the best source(s)."
@@ -201,6 +202,7 @@ TOOL_METADATA: dict = {
 
     "code_eval": {
         "name": "code_eval",
+        "modes": ["coding", "math"],
         "description": "Run Python code to compute, verify formulas, or test logic. Use print() for output.",
         "documentation": (
             "Runs Python code in a restricted sandbox. Use this as a scratchpad "
@@ -239,6 +241,7 @@ TOOL_METADATA: dict = {
 
     "programming_docs_search": {
         "name": "programming_docs_search",
+        "modes": ["coding", "research"],
         "description": (
             "Search official documentation for PHP, Python, JavaScript, Go, Rust, "
             "Java, Ruby, C#, Dart, C/C++, Bash, SQL and frameworks Laravel, Django, "
@@ -283,6 +286,7 @@ TOOL_METADATA: dict = {
 
     "news": {
         "name": "news",
+        "modes": ["research", "brainstorm"],
         "description": "Search news articles across global sources.",
         "documentation": (
             "Search news by query. Supply a category only when the query is broad "
@@ -326,6 +330,7 @@ TOOL_METADATA: dict = {
 if _BROWSER_AVAILABLE:
     TOOL_METADATA["browser"] = {
         "name": "browser",
+        "modes": ["research", "analyze"],
         "timeout": 90,
         "description": (
             "Render JavaScript-heavy web pages, take screenshots, fill forms, "

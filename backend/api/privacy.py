@@ -49,6 +49,7 @@ _DELETE_ALL_TABLES = (
 # MemoryStore key patterns that belong to the user and must be cleared.
 _DELETE_ALL_STORE_PATTERNS = (
     "working_memory:*",
+    "mode_gate:*",
 )
 
 

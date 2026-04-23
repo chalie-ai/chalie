@@ -207,6 +207,18 @@ class MessageProcessor:
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
+    def getConditionalTools(self) -> list[dict]:
+        """Mode-gated tools for channels that opt in. Base no-op returns [].
+
+        UserMessageProcessor overrides this to consult ModeGateService and
+        return schemas for mode-promoted tools (cached per-turn on the instance).
+
+        Non-user channels (DMN, GoalPursuit, Scheduled, encoders, …) inherit
+        this base implementation and always get [], so their tool lists are
+        completely unchanged by the mode gate feature.
+        """
+        return []
+
     def getDynamicTools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
@@ -252,13 +264,15 @@ class MessageProcessor:
     def getTools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
-        Resolution order:
-        1. Resolve NATIVE_TOOLS (list of skill name strings) via
-           tool_schema_service.get_skill_schemas().
-        2. Concatenate getDynamicTools() (schemas discovered at runtime).
-        3. Deduplicate by tool name, preserving first-seen order.
+        Resolution order (first-seen wins on duplicates):
+        1. NATIVE_TOOLS — unconditional tier (resolved via get_skill_schemas).
+           Base is []; UserMessageProcessor narrows to COGNITIVE_PRIMITIVES_ORDERED.
+        2. getConditionalTools() — mode-gated tier. Base always returns [].
+           UserMessageProcessor overrides to consult ModeGateService.
+        3. getDynamicTools() — tools discovered this turn via find_tools.
 
-        If NATIVE_TOOLS is empty, skips step 1 and goes straight to dynamic.
+        Deduplication preserves first-seen order so the unconditional tier
+        cannot be shadowed by a conditional or dynamic entry of the same name.
         """
         from services.tool_schema_service import get_skill_schemas
 
@@ -266,11 +280,12 @@ class MessageProcessor:
         if self.NATIVE_TOOLS:
             native = get_skill_schemas(self.NATIVE_TOOLS)
 
+        conditional = self.getConditionalTools()
         dynamic = self.getDynamicTools()
 
         seen: set[str] = set()
         result: list[dict] = []
-        for schema in native + dynamic:
+        for schema in native + conditional + dynamic:
             name = schema.get('name')
             if name and name not in seen:
                 seen.add(name)

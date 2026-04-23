@@ -142,6 +142,7 @@ def _find_local_release_tag() -> Optional[str]:
 # (note the mixed separator: hyphen before "classifier", underscore before "head")
 MODEL_REGISTRY = [
     ("thinking_level", "thinking-level"),
+    ("mode_detector", "mode-detector"),
 ]
 
 # Asset filename constants
@@ -633,6 +634,50 @@ class OnnxInferenceService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Multi-label inference failed for '{model_name}': {e}")
             return []
+
+    def predict_all_sigmoids(self, task: str, text: str) -> Dict[str, float]:
+        """Return sigmoid probabilities for every output head of a multi-label task.
+
+        Returns a ``{label: probability}`` dict with NO threshold filtering.
+        Intended for tasks whose ``classifier_meta.json`` sets
+        ``task_type = "multi_label"`` and ``output_activation = "sigmoid"``.
+
+        Args:
+            task: Registered task name (e.g. ``'mode_detector'``).
+            text: Raw user text to classify.
+
+        Returns:
+            Dict mapping each label to its sigmoid probability in [0, 1].
+            Returns ``{}`` when the task is unavailable, the head cannot be
+            loaded, feature dimensions do not match, or any other error occurs.
+            Never raises.
+        """
+        try:
+            head = self._get_head(task)
+            if head is None:
+                return {}
+
+            embedding = self._embed(text)  # (1, 768)
+            features = embedding
+
+            if features.shape[-1] != head.input_dim:
+                logger.warning(
+                    f"{LOG_PREFIX} {task}: feature dim mismatch "
+                    f"(got {features.shape[-1]}, expected {head.input_dim}) "
+                    f"in predict_all_sigmoids"
+                )
+                return {}
+
+            logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
+
+            # Sigmoid over all logits — no threshold applied here
+            probs = 1.0 / (1.0 + np.exp(-logits))
+
+            return {label: float(probs[i]) for i, label in enumerate(head.labels) if i < len(probs)}
+
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} predict_all_sigmoids failed for '{task}': {exc}")
+            return {}
 
     def is_available(self, model_name: str) -> bool:
         """Check if a model is loaded or loadable."""

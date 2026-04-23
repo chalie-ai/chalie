@@ -19,6 +19,21 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for get_tools_by_mode() — cleared on tool (re-)registration.
+_tools_by_mode_cache: Optional[Dict[str, set]] = None
+_tools_by_mode_lock = threading.Lock()
+
+
+def _invalidate_mode_cache() -> None:
+    """Invalidate the get_tools_by_mode() cache.
+
+    Called after any dynamic tool registration or removal so the next call
+    to get_tools_by_mode() rebuilds the index from the current registry state.
+    """
+    global _tools_by_mode_cache
+    with _tools_by_mode_lock:
+        _tools_by_mode_cache = None
+
 # Singleton instance
 _instance = None
 
@@ -121,6 +136,13 @@ class ToolRegistryService:
             logger.info(f"[TOOL REGISTRY] Loaded {len(self.tools)} tools: {names}")
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
+
+        # Boot-time validation: every non-primitive innate must declare modes,
+        # and every declared mode string must be valid. Fails loudly — typos
+        # must not silently demote tools in production.
+        # Runs AFTER TOOL_METADATA and SKILL_MODES are imported, BEFORE
+        # get_tools_by_mode() can be called (cache is still None here).
+        self._validate_mode_declarations()
 
         # Kick off profile enrichment in background (skip built-in tools — they are seeded at startup)
         from services.tool_library_service import BUILTIN_TOOL_PROFILES
@@ -481,6 +503,7 @@ class ToolRegistryService:
         with self._lock:
             self.tools[name] = tool_entry
 
+        _invalidate_mode_cache()
         logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
 
         # Immediately kick off profile enrichment so the tool is discoverable
@@ -539,6 +562,7 @@ class ToolRegistryService:
             except Exception as e:
                 logger.warning(f"[TOOL REGISTRY] Failed to remove profiles: {e}")
 
+            _invalidate_mode_cache()
             logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
 
     # ── Public API ──────────────────────────────────────────────────
@@ -703,5 +727,140 @@ class ToolRegistryService:
         """Get full manifest details for a tool (used by introspect)."""
         tool = self.tools.get(tool_name)
         return tool["manifest"] if tool else None
+
+    def get_tools_by_mode(self) -> Dict[str, set]:
+        """Return a mode → set-of-tool-names index for mode-gated promotion.
+
+        Walks both:
+        - Innate skills: ``SKILL_MODES`` from ``innate_skills/registry.py``
+        - External tools: ``TOOL_METADATA[name]['modes']`` from ``tool_library_service.py``
+
+        Result is cached at module level (process lifetime). Cache is cleared by
+        ``_invalidate_mode_cache()`` which is called from ``register_interface_tool``
+        and ``remove_interface_tools`` so dynamically registered tools are reflected.
+
+        Boot-order note: this method is safe to call any time after ``__init__``
+        completes. The validation walk in ``__init__`` ensures every declared
+        mode is valid before the cache can be populated.
+
+        Returns:
+            Dict mapping mode name → frozenset of tool names that serve that mode.
+        """
+        global _tools_by_mode_cache
+
+        if _tools_by_mode_cache is not None:
+            return _tools_by_mode_cache
+
+        with _tools_by_mode_lock:
+            if _tools_by_mode_cache is not None:
+                return _tools_by_mode_cache
+
+            index: Dict[str, set] = {}
+
+            # Innate skills — SKILL_MODES from registry
+            try:
+                from services.innate_skills.registry import SKILL_MODES
+                for skill_name, modes in SKILL_MODES.items():
+                    for mode in modes:
+                        index.setdefault(mode, set()).add(skill_name)
+            except Exception as exc:
+                logger.warning("[TOOL REGISTRY] Failed to build innate mode index: %s", exc)
+
+            # External tools — TOOL_METADATA[name]['modes']
+            try:
+                from services.tool_library_service import TOOL_METADATA
+                with self._lock:
+                    registered = set(self.tools.keys())
+                for name in registered:
+                    meta = TOOL_METADATA.get(name, {})
+                    tool_modes = meta.get('modes', [])
+                    if not tool_modes:
+                        continue
+                    for mode in tool_modes:
+                        index.setdefault(mode, set()).add(name)
+            except Exception as exc:
+                logger.warning("[TOOL REGISTRY] Failed to build external mode index: %s", exc)
+
+            _tools_by_mode_cache = index
+            return index
+
+    def _validate_mode_declarations(self) -> None:
+        """Boot-time validation of all tool mode declarations.
+
+        Called from __init__ AFTER tools are loaded. Checks:
+        1. Every non-primitive innate skill MUST appear in SKILL_MODES with a
+           non-empty OR explicitly empty list (missing entirely → RuntimeError).
+        2. Every mode string declared by any tool (innate or external) MUST be
+           a member of ModeGateService.MODES (typo → RuntimeError).
+
+        Empty list ``modes: []`` is LEGAL — "never promote, find_tools only."
+        MISSING entry for a non-primitive innate IS an error.
+
+        This runs at boot-time before any user requests are processed so
+        configuration typos fail loudly rather than silently demoting tools.
+        """
+        # Import here to avoid circular imports at module load time.
+        try:
+            from services.mode_gate_service import ModeGateService
+            valid_modes = frozenset(ModeGateService.MODES)
+        except Exception as exc:
+            logger.warning(
+                "[TOOL REGISTRY] Cannot import ModeGateService for validation: %s — "
+                "mode declaration validation skipped", exc,
+            )
+            return
+
+        try:
+            from services.innate_skills.registry import (
+                SKILL_MODES, ALL_SKILL_NAMES, COGNITIVE_PRIMITIVES,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TOOL REGISTRY] Cannot import skill registry for validation: %s — "
+                "mode declaration validation skipped", exc,
+            )
+            return
+
+        non_primitive_skills = ALL_SKILL_NAMES - COGNITIVE_PRIMITIVES
+
+        # 1. Every non-primitive innate must have an entry in SKILL_MODES.
+        for skill in sorted(non_primitive_skills):
+            if skill not in SKILL_MODES:
+                raise RuntimeError(
+                    f"[TOOL REGISTRY] Non-primitive innate skill '{skill}' has no "
+                    f"entry in SKILL_MODES. Add it to "
+                    f"backend/services/innate_skills/registry.py SKILL_MODES dict. "
+                    f"An empty list [] is valid for 'find_tools only'. Missing entry is not."
+                )
+
+        # 2. Every declared mode string must be in ModeGateService.MODES.
+        # Check innate SKILL_MODES
+        for skill, modes in SKILL_MODES.items():
+            for mode in modes:
+                if mode not in valid_modes:
+                    raise RuntimeError(
+                        f"[TOOL REGISTRY] Innate skill '{skill}' declares unknown "
+                        f"mode '{mode}'. Valid modes: {sorted(valid_modes)}"
+                    )
+
+        # Check external TOOL_METADATA modes
+        try:
+            from services.tool_library_service import TOOL_METADATA
+            for tool_name, meta in TOOL_METADATA.items():
+                tool_modes = meta.get('modes', [])
+                for mode in tool_modes:
+                    if mode not in valid_modes:
+                        raise RuntimeError(
+                            f"[TOOL REGISTRY] External tool '{tool_name}' declares "
+                            f"unknown mode '{mode}'. Valid modes: {sorted(valid_modes)}"
+                        )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "[TOOL REGISTRY] External tool mode validation failed: %s", exc
+            )
+
+        logger.info("[TOOL REGISTRY] Mode declaration validation passed")
 
 
