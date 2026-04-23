@@ -144,6 +144,14 @@ class ToolRegistryService:
         # get_tools_by_mode() can be called (cache is still None here).
         self._validate_mode_declarations()
 
+        # Invalidate the mode cache so the next get_tools_by_mode() call
+        # rebuilds against the freshly loaded tool set. Matters when
+        # _load_tools() runs mid-process (e.g. run.py capability hot-reload
+        # at bootstrap lines ~392-395): without this, newly registered
+        # capability tools with declared modes would be silently excluded
+        # from mode promotions until a process restart.
+        _invalidate_mode_cache()
+
         # Kick off profile enrichment in background (skip built-in tools — they are seeded at startup)
         from services.tool_library_service import BUILTIN_TOOL_PROFILES
         for name in list(self.tools.keys()):
@@ -843,10 +851,17 @@ class ToolRegistryService:
                         f"mode '{mode}'. Valid modes: {sorted(valid_modes)}"
                     )
 
-        # Check external TOOL_METADATA modes
+        # Check external TOOL_METADATA modes — only for tools actually
+        # registered (disabled tools are skipped during _load_tools and must
+        # not gate boot on their manifest contents; they can't be served
+        # anyway). Symmetric with get_tools_by_mode() which only indexes
+        # registered tools.
         try:
             from services.tool_library_service import TOOL_METADATA
-            for tool_name, meta in TOOL_METADATA.items():
+            with self._lock:
+                registered_names = set(self.tools.keys())
+            for tool_name in registered_names:
+                meta = TOOL_METADATA.get(tool_name, {})
                 tool_modes = meta.get('modes', [])
                 for mode in tool_modes:
                     if mode not in valid_modes:

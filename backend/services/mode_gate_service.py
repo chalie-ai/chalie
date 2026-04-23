@@ -84,6 +84,16 @@ def _load_config() -> dict:
             raw = yaml.safe_load(f)
         if not isinstance(raw, dict):
             raise ValueError(f"Expected YAML dict, got {type(raw)}")
+        # Surface unknown keys so operator typos (e.g. ``shadow-mode`` with a
+        # hyphen) don't silently retain defaults. Every recognised top-level
+        # key must match a _DEFAULT_CONFIG entry.
+        unknown = [k for k in raw.keys() if k not in _DEFAULT_CONFIG]
+        if unknown:
+            logger.warning(
+                "%s unknown config keys in %s: %s — expected one of %s. "
+                "Check for typos (YAML is hyphen-sensitive; use underscores).",
+                LOG_PREFIX, _CONFIG_PATH, unknown, sorted(_DEFAULT_CONFIG.keys()),
+            )
         _config_loaded = {**_DEFAULT_CONFIG, **raw}
         # Merge fire_threshold_overrides carefully
         overrides = _DEFAULT_CONFIG["fire_threshold_overrides"].copy()
@@ -222,18 +232,41 @@ class ModeGateService:
 
             # Cold-start bootstrap: if state is all zeros, classify the
             # previous user turn to warm up state before classifying current.
+            # bootstrapped reflects whether bootstrap actually produced any
+            # warmed state — a no-history cold DB should log bootstrap=false
+            # (spec §4.4 / §6.5). Compare before/after so we don't mark the
+            # flag true on every cold start when there's nothing to classify.
             if not any(v > 0 for v in state_before.values()):
                 if self._bootstrap_on_cold_start:
                     state_before = self._bootstrap_from_last_turn(state_before)
-                    bootstrapped = True
+                    bootstrapped = any(v > 0 for v in state_before.values())
 
             probs = self._classify(user_turn)
 
-            # Classifier failure — log INFO, leave state unchanged, return []
+            # Classifier failure — emit the same single-line [MODE-GATE]
+            # record the happy path emits so per-turn grep assertions in
+            # scenario 107 still find a line (spec §6.5 "ONE [MODE-GATE]
+            # log line per user turn"). Use the loaded state as both
+            # before/after since we do NOT mutate state on degradation.
             if not probs:
+                elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                 logger.info(
-                    "%s classifier returned empty — state unchanged turn=%s",
-                    LOG_PREFIX, turn_id or "?",
+                    "%s shadow=%s bootstrap=%s turn_id=%s "
+                    "probs=%s fires=%s state_before=%s state_after=%s "
+                    "active=%s would_promote=%s actually_promoted=%s "
+                    "classifier=unavailable elapsed_ms=%d",
+                    LOG_PREFIX,
+                    str(self._shadow).lower(),
+                    str(bootstrapped).lower(),
+                    turn_id or "?",
+                    json.dumps({m: 0.0 for m in self.MODES}),
+                    json.dumps([]),
+                    json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
+                    json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
+                    json.dumps([]),
+                    json.dumps([]),
+                    json.dumps([]),
+                    elapsed_ms,
                 )
                 return []
 
@@ -242,7 +275,9 @@ class ModeGateService:
 
             active = {m for m in self.MODES if state_after.get(m, 0.0) >= self._activation_threshold}
             would_promote = self._resolve_active_tools(active)
-            actually_promoted = [] if self._shadow else list(would_promote)
+            # Sort defensively so the emitted JSON is deterministic even if
+            # _resolve_active_tools ever returns an unsorted structure.
+            actually_promoted = [] if self._shadow else sorted(would_promote)
 
             fires = [m for m in self.MODES if probs.get(m, 0.0) >= self._fire_thresholds.get(m, 0.5)]
 
@@ -356,9 +391,14 @@ class ModeGateService:
 
         try:
             from services import transcript_service
-            rows = transcript_service.get_recent(channel='user', limit=1)
-            # get_recent with no since_id returns DESC-ordered rows → most recent first
-            user_rows = [r for r in rows if r.get('role') == 'user']
+            # The 'user' channel interleaves role='user' and role='assistant'
+            # rows (see transcript_service.write_assistant_row). Fetch a
+            # small window so that if the most recent row is an assistant
+            # reply, we still find the user turn immediately before it.
+            rows = transcript_service.get_recent(channel='user', limit=5)
+            # get_recent with no since_id returns oldest-first (DESC fetched,
+            # then reversed). Walk newest → oldest to find the last user row.
+            user_rows = [r for r in reversed(rows) if r.get('role') == 'user']
             if not user_rows or not user_rows[0].get('content'):
                 logger.debug("%s bootstrap: no prior user row — proceeding cold", LOG_PREFIX)
                 return state
