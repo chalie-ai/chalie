@@ -24,6 +24,14 @@ import { UpdateSystem } from './update_system.js';
 import { AppsPanel } from './apps_panel.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
+// Disable the browser's scroll-restoration so a refresh never lands the
+// user mid-conversation. Renderer.forceScrollToBottom takes over after
+// history loads. Set at module load — earlier than DOMContentLoaded — so
+// the browser never applies its stored scroll position in the first place.
+if ('scrollRestoration' in history) {
+  history.scrollRestoration = 'manual';
+}
+
 class ChalieApp {
   constructor() {
     this._backendHost = lsGet('chalie_backend_host') || '';

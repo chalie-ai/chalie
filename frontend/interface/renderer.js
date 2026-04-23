@@ -387,11 +387,36 @@ export class Renderer {
 
   /**
    * Force-scroll to the very bottom, ignoring the _userScrolledUp guard.
-   * Uses instant behavior so it can't race with content appends.
+   *
+   * Defers to two rAFs so the first scroll fires after the browser has
+   * applied layout for any just-appended nodes, and re-fires once each
+   * in-spine image finishes loading — images arrive async and shift
+   * scrollHeight after the initial scroll, leaving the view mid-page
+   * on page refresh. A single `instant` scroll before layout settles
+   * was the original bug.
    */
   forceScrollToBottom() {
     this._userScrolledUp = false;
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
+    const scroll = () => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
+    };
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scroll();
+        const imgs = this._spine?.querySelectorAll('img') || [];
+        for (const img of imgs) {
+          if (img.complete) continue;
+          // Late-loading image; re-scroll once it lands. Guarded by
+          // `_userScrolledUp` so we don't yank the user if they've
+          // since scrolled up.
+          const retry = () => {
+            if (!this._userScrolledUp) scroll();
+          };
+          img.addEventListener('load', retry, { once: true });
+          img.addEventListener('error', retry, { once: true });
+        }
+      });
+    });
   }
 
   _formatTimestamp(ts) {
