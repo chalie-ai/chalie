@@ -171,7 +171,7 @@ class UserMessageProcessor(MessageProcessor):
         self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
 
-    def getConditionalTools(self) -> list[dict]:
+    def getConditionalTools(self) -> list[dict]:  # NOSONAR — overrides MessageProcessor hook (camelCase by contract)
         """Return mode-gated tool schemas for this turn (cached after first call).
 
         Consults ModeGateService once per turn. In shadow mode the gate returns

@@ -259,7 +259,7 @@ class ModeGateService:
                     str(self._shadow).lower(),
                     str(bootstrapped).lower(),
                     turn_id or "?",
-                    json.dumps({m: 0.0 for m in self.MODES}),
+                    json.dumps(dict.fromkeys(self.MODES, 0.0)),
                     json.dumps([]),
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
@@ -350,7 +350,7 @@ class ModeGateService:
             store = MemoryClientService.create_connection()
             raw = store.get(self.STATE_KEY)
             if raw is None:
-                return {m: 0.0 for m in self.MODES}
+                return dict.fromkeys(self.MODES, 0.0)
             if isinstance(raw, bytes):
                 raw = raw.decode()
             parsed = json.loads(raw)
@@ -359,7 +359,7 @@ class ModeGateService:
             return {m: float(modes_data.get(m, 0.0)) for m in self.MODES}
         except Exception as exc:
             logger.warning("%s _load_state failed (%s) — treating as cold", LOG_PREFIX, exc)
-            return {m: 0.0 for m in self.MODES}
+            return dict.fromkeys(self.MODES, 0.0)
 
     def _save_state(self, state: Dict[str, float]) -> None:
         """Persist mode state to MemoryStore as JSON (no TTL — survives restart)."""

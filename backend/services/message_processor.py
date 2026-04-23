@@ -207,7 +207,7 @@ class MessageProcessor:
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
-    def getConditionalTools(self) -> list[dict]:
+    def getConditionalTools(self) -> list[dict]:  # NOSONAR — MessageProcessor hooks use camelCase (getTools, getSystemPrompt, …)
         """Mode-gated tools for channels that opt in. Base no-op returns [].
 
         UserMessageProcessor overrides this to consult ModeGateService and

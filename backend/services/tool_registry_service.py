@@ -807,43 +807,46 @@ class ToolRegistryService:
         This runs at boot-time before any user requests are processed so
         configuration typos fail loudly rather than silently demoting tools.
         """
-        # Import here to avoid circular imports at module load time.
+        imports = self._import_mode_validation_deps()
+        if imports is None:
+            return
+        valid_modes, skill_modes, non_primitive_skills = imports
+
+        self._validate_innate_modes(valid_modes, skill_modes, non_primitive_skills)
+        self._validate_external_modes(valid_modes)
+
+        logger.info("[TOOL REGISTRY] Mode declaration validation passed")
+
+    @staticmethod
+    def _import_mode_validation_deps():
+        """Resolve mode + skill-registry imports. Returns None on import failure."""
         try:
             from services.mode_gate_service import ModeGateService
-            valid_modes = frozenset(ModeGateService.MODES)
-        except Exception as exc:
-            logger.warning(
-                "[TOOL REGISTRY] Cannot import ModeGateService for validation: %s — "
-                "mode declaration validation skipped", exc,
-            )
-            return
-
-        try:
             from services.innate_skills.registry import (
                 SKILL_MODES, ALL_SKILL_NAMES, COGNITIVE_PRIMITIVES,
             )
         except Exception as exc:
             logger.warning(
-                "[TOOL REGISTRY] Cannot import skill registry for validation: %s — "
+                "[TOOL REGISTRY] Cannot import deps for mode validation: %s — "
                 "mode declaration validation skipped", exc,
             )
-            return
-
+            return None
+        valid_modes = frozenset(ModeGateService.MODES)
         non_primitive_skills = ALL_SKILL_NAMES - COGNITIVE_PRIMITIVES
+        return valid_modes, SKILL_MODES, non_primitive_skills
 
-        # 1. Every non-primitive innate must have an entry in SKILL_MODES.
+    @staticmethod
+    def _validate_innate_modes(valid_modes, skill_modes, non_primitive_skills) -> None:
+        """Raise RuntimeError on missing SKILL_MODES entry or unknown mode string."""
         for skill in sorted(non_primitive_skills):
-            if skill not in SKILL_MODES:
+            if skill not in skill_modes:
                 raise RuntimeError(
                     f"[TOOL REGISTRY] Non-primitive innate skill '{skill}' has no "
                     f"entry in SKILL_MODES. Add it to "
                     f"backend/services/innate_skills/registry.py SKILL_MODES dict. "
                     f"An empty list [] is valid for 'find_tools only'. Missing entry is not."
                 )
-
-        # 2. Every declared mode string must be in ModeGateService.MODES.
-        # Check innate SKILL_MODES
-        for skill, modes in SKILL_MODES.items():
+        for skill, modes in skill_modes.items():
             for mode in modes:
                 if mode not in valid_modes:
                     raise RuntimeError(
@@ -851,19 +854,20 @@ class ToolRegistryService:
                         f"mode '{mode}'. Valid modes: {sorted(valid_modes)}"
                     )
 
-        # Check external TOOL_METADATA modes — only for tools actually
-        # registered (disabled tools are skipped during _load_tools and must
-        # not gate boot on their manifest contents; they can't be served
-        # anyway). Symmetric with get_tools_by_mode() which only indexes
-        # registered tools.
+    def _validate_external_modes(self, valid_modes) -> None:
+        """Raise RuntimeError on unknown mode string in TOOL_METADATA for registered tools.
+
+        Only registered tools are checked — disabled tools are skipped during
+        ``_load_tools`` and must not gate boot on their manifest contents.
+        Symmetric with ``get_tools_by_mode`` which only indexes registered tools.
+        """
         try:
             from services.tool_library_service import TOOL_METADATA
             with self._lock:
                 registered_names = set(self.tools.keys())
             for tool_name in registered_names:
                 meta = TOOL_METADATA.get(tool_name, {})
-                tool_modes = meta.get('modes', [])
-                for mode in tool_modes:
+                for mode in meta.get('modes', []):
                     if mode not in valid_modes:
                         raise RuntimeError(
                             f"[TOOL REGISTRY] External tool '{tool_name}' declares "
@@ -875,7 +879,5 @@ class ToolRegistryService:
             logger.warning(
                 "[TOOL REGISTRY] External tool mode validation failed: %s", exc
             )
-
-        logger.info("[TOOL REGISTRY] Mode declaration validation passed")
 
 
