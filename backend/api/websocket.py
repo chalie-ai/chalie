@@ -221,6 +221,155 @@ def register_websocket(sock):
             ws_open.clear()
 
 
+def _resolve_file_tags(image_ids: list, text: str, request_id: str) -> list:
+    """
+    Build file_tags for a chat turn by resolving image analysis results and
+    a recent-upload document heuristic.
+
+    For each image_id: load the document record, wait up to 10 s for status
+    to become 'ready' or 'failed', then emit an ocr tag or a failure tag.
+    Never silently drops context — even failures produce a structured tag so
+    the LLM knows the image was attached.
+
+    For documents: if the text is short/empty AND a source_type='upload'
+    document was created within the last 60 s and is ready (or becomes ready
+    within 10 s), inject its clean_text.
+
+    Args:
+        image_ids:  Up to 3 image IDs from the chat message metadata.
+        text:       The raw user message text.
+        request_id: The per-turn request ID for log correlation.
+
+    Returns:
+        Flat list of tag strings for metadata['file_tags'].
+    """
+    import time as _time
+    from services.document_service import DocumentService
+    from services.database_service import get_shared_db_service
+
+    tags = []
+    doc_ids_injected = []
+
+    db = get_shared_db_service()
+    svc = DocumentService(db)
+
+    # --- Images ---------------------------------------------------------------
+    for image_id in image_ids:
+        doc = svc.get_document(image_id)
+        if not doc:
+            logger.warning(
+                f"[WS] file_tags image not found image_id={image_id} "
+                f"request_id={request_id}"
+            )
+            tags.append(f"[image id={image_id} status=not_found]")
+            continue
+
+        status = doc.get('status', '')
+        deadline = _time.monotonic() + 10.0
+
+        while status not in ('ready', 'failed') and _time.monotonic() < deadline:
+            _time.sleep(0.2)
+            doc = svc.get_document(image_id)
+            if doc:
+                status = doc.get('status', '')
+
+        if status == 'ready':
+            meta = doc.get('extracted_metadata') or {}
+            if isinstance(meta, str):
+                import json as _json
+                try:
+                    meta = _json.loads(meta)
+                except Exception:
+                    meta = {}
+            ocr_text = (meta.get('ocr_text') or '').strip()
+            if ocr_text:
+                tags.append(f"[image id={image_id} ocr={ocr_text[:500]}]")
+            else:
+                tags.append(f"[image id={image_id} ocr=<none>]")
+        elif status == 'failed':
+            logger.warning(
+                f"[WS] file_tags image analysis failed image_id={image_id} "
+                f"request_id={request_id}"
+            )
+            tags.append(f"[image id={image_id} status=failed]")
+        else:
+            logger.warning(
+                f"[WS] file_tags image analysis timed out image_id={image_id} "
+                f"status={status} request_id={request_id}"
+            )
+            tags.append(f"[image id={image_id} status=timeout]")
+
+    # --- Recent upload heuristic ----------------------------------------------
+    # When no image_ids were attached by the client, look for any recently-
+    # uploaded file (document OR chat_image) the user might be referring to.
+    # chat_image → image tag with OCR; upload → document tag with clean_text.
+    if not image_ids:
+        try:
+            with db.connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT id, original_name, status, clean_text, source_type
+                    FROM documents
+                    WHERE source_type IN ('upload', 'chat_image')
+                      AND deleted_at IS NULL
+                      AND created_at >= datetime('now', '-120 seconds')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                ).fetchone()
+
+            if row:
+                doc_id, original_name, doc_status, clean_text, source_type = row
+                deadline = _time.monotonic() + 10.0
+
+                while doc_status not in ('ready', 'failed') and _time.monotonic() < deadline:
+                    _time.sleep(0.2)
+                    doc = svc.get_document(doc_id)
+                    if doc:
+                        doc_status = doc.get('status', '')
+                        clean_text = doc.get('clean_text', '') or clean_text
+
+                if doc_status == 'ready':
+                    if source_type == 'chat_image':
+                        doc = svc.get_document(doc_id) or {}
+                        meta = doc.get('extracted_metadata') or {}
+                        if isinstance(meta, str):
+                            import json as _json
+                            try:
+                                meta = _json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        ocr_text = (meta.get('ocr_text') or '').strip()
+                        if ocr_text:
+                            tags.append(f"[image id={doc_id} ocr={ocr_text[:500]}]")
+                        else:
+                            tags.append(f"[image id={doc_id} ocr=<none>]")
+                        doc_ids_injected.append(doc_id)
+                    elif clean_text:
+                        content_snippet = clean_text[:2000]
+                        tags.append(
+                            f"[document id={doc_id} name={original_name} "
+                            f"content={content_snippet}]"
+                        )
+                        doc_ids_injected.append(doc_id)
+                elif doc_status == 'failed':
+                    logger.warning(
+                        f"[WS] file_tags recent upload failed doc_id={doc_id} "
+                        f"source_type={source_type} request_id={request_id}"
+                    )
+                    tags.append(f"[{'image' if source_type == 'chat_image' else 'document'} id={doc_id} status=failed]")
+        except Exception as e:
+            logger.warning(
+                f"[WS] file_tags recent-upload heuristic error request_id={request_id}: {e}"
+            )
+
+    logger.info(
+        f"[WS] file_tags injected request_id={request_id} "
+        f"tags={len(tags)} image_ids={image_ids} doc_ids={doc_ids_injected}"
+    )
+    return tags
+
+
 def _handle_resume(ws, msg):
     """Replay missed events on reconnect."""
     last_seq = msg.get('last_seq', 0)
@@ -376,6 +525,12 @@ def _handle_chat(ws, store, msg, active_request=None):
                 'image_ids': image_ids,
                 'channel': 'user',
             }
+
+            # Resolve file context tags — waits up to 10 s for image analysis
+            # and injects a recent-upload document heuristic when applicable.
+            # MUST run before UserMessageProcessor is constructed so that
+            # getUserPrompt() picks up file_tags on its first call.
+            metadata['file_tags'] = _resolve_file_tags(image_ids, text, request_id)
 
             def _on_narration(text, step=0):
                 """Publish per-iteration synthesis text to the per-request SSE channel."""

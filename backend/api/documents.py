@@ -161,7 +161,15 @@ def _process_upload(doc_id: str):
             dot_pos = summary.rfind('. ')
             if dot_pos > 200:
                 summary = summary[:dot_pos + 1]
-            svc.update_summary(doc_id, summary)
+
+            # Write clean_text so the file_tags heuristic in websocket.py
+            # (_resolve_file_tags) can inject document content into the LLM prompt.
+            svc.update_extracted_metadata(
+                doc_id,
+                metadata={},
+                summary=summary,
+                clean_text=text,
+            )
             svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
 
             logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")

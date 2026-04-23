@@ -5,10 +5,11 @@ import { showToast } from './utils.js';
  */
 export class ImageAttach {
   /**
-   * @param {{ getHost: () => string }} opts
+   * @param {{ getHost: () => string, onDocumentDrop?: (file: File) => void }} opts
    */
-  constructor({ getHost }) {
+  constructor({ getHost, onDocumentDrop }) {
     this._getHost = getHost;
+    this._onDocumentDrop = onDocumentDrop || null;
 
     // [{id: string, element: HTMLElement}]
     this._attachedImages = [];
@@ -158,6 +159,68 @@ export class ImageAttach {
    */
   get count() {
     return this._attachedImages.length;
+  }
+
+  /**
+   * Wire drag-and-drop and paste listeners for image attachment.
+   *
+   * @param {{ dropzone: Element, pasteTarget: Element }} opts
+   *   dropzone   — the element that receives dragover/drop events (e.g. .input-dock)
+   *   pasteTarget — the element that receives paste events (e.g. #messageInput)
+   */
+  enableDropTargets({ dropzone, pasteTarget }) {
+    if (!dropzone || !pasteTarget) return;
+
+    // Dragover — prevent default to allow drop, add visual class
+    dropzone.addEventListener('dragenter', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+
+    dropzone.addEventListener('dragover', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+
+    // Dragleave — only remove class when leaving the dropzone entirely
+    dropzone.addEventListener('dragleave', (ev) => {
+      if (dropzone.contains(ev.relatedTarget)) return;
+      dropzone.classList.remove('dragover');
+    });
+
+    // Drop on the input-dock
+    dropzone.addEventListener('drop', (ev) => {
+      dropzone.classList.remove('dragover');
+      const files = ev.dataTransfer?.files;
+      if (!files?.length) return;
+      ev.preventDefault();
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          this.handleFile(file);
+        } else if (this._onDocumentDrop) {
+          this._onDocumentDrop(file);
+        } else {
+          showToast('Drop an image here (documents: use + menu)');
+        }
+      }
+    });
+
+    // Paste — only intercept when clipboard contains an image item
+    pasteTarget.addEventListener('paste', (ev) => {
+      const items = ev.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          ev.preventDefault();
+          const file = item.getAsFile();
+          if (file) this.handleFile(file);
+          return; // handle one image per paste
+        }
+      }
+      // Plain text — fall through to native paste behaviour
+    });
   }
 
   // ---------------------------------------------------------------------------
