@@ -515,3 +515,33 @@ class TestSystemAPI:
 
         data = resp.get_json()
         assert 'checks' not in data
+
+    # ────────────────────────────────────────────
+    # POST /system/reset-thread — notifications:recent cleared
+    # ────────────────────────────────────────────
+
+    def test_reset_thread_clears_notifications_recent(self, authed_client):
+        """POST /system/reset-thread wipes notifications:recent from MemoryStore.
+
+        Plants a stale task event in notifications:recent (mimicking a completed
+        goal_pursuit background worker), calls the endpoint, then asserts the list
+        is gone — both via llen==0 and lpop returning None.  Also verifies the
+        response includes notifications_cleared==1.
+        """
+        client, _db_conn, store = authed_client
+
+        store.rpush('notifications:recent', '{"type":"task","test":1}')
+        assert store.llen('notifications:recent') == 1
+
+        resp = client.post(
+            '/system/reset-thread',
+            json={'channel': 'user'},
+            content_type='application/json',
+        )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['ok'] is True
+        assert data['notifications_cleared'] == 1
+        assert store.llen('notifications:recent') == 0
+        assert store.lpop('notifications:recent') is None
