@@ -236,33 +236,6 @@ class TestIntentServiceQueueTTL:
 
 
 # ---------------------------------------------------------------------------
-# 8. world_state_service — rpush to world_state:external_signals
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestWorldStateExternalSignalsTTL:
-    """After rpush to world_state:external_signals, expire with 3600 must fire."""
-
-    def test_notify_external_signal_sets_ttl(self):
-        store = MemoryStore()
-        # Keep the patch active during the call — _get_store() is lazy-initialized
-        # and will call create_connection() inside notify_external_signal().
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.world_state_service import WorldStateService, EXTERNAL_SIGNALS_KEY
-            svc = WorldStateService()
-            svc.notify_external_signal(
-                signal_type="news_update",
-                source="rss",
-                content="Latest headlines",
-                topic="default",
-            )
-
-        assert _has_ttl(store, EXTERNAL_SIGNALS_KEY), \
-            "world_state:external_signals must have a TTL after rpush"
-
-
-# ---------------------------------------------------------------------------
 # 10. dmn_service — zadd to dmn:deliveries
 # ---------------------------------------------------------------------------
 
@@ -274,9 +247,7 @@ class TestDMNServiceDeliveryZSetTTL:
         store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store), \
-             patch("services.database_service.get_shared_db_service"), \
-             patch("services.interaction_log_service.InteractionLogService.__init__",
-                   return_value=None):
+             patch("services.database_service.get_shared_db_service"):
             from services.dmn_service import DMNService, _DELIVERY_ZSET
             svc = DMNService.__new__(DMNService)
             svc._store = store

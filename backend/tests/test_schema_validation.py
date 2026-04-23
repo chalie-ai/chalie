@@ -90,7 +90,7 @@ class TestSchemaValidation:
         """Absorbs scenario 200: reliability column exists on knowledge.
 
         uncertainties table was removed from schema.sql (dropped by migration
-        025, replaced by pending_contradictions). Reliability column is still
+        025). Reliability column is still
         present on knowledge (for migration 026 compat).
         """
         cols = _get_columns(schema_db, 'knowledge')
@@ -131,10 +131,8 @@ class TestSchemaValidation:
         # episodes
         ep_id = str(uuid.uuid4())
         schema_db.execute(
-            "INSERT INTO episodes "
-            "(id, intent, context, action, emotion, outcome, gist, salience, channel) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ep_id, '{}', '{}', 'test', '{}', 'test', 'test gist', 5, 'test-topic')
+            "INSERT INTO episodes (id, gist, salience, channel) VALUES (?, ?, ?, ?)",
+            (ep_id, 'test gist', 5, 'test-topic')
         )
         row = schema_db.execute(
             "SELECT id FROM episodes WHERE id = ?", (ep_id,)
@@ -142,30 +140,6 @@ class TestSchemaValidation:
         assert row is not None, "episodes INSERT failed"
 
         schema_db.rollback()
-
-    # ── Scenario 230 ─────────────────────────────────────────────────────────
-
-    def test_interaction_log_event_type_column(self, schema_db):
-        """Absorbs scenario 230: interaction_log has event_type column.
-
-        event_type is NOT NULL and indexed; it is the primary discriminator
-        for filtering audit trail entries (e.g. 'action_gate_rejected').
-        """
-        tables = _get_tables(schema_db)
-        assert 'interaction_log' in tables, (
-            "interaction_log table missing from schema"
-        )
-
-        columns = _get_columns(schema_db, 'interaction_log')
-        assert 'event_type' in columns, (
-            "event_type column missing from interaction_log"
-        )
-
-        # Verify the index that makes filtering efficient also exists
-        indexes = _get_indexes(schema_db, 'interaction_log')
-        assert 'idx_interaction_log_event_type_created' in indexes, (
-            "idx_interaction_log_event_type_created index missing"
-        )
 
     # ── Scenario 231 ─────────────────────────────────────────────────────────
 

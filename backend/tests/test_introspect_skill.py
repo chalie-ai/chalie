@@ -18,7 +18,6 @@ _SELF_MODEL  = 'services.self_model_service.SelfModelService'
 _DB          = 'services.database_service.get_shared_db_service'
 _KNOWLEDGE   = 'services.knowledge_service.KnowledgeService'
 _MEMORY_CLI  = 'services.memory_client.MemoryClientService'
-_UTC_NOW     = 'services.innate_skills.introspect_skill.utc_now'
 
 # A fixed "now" for deterministic relative-time assertions.
 _FIXED_NOW = datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc)
@@ -34,9 +33,8 @@ def _invoke(topic='test', params=None):
 def _seed_episode(db, episode_id='ep-1', updated_at='2026-01-01 10:00:00'):
     """Insert a minimal valid episode row for consolidation-timestamp tests."""
     db.execute(
-        "INSERT INTO episodes "
-        "(id, intent, context, action, emotion, outcome, gist, salience, channel, updated_at) "
-        "VALUES (?, '{}', '{}', 'test', '{}', 'ok', 'gist', 5, 'test', ?)",
+        "INSERT INTO episodes (id, gist, salience, channel, updated_at) "
+        "VALUES (?, 'gist', 5, 'test', ?)",
         (episode_id, updated_at),
     )
     db.commit()
@@ -51,17 +49,6 @@ def _seed_scheduled_item(db, message, due_at, status='pending', item_id=None):
         "INSERT INTO scheduled_items (id, message, due_at, status) VALUES (?, ?, ?, ?)",
         (item_id, message, due_at, status),
     )
-    db.commit()
-
-
-def _seed_interaction(db, event_type='message_received', n=1):
-    """Insert n interaction_log rows."""
-    import uuid
-    for _ in range(n):
-        db.execute(
-            "INSERT INTO interaction_log (id, event_type, payload) VALUES (?, ?, '{}')",
-            (str(uuid.uuid4()), event_type),
-        )
     db.commit()
 
 
@@ -294,8 +281,7 @@ class TestSkillUsageScope:
 @pytest.mark.unit
 class TestReasoningStateScope:
 
-    @patch(_UTC_NOW, return_value=_FIXED_NOW)
-    def test_reasoning_state_shows_reminders(self, mock_now, db):
+    def test_reasoning_state_shows_reminders(self, db):
         # due_at must be in the future relative to SQL datetime('now')
         future1 = (datetime.utcnow() + timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
         future2 = (datetime.utcnow() + timedelta(hours=20)).strftime('%Y-%m-%d %H:%M:%S')
@@ -307,8 +293,7 @@ class TestReasoningStateScope:
 
         assert 'Team standup call' in result
 
-    @patch(_UTC_NOW, return_value=_FIXED_NOW)
-    def test_reasoning_state_reminder_count_singular(self, mock_now, db):
+    def test_reasoning_state_reminder_count_singular(self, db):
         future = (datetime.utcnow() + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
         _seed_scheduled_item(db, 'Dentist appointment', future)
 
@@ -317,8 +302,7 @@ class TestReasoningStateScope:
 
         assert '1 upcoming reminder' in result
 
-    @patch(_UTC_NOW, return_value=_FIXED_NOW)
-    def test_reasoning_state_reminder_count_plural(self, mock_now, db):
+    def test_reasoning_state_reminder_count_plural(self, db):
         future1 = (datetime.utcnow() + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
         future2 = (datetime.utcnow() + timedelta(hours=4)).strftime('%Y-%m-%d %H:%M:%S')
         _seed_scheduled_item(db, 'First reminder', future1)
@@ -347,46 +331,6 @@ class TestReasoningStateScope:
 
 @pytest.mark.unit
 class TestIdentityScope:
-
-    def test_identity_shows_relationship_depth_new(self, db):
-        _seed_interaction(db, n=10)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'new' in result
-
-    def test_identity_shows_relationship_depth_developing(self, db):
-        _seed_interaction(db, n=200)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'developing' in result
-
-    def test_identity_shows_relationship_depth_established(self, db):
-        _seed_interaction(db, n=1000)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'established' in result
-
-    def test_identity_shows_relationship_depth_deep(self, db):
-        _seed_interaction(db, n=5000)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert 'deep' in result
-
-    def test_identity_shows_interaction_count(self, db):
-        _seed_interaction(db, n=342)
-
-        from services.innate_skills.introspect_skill import _identity_relationship_depth
-        result = _identity_relationship_depth()
-
-        assert '342' in result
 
     @patch('services.data_graph_service.get_data_graph_service')
     def test_identity_communication_style_verbosity(self, mock_dgs_fn, db):
@@ -457,61 +401,55 @@ class TestIdentityScope:
 
 @pytest.mark.unit
 class TestRelativeTimeFormatting:
+    """TimeFormatterService.ago() is now the shared chokepoint; test it via the service."""
 
     def _call(self, dt_value, now=_FIXED_NOW):
-        with patch(_UTC_NOW, return_value=now):
-            from services.innate_skills.introspect_skill import _relative_time
-            return _relative_time(dt_value)
+        with patch('services.time_formatter_service.utc_now', return_value=now):
+            from services.time_formatter_service import TimeFormatterService
+            return TimeFormatterService.ago(dt_value)
 
-    def test_just_now_for_seconds_ago(self):
+    def test_seconds_ago(self):
         ts = (_FIXED_NOW - timedelta(seconds=30)).isoformat()
         result = self._call(ts)
-        assert result == 'just now'
+        assert result == '30s ago'
 
     def test_minutes_ago(self):
         ts = (_FIXED_NOW - timedelta(minutes=15)).isoformat()
         result = self._call(ts)
-        assert '15' in result
-        assert 'min' in result
+        assert result == '15m ago'
 
     def test_one_hour_ago(self):
         ts = (_FIXED_NOW - timedelta(hours=1)).isoformat()
         result = self._call(ts)
-        assert '1' in result
-        assert 'hour' in result
+        assert result == '1h 0m ago'
 
     def test_multiple_hours_ago(self):
         ts = (_FIXED_NOW - timedelta(hours=5)).isoformat()
         result = self._call(ts)
-        assert '5' in result
-        assert 'hours' in result
+        assert result == '5h 0m ago'
 
     def test_one_day_ago(self):
         ts = (_FIXED_NOW - timedelta(days=1)).isoformat()
         result = self._call(ts)
-        assert '1' in result
-        assert 'day' in result
+        assert result == '1d 0h ago'
 
     def test_multiple_days_ago(self):
         ts = (_FIXED_NOW - timedelta(days=4)).isoformat()
         result = self._call(ts)
-        assert '4' in result
-        assert 'days' in result
+        assert result == '4d 0h ago'
 
-    def test_future_datetime(self):
+    def test_future_datetime_clamps_to_zero(self):
         ts = (_FIXED_NOW + timedelta(hours=2)).isoformat()
         result = self._call(ts)
-        assert result == 'in the future'
+        assert result == '0s ago'
 
     def test_naive_sqlite_string(self):
         """SQLite-style naive timestamp strings must be handled without error."""
         ts = '2026-03-19 11:00:00'   # 1 hour before _FIXED_NOW, no tz suffix
         result = self._call(ts)
-        assert '1' in result
-        assert 'hour' in result
+        assert result == '1h 0m ago'
 
     def test_unparseable_value_does_not_crash(self):
-        # parse_utc returns datetime.min for bad input → large "days ago" string
         result = self._call('not-a-date')
         assert isinstance(result, str) and len(result) > 0
 

@@ -32,7 +32,6 @@ class WorldAwarenessService:
         self._db = database_service
         self._embedding_svc = None
         self._news_service = None
-        self._world_state_svc = None
 
     # ── Lazy accessors ────────────────────────────────────────
 
@@ -48,11 +47,6 @@ class WorldAwarenessService:
             self._news_service = NewsService()
         return self._news_service
 
-    def _get_world_state_service(self):
-        if self._world_state_svc is None:
-            from services.world_state_service import WorldStateService
-            self._world_state_svc = WorldStateService(self._db)
-        return self._world_state_svc
 
     # ── Interest extraction ───────────────────────────────────
 
@@ -177,8 +171,8 @@ class WorldAwarenessService:
         logger.info(f"{LOG_PREFIX} Scanning {len(interests)} interests: "
                      f"{[i['term'] for i in interests]}")
 
+        from services.world_state import world_state as _world_state
         news_svc = self._get_news_service()
-        world_svc = self._get_world_state_service()
         signals_written = 0
 
         for interest in interests:
@@ -191,19 +185,8 @@ class WorldAwarenessService:
                     continue
 
                 best = articles[0]
-                world_svc.notify_external_signal(
-                    signal_type="news",
-                    source=SIGNAL_SOURCE,
-                    content=f"{best.title} \u2014 {best.source}",
-                    activation_energy=min(0.6, interest["score"] * 0.3),
-                    metadata={
-                        "interest": interest["term"],
-                        "url": best.url,
-                        "source_name": best.source,
-                        "published_at": best.published_at,
-                        "article_count": len(articles),
-                    },
-                )
+                headline = f"{best.title} \u2014 {best.source}"
+                _world_state.push_signal("news", headline, ttl=3600)
                 signals_written += 1
 
             except Exception as e:

@@ -101,6 +101,16 @@ class LLMResponse:
             by the provider.
         tokens_output: Number of output/completion tokens generated, if
             reported by the provider.
+        tokens_thinking: CoT/reasoning tokens charged separately by the
+            provider (OpenAI reasoning_tokens, Gemini thoughts_token_count).
+            Anthropic: extended thinking tokens are INCLUDED in
+            ``output_tokens`` per the Anthropic API docs — the SDK does not
+            report a separate field, so ``tokens_thinking`` stays ``None``
+            and thinking cost is reflected in ``tokens_output``. If a future
+            SDK version exposes it separately, extract here and subtract
+            from ``tokens_output`` to avoid double-counting.
+        tokens_cache_read: Prompt-cache read tokens (Anthropic only).
+        tokens_cache_create: Prompt-cache write tokens (Anthropic only).
         latency_ms: End-to-end round-trip latency in milliseconds from
             request dispatch to response receipt.
     """
@@ -110,6 +120,9 @@ class LLMResponse:
     provider: Optional[str] = None
     tokens_input: Optional[int] = None
     tokens_output: Optional[int] = None
+    tokens_thinking: Optional[int] = None
+    tokens_cache_read: Optional[int] = None
+    tokens_cache_create: Optional[int] = None
     tool_calls: Optional[list] = None
     stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
@@ -153,6 +166,26 @@ def _call_with_retry(fn, max_retries=2, backoff=1.0):
             attempt += 1
 
 
+def _parse_retry_after(exc) -> Optional[float]:
+    """Extract the Retry-After header value from an HTTP exception, or return None."""
+    if hasattr(exc, 'response') and exc.response is not None:
+        ra = exc.response.headers.get('retry-after')
+        if ra:
+            try:
+                return float(ra)
+            except (ValueError, TypeError) as parse_err:
+                logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {parse_err}")
+    return None
+
+
+def _is_thinking_rejection(exc, create_kwargs: dict) -> bool:
+    """Return True when the provider rejected a reasoning_effort parameter."""
+    if 'reasoning_effort' not in create_kwargs:
+        return False
+    err = str(exc).lower()
+    return 'reasoning_effort' in err or 'unsupported' in err
+
+
 class FallbackLLMService:
     """Wraps a primary + fallback service. On primary failure, invokes fallback."""
 
@@ -192,12 +225,12 @@ class FallbackLLMService:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
-            return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+            return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
-            return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+            return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
 
     def get_context_limit(self) -> int:
         return self._primary.get_context_limit()
@@ -277,8 +310,8 @@ class LoggingLLMService:
         _log_llm_call(self._job_name, result)
         return result
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
-        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._job_name, result)
         return result
 
@@ -423,9 +456,9 @@ class RefreshableLLMService:
         _log_llm_call(self._agent_name, result)
         return result
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         self._ensure_fresh()
-        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._agent_name, result)
         return result
 
@@ -454,6 +487,46 @@ def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
         RefreshableLLMService that transparently re-creates its client on changes.
     """
     return RefreshableLLMService(agent_name)
+
+
+_ANTHROPIC_THINKING_BUDGETS = {'medium': 4096, 'high': 16384}
+
+
+def _anthropic_raise_rate_limit(exc) -> None:
+    """Parse a Retry-After header from an Anthropic RateLimitError and raise RateLimitError."""
+    retry_after = None
+    if hasattr(exc, 'response') and exc.response is not None:
+        ra = exc.response.headers.get('retry-after')
+        if ra:
+            try:
+                retry_after = float(ra)
+            except (ValueError, TypeError) as parse_err:
+                logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {parse_err}")
+    raise RateLimitError(str(exc), retry_after=retry_after, provider='anthropic') from exc
+
+
+def _anthropic_build_thinking_kwargs(thinking_mode: str, model: str) -> dict:
+    """Return extra kwargs for the thinking flag, or an empty dict."""
+    if thinking_mode not in _ANTHROPIC_THINKING_BUDGETS:
+        return {}
+    budget = _ANTHROPIC_THINKING_BUDGETS[thinking_mode]
+    logger.info(f"[THINKING] native flag passed: provider=anthropic mode={thinking_mode} model={model}")
+    return {'thinking': {'type': 'enabled', 'budget_tokens': budget}}
+
+
+def _anthropic_parse_content_blocks(content) -> tuple:
+    """Extract (text, tool_calls) from an Anthropic response content list."""
+    text_parts = []
+    tool_calls = []
+    for block in (content or []):
+        block_type = getattr(block, 'type', None)
+        if block_type == 'tool_use':
+            tool_calls.append({'id': block.id, 'name': block.name, 'input': block.input})
+        elif block_type == 'thinking':
+            logger.debug("[AnthropicService] thinking block present; usage deferred to caller")
+        elif hasattr(block, 'text') and block.text:
+            text_parts.append(block.text)
+    return '\n'.join(text_parts), tool_calls or None
 
 
 class AnthropicService:
@@ -516,15 +589,7 @@ class AnthropicService:
                     messages=[{"role": "user", "content": user_message}],
                 )
             except anthropic.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
-                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+                _anthropic_raise_rate_limit(e)
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -546,7 +611,7 @@ class AnthropicService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         import anthropic
 
         client = self._get_client()
@@ -558,54 +623,38 @@ class AnthropicService:
             else system_prompt
         )
 
-        # Convert normalized messages to Anthropic format (handle tool_calls + tool results)
-        api_messages = _anthropic_convert_messages(messages)
-
+        # Anthropic: input_schema must be valid JSON Schema. Standard types only
+        # (string, number, integer, boolean, array, object, null). Custom types rejected.
+        # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf at top level.
+        # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
         create_kwargs = {
             'model': self.model,
             'max_tokens': self._MAX_TOKENS,
             'system': system,
-            'messages': api_messages,
+            'messages': _anthropic_convert_messages(messages),
+            **({'tools': tools} if tools else {}),
+            **_anthropic_build_thinking_kwargs(thinking_mode, self.model),
         }
-        if tools:
-            # Anthropic: input_schema must be valid JSON Schema. Standard types only
-            # (string, number, integer, boolean, array, object, null). Custom types rejected.
-            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf at top level.
-            # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
-            create_kwargs['tools'] = tools  # Anthropic format matches our schema directly
 
         def _call():
             try:
                 return client.messages.create(**create_kwargs)
             except anthropic.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
-                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+                _anthropic_raise_rate_limit(e)
+            except (anthropic.BadRequestError, anthropic.APIError) as e:
+                if 'thinking' in str(e).lower() and 'thinking' in create_kwargs:
+                    logger.info(
+                        f"[THINKING] native flag rejected by provider=anthropic model={self.model} — retried without"
+                    )
+                    return client.messages.create(**{k: v for k, v in create_kwargs.items() if k != 'thinking'})
+                raise
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Extract text + tool_calls from response content blocks
-        text_parts = []
-        tool_calls = []
-        for block in (response.content or []):
-            block_type = getattr(block, 'type', None)
-            if block_type == 'tool_use':
-                tool_calls.append({
-                    'id': block.id,
-                    'name': block.name,
-                    'input': block.input,
-                })
-            elif hasattr(block, 'text') and block.text:
-                text_parts.append(block.text)
-
-        text = '\n'.join(text_parts)
+        # Thinking blocks are intentionally NOT surfaced in `text` — internal reasoning only.
+        # Token cost is folded into response.usage.output_tokens per Anthropic API docs.
+        text, tool_calls = _anthropic_parse_content_blocks(response.content)
         stop_reason = response.stop_reason  # 'end_turn', 'tool_use', 'max_tokens'
 
         logger.info(
@@ -621,8 +670,10 @@ class AnthropicService:
             provider='anthropic',
             tokens_input=response.usage.input_tokens,
             tokens_output=response.usage.output_tokens,
+            tokens_cache_read=getattr(response.usage, 'cache_read_input_tokens', None),
+            tokens_cache_create=getattr(response.usage, 'cache_creation_input_tokens', None),
             latency_ms=latency_ms,
-            tool_calls=tool_calls if tool_calls else None,
+            tool_calls=tool_calls,
             stop_reason=stop_reason,
         )
 
@@ -811,77 +862,102 @@ class OpenAIService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    @staticmethod
+    def _build_openai_tools(tools: list) -> list:
+        """Convert normalized tool schemas to the OpenAI function-calling format.
+
+        OpenAI: parameters must be valid JSON Schema. Standard types only.
+        strict=true enforces exact compliance; best-effort without it.
+        Enums: {"type": "string", "enum": [...]}. Custom types rejected.
+        Ref: https://platform.openai.com/docs/guides/function-calling
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t['name'],
+                    "description": t.get('description', ''),
+                    "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
+                },
+            }
+            for t in tools
+        ]
+
+    def _apply_reasoning_effort(self, create_kwargs: dict, thinking_mode: Optional[str]) -> None:
+        """Inject reasoning_effort into create_kwargs when thinking_mode is set."""
+        _reasoning_efforts = {'medium': 'medium', 'high': 'high'}
+        if thinking_mode in _reasoning_efforts:
+            create_kwargs['reasoning_effort'] = _reasoning_efforts[thinking_mode]
+            logger.info(
+                f"[THINKING] native flag passed: provider=openai mode={thinking_mode} model={self.model}"
+            )
+
+    def _call_completions(self, client, create_kwargs: dict):
+        """Execute the completions API call with rate-limit and thinking-fallback handling."""
         import openai as openai_mod
-        import json as _json
-
-        client = self._get_client()
-        start_time = time.time()
-
-        # Convert normalized messages to OpenAI format
-        api_messages = _openai_convert_messages(messages)
-
-        create_kwargs = {
-            'model': self.model,
-            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
-        }
-        if tools:
-            # OpenAI: parameters must be valid JSON Schema. Standard types only.
-            # strict=true enforces exact compliance; best-effort without it.
-            # Enums: {"type": "string", "enum": [...]}. Custom types rejected.
-            # Ref: https://platform.openai.com/docs/guides/function-calling
-            # Convert to OpenAI function calling format
-            create_kwargs['tools'] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t['name'],
-                        "description": t.get('description', ''),
-                        "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
-                    },
-                }
-                for t in tools
-            ]
-        # Note: send_messages is the native-tool-calling / multi-turn path.
-        # Never set response_format: json_object here — the prompt may not
-        # mention "json" (OpenAI requires it), and tool calling uses its own
-        # structured output protocol. Legacy JSON output lives in send_message.
 
         def _call():
             try:
                 return client.chat.completions.create(**create_kwargs)
             except openai_mod.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError) as e:
-                            logger.debug(f"[LLM] Could not parse Retry-After header value {ra!r}: {e}")
+                retry_after = _parse_retry_after(e)
                 raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
+            except (openai_mod.BadRequestError, openai_mod.APIError) as e:
+                if _is_thinking_rejection(e, create_kwargs):
+                    logger.info(
+                        f"[THINKING] native flag rejected by provider=openai model={self.model} — retried without"
+                    )
+                    fallback_kwargs = {k: v for k, v in create_kwargs.items() if k != 'reasoning_effort'}
+                    return client.chat.completions.create(**fallback_kwargs)
+                raise
 
-        response = _call_with_retry(_call)
+        return _call_with_retry(_call)
+
+    @staticmethod
+    def _parse_openai_tool_calls(msg) -> Optional[list]:
+        """Parse tool calls from an OpenAI response message. Returns None if absent."""
+        import json as _json
+
+        if not msg.tool_calls:
+            return None
+        tool_calls = []
+        for tc in msg.tool_calls:
+            try:
+                parsed_args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
+            except _json.JSONDecodeError:
+                parsed_args = {}
+            tool_calls.append({
+                'id': tc.id,
+                'name': tc.function.name,
+                'input': parsed_args,
+            })
+        return tool_calls
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
+        del cache_prefix  # interface parity with Anthropic; OpenAI has no prefix-cache.
+        # Note: send_messages is the native-tool-calling / multi-turn path.
+        # Never set response_format: json_object here — the prompt may not
+        # mention "json" (OpenAI requires it), and tool calling uses its own
+        # structured output protocol. Legacy JSON output lives in send_message.
+        client = self._get_client()
+        start_time = time.time()
+
+        api_messages = _openai_convert_messages(messages)
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
+        }
+        if tools:
+            create_kwargs['tools'] = self._build_openai_tools(tools)
+        self._apply_reasoning_effort(create_kwargs, thinking_mode)
+
+        response = self._call_completions(client, create_kwargs)
         latency_ms = int((time.time() - start_time) * 1000)
 
         msg = response.choices[0].message
         text = _strip_think_blocks(msg.content or "")
         finish_reason = response.choices[0].finish_reason
-
-        # Extract tool calls
-        tool_calls = None
-        if msg.tool_calls:
-            tool_calls = []
-            for tc in msg.tool_calls:
-                try:
-                    parsed_args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
-                except _json.JSONDecodeError:
-                    parsed_args = {}
-                tool_calls.append({
-                    'id': tc.id,
-                    'name': tc.function.name,
-                    'input': parsed_args,
-                })
+        tool_calls = self._parse_openai_tool_calls(msg)
 
         log_level = logger.info if (text and text.strip()) or tool_calls else logger.warning
         log_level(
@@ -891,12 +967,16 @@ class OpenAIService:
             + (f", tools={len(tool_calls)}" if tool_calls else "")
         )
 
+        _completion_details = getattr(response.usage, 'completion_tokens_details', None)
+        _reasoning_tokens = getattr(_completion_details, 'reasoning_tokens', None) if _completion_details else None
+
         return LLMResponse(
             text=text,
             model=response.model,
             provider='openai',
             tokens_input=response.usage.prompt_tokens,
             tokens_output=response.usage.completion_tokens,
+            tokens_thinking=_reasoning_tokens,
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             stop_reason=finish_reason,
@@ -1071,7 +1151,8 @@ class GeminiService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
+        del cache_prefix  # interface parity with Anthropic; Gemini has no prefix-cache.
         try:
             from google import genai
         except ImportError:
@@ -1080,70 +1161,15 @@ class GeminiService:
                 "Run: pip install google-genai"
             )
 
-        api_key = _resolve_api_key(self._config)
-        client = genai.Client(api_key=api_key)
-
+        client = genai.Client(api_key=_resolve_api_key(self._config))
         start_time = time.time()
-
-        # Convert normalized messages to Gemini format
         gemini_contents = _gemini_convert_messages(messages)
-
-        gen_config_kwargs = {'system_instruction': system_prompt}
-        if self.format == 'json' and not tools:
-            gen_config_kwargs['response_mime_type'] = 'application/json'
-        if tools:
-            # Gemini: parameters follow OpenAPI schema subset (stricter than JSON Schema).
-            # Standard types only. No default values in schema. Custom types rejected.
-            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf/anyOf.
-            # Ref: https://ai.google.dev/gemini-api/docs/function-calling
-            gen_config_kwargs['tools'] = [
-                genai.types.Tool(function_declarations=[
-                    genai.types.FunctionDeclaration(
-                        name=t['name'],
-                        description=t.get('description', ''),
-                        parameters=t.get('input_schema'),
-                    )
-                    for t in tools
-                ])
-            ]
-
-        def _call():
-            try:
-                return client.models.generate_content(
-                    model=self.model,
-                    contents=gemini_contents,
-                    config=genai.types.GenerateContentConfig(**gen_config_kwargs),
-                )
-            except Exception as e:
-                ename = type(e).__name__
-                if 'ResourceExhausted' in ename or '429' in str(e):
-                    raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
-                if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
-                    raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
-                raise
-
-        response = _call_with_retry(_call)
+        gen_config_kwargs = self._gemini_build_config(genai, system_prompt, tools, thinking_mode)
+        response = _call_with_retry(
+            lambda: self._gemini_generate(client, genai, gemini_contents, gen_config_kwargs)
+        )
         latency_ms = int((time.time() - start_time) * 1000)
-
-        # Extract text + tool calls from response parts
-        text_parts = []
-        tool_calls = []
-        if response.candidates:
-            for part in (response.candidates[0].content.parts or []):
-                if hasattr(part, 'text') and part.text:
-                    text_parts.append(part.text)
-                if hasattr(part, 'function_call') and part.function_call:
-                    fc = part.function_call
-                    tool_calls.append({
-                        'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
-                        'name': fc.name,
-                        'input': dict(fc.args) if fc.args else {},
-                    })
-
-        text = '\n'.join(text_parts)
-        finish_reason = None
-        if response.candidates:
-            finish_reason = str(response.candidates[0].finish_reason) if response.candidates[0].finish_reason else None
+        text, tool_calls, finish_reason = self._gemini_parse_response(response)
 
         if not text and not tool_calls:
             logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
@@ -1152,6 +1178,7 @@ class GeminiService:
         usage = getattr(response, 'usage_metadata', None)
         tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
         tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
+        tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
 
         logger.info(
             f"[GeminiService] model={self.model}, "
@@ -1166,10 +1193,79 @@ class GeminiService:
             provider='gemini',
             tokens_input=tokens_input,
             tokens_output=tokens_output,
+            tokens_thinking=tokens_thinking,
             latency_ms=latency_ms,
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=finish_reason,
         )
+
+    def _gemini_build_config(self, genai, system_prompt: str, tools: list, thinking_mode: str) -> dict:
+        """Build the GenerateContentConfig kwargs dict for a multi-turn request."""
+        cfg: dict = {'system_instruction': system_prompt}
+        if self.format == 'json' and not tools:
+            cfg['response_mime_type'] = 'application/json'
+        if tools:
+            # Gemini: parameters follow OpenAPI schema subset (stricter than JSON Schema).
+            # Standard types only. No default values in schema. Custom types rejected.
+            # Enums: {"type": "string", "enum": [...]}. No oneOf/allOf/anyOf.
+            # Ref: https://ai.google.dev/gemini-api/docs/function-calling
+            cfg['tools'] = [
+                genai.types.Tool(function_declarations=[
+                    genai.types.FunctionDeclaration(
+                        name=t['name'],
+                        description=t.get('description', ''),
+                        parameters=t.get('input_schema'),
+                    )
+                    for t in tools
+                ])
+            ]
+        _thinking_budgets = {'medium': 4096, 'high': 16384}
+        if thinking_mode in _thinking_budgets:
+            cfg['thinking_config'] = genai.types.ThinkingConfig(
+                thinking_budget=_thinking_budgets[thinking_mode]
+            )
+            logger.info(
+                f"[THINKING] native flag passed: provider=gemini mode={thinking_mode} model={self.model}"
+            )
+        return cfg
+
+    def _gemini_generate(self, client, genai, gemini_contents, gen_config_kwargs: dict):
+        """Execute a single generate_content call, mapping provider errors to typed exceptions."""
+        try:
+            return client.models.generate_content(
+                model=self.model,
+                contents=gemini_contents,
+                config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+            )
+        except Exception as e:
+            ename = type(e).__name__
+            if 'ResourceExhausted' in ename or '429' in str(e):
+                raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
+            if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
+                raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
+            if 'thinking_config' in gen_config_kwargs and (
+                'thinking' in str(e).lower() or 'unsupported' in str(e).lower()
+            ):
+                logger.info(
+                    f"[THINKING] native flag rejected by provider=gemini model={self.model} — retried without"
+                )
+                fallback_kwargs = {k: v for k, v in gen_config_kwargs.items() if k != 'thinking_config'}
+                return client.models.generate_content(
+                    model=self.model,
+                    contents=gemini_contents,
+                    config=genai.types.GenerateContentConfig(**fallback_kwargs),
+                )
+            raise
+
+    def _gemini_parse_response(self, response) -> tuple:
+        """Extract (text, tool_calls, finish_reason) from a Gemini response object."""
+        text_parts, tool_calls = [], []
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is not None:
+            for part in (candidate.content.parts or []):
+                _gemini_accumulate_part(part, text_parts, tool_calls)
+        finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
+        return '\n'.join(text_parts), tool_calls, finish_reason
 
     def get_context_limit(self) -> int:
         """Query Gemini API for model's input token limit, cached."""
@@ -1205,6 +1301,19 @@ class GeminiService:
             logger.debug(f"[GeminiService] count_tokens API failed, using estimate: {e}")
             parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
             return estimate_tokens(' '.join(parts))
+
+
+def _gemini_accumulate_part(part, text_parts: list, tool_calls: list) -> None:
+    """Append text or a tool-call dict from a single Gemini response part."""
+    if getattr(part, 'text', None):
+        text_parts.append(part.text)
+    fc = getattr(part, 'function_call', None)
+    if fc:
+        tool_calls.append({
+            'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
+            'name': fc.name,
+            'input': dict(fc.args) if fc.args else {},
+        })
 
 
 def _gemini_convert_messages(messages: list) -> list:

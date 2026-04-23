@@ -1,0 +1,441 @@
+"""
+Search Expander Service — singleton daemon that expands stored knowledge rows
+into doc2query variants and embeds each variant for vector retrieval.
+
+Replaces the fire-and-forget _schedule_doc2query / _schedule_embeddings thread
+pattern in KnowledgeService and DataGraphService with a single sequential
+FIFO worker, eliminating thundering-herd contention on the doc2query ONNX
+sessions under write bursts.
+
+Dependents:
+  - services.knowledge_service  calls enqueue("knowledge", rowid)
+  - services.data_graph_service calls enqueue("data_graph", rowid)
+  - backend/run.py              registers search_expander_worker via _try_register
+"""
+
+import json
+import logging
+import threading
+from typing import Optional
+
+from services.database_service import get_shared_db_service
+from services.embedding_utils import pack_embedding
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_QUEUE_KEY = "ses:queue"          # MemoryStore list key — FIFO via rpush/lpop
+_TABLE_KNOWLEDGE = "knowledge"
+_TABLE_DATA_GRAPH = "data_graph"
+_VALID_TABLES = frozenset({_TABLE_KNOWLEDGE, _TABLE_DATA_GRAPH})
+
+
+# ── Module-level singleton references ─────────────────────────────────────────
+
+_service_instance: Optional["SearchExpanderService"] = None
+_instance_lock = threading.Lock()
+
+
+def _get_service() -> "SearchExpanderService":
+    """Return or create the module-level singleton."""
+    global _service_instance
+    if _service_instance is not None:
+        return _service_instance
+    with _instance_lock:
+        if _service_instance is None:
+            _service_instance = SearchExpanderService()
+    return _service_instance
+
+
+def enqueue(table: str, rowid: int) -> None:
+    """Enqueue a row for semantic expansion.
+
+    Called by KnowledgeService and DataGraphService after a successful store().
+    Idempotent — if the worker processes the same rowid twice it skips the
+    second pass because search_queries will already be set.
+
+    Args:
+        table:  'knowledge' or 'data_graph'
+        rowid:  integer primary key of the stored row
+    """
+    if table not in _VALID_TABLES:
+        logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
+        return
+    _get_service().enqueue(table, rowid)
+
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+class SearchExpanderService:
+    """Background daemon that pops one enqueued row at a time and expands it.
+
+    Worker lifecycle:
+      1. self._self_heal() — at boot, scans for rows with search_queries IS NULL
+         and re-enqueues them (covers queue loss across restarts/crashes).
+      2. while True: wait on threading.Event → drain queue → clear event.
+
+    The Event pattern guarantees no busy-loop and no recursive Timer chain:
+    enqueue() sets the event; the worker wakes, drains until empty, then
+    re-enters wait.
+    """
+
+    def __init__(self, db_service=None):
+        self._db = db_service or get_shared_db_service()
+        self._event = threading.Event()
+
+        # MemoryStore queue — lazy import so tests can stub the store before init
+        from services.memory_store import get_shared_store
+        self._store = get_shared_store()
+
+    # ── Public interface ──────────────────────────────────────────────────────
+
+    def enqueue(self, table: str, rowid: int) -> None:
+        """Push (table, rowid) to the FIFO queue and wake the worker."""
+        item = json.dumps({"table": table, "rowid": rowid})
+        self._store.rpush(_QUEUE_KEY, item)
+        self._event.set()
+
+    def run(self, shared_state=None) -> None:
+        """Blocking worker loop — call from a daemon thread."""
+        logger.info("[SES] Worker starting")
+        self._self_heal()
+        logger.info("[SES] Self-heal complete — entering event wait loop")
+
+        while True:
+            self._event.wait()
+            while True:
+                item = self._dequeue()
+                if item is None:
+                    break
+                self._process(item)
+            self._event.clear()
+
+    # ── Private: queue ────────────────────────────────────────────────────────
+
+    def _dequeue(self) -> Optional[dict]:
+        """Pop and decode one item from the queue. Returns None when empty."""
+        raw = self._store.lpop(_QUEUE_KEY)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("[SES] Malformed queue item — skipping: %s (raw=%r)", e, raw)
+            return None
+
+    # ── Private: self-heal ────────────────────────────────────────────────────
+
+    def _self_heal(self) -> None:
+        """Scan both tables for rows with search_queries IS NULL and re-enqueue them.
+
+        Handles the case where the process crashed mid-flight and the MemoryStore
+        queue was lost. Runs once at boot, before the event wait loop.
+        """
+        try:
+            with self._db.connection() as conn:
+                knowledge_ids = [
+                    r[0] for r in conn.execute(
+                        "SELECT rowid FROM knowledge "
+                        "WHERE search_queries IS NULL AND deleted_at IS NULL"
+                    ).fetchall()
+                ]
+                data_graph_ids = [
+                    r[0] for r in conn.execute(
+                        "SELECT id FROM data_graph "
+                        "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
+                    ).fetchall()
+                ]
+
+            for rowid in knowledge_ids:
+                self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_KNOWLEDGE, "rowid": rowid}))
+
+            for rowid in data_graph_ids:
+                self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_DATA_GRAPH, "rowid": rowid}))
+
+            total = len(knowledge_ids) + len(data_graph_ids)
+            if total:
+                logger.info(
+                    "[SES] Self-heal enqueued %d row(s) (knowledge=%d, data_graph=%d)",
+                    total, len(knowledge_ids), len(data_graph_ids),
+                )
+                self._event.set()
+        except Exception as e:
+            logger.warning("[SES] Self-heal scan failed: %s", e)
+
+    # ── Private: per-item processing ──────────────────────────────────────────
+
+    def _process(self, item: dict) -> None:
+        """Process one queue item end-to-end.
+
+        Steps:
+          1. Load (key, value) from the source table.
+          2. Generate doc2query variants.
+          3. Embed each variant and write to expanded_semantic + expanded_semantic_vec.
+          4. For data_graph: populate key_vec + value_vec if missing.
+          5. Persist variant texts as JSON in search_queries column.
+          6. Resync FTS.
+        """
+        table = item.get("table")
+        rowid = item.get("rowid")
+
+        if table not in _VALID_TABLES or rowid is None:
+            logger.warning("[SES] Invalid item — skipping: %r", item)
+            return
+
+        try:
+            if table == _TABLE_KNOWLEDGE:
+                self._process_knowledge(rowid)
+            else:
+                self._process_data_graph(rowid)
+        except Exception as e:
+            logger.warning("[SES] Processing failed for %s rowid=%s: %s", table, rowid, e)
+
+    def _process_knowledge(self, rowid: int) -> None:
+        """Expand one knowledge row."""
+        with self._db.connection() as conn:
+            row = conn.execute(
+                "SELECT key, value, kind, entity FROM knowledge WHERE rowid = ?",
+                (rowid,)
+            ).fetchone()
+
+        if row is None:
+            logger.debug("[SES] knowledge rowid=%s gone — skipping", rowid)
+            return
+
+        key, value, kind, entity = row[0], row[1], row[2], row[3]
+        variants = self._generate_variants(key, value)
+
+        with self._db.connection() as conn:
+            self._write_variants(conn, _TABLE_KNOWLEDGE, rowid, variants)
+            self._update_search_queries_knowledge(conn, rowid, key, value, kind, entity, variants)
+
+    def _process_data_graph(self, rowid: int) -> None:
+        """Expand one data_graph row, also backfilling key_vec/value_vec if absent."""
+        with self._db.connection() as conn:
+            row = conn.execute(
+                "SELECT key, value, kind FROM data_graph WHERE id = ?",
+                (rowid,)
+            ).fetchone()
+
+        if row is None:
+            logger.debug("[SES] data_graph rowid=%s gone — skipping", rowid)
+            return
+
+        key, value, kind = row[0], row[1], row[2]
+        variants = self._generate_variants(key, value)
+
+        with self._db.connection() as conn:
+            # Absorbs _schedule_embeddings: populate key_vec/value_vec if missing.
+            self._backfill_key_value_vec(conn, rowid, key, value)
+            self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants)
+            self._update_search_queries_data_graph(conn, rowid, key, value, kind, variants)
+
+    def _generate_variants(self, key: str, value: str) -> list:
+        """Generate doc2query variants for the compound 'key: value' text.
+
+        Returns a list of variant strings (may be empty if model unavailable).
+        Always returns a list — empty means skip variant writes but still mark
+        search_queries so self-heal doesn't re-enqueue the row.
+        """
+        try:
+            from services.doc2query_service import get_doc2query_service
+            d2q = get_doc2query_service()
+            if not d2q.is_available():
+                return []
+            text = f"{key}: {value}" if value else key
+            return d2q.generate_queries(text) or []
+        except Exception as e:
+            logger.warning("[SES] doc2query failed for key='%s': %s", key, e)
+            return []
+
+    def _write_variants(self, conn, table: str, rowid: int, variants: list) -> None:
+        """Write each variant string + embedding into expanded_semantic / expanded_semantic_vec.
+
+        Clears existing variants for this (table, rowid) first so re-processing
+        is idempotent. The cascade trigger on expanded_semantic handles vec cleanup.
+        """
+        conn.execute(
+            "DELETE FROM expanded_semantic "
+            "WHERE relates_to_table = ? AND related_to_id = ?",
+            (table, rowid)
+        )
+
+        if not variants:
+            return
+
+        try:
+            from services.embedding_service import get_embedding_service
+            emb_svc = get_embedding_service()
+        except Exception as e:
+            logger.warning("[SES] EmbeddingService unavailable — skipping variant vecs: %s", e)
+            return
+
+        for variant_text in variants:
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO expanded_semantic (relates_to_table, related_to_id, str) "
+                    "VALUES (?, ?, ?)",
+                    (table, rowid, variant_text)
+                )
+                new_id = cursor.lastrowid
+                cursor.close()
+
+                emb = emb_svc.generate_embedding(variant_text)
+                blob = pack_embedding(emb)
+                if blob:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO expanded_semantic_vec (rowid, embedding) "
+                        "VALUES (?, ?)",
+                        (new_id, blob)
+                    )
+            except Exception as e:
+                logger.warning("[SES] Failed to write variant '%s': %s", variant_text[:60], e)
+
+    def _backfill_key_value_vec(self, conn, rowid: int, key: str, value: str) -> None:
+        """Populate data_graph_key_vec / data_graph_value_vec if the row is missing.
+
+        Absorbs the old _schedule_embeddings thread. Noop when both vecs exist.
+        """
+        try:
+            key_exists = conn.execute(
+                "SELECT 1 FROM data_graph_key_vec WHERE rowid = ?", (rowid,)
+            ).fetchone()
+            if not key_exists:
+                from services.embedding_service import get_embedding_service
+                emb_svc = get_embedding_service()
+                key_emb = emb_svc.generate_embedding(key) if key else None
+                if key_emb:
+                    blob = pack_embedding(key_emb)
+                    if blob:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO data_graph_key_vec (rowid, embedding) "
+                            "VALUES (?, ?)",
+                            (rowid, blob)
+                        )
+
+            value_exists = conn.execute(
+                "SELECT 1 FROM data_graph_value_vec WHERE rowid = ?", (rowid,)
+            ).fetchone()
+            if not value_exists:
+                from services.embedding_service import get_embedding_service
+                emb_svc = get_embedding_service()
+                value_text = value if value else key
+                val_emb = emb_svc.generate_embedding(value_text) if value_text else None
+                if val_emb:
+                    blob = pack_embedding(val_emb)
+                    if blob:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO data_graph_value_vec (rowid, embedding) "
+                            "VALUES (?, ?)",
+                            (rowid, blob)
+                        )
+        except Exception as e:
+            logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
+
+    def _update_search_queries_knowledge(
+        self, conn, rowid: int, key: str, value: str,
+        kind: str, entity: str, variants: list
+    ) -> None:
+        """Persist variant texts in knowledge.search_queries and resync FTS."""
+        old = conn.execute(
+            "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
+            (rowid,)
+        ).fetchone()
+        if old is None:
+            return
+
+        # Delete stale FTS entry before overwriting content
+        self._delete_knowledge_fts(conn, rowid, old[0], old[1], old[2], old[3], old[4] or '')
+
+        conn.execute(
+            "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
+            (json.dumps(variants), rowid)
+        )
+        # Re-insert FTS entry with updated search_queries
+        try:
+            conn.execute(
+                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity, search_queries) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (rowid, old[0], old[1] or '', old[2], old[3], json.dumps(variants))
+            )
+        except Exception as e:
+            logger.warning("[SES] knowledge FTS sync failed for rowid=%s: %s", rowid, e)
+
+    def _update_search_queries_data_graph(
+        self, conn, rowid: int, key: str, value: str, kind: str, variants: list
+    ) -> None:
+        """Persist variant texts in data_graph.search_queries and resync FTS."""
+        old = conn.execute(
+            "SELECT key, value, kind, search_queries FROM data_graph WHERE id = ?",
+            (rowid,)
+        ).fetchone()
+        if old is None:
+            return
+
+        # Delete stale FTS entry before overwriting content
+        self._delete_data_graph_fts(conn, rowid, old[0], old[1], old[2], old[3] or '')
+
+        conn.execute(
+            "UPDATE data_graph SET search_queries = ? WHERE id = ?",
+            (json.dumps(variants), rowid)
+        )
+        try:
+            conn.execute(
+                "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (rowid, old[0], old[1] or '', old[2], json.dumps(variants))
+            )
+        except Exception as e:
+            logger.warning("[SES] data_graph FTS sync failed for rowid=%s: %s", rowid, e)
+
+    # ── Private: FTS helpers (mirror KS/DGS delete conventions) ──────────────
+
+    def _delete_knowledge_fts(self, conn, rowid: int, key: str, value: str,
+                               kind: str, entity: str, search_queries: str) -> None:
+        """Remove a knowledge FTS entry using the external-content delete command."""
+        try:
+            conn.execute(
+                "INSERT INTO knowledge_fts"
+                "(knowledge_fts, rowid, key, value, kind, entity, search_queries) "
+                "VALUES('delete', ?, ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, entity, search_queries)
+            )
+        except Exception:
+            try:
+                conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning("[SES] knowledge FTS delete failed for rowid=%s: %s", rowid, e)
+
+    def _delete_data_graph_fts(self, conn, rowid: int, key: str, value: str,
+                                kind: str, search_queries: str) -> None:
+        """Remove a data_graph FTS entry using the external-content delete command."""
+        try:
+            conn.execute(
+                "INSERT INTO data_graph_fts"
+                "(data_graph_fts, rowid, key, value, kind, search_queries) "
+                "VALUES('delete', ?, ?, ?, ?, ?)",
+                (rowid, key, value or '', kind, search_queries)
+            )
+        except Exception:
+            try:
+                conn.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
+            except Exception as e:
+                logger.warning("[SES] data_graph FTS delete failed for rowid=%s: %s", rowid, e)
+
+
+# ── Worker entry point ────────────────────────────────────────────────────────
+
+def search_expander_worker(shared_state=None):
+    """Entry point registered in run.py via _try_register.
+
+    Creates the singleton and enters the blocking run loop. Registered with
+    _try_register so boot continues gracefully when doc2query models are absent.
+    """
+    service = SearchExpanderService()
+    # Share the singleton so module-level enqueue() calls reach the same instance.
+    global _service_instance
+    with _instance_lock:
+        _service_instance = service
+    service.run(shared_state)

@@ -1,186 +1,46 @@
 # Tools System
 
-Tools are one of three capability tiers in Chalie:
+Three capability tiers exist in Chalie, each with a different scope and lifecycle.
 
-1. **Innate Skills** (`backend/services/innate_skills/`) — Built-in cognitive capabilities with direct access to Chalie's services, database, and memory. Always injected into the LLM context. Examples: `recall`, `memorize`, `schedule`, `list`, `document`, `find_tools`, `reflect`.
+**Innate skills** are core cognitive capabilities — memory, introspect, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They are always loaded into LLM context and have direct access to Chalie's services and memory.
 
-2. **Tools** (`backend/tools/`) — First-party capabilities committed to the repo. Simple callable Python modules invoked directly in-process. All metadata declared in `ToolLibraryService`. This document covers these.
+**First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
 
-3. **Interfaces** (`frontend/_interfaces/`) — External third-party integrations that pair with Chalie via the interface protocol. Can expose capabilities and update world state. See [15-INTERFACES.md](15-INTERFACES.md).
+**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They extend what Chalie can act on without being committed to this repo. See [15-INTERFACES.md](15-INTERFACES.md).
 
-## Overview
+## How tools are used
 
-The tools system provides:
-- **Direct invocation**: First-party tools are called in-process (no subprocess, no IPC)
-- **Interface tools**: External applications can pair with Chalie and expose tool capabilities via the interface protocol
-- **Configuration Management**: Per-tool secrets and credentials stored in SQLite (encrypted)
-- **Semantic Matching**: Tool relevance determined via embedding-based similarity, not regex patterns
-- **Audit Trail**: All tool invocations logged to `tool_calls` table with success/failure and execution time
+The LLM never has the full tool list in context. Instead, when it needs a capability it invokes the `find_tools` innate skill, which runs a semantic search over tool capability profiles and returns the closest matches. The LLM then decides whether to invoke one. The result comes back into context as structured output and the conversation continues. This keeps context lean and makes tool discovery robust to naming variation — matching is by meaning, not keyword.
 
-## Architecture
+## Tool status
 
-### Components
+Three status values appear in the tools list:
 
-**Tool Library Service** (`backend/services/tool_library_service.py`)
-- Single source of truth for first-party tool metadata and handlers
-- All tool descriptions, parameters, and constraints declared in Python (like innate skills)
-- Maps tool names to handler functions imported from `backend/tools/*.py`
+| Status | Meaning |
+|---|---|
+| `system` | Built-in, no configuration required |
+| `available` | Discovered but not yet configured (missing required secrets) |
+| `connected` | Fully configured and ready to use |
 
-**Tool Registry Service** (`backend/services/tool_registry_service.py`)
-- Singleton that loads tools from ToolLibraryService at startup
-- Invokes first-party tools directly in-process
-- Routes interface tools via HTTP to paired interfaces
-- Logs outcomes for feedback/learning
+## Adding a first-party tool
 
-**Tool Config Service**
-- SQLite backend for per-tool configuration
-- Stores API keys, credentials, and parameters as key-value pairs
-- Secrets are masked in API responses (shows `***` instead of actual value)
-
-**Tool Profile Service** (`backend/services/tool_profile_service.py`)
-- LLM-generated tool capability profiles with triage triggers and usage scenarios
-- Powers the `find_tools` innate skill (semantic search against capability embeddings)
-
-**REST API** (`backend/api/tools.py`)
-- List tools with status and config schema
-- Get/set/delete tool configuration
-- Test tool configuration completeness
-
-## Tool Interface
-
-All first-party tools expose a single function:
+A first-party tool is a Python module that exposes a single function:
 
 ```python
 def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict
 ```
 
-**Input parameters:**
+`topic` is the current conversation topic, `params` are the LLM-extracted arguments, `config` contains any stored secrets or endpoints, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return dict can include a `text` key for a plain-text result, an `html` key for a UI card fragment, and an `error` key that signals failure and suppresses the other fields.
 
-| Arg | Contents |
-|-----|----------|
-| `topic` | Current conversation topic |
-| `params` | LLM-extracted parameters matching tool schema |
-| `config` | Per-tool config from database (API keys, endpoints) |
-| `telemetry` | Flattened client context (location, time, locale — fields may be null) |
+Alongside the module, declare the tool's metadata: a description that the semantic search will embed, a parameter schema the LLM uses to extract arguments, and any constraints. The description is the most important field — it determines when `find_tools` surfaces this tool.
 
-**Return dict:**
+## Configuration
 
-| Key | Description |
-|-----|-------------|
-| `text` | Plain text result (optional). If `output.synthesize: true`, rewritten in Chalie's voice |
-| `html` | HTML fragment for UI card (optional). Inline CSS only, no JS, no dangerous tags |
-| `title` | Dynamic card title override (optional) |
-| `error` | Error message — if present, triggers fallback and skips text/html |
+Tools that require API keys or custom endpoints declare their required config keys in their metadata. Configure them through the Brain UI (Settings > Tools) or via the REST API — see the API reference for endpoints. Stored secrets are masked in all API responses.
 
-## Using Tools
+## Safety constraints
 
-### Configure Tool via REST API
-
-1. **List available tools:**
-   ```bash
-   curl http://localhost:8081/tools \
-     -H "Authorization: Bearer YOUR_API_KEY"
-   ```
-
-2. **Set configuration (API keys, endpoints):**
-   ```bash
-   curl -X PUT http://localhost:8081/tools/my_tool/config \
-     -H "Authorization: Bearer YOUR_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"api_key": "sk-...", "endpoint": "https://..."}'
-   ```
-
-3. **Test configuration:**
-   ```bash
-   curl -X POST http://localhost:8081/tools/my_tool/test \
-     -H "Authorization: Bearer YOUR_API_KEY"
-   ```
-   Returns `{"ok": true, "message": "Configuration looks complete"}` if all required keys are set.
-
-4. **Get configuration (secrets masked):**
-   ```bash
-   curl http://localhost:8081/tools/my_tool/config \
-     -H "Authorization: Bearer YOUR_API_KEY"
-   ```
-
-5. **Delete a config key:**
-   ```bash
-   curl -X DELETE http://localhost:8081/tools/my_tool/config/api_key \
-     -H "Authorization: Bearer YOUR_API_KEY"
-   ```
-
-### Tool Execution Flow
-
-When the LLM decides to use a tool during the unified generation path:
-
-1. **Discovery** — LLM uses the `find_tools` innate skill to search available tools by capability
-2. **Selection** — LLM decides which tool to invoke based on capability profiles
-3. **Parameter Extraction** — LLM extracts parameters from conversation context
-4. **Configuration Injection** — ToolConfigService fetches stored API keys/endpoints
-5. **Direct Invocation** — Handler called in-process via `ToolLibraryService.get_handler()`
-6. **Output Sanitization** — Result stripped of action-like patterns, truncated to 3000 chars
-7. **Memory Logging** — Outcome (success/failure, execution time) logged to `tool_calls` table
-8. **Integration** — Tool output wrapped in `[TOOL:name]...[/TOOL]` markers and included in LLM context
-
-### Tool Status
-
-Tools have three status values (from API `/tools` endpoint):
-
-- **"system"** — Built-in tool with no configuration required
-- **"available"** — Tool discovered but not yet configured (missing required secrets)
-- **"connected"** — Tool fully configured and ready to use
-
-## Safety & Constraints
-
-### Timeouts
-
-- **Default timeout**: 9 seconds
-- **Configurable** per tool in `constraints.timeout_seconds`
-- Exceeded timeouts logged as failures in `tool_calls` table
-
-### Cost Budgets
-
-Optional per-tool budget tracking (if tool returns `budget_remaining` field):
-- Budget info included in tool output metadata
-- Useful for API-based tools (e.g., search engines with rate limits)
-
-### Output Sanitization
-
-Tool output is sanitized before integration:
-- Removes action-like patterns: `{...}`, function calls, ACTION: keywords
-- Prevents tool output from instructing Chalie to take unintended actions
-- Truncated to 3000 characters max
-
-
-## Troubleshooting
-
-### Tool Not Appearing in List
-
-1. Check the tool has an entry in `TOOL_HANDLERS` and `TOOL_METADATA` in `backend/services/tool_library_service.py`
-2. Check the tool module exists: `backend/tools/tool_name.py`
-3. Check the module exposes `execute(topic, params, config, telemetry) -> dict`
-4. View logs in the `python backend/run.py` console output
-
-### "Tool not found" Error
-
-Tool name in `TOOL_HANDLERS` must match the name used in `TOOL_METADATA` exactly.
-
-### Configuration Not Being Used
-
-1. Verify config is set: `curl http://localhost:8081/tools/my_tool/config`
-2. Test configuration: `curl -X POST http://localhost:8081/tools/my_tool/test`
-3. Check required keys are present (marked with `"required": true`)
-
-### Tool Timeout
-
-1. Increase `timeout_seconds` in `TOOL_METADATA` constraints: `"constraints": {"timeout_seconds": 30}`
-2. Optimize tool code (database queries, API calls, etc.)
-
-## Safety Guardrails
-
-- **Kill Switch**: Set `tools_enabled: false` in config to disable all tools
-- **Declared Library**: Tools are declared in `ToolLibraryService`, not discovered by scanning
-- **Single Authority**: `tool_performance_metrics` table is the single authority for tool usage analytics
-- **Data Scope**: All tool invocations scoped to topic (no cross-topic leakage)
-- **Audit Trail**: Every invocation logged with topic, success/failure, execution time
-
+- Tool invocations time out. Exceeded timeouts are logged as failures.
+- Output is sanitized before it enters LLM context: action-like patterns are stripped and the result is truncated.
+- Every invocation is written to an audit trail with the topic, outcome, and execution time.
+- A global kill switch can disable all tools if needed.

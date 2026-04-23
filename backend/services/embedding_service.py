@@ -18,6 +18,7 @@ at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 import hashlib
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -32,6 +33,13 @@ logger = logging.getLogger(__name__)
 _MODEL_ID = "Alibaba-NLP/gte-modernbert-base"
 _MODEL_SUBDIR = "gte-modernbert-base"
 _ONNX_FILENAME = "onnx/model.onnx"
+
+# Hard ceiling = ModernBERT's positional-embedding limit. The tokenizer's own
+# model_max_length is the HuggingFace "no limit" sentinel (~1e30), so we must
+# enforce the architectural cap here to guard against pathological inputs.
+# Tokeniser uses padding=True so short inputs pay no extra compute for a high
+# ceiling — the tensor is sized to the actual token count, not to this value.
+_MODEL_MAX_TOKENS = 8192
 
 # Singleton (lazy loaded, thread-safe)
 _session = None
@@ -52,10 +60,96 @@ def _model_dir() -> Path:
     return base
 
 
+def _resolve_thread_count() -> int:
+    """Pick ``intra_op_num_threads``. Env override wins, else ``min(4, max(2, cpu//2))``.
+
+    The hardcoded ``2`` left cycles on the table on 8+ core hosts. Cap of 4 avoids
+    oversubscribing shared workers (memory pipeline, DMN, goal pursuit all share the
+    same CPU). Env override (``CHALIE_ORT_INTRA_THREADS``) is the escape hatch for
+    container CPU limits that ``os.cpu_count()`` cannot see.
+    """
+    override = os.environ.get("CHALIE_ORT_INTRA_THREADS")
+    if override:
+        try:
+            n = int(override)
+            if n >= 1:
+                return n
+        except ValueError:
+            logger.warning(f"[EMBEDDING] Ignoring non-integer CHALIE_ORT_INTRA_THREADS={override!r}")
+    cpu = os.cpu_count() or 2
+    return min(4, max(2, cpu // 2))
+
+
+def _build_session(providers: Optional[List[str]] = None):
+    """Construct an ONNX InferenceSession with the chosen providers.
+
+    If ``providers`` is None, uses ``ort.get_available_providers()`` — the
+    runtime returns accelerators (CUDA/CoreML/ROCm/…) first and CPU last, so
+    whatever is installed gets picked automatically.
+
+    The pre-optimized graph is cached with the ORT version baked into the filename
+    (``model.optimized.<ort_version>.onnx``). Optimized graphs are not forward-
+    compatible across ORT upgrades — a stale ``.optimized.onnx`` from an older ORT
+    can load but silently degrade, or worse, fail to run specific op kernels. Pin
+    the version so every upgrade forces a fresh optimize pass.
+    """
+    import onnxruntime as ort
+    from huggingface_hub import hf_hub_download
+
+    model_dir = _model_dir()
+    onnx_path = model_dir / "onnx" / "model.onnx"
+    ort_ver = ort.__version__.replace(".", "_")
+    optimized_path = model_dir / "onnx" / f"model.optimized.{ort_ver}.onnx"
+
+    if not onnx_path.exists():
+        logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
+        try:
+            hf_hub_download(repo_id=_MODEL_ID, filename=_ONNX_FILENAME, local_dir=str(model_dir))
+            logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
+        except Exception as e:
+            logger.error(f"[EMBEDDING] Failed to download model: {e}")
+            raise
+
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = _resolve_thread_count()
+    opts.inter_op_num_threads = 1
+    opts.enable_mem_pattern = True
+    opts.enable_cpu_mem_arena = True
+
+    if optimized_path.exists():
+        load_path = optimized_path
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        logger.info(f"[EMBEDDING] Loading pre-optimized model (ORT {ort.__version__})")
+    else:
+        load_path = onnx_path
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+        opts.optimized_model_filepath = str(optimized_path)
+
+    chosen = providers if providers is not None else ort.get_available_providers()
+    session = ort.InferenceSession(str(load_path), sess_options=opts, providers=chosen)
+    logger.info(
+        f"[EMBEDDING] Providers: {session.get_providers()}, "
+        f"intra_op_num_threads={opts.intra_op_num_threads}"
+    )
+    return session, onnx_path
+
+
+def _rebuild_session_cpu_only():
+    """Rebuild the module-level session as CPU-only. Called when an accelerator fails at runtime."""
+    global _session
+    with _model_lock:
+        session, _ = _build_session(providers=["CPUExecutionProvider"])
+        _session = session
+        return session
+
+
 def _get_session_and_tokenizer():
     """Return (ort.InferenceSession, AutoTokenizer), loading on first call.
 
     Uses double-checked locking so only one thread triggers the model load.
+    Some providers (notably CoreML on ModernBERT variants) init cleanly but
+    fail on certain runtime shapes/token-ids. The inference path in
+    _encode_batch catches that and calls _rebuild_session_cpu_only.
     """
     global _session, _tokenizer, _output_names, _input_names
 
@@ -66,49 +160,9 @@ def _get_session_and_tokenizer():
         if _session is not None and _tokenizer is not None:
             return _session, _tokenizer
 
-        import onnxruntime as ort
         from transformers import AutoTokenizer
-        from huggingface_hub import hf_hub_download
 
-        model_dir = _model_dir()
-        onnx_path = model_dir / "onnx" / "model.onnx"
-        optimized_path = model_dir / "onnx" / "model.optimized.onnx"
-
-        # Download ONNX model if not cached locally
-        if not onnx_path.exists():
-            logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
-            try:
-                hf_hub_download(
-                    repo_id=_MODEL_ID,
-                    filename=_ONNX_FILENAME,
-                    local_dir=str(model_dir),
-                )
-                logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
-            except Exception as e:
-                logger.error(f"[EMBEDDING] Failed to download model: {e}")
-                raise
-
-        # Load ONNX session — prefer pre-optimized model if available
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 2
-        opts.inter_op_num_threads = 1
-        opts.enable_mem_pattern = True
-        opts.enable_cpu_mem_arena = True
-
-        if optimized_path.exists():
-            load_path = optimized_path
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-            logger.info("[EMBEDDING] Loading pre-optimized model")
-        else:
-            load_path = onnx_path
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            opts.optimized_model_filepath = str(optimized_path)
-
-        session = ort.InferenceSession(
-            str(load_path),
-            sess_options=opts,
-            providers=["CPUExecutionProvider"],
-        )
+        session, onnx_path = _build_session()
 
         _output_names = [o.name for o in session.get_outputs()]
         _input_names = [i.name for i in session.get_inputs()]
@@ -145,7 +199,13 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
 
 
 def _encode_batch(texts: List[str]) -> np.ndarray:
-    """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized."""
+    """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized.
+
+    Sequence length is set dynamically by the tokenizer (padding=True pads each
+    batch to its longest item). _MODEL_MAX_TOKENS only bites for truly
+    oversized inputs — it prevents position_ids from exceeding the model's
+    positional-embedding range.
+    """
     session, tokenizer = _get_session_and_tokenizer()
 
     encoded = tokenizer(
@@ -153,7 +213,7 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
         return_tensors="np",
         padding=True,
         truncation=True,
-        max_length=8192,
+        max_length=_MODEL_MAX_TOKENS,
     )
     input_ids = encoded["input_ids"]
     attention_mask = encoded["attention_mask"]
@@ -162,7 +222,20 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
     if "token_type_ids" in _input_names:
         feed["token_type_ids"] = np.zeros_like(input_ids)
 
-    outputs = session.run(None, feed)
+    try:
+        outputs = session.run(None, feed)
+    except Exception as e:
+        # Accelerated providers (CoreML, CUDA, etc.) can init cleanly but fail
+        # on specific runtime shapes/tokens. Rebuild once as CPU-only and retry.
+        if session.get_providers() != ["CPUExecutionProvider"]:
+            logger.warning(
+                f"[EMBEDDING] Inference failed on {session.get_providers()}: {e}. "
+                f"Rebuilding session as CPU-only for the rest of this process."
+            )
+            session = _rebuild_session_cpu_only()
+            outputs = session.run(None, feed)
+        else:
+            raise
 
     # Use pre-pooled output if available, otherwise mean pool last_hidden_state
     if "sentence_embedding" in _output_names:

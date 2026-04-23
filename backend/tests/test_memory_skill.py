@@ -106,8 +106,6 @@ def _doc_svc(_doc_db):
     """DataGraphService with real SQLite, embeddings disabled."""
     svc = DataGraphService(_doc_db)
     svc._generate_embedding = MagicMock(return_value=None)
-    svc._schedule_embeddings = MagicMock()
-    svc._schedule_doc2query = MagicMock()
     return svc
 
 
@@ -141,17 +139,13 @@ class TestRelevanceLabel:
 
 class TestToolSchema:
 
-    def test_schema_actions_are_store_recall_reflect(self):
+    def test_schema_actions_include_forget(self):
         action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
-        assert set(action_enum) == {'store', 'recall', 'reflect'}
+        assert set(action_enum) == {'store', 'recall', 'reflect', 'forget'}
 
     def test_schema_has_no_update_action(self):
         action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
         assert 'update' not in action_enum
-
-    def test_schema_has_no_forget_action(self):
-        action_enum = TOOL_SCHEMA['input_schema']['properties']['action']['enum']
-        assert 'forget' not in action_enum
 
     def test_schema_has_no_entries_array(self):
         props = TOOL_SCHEMA['input_schema']['properties']
@@ -197,8 +191,16 @@ class TestHandleMemoryStore:
         mock.store.return_value = return_value
         return mock
 
+    def _make_created_result(self, key, value):
+        return {
+            'action': 'store', 'status': 'created',
+            'canonical_key': key, 'provided_key': key,
+            'rule': None, 'value': value, 'old_value': None,
+            'all_values': None, 'date': None, 'row': {'value': value},
+        }
+
     def test_store_calls_dgs_store_with_correct_args(self):
-        mock_dgs = self._mock_dgs({'id': 1, 'key': 'user_name', 'value': 'Dylan'})
+        mock_dgs = self._mock_dgs(self._make_created_result('user_name', 'Dylan'))
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {
@@ -214,11 +216,11 @@ class TestHandleMemoryStore:
             value='Dylan',
             source='skill:memory:store:topic',
         )
-        assert 'Stored' in result
         assert 'user_name' in result
+        assert 'saved' in result
 
     def test_store_defaults_kind_to_user_specific(self):
-        mock_dgs = self._mock_dgs({'id': 2, 'key': 'fav_food', 'value': 'pizza'})
+        mock_dgs = self._mock_dgs(self._make_created_result('fav_food', 'pizza'))
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {
@@ -229,7 +231,7 @@ class TestHandleMemoryStore:
 
         mock_dgs.store.assert_called_once()
         assert mock_dgs.store.call_args.kwargs['kind'] == 'user_specific'
-        assert 'Stored' in result
+        assert 'pizza' in result
 
     def test_store_missing_key_returns_error(self):
         result = handle_memory('topic', {'action': 'store', 'value': 'something'})
@@ -253,13 +255,18 @@ class TestHandleMemoryStore:
 
         assert 'failed' in result.lower() or 'error' in result.lower() or 'Store' in result
 
-    def test_store_true_contradiction_returns_conflict_question(self):
+    def test_store_immutable_conflict_returns_conflict_message(self):
         conflict_result = {
-            'conflict': True,
-            'classification': 'true_contradiction',
-            'existing': {'value': 'Malta'},
-            'proposed_key': 'hometown',
-            'proposed_value': 'London',
+            'action': 'store',
+            'status': 'conflict',
+            'canonical_key': 'residence',
+            'provided_key': 'hometown',
+            'rule': 'immutable',
+            'value': 'London',
+            'old_value': 'Malta',
+            'all_values': None,
+            'date': '2026-01-01',
+            'row': {'value': 'Malta'},
         }
         mock_dgs = self._mock_dgs(conflict_result)
 
@@ -270,19 +277,25 @@ class TestHandleMemoryStore:
                 'value': 'London',
             })
 
-        assert 'Conflict detected' in result
+        assert 'immutable' in result
         assert 'Malta' in result
         assert 'London' in result
+        assert 'forget' in result
 
-    def test_store_ambiguous_contradiction_returns_prompt(self):
-        conflict_result = {
-            'conflict': True,
-            'classification': 'ambiguous',
-            'existing': {'value': 'blue'},
-            'proposed_key': 'eye_colour',
-            'proposed_value': 'green',
+    def test_store_created_returns_saved_message(self):
+        created_result = {
+            'action': 'store',
+            'status': 'created',
+            'canonical_key': 'eye_colour',
+            'provided_key': 'eye_colour',
+            'rule': None,
+            'value': 'green',
+            'old_value': None,
+            'all_values': None,
+            'date': None,
+            'row': {'value': 'green'},
         }
-        mock_dgs = self._mock_dgs(conflict_result)
+        mock_dgs = self._mock_dgs(created_result)
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {
@@ -291,11 +304,11 @@ class TestHandleMemoryStore:
                 'value': 'green',
             })
 
-        assert 'Should I store' in result
         assert 'green' in result
+        assert 'saved' in result
 
     def test_store_system_kind_accepted(self):
-        mock_dgs = self._mock_dgs({'id': 3, 'key': 'tone', 'value': 'terse'})
+        mock_dgs = self._mock_dgs(self._make_created_result('tone', 'terse'))
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {
@@ -306,10 +319,10 @@ class TestHandleMemoryStore:
             })
 
         assert mock_dgs.store.call_args.kwargs['kind'] == 'system'
-        assert 'Stored' in result
+        assert 'terse' in result
 
     def test_store_misc_kind_accepted(self):
-        mock_dgs = self._mock_dgs({'id': 4, 'key': 'scratch', 'value': 'temp'})
+        mock_dgs = self._mock_dgs(self._make_created_result('scratch', 'temp'))
 
         with patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {
@@ -320,7 +333,7 @@ class TestHandleMemoryStore:
             })
 
         assert mock_dgs.store.call_args.kwargs['kind'] == 'misc'
-        assert 'Stored' in result
+        assert 'temp' in result
 
 
 # ── Recall ───────────────────────────────────────────────────────────
@@ -430,13 +443,10 @@ class TestHandleMemoryInvalid:
         assert 'store' in result
         assert 'recall' in result
         assert 'reflect' in result
+        assert 'forget' in result
 
     def test_update_action_rejected_as_unknown(self):
         result = handle_memory('topic', {'action': 'update', 'key': 'k', 'value': 'v'})
-        assert 'Unknown action' in result
-
-    def test_forget_action_rejected_as_unknown(self):
-        result = handle_memory('topic', {'action': 'forget', 'key': 'something'})
         assert 'Unknown action' in result
 
     def test_missing_action_defaults_to_recall_then_errors_no_query(self):

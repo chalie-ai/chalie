@@ -1,9 +1,11 @@
-"""Tests for EpisodicService storage — real SQLite via shared db fixture."""
+"""Tests for EpisodicService storage — real SQLite via shared db fixture.
 
-import json
+All tests use the real production stack. No mocks.
+"""
+
 import uuid
+
 import pytest
-from unittest.mock import patch
 
 from services.episodic_service import EpisodicService
 
@@ -19,13 +21,8 @@ def episodic_svc(db):
 
 
 def _make_episode_data(**overrides):
-    """Minimal valid episode data with all 8 required fields."""
+    """Minimal valid episode data with all 3 required fields."""
     base = {
-        'intent': {'type': 'exploration'},
-        'context': {'topic': 'test'},
-        'action': 'user asked a question',
-        'emotion': {'valence': 0.5},
-        'outcome': 'answered successfully',
         'gist': 'Test conversation about coding',
         'salience': 5,
         'channel': 'programming',
@@ -39,11 +36,10 @@ def _make_episode_data(**overrides):
 class TestStoreEpisodeValidation:
 
     @pytest.mark.parametrize("missing_field", [
-        'intent', 'context', 'action', 'emotion', 'outcome',
         'gist', 'salience', 'channel',
     ])
     def test_raises_value_error_for_missing_field(self, episodic_svc, missing_field):
-        """Each of the 8 required fields triggers ValueError when absent."""
+        """Each of the 3 required fields triggers ValueError when absent."""
         svc = episodic_svc
         data = _make_episode_data()
         del data[missing_field]
@@ -55,90 +51,91 @@ class TestStoreEpisodeValidation:
 class TestStoreEpisodeSuccess:
 
     def test_returns_uuid_string_on_success(self, db, episodic_svc):
-        """Successful store returns the episode UUID as a string."""
+        """Successful store returns a UUID string and persists the row."""
         svc = episodic_svc
-        test_uuid = 'c862db4f-bd83-4724-92a8-33fcf3bd38e8'
+        result = svc.store_episode(_make_episode_data())
 
-        with patch('services.episodic_service.uuid') as mock_uuid_mod:
-            mock_uuid_mod.uuid4.return_value = uuid.UUID(test_uuid)
-            result = svc.store_episode(_make_episode_data())
+        # Result must be a well-formed UUID string
+        assert isinstance(result, str)
+        parsed = uuid.UUID(result)  # raises if not a valid UUID
+        assert str(parsed) == result
 
-        assert result == test_uuid
-
-        # Verify the episode was actually persisted
-        row = db.execute("SELECT id, gist, channel FROM episodes WHERE id = ?", (test_uuid,)).fetchone()
+        # Verify the episode was actually persisted with the right data
+        row = db.execute(
+            "SELECT id, gist, channel FROM episodes WHERE id = ?", (result,)
+        ).fetchone()
         assert row is not None
-        assert row[0] == test_uuid
+        assert row[0] == result
         assert row[1] == 'Test conversation about coding'
         assert row[2] == 'programming'
+
+    def test_each_store_produces_distinct_id(self, episodic_svc):
+        """Two store_episode calls produce two different UUIDs."""
+        svc = episodic_svc
+        id1 = svc.store_episode(_make_episode_data())
+        id2 = svc.store_episode(_make_episode_data())
+        assert id1 != id2
 
 
 # ── update_episode ───────────────────────────────────────────────────
 
 class TestUpdateEpisode:
 
-    def test_empty_updates_returns_true_immediately(self, episodic_svc):
-        """Empty updates dict returns True without touching DB."""
-        with patch.object(episodic_svc.db_service, 'connection', wraps=episodic_svc.db_service.connection) as spy:
-            result = episodic_svc.update_episode('some-id', {})
-            assert result is True
-            spy.assert_not_called()
+    def test_empty_updates_is_noop(self, episodic_svc):
+        """Empty updates dict returns None without modifying any row."""
+        result = episodic_svc.update_episode('some-id', {})
+        assert result is None
 
-    def test_returns_true_when_row_updated(self, db, episodic_svc):
-        """rowcount=1 returns True."""
+    def test_gist_update_persisted(self, db, episodic_svc):
+        """Field update is written to the database."""
         svc = episodic_svc
-        # Insert an episode first
         episode_id = svc.store_episode(_make_episode_data())
 
         result = svc.update_episode(episode_id, {'gist': 'updated gist'})
-        assert result is True
+        assert result is None
 
-        # Verify the update persisted
         row = db.execute("SELECT gist FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] == 'updated gist'
 
-    def test_returns_false_when_no_row_found(self, episodic_svc):
-        """rowcount=0 returns False."""
-        svc = episodic_svc
-        result = svc.update_episode('nonexistent-id', {'gist': 'updated'})
-        assert result is False
-
-    def test_json_fields_serialized(self, db, episodic_svc):
-        """JSON-typed fields (intent, context, emotion, etc.) are serialized."""
-        svc = episodic_svc
-        episode_id = svc.store_episode(_make_episode_data())
-
-        svc.update_episode(episode_id, {'intent': {'type': 'new'}})
-
-        # Verify the JSON was serialized correctly in the DB
-        row = db.execute("SELECT intent FROM episodes WHERE id = ?", (episode_id,)).fetchone()
-        assert json.loads(row[0]) == {'type': 'new'}
+    def test_update_nonexistent_row_is_silent(self, episodic_svc):
+        """Updating a row that doesn't exist completes without raising
+        (SQLite silently updates 0 rows)."""
+        result = episodic_svc.update_episode('nonexistent-id', {'gist': 'updated'})
+        assert result is None
 
 
-# ── soft_delete_episode ──────────────────────────────────────────────
+# ── soft_delete ──────────────────────────────────────────────────────
 
 class TestSoftDeleteEpisode:
 
-    def test_returns_true_when_row_deleted(self, db, episodic_svc):
-        """rowcount>0 returns True."""
+    def test_sets_deleted_at_on_existing_episode(self, db, episodic_svc):
+        """soft_delete() sets deleted_at on an existing live episode."""
         svc = episodic_svc
         episode_id = svc.store_episode(_make_episode_data())
 
-        result = svc.soft_delete_episode(episode_id)
-        assert result is True
+        svc.soft_delete(episode_id)
 
-        # Verify deleted_at is set
         row = db.execute("SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] is not None
 
-    def test_returns_false_when_not_found_or_already_deleted(self, episodic_svc):
-        """rowcount=0 returns False (episode doesn't exist or already deleted)."""
-        svc = episodic_svc
-        result = svc.soft_delete_episode('nonexistent-id')
-        assert result is False
+    def test_nonexistent_id_is_noop(self, episodic_svc):
+        """soft_delete() on a nonexistent ID completes without raising."""
+        episodic_svc.soft_delete('nonexistent-id')
 
-    def test_returns_false_on_db_error(self, episodic_svc):
-        """Database exception returns False (doesn't propagate)."""
-        with patch.object(episodic_svc.db_service, 'connection', side_effect=Exception("connection lost")):
-            result = episodic_svc.soft_delete_episode('some-id')
-        assert result is False
+    def test_already_deleted_episode_timestamp_unchanged(self, db, episodic_svc):
+        """soft_delete() on an already-deleted episode is a no-op (WHERE deleted_at IS NULL)."""
+        svc = episodic_svc
+        episode_id = svc.store_episode(_make_episode_data())
+        svc.soft_delete(episode_id)
+
+        first_deleted_at = db.execute(
+            "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()[0]
+
+        # Second call should not change deleted_at (WHERE deleted_at IS NULL filters it out)
+        svc.soft_delete(episode_id)
+
+        second_deleted_at = db.execute(
+            "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()[0]
+        assert first_deleted_at == second_deleted_at

@@ -8,7 +8,6 @@ is relevant.
 Routes:
   GET  /api/query/situation          — current situation assessment
   GET  /api/query/relevance?q=<text> — relevance ranking for a topic
-  GET  /api/query/world-state        — salience-scored world model items
   GET  /api/query/memory?q=<query>&k=5 — semantic memory search
   POST /api/query/composite          — multiple slices in one call
 
@@ -40,16 +39,10 @@ def _get_situation_model_service():
     return SituationModelService
 
 
-def _get_world_state_service():
-    """Return WorldStateService class (lazy, fail-open)."""
-    from services.world_state_service import WorldStateService
-    return WorldStateService
-
-
-def _get_episodic_service():
-    """Return EpisodicService class (lazy, fail-open)."""
-    from services.episodic_service import EpisodicService
-    return EpisodicService
+def _get_retrieval_module():
+    """Return the episodic retrieval module (lazy, fail-open)."""
+    from services import episodic_retrieval_service
+    return episodic_retrieval_service
 
 
 def _get_memory_client():
@@ -153,7 +146,7 @@ def _slice_situation() -> dict:
 def _slice_relevance(query: str) -> dict:
     """Score relevance of a text snippet against the current cognitive context.
 
-    Uses EpisodicService for semantic similarity and the cached
+    Uses episodic_retrieval_service for semantic similarity and the cached
     world model for goal/task matching.
 
     Args:
@@ -177,10 +170,7 @@ def _slice_relevance(query: str) -> dict:
 
     # Semantic similarity via episodic retrieval
     try:
-        EpisodicSvc = _get_episodic_service()
-        db = _get_db_service()
-        svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query)
+        episodes = _get_retrieval_module().retrieve(query_text=query, channel=None)
 
         if episodes:
             top = episodes[0]
@@ -222,41 +212,6 @@ def _slice_relevance(query: str) -> dict:
     }
 
 
-def _slice_world_state(query: str = "") -> dict:
-    """Return salience-scored world model items.
-
-    Delegates to WorldStateService.get_world_model_summary() for the
-    structured cache read.
-
-    Args:
-        query: Optional topic hint (reserved for future semantic filtering).
-
-    Returns:
-        dict with key ``items`` — list of dicts with ``type`` and ``label``.
-    """
-    try:
-        WorldStateService = _get_world_state_service()
-        svc = WorldStateService()
-        summary = svc.get_world_model_summary()
-
-        items = []
-        for label in summary.get("scheduled", []):
-            items.append({"type": "scheduled", "label": label})
-        for label in summary.get("tasks", []):
-            items.append({"type": "task", "label": label})
-        for label in summary.get("lists", []):
-            items.append({"type": "list", "label": label})
-        for label in summary.get("ambient", []):
-            items.append({"type": "ambient", "label": label})
-        for label in summary.get("topics", []):
-            items.append({"type": "topic", "label": label})
-
-        return {"items": items}
-    except Exception as e:
-        logger.debug("[Query API] world-state slice failed: %s", e)
-        return {"items": []}
-
-
 def _slice_memory(query: str, k: int) -> dict:
     """Search episodic memory semantically.
 
@@ -272,10 +227,9 @@ def _slice_memory(query: str, k: int) -> dict:
         return {"results": []}
 
     try:
-        EpisodicSvc = _get_episodic_service()
-        db = _get_db_service()
-        svc = EpisodicSvc(db)
-        episodes = svc.retrieve_episodes(query_text=query, radius=0.5)
+        episodes = _get_retrieval_module().retrieve(
+            query_text=query, channel=None, radius=0.5
+        )
 
         results = []
         for ep in episodes:
@@ -319,8 +273,6 @@ def _dispatch_slice(slice_name: str) -> dict:
         return _slice_situation()
     elif name == "relevance":
         return _slice_relevance(param.strip())
-    elif name in ("world-state", "world_state"):
-        return _slice_world_state(param.strip())
     elif name == "memory":
         parts = param.split("&k=", 1)
         q = parts[0].strip()
@@ -385,32 +337,6 @@ def get_relevance():
 
 
 # ---------------------------------------------------------------------------
-# GET /api/query/world-state
-# ---------------------------------------------------------------------------
-
-@query_bp.route("/world-state", methods=["GET"])
-@require_auth
-def get_world_state():
-    """Return salience-scored world model items.
-
-    Query parameters:
-        q (str, optional): Topic hint for future semantic filtering.
-
-    Response JSON:
-        items (list[dict]): Each item has ``type`` and ``label`` fields.
-
-    Returns:
-        200 with world-state dict.
-        403 if bearer token lacks ``"world-state"`` query permission.
-    """
-    if not _check_query_permission("world-state"):
-        return _permission_denied("world-state")
-
-    q = (request.args.get("q") or "").strip()
-    return jsonify(_slice_world_state(q)), 200
-
-
-# ---------------------------------------------------------------------------
 # GET /api/query/memory
 # ---------------------------------------------------------------------------
 
@@ -459,8 +385,7 @@ def get_composite():
             (e.g. ``"relevance:auth tests"``).
 
     Supported slice names:
-        ``situation``, ``relevance``, ``world-state``, ``memory``,
-        ``world_state`` (alias for ``world-state``).
+        ``situation``, ``relevance``, ``memory``.
 
     Permission model:
         Each slice is checked independently against the bearer's query
@@ -491,10 +416,8 @@ def get_composite():
 
         # Derive the base name for permission checking (before any ":" param)
         base_name = raw_slice.partition(":")[0].strip().lower()
-        # Normalise world_state alias for permission key
-        perm_key = "world-state" if base_name == "world_state" else base_name
 
-        if not _check_query_permission(perm_key):
+        if not _check_query_permission(base_name):
             denied.append(raw_slice)
             continue
 

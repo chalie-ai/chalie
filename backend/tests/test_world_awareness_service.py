@@ -273,11 +273,15 @@ class TestScan:
 
     def setup_method(self):
         _reset_dgs_singleton()
+        # Reset the world_state signals before each scan test
+        from services.world_state import world_state
+        world_state.set("signals", {})
 
     def teardown_method(self):
         _reset_dgs_singleton()
 
     def test_scan_writes_signals(self, db):
+        from services.world_state import world_state
         _seed_trait(db, "interest", "AI", 0.9, 5)
 
         svc = _make_service(db)
@@ -294,26 +298,23 @@ class TestScan:
         mock_news.search.return_value = [_make_article()]
         svc._news_service = mock_news
 
-        # Mock world state
-        mock_world = MagicMock()
-        svc._world_state_svc = mock_world
-
         count = svc.scan()
         assert count == 1
-        mock_world.notify_external_signal.assert_called_once()
 
-        # Check signal content
-        call_kwargs = mock_world.notify_external_signal.call_args[1]
-        assert call_kwargs["signal_type"] == "news"
-        assert call_kwargs["source"] == "world_awareness"
-        assert "AI Breakthrough" in call_kwargs["content"]
+        # Check the signal landed in the singleton
+        signals = world_state.get("signals")
+        assert "news" in signals
+        assert "AI Breakthrough" in signals["news"]["label"]
 
     def test_scan_skips_empty_interests(self, db):
+        from services.world_state import world_state
         svc = _make_service(db)
         count = svc.scan()
         assert count == 0
+        assert world_state.get("signals") == {}
 
     def test_scan_skips_interests_with_no_articles(self, db):
+        from services.world_state import world_state
         _seed_trait(db, "interest", "obscure topic", 0.9, 5)
 
         svc = _make_service(db)
@@ -328,14 +329,12 @@ class TestScan:
         mock_news.search.return_value = []
         svc._news_service = mock_news
 
-        mock_world = MagicMock()
-        svc._world_state_svc = mock_world
-
         count = svc.scan()
         assert count == 0
-        mock_world.notify_external_signal.assert_not_called()
+        assert world_state.get("signals") == {}
 
     def test_scan_continues_on_search_failure(self, db):
+        from services.world_state import world_state
         _seed_trait(db, "key1", "AI", 0.9, 5)
         _seed_trait(db, "key2", "cooking", 0.8, 4)
 
@@ -354,30 +353,6 @@ class TestScan:
         mock_news.search.side_effect = [Exception("Network error"), [_make_article()]]
         svc._news_service = mock_news
 
-        mock_world = MagicMock()
-        svc._world_state_svc = mock_world
-
         count = svc.scan()
         assert count == 1  # Only second interest succeeded
-
-    def test_scan_activation_energy_capped(self, db):
-        _seed_trait(db, "interest", "AI", 0.99, 100)  # score = 99
-
-        svc = _make_service(db)
-
-        vec = np.zeros(768, dtype=np.float32)
-        vec[0] = 1.0
-        mock_emb = MagicMock()
-        mock_emb.generate_embeddings_batch.return_value = [vec]
-        svc._embedding_svc = mock_emb
-
-        mock_news = MagicMock()
-        mock_news.search.return_value = [_make_article()]
-        svc._news_service = mock_news
-
-        mock_world = MagicMock()
-        svc._world_state_svc = mock_world
-
-        svc.scan()
-        call_kwargs = mock_world.notify_external_signal.call_args[1]
-        assert call_kwargs["activation_energy"] <= 0.6
+        assert len(world_state.get("signals")) == 1

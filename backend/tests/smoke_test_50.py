@@ -5,7 +5,6 @@
 Sends prompts across multiple UUIDs (cold + warm contexts) and tracks:
 - Mode distribution vs expected
 - Response times with rolling average (detect degradation as context grows)
-- Tie-breaker invocation rate and success
 
 Usage:
     python3 tests/smoke_test_50.py

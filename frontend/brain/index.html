@@ -10,6 +10,8 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link rel="stylesheet" href="/shared/theme.css">
     <link rel="stylesheet" href="style.css">
+    <script>globalThis.__chaliePage = 'brain';</script>
+    <script src="/shared/auth-gate.js"></script>
     <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js" integrity="sha384-hJnF5AwidE18GSWTAGHv3ByzzvfNZ1Tcx5y1UUV3WkauuMCEzBJBMSwSt/PUPXnM" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js" integrity="sha384-/cXAMbzovUIKbBERjPmR3SnPTh8siWr5lsvFYj1Uq4XP0yaJUZJmsh0YXyGv5P0y" crossorigin="anonymous"></script>
@@ -71,8 +73,8 @@
                 <button class="filter-tab" data-subtab="memory">Memory</button>
                 <button class="filter-tab" data-subtab="tools">Tools</button>
                 <button class="filter-tab" data-subtab="tasks">Working On</button>
-                <button class="filter-tab" data-subtab="understanding">Understanding</button>
                 <button class="filter-tab" data-subtab="worldstate">World State</button>
+                <button class="filter-tab" data-subtab="personality">Personality</button>
             </div>
 
             <!-- Jobs sub-panel (existing content, unchanged) -->
@@ -85,7 +87,29 @@
 
             <!-- Memory sub-panel -->
             <div class="cognition-subpanel" id="subtab-memory">
-                <div id="memoryContent"></div>
+                <div class="records-controls">
+                    <div class="records-source-switcher" id="recordsSourceSwitcher">
+                        <button class="filter-tab active" data-source="episodes">Episodes</button>
+                        <button class="filter-tab" data-source="user">User</button>
+                        <button class="filter-tab" data-source="system">System</button>
+                    </div>
+                    <input type="text" class="records-search-input" id="recordsSearchInput" placeholder="Search…" maxlength="200">
+                </div>
+                <div id="recordsStatus" class="obs-empty" style="display:none"></div>
+                <table class="records-table" id="recordsTable" style="display:none">
+                    <thead>
+                        <tr>
+                            <th>Created</th>
+                            <th>Last Accessed</th>
+                            <th>Key</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsTableBody"></tbody>
+                </table>
+                <div class="records-footer">
+                    <button class="btn btn-secondary hidden" id="recordsLoadMore">Load more</button>
+                </div>
             </div>
 
             <!-- Tools sub-panel -->
@@ -98,14 +122,60 @@
                 <div id="tasksContent"></div>
             </div>
 
-            <!-- Understanding sub-panel -->
-            <div class="cognition-subpanel" id="subtab-understanding">
-                <div id="understandingContent"></div>
-            </div>
-
             <!-- World State sub-panel -->
             <div class="cognition-subpanel" id="subtab-worldstate">
                 <div id="worldStateContent"></div>
+            </div>
+
+            <!-- Personality sub-panel -->
+            <div class="cognition-subpanel" id="subtab-personality">
+                <p class="panel-desc">Adjust how Chalie communicates. Changes take effect on the next message.</p>
+                <div class="personality-sliders" id="personalitySliders">
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Cool</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label" for="personality-slider-warmth">Warmth</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="warmth" class="personality-range" id="personality-slider-warmth">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Warm</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Level-headed</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label" for="personality-slider-mood">Mood</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="mood" class="personality-range" id="personality-slider-mood">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Moody</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Reserved</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label" for="personality-slider-expressiveness">Expressiveness</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="expressiveness" class="personality-range" id="personality-slider-expressiveness">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Vocal</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Matter-of-fact</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label" for="personality-slider-curiosity">Curiosity</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="curiosity" class="personality-range" id="personality-slider-curiosity">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Inquisitive</span>
+                    </div>
+                    <div class="personality-slider-row">
+                        <span class="personality-pole personality-pole--left">Dry</span>
+                        <div class="personality-slider-track">
+                            <label class="personality-slider-label" for="personality-slider-humor">Humor</label>
+                            <input type="range" min="-2" max="2" step="1" value="0" data-slider="humor" class="personality-range" id="personality-slider-humor">
+                        </div>
+                        <span class="personality-pole personality-pole--right">Playful</span>
+                    </div>
+                </div>
+                <div class="personality-voice-preview" id="personalityVoicePreview"></div>
+                <div class="personality-actions">
+                    <button class="btn btn-primary btn-save-personality" id="savePersonalityBtn">Save</button>
+                </div>
             </div>
         </div>
 
@@ -208,9 +278,9 @@
             </div>
 
             <!-- Pagination + utility row -->
-            <div class="scheduler-footer" id="schedulerFooter" style="display:none">
-                <button class="btn btn-secondary" id="scheduleLoadMoreBtn" style="display:none">Load more</button>
-                <button class="btn btn-secondary" id="clearHistoryBtn" style="display:none">Clear History</button>
+            <div class="scheduler-footer hidden" id="schedulerFooter">
+                <button class="btn btn-secondary hidden" id="scheduleLoadMoreBtn">Load more</button>
+                <button class="btn btn-secondary hidden" id="clearHistoryBtn">Clear History</button>
             </div>
         </div>
 
@@ -376,16 +446,24 @@
                 </div>
                 <div class="form-group" id="editHostGroup">
                     <label>Host</label>
-                    <input type="text" id="editHost" value="http://localhost:11434">
-                    <button type="button" class="btn btn-secondary" id="editTestConnectionBtn">Test Connection</button>
+                    <div class="host-input-row">
+                        <input type="text" id="editHost" value="http://localhost:11434">
+                        <button type="button" class="btn btn-secondary btn-sm" id="editTestConnectionBtn">Refresh models</button>
+                    </div>
                     <span id="editConnectionStatus"></span>
                 </div>
                 <div class="form-group" id="editApiKeyGroup">
                     <label>API Key</label>
                     <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
                 </div>
+                <div class="form-group" id="ollamaModelListGroup" style="display:none;">
+                    <label for="ollamaModelList">Available models <span class="label-hint">(click to select)</span></label>
+                    <div class="ollama-model-list" id="ollamaModelList">
+                        <span class="ollama-model-empty">Click &ldquo;Refresh models&rdquo; to load the list from your Ollama host.</span>
+                    </div>
+                </div>
                 <div class="form-group">
-                    <label>Models</label>
+                    <label for="editModelTags">Selected models</label>
                     <div class="model-tags-container" id="editModelTags"></div>
                     <div class="model-input-row">
                         <input type="text" id="editModelInput" placeholder="e.g. claude-opus-4" list="editModelSuggestions">

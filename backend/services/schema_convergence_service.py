@@ -5,25 +5,45 @@ Compares the desired state (schema.sql executed into :memory:) against the
 live database and applies the minimum set of changes needed to bring the live
 schema up to date.  Replaces SchemaService.initialize_schema(),
 DatabaseService.run_pending_migrations(), and SchemaService._create_vec_tables().
+
+Bidirectional: both adds what is missing AND drops what is no longer declared.
+schema.sql is the only source of truth — a table or column that disappears
+from schema.sql will be removed from the live database on the next boot.
+
+Safety: destructive operations can be disabled by setting the env var
+``CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=0``. Default is enabled.
 """
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Idempotent error substrings: these mean the statement was already applied.
-_IDEMPOTENT_ERRORS = (
-    "no such column",
-    "no such table",
-    "duplicate column name",
-    "no such module",
-    "already exists",
-    "sql logic error",
+# Tables whose names we never touch even if they appear stale.  SQLite system
+# tables, FTS5/vec0 shadow tables, and our own bookkeeping live here.  Shadow
+# tables are usually filtered out by ``_introspect_tables`` via virtual-table
+# prefix matching, but this is a defence-in-depth guard for orphans.
+_PROTECTED_TABLE_PREFIXES = ("sqlite_",)
+_PROTECTED_TABLE_NAMES = frozenset({"sqlite_sequence"})
+
+# Shadow-table suffixes used by FTS5 and sqlite-vec — defence in depth so an
+# orphaned shadow (e.g. left over from a manual drop) is never blindly dropped
+# as a stale table.
+_SHADOW_SUFFIXES = (
+    "_data", "_idx", "_docsize", "_config", "_content",  # FTS5
+    "_chunks", "_rowids", "_info",                       # sqlite-vec
 )
+
+
+def _destructive_allowed() -> bool:
+    """Return True unless the operator has explicitly opted out via env var."""
+    return os.environ.get("CHALIE_SCHEMA_ALLOW_DESTRUCTIVE", "1").lower() not in (
+        "0", "false", "no", "off",
+    )
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -48,7 +68,6 @@ class SchemaConvergenceService:
         self.db_service = db_service
         self._embedding_dimensions = embedding_dimensions
         self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
-        self._migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
         self._jobs_config_path = Path(__file__).resolve().parent.parent / "configs" / "cognitive_jobs.json"
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -56,7 +75,13 @@ class SchemaConvergenceService:
     # ──────────────────────────────────────────────────────────────────────────
 
     def converge(self) -> None:
-        """Single entry point — replaces initialize_schema + run_pending_migrations + ensure_vec_tables."""
+        """Single entry point — replaces initialize_schema + run_pending_migrations + ensure_vec_tables.
+
+        Bidirectional: adds missing schema objects (tables, columns, indexes,
+        virtual tables) and drops live objects that are no longer declared in
+        ``schema.sql``.  Destructive operations are gated behind
+        ``CHALIE_SCHEMA_ALLOW_DESTRUCTIVE`` (default on).
+        """
         if not self._schema_path.exists():
             raise FileNotFoundError(f"Schema file not found: {self._schema_path}")
 
@@ -67,14 +92,9 @@ class SchemaConvergenceService:
             desired_tables = self._introspect_tables(desired_conn)
             desired_indexes = self._introspect_indexes(desired_conn)
             desired_virtual = self._introspect_virtual_tables(desired_conn)
+            desired_triggers = self._introspect_triggers(desired_conn)
         finally:
             desired_conn.close()
-
-        tables_created = 0
-        columns_added = 0
-        indexes_synced = 0
-        virtual_tables_created = 0
-        orphan_jobs_pruned = 0
 
         with self.db_service.connection() as conn:
             _load_sqlite_vec(conn)
@@ -84,31 +104,64 @@ class SchemaConvergenceService:
             live_tables = self._introspect_tables(conn)
             live_indexes = self._introspect_indexes(conn)
             live_virtual = self._introspect_virtual_tables(conn)
+            live_triggers = self._introspect_triggers(conn)
 
-            tc, ca = self._converge_tables(desired_tables, live_tables, conn, schema_sql)
-            tables_created += tc
-            columns_added += ca
+            # Additive pass first — ensures new shape is in place before any
+            # destructive change runs.  If a destructive op fails we still end
+            # up with a usable schema.
+            tables_created, columns_added = self._converge_tables(
+                desired_tables, live_tables, conn, schema_sql
+            )
+            indexes_synced = self._converge_indexes(desired_indexes, live_indexes, conn)
+            virtual_tables_created = self._converge_virtual_tables(
+                desired_virtual, live_virtual, conn, schema_sql
+            )
+            triggers_synced = self._converge_triggers(desired_triggers, live_triggers, conn, schema_sql)
 
-            indexes_synced += self._converge_indexes(desired_indexes, live_indexes, conn)
-            virtual_tables_created += self._converge_virtual_tables(desired_virtual, live_virtual, conn, schema_sql)
+            # Destructive pass (gated).  Safety: if the desired state looks
+            # suspiciously empty or truncated, refuse to drop anything — the
+            # live DB is more trustworthy than a corrupt schema.sql.
+            destructive_safe = self._destructive_safety_check(
+                desired_tables, live_tables
+            )
+            if _destructive_allowed() and destructive_safe:
+                # Order: virtual tables first (cascades shadow tables) → indexes
+                # (some auto-drop with their owning table) → columns within
+                # surviving tables → stale regular tables last.
+                virtual_tables_dropped = self._drop_stale_virtual_tables(
+                    desired_virtual, live_virtual, conn
+                )
+                indexes_dropped = self._drop_stale_indexes(
+                    desired_indexes, live_indexes, conn
+                )
+                columns_dropped = self._drop_stale_columns(
+                    desired_tables, live_tables, conn
+                )
+                tables_dropped = self._drop_stale_tables(
+                    desired_tables, live_tables, live_virtual, conn
+                )
+                triggers_dropped = self._drop_stale_triggers(desired_triggers, live_triggers, conn)
+            else:
+                virtual_tables_dropped = indexes_dropped = columns_dropped = tables_dropped = 0
+                triggers_dropped = 0
+                self._log_stale(desired_tables, live_tables, desired_indexes, live_indexes,
+                                desired_virtual, live_virtual)
 
-            self._run_drop_statements(schema_sql, conn)
             self._strip_data_graph_check_constraint(conn)
 
             if is_fresh:
                 self._run_seed_data(schema_sql, conn)
-                self._stamp_migrations(conn)
-            else:
-                self._run_pending_migrations(conn)
 
             orphan_jobs_pruned = self._converge_job_assignments(conn)
 
         logger.info(
-            f"Schema converged: {tables_created} tables created, "
-            f"{columns_added} columns added, "
-            f"{indexes_synced} indexes synced, "
-            f"{virtual_tables_created} virtual tables created, "
-            f"{orphan_jobs_pruned} orphan jobs pruned"
+            f"Schema converged: "
+            f"+{tables_created} tables / -{tables_dropped}, "
+            f"+{columns_added} columns / -{columns_dropped}, "
+            f"+{indexes_synced} indexes / -{indexes_dropped}, "
+            f"+{virtual_tables_created} virtual tables / -{virtual_tables_dropped}, "
+            f"+{triggers_synced} triggers / -{triggers_dropped}, "
+            f"-{orphan_jobs_pruned} orphan jobs"
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -122,6 +175,10 @@ class SchemaConvergenceService:
         a single failing statement (e.g. vec0 when sqlite-vec is unavailable)
         does not prevent all subsequent tables from being created in the desired
         state.
+
+        Trigger bodies contain semicolons inside BEGIN...END; the simple
+        split(";") approach breaks them into fragments.  ``_split_statements``
+        tracks BEGIN/END nesting so trigger bodies survive intact.
         """
         conn = sqlite3.connect(":memory:")
         _load_sqlite_vec(conn)
@@ -129,15 +186,54 @@ class SchemaConvergenceService:
         sql = schema_sql
         if self._embedding_dimensions != 768:
             sql = sql.replace("float[768]", f"float[{self._embedding_dimensions}]")
-        # Strip comments, then split on semicolons and execute one at a time.
+        # Strip single-line comments, then split respecting BEGIN...END blocks.
         sql_no_comments = re.sub(r"--[^\n]*", "", sql)
-        statements = [s.strip() for s in sql_no_comments.split(";") if s.strip()]
-        for stmt in statements:
+        for stmt in self._split_statements(sql_no_comments):
             try:
                 conn.execute(stmt)
             except Exception as exc:
                 logger.debug(f"[convergence] Skipping desired-state statement: {exc}")
         return conn
+
+    def _split_statements(self, sql: str) -> list:
+        """Split SQL text on semicolons while keeping BEGIN...END blocks intact.
+
+        SQLite trigger bodies use the form ``BEGIN <stmt>; <stmt>; END;``.
+        A naive split(";") breaks these into fragments.  This method counts
+        BEGIN/END depth and only treats a semicolon at depth 0 as a statement
+        terminator.
+
+        Returns a list of non-empty, stripped statement strings.
+        """
+        statements = []
+        current: list = []
+        depth = 0
+
+        for token in re.split(r"(\bBEGIN\b|\bEND\b|;)", sql, flags=re.IGNORECASE):
+            upper = token.strip().upper()
+            if upper == "BEGIN":
+                depth += 1
+                current.append(token)
+            elif upper == "END":
+                depth = max(0, depth - 1)
+                current.append(token)
+            elif token == ";":
+                if depth == 0:
+                    stmt = "".join(current).strip()
+                    if stmt:
+                        statements.append(stmt)
+                    current = []
+                else:
+                    current.append(token)
+            else:
+                current.append(token)
+
+        # Handle any trailing content without a final semicolon
+        remainder = "".join(current).strip()
+        if remainder:
+            statements.append(remainder)
+
+        return statements
 
     # ──────────────────────────────────────────────────────────────────────────
     # Introspection helpers
@@ -182,6 +278,18 @@ class SchemaConvergenceService:
                 result[name] = self._normalize_ddl(ddl)
         return result
 
+    def _introspect_triggers(self, conn: sqlite3.Connection) -> dict:
+        """Return {trigger_name: normalized_ddl} for all user-defined triggers.
+
+        Auto-created triggers from FTS5 and sqlite-vec internals store NULL in
+        the sql column of sqlite_master and are excluded by the IS NOT NULL
+        filter.  Only triggers the schema explicitly declares come through.
+        """
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL"
+        ).fetchall()
+        return {name: self._normalize_ddl(ddl) for name, ddl in rows}
+
     def _normalize_ddl(self, ddl) -> str:
         """Lowercase, collapse whitespace, strip IF NOT EXISTS for comparison."""
         if not ddl:
@@ -196,7 +304,11 @@ class SchemaConvergenceService:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _converge_tables(self, desired: dict, actual: dict, live_conn: sqlite3.Connection, schema_sql: str):
-        """Create missing tables; add missing columns to existing tables."""
+        """Additive: create missing tables; add missing columns to existing tables.
+
+        Stale tables and columns are handled by ``_drop_stale_tables`` and
+        ``_drop_stale_columns`` after this pass completes.
+        """
         tables_created = 0
         columns_added = 0
 
@@ -214,7 +326,7 @@ class SchemaConvergenceService:
                     logger.warning(f"[convergence] No DDL found for missing table: {table_name}")
                 continue
 
-            # Table exists — check columns
+            # Table exists — add any missing columns.
             live_cols = actual[table_name]
             for col_name, col_info in desired_cols.items():
                 if col_name not in live_cols:
@@ -241,17 +353,9 @@ class SchemaConvergenceService:
                             f"[convergence] Failed to add column {table_name}.{col_name}: {exc}"
                         )
 
-            # Log columns in live but not desired (candidates for removal — do not drop)
-            # TODO v0.5.0: auto-drop stale columns
-            for col_name in live_cols:
-                if col_name not in desired_cols:
-                    logger.debug(
-                        f"[convergence] Stale column (not in desired schema): "
-                        f"{table_name}.{col_name}"
-                    )
-
-            # Log type/constraint mismatches — do not auto-fix
-            # TODO v0.5.0: auto-alter columns with type/constraint mismatches
+            # Log type/constraint mismatches — SQLite cannot ALTER column types
+            # in place; rebuilding the table is destructive enough that we
+            # require an explicit migration helper rather than auto-fix.
             for col_name, desired_info in desired_cols.items():
                 if col_name in live_cols:
                     live_info = live_cols[col_name]
@@ -264,6 +368,188 @@ class SchemaConvergenceService:
                         )
 
         return tables_created, columns_added
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Destructive convergence — drop what is no longer declared in schema.sql
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _drop_stale_tables(
+        self,
+        desired: dict,
+        actual: dict,
+        live_virtual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop regular tables present in the live DB but absent from schema.sql.
+
+        Skips: protected names, sqlite system tables, virtual tables (handled
+        separately), and any name that looks like a shadow table for a virtual
+        table that still exists.
+        """
+        dropped = 0
+        virtual_names = set(live_virtual.keys())
+        shadow_prefixes = tuple(f"{vn}_" for vn in virtual_names)
+
+        for table_name in actual:
+            if table_name in desired:
+                continue
+            if not self._is_droppable_table(table_name, virtual_names, shadow_prefixes):
+                continue
+            try:
+                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                logger.warning(f"[convergence] DROPPED table: {table_name}")
+                dropped += 1
+            except Exception as exc:
+                logger.error(f"[convergence] Failed to drop stale table {table_name}: {exc}")
+        return dropped
+
+    def _drop_stale_columns(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop columns present in live tables but absent from the desired schema.
+
+        Only operates on tables that exist in both ``desired`` and ``actual`` —
+        a table that is itself stale will be dropped wholesale by
+        ``_drop_stale_tables``.
+        Requires SQLite 3.35+ for ``ALTER TABLE DROP COLUMN``.
+        """
+        dropped = 0
+        for table_name, desired_cols in desired.items():
+            if table_name not in actual:
+                continue
+            live_cols = actual[table_name]
+            for col_name in live_cols:
+                if col_name in desired_cols:
+                    continue
+                try:
+                    live_conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {col_name}")
+                    logger.warning(f"[convergence] DROPPED column: {table_name}.{col_name}")
+                    dropped += 1
+                except Exception as exc:
+                    logger.error(
+                        f"[convergence] Failed to drop stale column {table_name}.{col_name}: {exc}"
+                    )
+        return dropped
+
+    def _drop_stale_indexes(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop indexes that exist in the live DB but not in the desired schema.
+
+        Auto-created indexes (those without a SQL row in sqlite_master) are
+        already filtered out by ``_introspect_indexes``.
+        """
+        dropped = 0
+        for idx_name in actual:
+            if idx_name in desired:
+                continue
+            try:
+                live_conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+                logger.warning(f"[convergence] DROPPED index: {idx_name}")
+                dropped += 1
+            except Exception as exc:
+                logger.error(f"[convergence] Failed to drop stale index {idx_name}: {exc}")
+        return dropped
+
+    def _drop_stale_virtual_tables(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop virtual tables (FTS5 / sqlite-vec) that are no longer declared.
+
+        Dropping a virtual table cascades to its shadow tables automatically.
+        """
+        dropped = 0
+        for table_name in actual:
+            if table_name in desired:
+                continue
+            try:
+                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                logger.warning(f"[convergence] DROPPED virtual table: {table_name}")
+                dropped += 1
+            except Exception as exc:
+                logger.error(
+                    f"[convergence] Failed to drop stale virtual table {table_name}: {exc}"
+                )
+        return dropped
+
+    def _destructive_safety_check(self, desired_tables: dict, live_tables: dict) -> bool:
+        """Refuse destructive ops if schema.sql looks corrupted or truncated.
+
+        Heuristics (tripping any one trips the guard):
+          * Desired state has zero tables — schema.sql unreadable or empty.
+          * Live DB has ≥10 tables and desired has fewer than half of them —
+            likely a corrupt or partial schema.sql.
+        """
+        if not desired_tables:
+            logger.error(
+                "[convergence] SAFETY: desired schema has zero tables — "
+                "refusing destructive ops.  Check schema.sql integrity."
+            )
+            return False
+        if len(live_tables) >= 10 and len(desired_tables) < len(live_tables) / 2:
+            logger.error(
+                f"[convergence] SAFETY: desired={len(desired_tables)} tables vs "
+                f"live={len(live_tables)} — too large a shrink, refusing destructive "
+                f"ops.  Check schema.sql integrity."
+            )
+            return False
+        return True
+
+    def _is_droppable_table(
+        self,
+        name: str,
+        virtual_names: set,
+        shadow_prefixes: tuple,
+    ) -> bool:
+        """Return False for protected, system, virtual, or shadow tables."""
+        if name in _PROTECTED_TABLE_NAMES:
+            return False
+        if name.startswith(_PROTECTED_TABLE_PREFIXES):
+            return False
+        if name in virtual_names:
+            return False
+        # If this name looks like a shadow table for an existing virtual table,
+        # leave it alone — it will be cleaned up when the virtual table is.
+        if shadow_prefixes and name.startswith(shadow_prefixes):
+            return False
+        # Extra defence in depth: bare suffix match for orphaned shadow names
+        # (e.g. "foo_data" with no virtual "foo"). Prefer to leak rather than
+        # silently corrupt a virtual table.
+        for suffix in _SHADOW_SUFFIXES:
+            if name.endswith(suffix):
+                return False
+        return True
+
+    def _log_stale(
+        self,
+        desired_tables: dict,
+        live_tables: dict,
+        desired_indexes: dict,
+        live_indexes: dict,
+        desired_virtual: dict,
+        live_virtual: dict,
+    ) -> None:
+        """When destructive ops are disabled, log what *would* have been dropped."""
+        for t in live_tables.keys() - desired_tables.keys():
+            logger.warning(f"[convergence] STALE table (would drop): {t}")
+        for t, cols in live_tables.items():
+            if t not in desired_tables:
+                continue
+            for c in cols.keys() - desired_tables[t].keys():
+                logger.warning(f"[convergence] STALE column (would drop): {t}.{c}")
+        for i in live_indexes.keys() - desired_indexes.keys():
+            logger.warning(f"[convergence] STALE index (would drop): {i}")
+        for v in live_virtual.keys() - desired_virtual.keys():
+            logger.warning(f"[convergence] STALE virtual table (would drop): {v}")
 
     def _converge_indexes(self, desired: dict, actual: dict, live_conn: sqlite3.Connection) -> int:
         """Create missing indexes; drop and recreate indexes whose DDL has changed."""
@@ -292,8 +578,31 @@ class SchemaConvergenceService:
 
         return synced
 
+    def _extract_fts5_columns(self, normalized_ddl: str) -> list:
+        """Parse the column list from a normalized FTS5 CREATE VIRTUAL TABLE DDL.
+
+        Strips key=value options (e.g. content='episodes', content_rowid='rowid')
+        and returns only bare column names.
+
+        Returns an empty list if the DDL is not an FTS5 table or cannot be parsed.
+        """
+        if "fts5" not in normalized_ddl:
+            return []
+        # Extract the argument list between the outer parentheses after USING fts5(
+        match = re.search(r"using\s+fts5\s*\((.+)\)", normalized_ddl)
+        if not match:
+            return []
+        args_str = match.group(1)
+        # Split by comma, then discard entries that contain '=' (key=value options)
+        columns = []
+        for part in args_str.split(","):
+            part = part.strip().strip("'\"")
+            if "=" not in part and part:
+                columns.append(part)
+        return columns
+
     def _converge_virtual_tables(self, desired: dict, actual: dict, live_conn: sqlite3.Connection, schema_sql: str) -> int:
-        """Create missing virtual tables; warn on DDL mismatch (no auto-rebuild)."""
+        """Create missing virtual tables; rebuild FTS5 tables whose column list changed."""
         created = 0
 
         for table_name, desired_ddl in desired.items():
@@ -320,12 +629,106 @@ class SchemaConvergenceService:
                                 f"[convergence] FTS5 rebuild failed for {table_name}: {exc}"
                             )
             elif actual[table_name] != desired_ddl:
-                # FTS5/vec0 recreation is destructive — log only
+                # For FTS5 content tables, check if only the column list changed.
+                # If so, rebuild automatically (DROP + CREATE + rebuild).
+                live_ddl = actual[table_name]
+                if "fts5" in desired_ddl and "content=" in desired_ddl:
+                    desired_cols = self._extract_fts5_columns(desired_ddl)
+                    live_cols = self._extract_fts5_columns(live_ddl)
+                    if desired_cols != live_cols:
+                        logger.warning(
+                            f"[convergence] FTS5 column list changed for {table_name}: "
+                            f"{live_cols} -> {desired_cols}. Rebuilding."
+                        )
+                        raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+                        if raw_ddl:
+                            try:
+                                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                                live_conn.execute(raw_ddl)
+                                live_conn.execute(
+                                    f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
+                                )
+                                logger.info(f"[convergence] Rebuilt FTS5 table (column change): {table_name}")
+                                created += 1
+                            except Exception as exc:
+                                logger.error(
+                                    f"[convergence] Failed to rebuild FTS5 table {table_name}: {exc}"
+                                )
+                        continue
+                # Non-FTS5 or non-column-list change — log only
                 logger.warning(
                     f"[convergence] Virtual table DDL mismatch (not auto-fixed): {table_name}"
                 )
 
         return created
+
+    def _converge_triggers(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+        schema_sql: str,
+    ) -> int:
+        """Create missing triggers; drop and recreate triggers whose DDL has changed.
+
+        Mirrors ``_converge_indexes``: compare normalized DDL, CREATE if absent,
+        DROP+CREATE if the body changed.
+        """
+        synced = 0
+
+        for trigger_name, desired_ddl in desired.items():
+            if trigger_name not in actual:
+                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                if not raw_ddl:
+                    logger.warning(
+                        f"[convergence] No DDL found for missing trigger: {trigger_name}"
+                    )
+                    continue
+                try:
+                    live_conn.execute(raw_ddl)
+                    logger.info(f"[convergence] Created trigger: {trigger_name}")
+                    synced += 1
+                except Exception as exc:
+                    logger.error(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
+            elif actual[trigger_name] != desired_ddl:
+                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+                if not raw_ddl:
+                    logger.warning(
+                        f"[convergence] No DDL found for changed trigger: {trigger_name}"
+                    )
+                    continue
+                try:
+                    live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                    live_conn.execute(raw_ddl)
+                    logger.info(f"[convergence] Recreated trigger (DDL changed): {trigger_name}")
+                    synced += 1
+                except Exception as exc:
+                    logger.error(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
+
+        return synced
+
+    def _drop_stale_triggers(
+        self,
+        desired: dict,
+        actual: dict,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """Drop triggers present in the live DB but absent from schema.sql.
+
+        Mirrors ``_drop_stale_indexes``.  Only runs when destructive ops are
+        permitted and the safety check has passed.
+        """
+        dropped = 0
+        for trigger_name in actual:
+            if trigger_name in desired:
+                continue
+            try:
+                live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                logger.warning(f"[convergence] DROPPED trigger: {trigger_name}")
+                dropped += 1
+            except Exception as exc:
+                logger.error(f"[convergence] Failed to drop stale trigger {trigger_name}: {exc}")
+        return dropped
 
     def _create_virtual_table(self, conn: sqlite3.Connection, table_name: str, ddl: str) -> bool:
         """Attempt to CREATE VIRTUAL TABLE; handle orphaned shadow tables for vec0."""
@@ -372,20 +775,8 @@ class SchemaConvergenceService:
                 return False
 
     # ──────────────────────────────────────────────────────────────────────────
-    # DROP / seed / migration helpers
+    # Seed / one-shot helpers
     # ──────────────────────────────────────────────────────────────────────────
-
-    def _run_drop_statements(self, schema_sql: str, live_conn: sqlite3.Connection) -> None:
-        """Execute DROP TABLE IF EXISTS statements found in schema.sql."""
-        for match in re.finditer(
-            r"DROP\s+TABLE\s+IF\s+EXISTS\s+(\w+)\s*;", schema_sql, re.IGNORECASE
-        ):
-            table_name = match.group(1)
-            try:
-                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-                logger.debug(f"[convergence] Executed drop: {table_name}")
-            except Exception as exc:
-                logger.warning(f"[convergence] DROP TABLE {table_name} failed: {exc}")
 
     def _strip_data_graph_check_constraint(self, live_conn: sqlite3.Connection) -> None:
         """Strip CHECK constraint from data_graph.kind on existing databases.
@@ -452,68 +843,6 @@ class SchemaConvergenceService:
             except Exception as exc:
                 logger.warning(f"[convergence] Seed insert failed: {exc}")
 
-    def _stamp_migrations(self, live_conn: sqlite3.Connection) -> None:
-        """On a fresh DB, mark all *.sql migration files as already applied."""
-        if not self._migrations_dir.exists():
-            return
-        for migration_file in sorted(self._migrations_dir.glob("*.sql")):
-            try:
-                live_conn.execute(
-                    "INSERT OR IGNORE INTO schema_migrations (filename) VALUES (?)",
-                    (migration_file.name,),
-                )
-            except Exception as exc:
-                logger.warning(f"[convergence] Could not stamp migration {migration_file.name}: {exc}")
-        logger.info("[convergence] Fresh install — stamped all migrations as applied")
-
-    def _run_pending_migrations(self, live_conn: sqlite3.Connection) -> None:
-        """Apply unapplied *.sql migration files from the migrations directory."""
-        if not self._migrations_dir.exists():
-            return
-
-        applied_rows = live_conn.execute(
-            "SELECT filename FROM schema_migrations"
-        ).fetchall()
-        applied = {row[0] for row in applied_rows}
-
-        pending_count = 0
-        for migration_file in sorted(self._migrations_dir.glob("*.sql")):
-            filename = migration_file.name
-            if filename in applied:
-                continue
-
-            logger.info(f"[convergence] Applying migration: {filename}")
-            sql = migration_file.read_text()
-
-            # Execute statement-by-statement with idempotent error handling.
-            # Never use executescript() for migrations — it auto-commits and can
-            # produce FK violations.
-            sql_no_comments = re.sub(r"--[^\n]*", "", sql)
-            statements = [s.strip() for s in sql_no_comments.split(";") if s.strip()]
-
-            for stmt in statements:
-                try:
-                    live_conn.execute(stmt)
-                except Exception as exc:
-                    err_msg = str(exc).lower()
-                    if any(pat in err_msg for pat in _IDEMPOTENT_ERRORS):
-                        logger.debug(
-                            f"[convergence] Skipping already-applied step in {filename}: {exc}"
-                        )
-                    else:
-                        raise
-
-            live_conn.execute(
-                "INSERT INTO schema_migrations (filename) VALUES (?)", (filename,)
-            )
-            pending_count += 1
-            logger.info(f"[convergence] Migration applied: {filename}")
-
-        if pending_count == 0:
-            logger.info("[convergence] No pending migrations")
-        else:
-            logger.info(f"[convergence] Applied {pending_count} migration(s)")
-
     # ──────────────────────────────────────────────────────────────────────────
     # DDL extraction from schema.sql
     # ──────────────────────────────────────────────────────────────────────────
@@ -550,6 +879,22 @@ class SchemaConvergenceService:
         if self._embedding_dimensions != 768 and "vec0" in ddl.lower():
             ddl = ddl.replace("float[768]", f"float[{self._embedding_dimensions}]")
         return ddl
+
+    def _extract_trigger_ddl(self, schema_sql: str, trigger_name: str) -> str | None:
+        """Extract the CREATE TRIGGER ... END ; block for a trigger from schema.sql.
+
+        SQLite trigger bodies contain semicolons inside the BEGIN...END block, so
+        we cannot rely on the simple split-on-semicolon approach used elsewhere.
+        Instead we match from CREATE TRIGGER <name> through the END keyword that
+        closes the outermost block, then consume the trailing semicolon.
+        """
+        stripped = re.sub(r"--[^\n]*", "", schema_sql)
+        pattern = re.compile(
+            r"(CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(trigger_name) + r"\b.+?END\s*;)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = pattern.search(stripped)
+        return match.group(1).strip() if match else None
 
     def _restore_if_not_exists(self, normalized_ddl: str, obj_type: str) -> str:
         """Re-insert IF NOT EXISTS into a normalized DDL string."""

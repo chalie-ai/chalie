@@ -233,13 +233,16 @@ def login():
         # password we just verified against the hash.
         vault = get_vault_service()
         vault_state = "locked"
+        vault_reinitialized = False
         try:
             if vault.get_state() == "uninitialized":
-                logger.info(
-                    "[Auth] Vault uninitialized — "
-                    "auto-initializing for existing user"
+                logger.error(
+                    "[Auth] Vault uninitialized at login time — "
+                    "auto-initializing with login password. "
+                    "Any previously sealed data (provider keys, etc.) is orphaned."
                 )
-                vault.initialize(password)
+                vault.initialize(password, mark_reinit=True)
+                vault_reinitialized = True
             unlocked = vault.unlock(password)
             if not unlocked:
                 logger.warning(
@@ -253,12 +256,50 @@ def login():
             logger.error("[Auth] Vault unlock failed during login: %s", exc)
 
         # Create session and set cookie
-        resp = make_response(jsonify({"ok": True, "vault_state": vault_state}), 200)
+        resp = make_response(
+            jsonify({"ok": True, "vault_state": vault_state,
+                     "vault_reinitialized": vault_reinitialized}),
+            200,
+        )
         create_session(resp)
         return resp
     except Exception as e:
         logger.error(f"[REST API] Login error: {e}")
         return jsonify({"error": "Failed to authenticate"}), 500
+
+
+@user_auth_bp.route('/auth/vault-status', methods=['GET'])
+def vault_status():
+    """Return the vault reinit timestamp so the UI can show a warning banner."""
+    try:
+        from services.auth_session_service import validate_session
+        from services.vault_service import get_vault_service
+
+        if not validate_session(request):
+            return jsonify({"error": "Unauthorized"}), 401
+
+        reinitialized_at = get_vault_service().get_reinitialized_at()
+        return jsonify({"reinitialized_at": reinitialized_at}), 200
+    except Exception as exc:
+        logger.error("[Auth] vault-status error: %s", exc)
+        return jsonify({"error": "Failed to get vault status"}), 500
+
+
+@user_auth_bp.route('/auth/vault-status/dismiss', methods=['POST'])
+def vault_status_dismiss():
+    """Clear the vault reinit flag (user dismissed the warning)."""
+    try:
+        from services.auth_session_service import validate_session
+        from services.vault_service import get_vault_service
+
+        if not validate_session(request):
+            return jsonify({"error": "Unauthorized"}), 401
+
+        get_vault_service().clear_reinitialized_at()
+        return jsonify({"ok": True}), 200
+    except Exception as exc:
+        logger.error("[Auth] vault-status/dismiss error: %s", exc)
+        return jsonify({"error": "Failed to dismiss vault status"}), 500
 
 
 @user_auth_bp.route('/auth/logout', methods=['POST'])

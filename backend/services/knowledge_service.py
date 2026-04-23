@@ -29,6 +29,12 @@ from typing import List, Optional
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
+# SearchExpanderService: generates doc2query variants + embeds them for KNN recall.
+# Replaces the old _schedule_doc2query fire-and-forget thread pattern.
+import services.search_expander_service as _ses
+
+# Table identifier used when enqueueing rows to SearchExpanderService.
+_TABLE_KNOWLEDGE = "knowledge"
 
 logger = logging.getLogger(__name__)
 
@@ -265,39 +271,6 @@ class KnowledgeService:
         except Exception as e:
             logger.warning(f"[KNOWLEDGE] FTS removal failed for rowid={rowid}: {e}")
 
-    def _schedule_doc2query(self, rowid: int, key: str, value: str):
-        """Fire-and-forget: generate search queries for a knowledge entry and persist them."""
-        import threading
-
-        def _run():
-            try:
-                from services.doc2query_service import get_doc2query_service
-                d2q = get_doc2query_service()
-                if not d2q.is_available():
-                    return
-                queries = d2q.generate_queries(f"{key}: {value}")
-                if not queries:
-                    return
-                import json as _json
-                with self.db.connection() as conn:
-                    # Read old values BEFORE update for correct FTS delete
-                    old = conn.execute(
-                        "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
-                        (rowid,)
-                    ).fetchone()
-                    if not old:
-                        return
-                    self._delete_fts(conn, rowid, old[0], old[1], old[2], old[3], old[4] or '')
-                    conn.execute(
-                        "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
-                        (_json.dumps(queries), rowid)
-                    )
-                    self._sync_fts(conn, rowid)
-            except Exception as e:
-                logger.warning(f"[KNOWLEDGE] doc2query failed for rowid={rowid}: {e}")
-
-        threading.Thread(target=_run, daemon=True).start()
-
     # ── Core: store ────────────────────────────────────────────────────
 
     def store(
@@ -447,9 +420,11 @@ class KnowledgeService:
                     if value:
                         _schedule_d2q_args = (row_id, key, value)
 
-            # Fire doc2query AFTER the connection context exits (row committed)
+            # Enqueue for SearchExpanderService AFTER connection exits (row committed).
+            # SES generates doc2query variants, embeds each, and writes to
+            # expanded_semantic / expanded_semantic_vec for variant-based KNN recall.
             if _schedule_d2q_args:
-                self._schedule_doc2query(*_schedule_d2q_args)
+                _ses.enqueue(_TABLE_KNOWLEDGE, _schedule_d2q_args[0])
 
             return self.get(entity, key)
 
@@ -598,6 +573,42 @@ class KnowledgeService:
                                     scores[rid] = scores.get(rid, 0.0) + 1.0 / (rrf_k + rank)
                 except Exception as e:
                     logger.debug(f"[KNOWLEDGE] Vector search failed (non-fatal): {e}")
+
+                # ── Signal 4: Expanded semantic variant KNN ────────────
+                # Hits expanded_semantic_vec whose rows are doc2query variants
+                # written by SearchExpanderService. Joins back to knowledge via
+                # expanded_semantic.related_to_id so the source row scores.
+                try:
+                    if query_embedding:
+                        blob = pack_embedding(query_embedding)
+                        if blob:
+                            variant_k = min(limit * 3, 50)
+                            cursor.execute("""
+                                SELECT CAST(es.related_to_id AS INTEGER) AS source_id,
+                                       v.distance
+                                FROM expanded_semantic_vec v
+                                JOIN expanded_semantic es ON es.id = v.rowid
+                                WHERE v.embedding MATCH ? AND k = ?
+                                  AND es.relates_to_table = 'knowledge'
+                                ORDER BY v.distance
+                            """, (blob, variant_k))
+                            variant_results = cursor.fetchall()
+
+                            for rank, (source_id, _dist) in enumerate(variant_results):
+                                if source_id in row_cache:
+                                    scores[source_id] = scores.get(source_id, 0.0) + 1.0 / (rrf_k + rank)
+                                    continue
+                                cursor.execute(f"""
+                                    SELECT k.rowid, k.*
+                                    FROM knowledge k
+                                    WHERE k.rowid = ? AND {where_clause}
+                                """, [source_id] + params_base)
+                                row = cursor.fetchone()
+                                if row:
+                                    row_cache[source_id] = self._row_to_dict(row)
+                                    scores[source_id] = scores.get(source_id, 0.0) + 1.0 / (rrf_k + rank)
+                except Exception as e:
+                    logger.debug(f"[KNOWLEDGE] Variant vector search failed (non-fatal): {e}")
 
                 cursor.close()
 

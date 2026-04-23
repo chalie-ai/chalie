@@ -1,11 +1,11 @@
 """
 Ollama LLM service — local model inference via the Ollama HTTP API.
 
-Wraps the Ollama ``/api/generate`` endpoint with retry logic (exponential
-back-off on connection errors and 5xx responses), rate-limit handling
-(HTTP 429 → :class:`~services.llm_service.RateLimitError`), and a thin
-delegation to the shared :class:`~services.embedding_service.EmbeddingService`
-for embedding generation.
+Wraps the Ollama ``/api/generate`` and ``/api/chat`` endpoints with retry
+logic (exponential back-off on connection errors and 5xx responses),
+rate-limit handling (HTTP 429 → :class:`~services.llm_service.RateLimitError`),
+and a thin delegation to the shared
+:class:`~services.embedding_service.EmbeddingService` for embedding generation.
 """
 
 import logging
@@ -39,7 +39,6 @@ class OllamaService:
                 - ``model`` (str): Name of the Ollama model to use.
                 - ``keep_alive`` (str, default ``'0'``): Ollama keep-alive
                   duration passed verbatim to the API.
-                - ``temperature`` (float, default 0.5): Sampling temperature.
                 - ``timeout`` (int, default 60): HTTP request timeout in
                   seconds.
                 - ``format`` (str, default ``'json'``): Response format.
@@ -58,10 +57,11 @@ class OllamaService:
         self.host = config.get('host')
         self.model = config.get('model')
         self.keep_alive = config.get('keep_alive', '0')
-        self.temperature = config.get('temperature', 0.5)
         self.timeout = config.get('timeout', 60)
         self.format = config.get('format', 'json')
         self.max_retries = config.get('max_retries', 2)
+        # Cached result of _model_supports_thinking(). None = not yet checked.
+        self._thinking_supported: bool | None = None
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message to Ollama and return the response."""
@@ -72,12 +72,8 @@ class OllamaService:
             "prompt": user_message,
             "system": system_prompt,
             "stream": False,
-            "think": False,
             "raw": False,
             "keep_alive": self.keep_alive,
-            "options": {
-                "temperature": self.temperature,
-            }
         }
 
         # Only add format if not "text" (Ollama treats omission as natural language)
@@ -97,48 +93,33 @@ class OllamaService:
                     tokens_output=data.get('eval_count'),
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                if attempt < self.max_retries:
-                    backoff = 2 * (2 ** attempt)
-                    logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
-                    time.sleep(backoff)
-                else:
-                    logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
-                    raise
+                self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    retry_after = None
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
-                    raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
-                elif e.response is not None and e.response.status_code >= 500:
-                    if attempt < self.max_retries:
-                        backoff = 1.5 * (2 ** attempt)
-                        logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {e.response.status_code} — backoff {backoff}s")
-                        time.sleep(backoff)
-                    else:
-                        logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
-                        raise
-                else:
-                    raise
+                self._handle_http_error(e, attempt, payload)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
+        del cache_prefix  # interface parity with Anthropic; Ollama has no prefix-cache.
         url = f"{self.host}/api/chat"
 
-        # Convert normalized messages to Ollama format (OpenAI-compatible)
         api_messages = _ollama_convert_messages(messages)
+        payload = self._build_chat_payload(system_prompt, api_messages, tools, thinking_mode)
 
-        payload = {
+        for attempt in range(1 + self.max_retries):
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                response.raise_for_status()
+                return _parse_chat_response(response.json(), self.model)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                self._handle_network_error(e, attempt)
+            except requests.exceptions.HTTPError as e:
+                self._handle_http_error(e, attempt, payload)
+
+    def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: str) -> dict:
+        payload: dict = {
             "model": self.model,
             "messages": [{"role": "system", "content": system_prompt}] + api_messages,
             "stream": False,
             "keep_alive": self.keep_alive,
-            "options": {
-                "temperature": self.temperature,
-            },
         }
         if tools:
             payload["tools"] = [
@@ -152,66 +133,93 @@ class OllamaService:
                 }
                 for t in tools
             ]
-
-        for attempt in range(1 + self.max_retries):
-            try:
-                response = requests.post(url, json=payload, timeout=self.timeout)
-                response.raise_for_status()
-                data = response.json()
-
-                msg = data.get('message', {})
-                text = msg.get('content', '')
-
-                # Extract tool calls (Ollama uses OpenAI-compatible format)
-                tool_calls = None
-                raw_tool_calls = msg.get('tool_calls')
-                if raw_tool_calls:
-                    tool_calls = []
-                    for i, tc in enumerate(raw_tool_calls):
-                        fn = tc.get('function', {})
-                        tool_calls.append({
-                            'id': f"ollama_{fn.get('name', 'unknown')}_{i}",
-                            'name': fn.get('name', ''),
-                            'input': fn.get('arguments', {}),
-                        })
-
-                return LLMResponse(
-                    text=text,
-                    model=data.get('model', self.model),
-                    provider='ollama',
-                    tokens_input=data.get('prompt_eval_count'),
-                    tokens_output=data.get('eval_count'),
-                    tool_calls=tool_calls,
-                    stop_reason='tool_use' if tool_calls else 'end_turn',
+        # Ollama native thinking: binary True/False in the chat API (top-level
+        # field, not nested under options). 'medium' and 'high' both map to
+        # True — Ollama has no budget granularity.
+        # Pre-flight: only send the flag when the model advertises 'thinking'
+        # in its /api/show capabilities list. Unknown models default to False
+        # (safe — the flag simply doesn't appear in the payload).
+        if thinking_mode in ('medium', 'high'):
+            if self._model_supports_thinking():
+                payload["think"] = True
+                logging.info(
+                    f"[THINKING] native flag passed: provider=ollama mode={thinking_mode} model={self.model}"
                 )
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                if attempt < self.max_retries:
-                    backoff = 2 * (2 ** attempt)
-                    logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
-                    time.sleep(backoff)
-                else:
-                    logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
-                    raise
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    retry_after = None
-                    ra = e.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
-                    raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
-                elif e.response is not None and e.response.status_code >= 500:
-                    if attempt < self.max_retries:
-                        backoff = 1.5 * (2 ** attempt)
-                        logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {e.response.status_code} — backoff {backoff}s")
-                        time.sleep(backoff)
-                    else:
-                        logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
-                        raise
-                else:
-                    raise
+            else:
+                logging.info(
+                    f"[THINKING] provider=ollama model={self.model} does not support "
+                    f"native think — request sent without flag"
+                )
+        return payload
+
+    def _handle_network_error(self, e: Exception, attempt: int) -> None:
+        if attempt < self.max_retries:
+            backoff = 2 * (2 ** attempt)
+            logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__} — backoff {backoff}s")
+            time.sleep(backoff)
+        else:
+            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed ({type(e).__name__})")
+            raise e
+
+    def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int, payload: dict) -> None:
+        status = e.response.status_code if e.response is not None else None
+        if status == 429:
+            _raise_rate_limit(e)
+        if status is not None and status >= 500:
+            if attempt < self.max_retries:
+                backoff = 1.5 * (2 ** attempt)
+                logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {status} — backoff {backoff}s")
+                time.sleep(backoff)
+                return
+            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed (HTTP {status})")
+            raise e
+        # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
+        # can diagnose — raise_for_status() otherwise discards it.
+        body = ''
+        try:
+            body = e.response.text[:4000] if e.response is not None else ''
+        except Exception:
+            pass
+        logging.error(
+            "[OllamaService] HTTP %s model=%s think=%s tools=%d body=%r",
+            status if status is not None else '?',
+            self.model,
+            payload.get('think', False),
+            len(payload.get('tools', [])),
+            body,
+        )
+        raise e
+
+    def _model_supports_thinking(self) -> bool:
+        """Return True if the configured model advertises thinking capability.
+
+        Queries /api/show once per OllamaService instance and caches the result.
+        Returns False on any network or parse error (safe default — the think
+        flag simply won't be sent).
+
+        Ollama's /api/show response includes a ``capabilities`` list. Models
+        that support the think flag include ``'thinking'`` in that list.
+        """
+        if self._thinking_supported is not None:
+            return self._thinking_supported
+        try:
+            resp = requests.post(
+                f"{self.host}/api/show",
+                json={"name": self.model},
+                timeout=5,
+            )
+            if resp.ok:
+                data = resp.json()
+                caps = data.get('capabilities', [])
+                self._thinking_supported = 'thinking' in caps
+                return self._thinking_supported
+        except Exception as exc:
+            logging.debug(
+                f"[OllamaService] _model_supports_thinking check failed for "
+                f"model={self.model}: {exc}"
+            )
+        self._thinking_supported = False
+        return False
 
     def get_context_limit(self) -> int:
         """Query Ollama for model's context window size, cached."""
@@ -271,6 +279,45 @@ class OllamaService:
         except Exception as e:
             logging.error(f"Failed to generate embedding: {e}")
             raise
+
+
+def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
+    """Parse Retry-After from a 429 response and raise RateLimitError."""
+    retry_after = None
+    if e.response is not None:
+        ra = e.response.headers.get('retry-after')
+        if ra:
+            try:
+                retry_after = float(ra)
+            except (ValueError, TypeError):
+                pass
+    raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
+
+
+def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
+    """Build an LLMResponse from a raw Ollama /api/chat response dict."""
+    msg = data.get('message', {})
+    text = msg.get('content', '')
+    tool_calls = None
+    raw_tool_calls = msg.get('tool_calls')
+    if raw_tool_calls:
+        tool_calls = [
+            {
+                'id': f"ollama_{tc.get('function', {}).get('name', 'unknown')}_{i}",
+                'name': tc.get('function', {}).get('name', ''),
+                'input': tc.get('function', {}).get('arguments', {}),
+            }
+            for i, tc in enumerate(raw_tool_calls)
+        ]
+    return LLMResponse(
+        text=text,
+        model=data.get('model', default_model),
+        provider='ollama',
+        tokens_input=data.get('prompt_eval_count'),
+        tokens_output=data.get('eval_count'),
+        tool_calls=tool_calls,
+        stop_reason='tool_use' if tool_calls else 'end_turn',
+    )
 
 
 def _ollama_convert_messages(messages: list) -> list:

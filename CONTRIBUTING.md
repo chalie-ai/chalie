@@ -15,7 +15,8 @@ frontend/interface/
 ├── api.js              # API client
 ├── ws.js               # WebSocket client
 ├── renderer.js         # Card and message rendering
-├── voice.js            # Voice interaction
+├── voice_recorder.js   # Voice input (mic → STT → transcript paste)
+├── voice_player.js     # Voice output (speaker → overlay audio player)
 ├── presence.js         # Presence/status indicators
 ├── sw.js               # Service worker
 ├── style.css           # All styling

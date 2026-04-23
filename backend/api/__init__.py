@@ -4,9 +4,10 @@ and static file serving (replaces nginx).
 """
 
 import os
+import re
 import logging
 from pathlib import Path
-from flask import Flask, redirect, send_from_directory
+from flask import Flask, Response, redirect, send_from_directory
 from flask_cors import CORS
 
 from .auth import require_session as require_session
@@ -22,6 +23,110 @@ _BRAIN_DIR = _FRONTEND_DIR / 'brain'
 _ONBOARDING_DIR = _FRONTEND_DIR / 'on-boarding'
 _LOGIN_DIR = _FRONTEND_DIR / 'login'
 _SHARED_DIR = _FRONTEND_DIR / 'shared'
+
+
+# ---------------------------------------------------------------------------
+# Asset version injection
+#
+# Every <script src="…">, <link href="…">, <img src="…">, <source src="…"> in a
+# served HTML page is rewritten so the filename itself carries the current app
+# version — e.g. `app.js` → `app-0.3.3.js`, `style.css` → `style-0.3.3.css`.
+#
+# Static file routes transparently strip the `-{VERSION}` suffix before looking
+# the file up on disk, so the on-disk filenames stay clean.
+#
+# Versioned *paths* (not query strings) are chosen because some intermediate
+# caches and Service Workers treat `foo.js?v=1` and `foo.js?v=2` as the same
+# entry; a distinct filename is universally treated as a new resource.
+# ---------------------------------------------------------------------------
+
+_VERSION_FILE = _BACKEND_DIR.parent / 'VERSION'
+
+
+def _read_asset_version() -> str:
+    """Return the version string used in asset filenames. Falls back to 'dev'."""
+    try:
+        value = _VERSION_FILE.read_text(encoding='utf-8').strip()
+        return value or 'dev'
+    except OSError:
+        return 'dev'
+
+
+_ASSET_VERSION = _read_asset_version()
+
+_ASSET_REF_RE = re.compile(
+    r'''(<(?:script|link|img|source)\b[^>]*?\s(?:src|href)\s*=\s*)(["'])([^"']+?)\2''',
+    re.IGNORECASE,
+)
+
+# Extension that receives `-{version}` injection. Bare paths (no extension) and
+# HTML itself are left alone.
+_VERSIONABLE_EXT_RE = re.compile(r'^(.*?)(\.[^./]+)$')
+
+_VERSION_SUFFIX_RE = re.compile(
+    rf'(.+?)-{re.escape(_ASSET_VERSION)}(\.[^./]+)$'
+)
+
+
+def _resolve_same_origin_asset(url: str, base_dir: Path) -> Path | None:
+    """Map a URL found in HTML back to a file on disk — or None if external."""
+    if not url or url.startswith(('http://', 'https://', '//', 'data:', 'mailto:', 'tel:', '#')):
+        return None
+    if url.startswith('/'):
+        candidate = _FRONTEND_DIR / url.lstrip('/')
+    else:
+        candidate = base_dir / url
+    return candidate if candidate.is_file() else None
+
+
+def _inject_version_into_url(url: str) -> str:
+    """Insert `-{VERSION}` before the final extension. Returns url unchanged if it has none."""
+    if not _ASSET_VERSION or _ASSET_VERSION == 'dev':
+        return url
+    match = _VERSIONABLE_EXT_RE.match(url)
+    if not match:
+        return url
+    return f"{match.group(1)}-{_ASSET_VERSION}{match.group(2)}"
+
+
+def _strip_version_from_path(path: str) -> str:
+    """Inverse of _inject_version_into_url — remove `-{VERSION}` before the extension."""
+    match = _VERSION_SUFFIX_RE.match(path)
+    return f"{match.group(1)}{match.group(2)}" if match else path
+
+
+def _version_html(html: str, base_dir: Path) -> str:
+    """Rewrite every same-origin asset reference to carry the version in its filename."""
+    def repl(match: re.Match) -> str:
+        prefix, quote, url = match.group(1), match.group(2), match.group(3)
+        if '?' in url:
+            return match.group(0)
+        asset = _resolve_same_origin_asset(url, base_dir)
+        if asset is None:
+            return match.group(0)
+        # Service-worker script must stay at its registration URL — browsers
+        # identify SW registrations by scriptURL. Renaming would orphan the
+        # existing registration and install a second, conflicting SW.
+        if asset.name == 'sw.js':
+            return match.group(0)
+        versioned = _inject_version_into_url(url)
+        if versioned == url:
+            return match.group(0)
+        return f"{prefix}{quote}{versioned}{quote}"
+
+    return _ASSET_REF_RE.sub(repl, html)
+
+
+def _serve_versioned_html(directory: Path, filename: str = 'index.html') -> Response:
+    """Read an HTML file, inject asset versions, return a no-cache response."""
+    path = directory / filename
+    html = path.read_text(encoding='utf-8')
+    versioned = _version_html(html, directory)
+    resp = Response(versioned, mimetype='text/html; charset=utf-8')
+    # HTML itself must never be cached — otherwise the browser would keep
+    # serving an old doc that points at old versioned URLs forever.
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 
 def _get_or_generate_session_secret() -> str:
@@ -129,6 +234,11 @@ def create_app():
     # Upload limit (50MB for document uploads)
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
+    # Static assets: force browser to revalidate on every request via ETag/Last-Modified.
+    # Flask returns 304 when unchanged, so bandwidth cost is minimal, but a simple
+    # refresh always picks up redeployed assets. Paired with a no-cache Service Worker.
+    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
     # Reverse proxy support: trust X-Forwarded-For, X-Forwarded-Proto, etc.
     # This ensures request.remote_addr, request.host, and request.scheme
     # reflect the client's values when behind nginx/caddy/cloudflare.
@@ -164,7 +274,7 @@ def create_app():
     from .intents import intents_bp
     from .browser import browser_bp
     from .capabilities import capabilities_bp
-    from .probe import probe_bp
+    from .personality import personality_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -191,7 +301,7 @@ def create_app():
     app.register_blueprint(intents_bp)
     app.register_blueprint(browser_bp)
     app.register_blueprint(capabilities_bp)
-    app.register_blueprint(probe_bp)
+    app.register_blueprint(personality_bp)
 
     # ── Dashboard gateway (interface daemons) ─────────────────────
     _init_dashboard_gateway(app)
@@ -207,69 +317,82 @@ def create_app():
     @app.route('/shared/<path:filename>')
     def shared_static(filename):
         """Serve shared frontend assets (theme.css, etc.)."""
-        return send_from_directory(str(_SHARED_DIR), filename)
+        real = _strip_version_from_path(filename)
+        return send_from_directory(str(_SHARED_DIR), real)
+
+    def _serve_spa(directory: Path, filename: str):
+        """Serve a static file, or fall back to a versioned index.html.
+
+        Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
+        rewriter; strip it so the request resolves to the real on-disk file.
+        """
+        real = _strip_version_from_path(filename)
+        filepath = directory / real
+        if filepath.is_file():
+            if filepath.suffix.lower() in ('.html', '.htm'):
+                return _serve_versioned_html(directory, real)
+            return send_from_directory(str(directory), real)
+        return _serve_versioned_html(directory)
 
     @app.route('/brain/<path:filename>')
     def brain_static(filename):
         """Serve brain dashboard SPA."""
-        filepath = _BRAIN_DIR / filename
-        if filepath.is_file():
-            return send_from_directory(str(_BRAIN_DIR), filename)
-        return send_from_directory(str(_BRAIN_DIR), 'index.html')
+        return _serve_spa(_BRAIN_DIR, filename)
+
+    @app.route('/brain')
+    def brain_index_no_slash():
+        """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
+        return redirect('/brain/', code=301)
 
     @app.route('/brain/')
-    @app.route('/brain')
     def brain_index():
         """Serve brain dashboard index. Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
         from flask import request
         if not validate_session(request):
             return redirect('/login/?next=/brain/')
-        return send_from_directory(str(_BRAIN_DIR), 'index.html')
+        return _serve_versioned_html(_BRAIN_DIR)
 
     @app.route('/on-boarding/<path:filename>')
     def onboarding_static(filename):
         """Serve onboarding SPA."""
-        filepath = _ONBOARDING_DIR / filename
-        if filepath.is_file():
-            return send_from_directory(str(_ONBOARDING_DIR), filename)
-        return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
+        return _serve_spa(_ONBOARDING_DIR, filename)
+
+    @app.route('/on-boarding')
+    def onboarding_index_no_slash():
+        """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
+        return redirect('/on-boarding/', code=301)
 
     @app.route('/on-boarding/')
-    @app.route('/on-boarding')
     def onboarding_index():
         """Serve onboarding index."""
-        return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
+        return _serve_versioned_html(_ONBOARDING_DIR)
 
     @app.route('/login/<path:filename>')
     def login_static(filename):
         """Serve login page assets."""
-        filepath = _LOGIN_DIR / filename
-        if filepath.is_file():
-            return send_from_directory(str(_LOGIN_DIR), filename)
-        return send_from_directory(str(_LOGIN_DIR), 'index.html')
+        return _serve_spa(_LOGIN_DIR, filename)
+
+    @app.route('/login')
+    def login_index_no_slash():
+        """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
+        return redirect('/login/', code=301)
 
     @app.route('/login/')
-    @app.route('/login')
     def login_index():
         """Serve login page."""
-        return send_from_directory(str(_LOGIN_DIR), 'index.html')
+        return _serve_versioned_html(_LOGIN_DIR)
 
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>')
     def interface_static(filename):
         """Serve main interface SPA files."""
-        # Skip API routes (they're handled by blueprints with url_prefix or route names)
-        filepath = _INTERFACE_DIR / filename
-        if filepath.is_file():
-            return send_from_directory(str(_INTERFACE_DIR), filename)
-        # SPA fallback: serve index.html for client-side routing
-        return send_from_directory(str(_INTERFACE_DIR), 'index.html')
+        return _serve_spa(_INTERFACE_DIR, filename)
 
     @app.route('/')
     def interface_index():
         """Serve main interface index."""
-        return send_from_directory(str(_INTERFACE_DIR), 'index.html')
+        return _serve_versioned_html(_INTERFACE_DIR)
 
     logger.info("[REST API] All blueprints + WebSocket + static serving registered")
     return app

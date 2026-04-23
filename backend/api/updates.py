@@ -250,6 +250,9 @@ def update_context():
             ctx["external_signals"] = existing
 
         store.set(STORE_KEY, json.dumps(ctx), ex=TTL)
+
+        from services.world_state import world_state
+        world_state.set("telemetry", ctx)
     except Exception as exc:
         logger.error("[Updates API] context update failed: %s", exc)
         return jsonify({"error": "Internal error updating context"}), 500

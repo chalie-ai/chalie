@@ -33,7 +33,6 @@ FROM (
     UNION ALL SELECT 'experience-assimilation'
     UNION ALL SELECT 'autonomous-ambient-tool'
     UNION ALL SELECT 'frontal-cortex-scheduled-tool'
-    UNION ALL SELECT 'trait-extraction'
     UNION ALL SELECT 'moment-enrichment'
     UNION ALL SELECT 'document-synthesis'
     UNION ALL SELECT 'compaction'

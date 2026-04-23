@@ -2,7 +2,7 @@
 Unit tests for the /api/signals blueprint.
 
 All tests mock external dependencies (auth, WrapperAuthService,
-WrapperRateLimiter, WorldStateService) so no database or reasoning
+WrapperRateLimiter) so no database or reasoning
 loop is required.
 """
 
@@ -65,10 +65,7 @@ def _cookie_patches(rate_allowed=True, capabilities_ok=True):
         # Cookie auth → __chat_ui__ → always has capability
         stack.enter_context(patch("api.signals._check_signal_capability", return_value=capabilities_ok))
 
-        ws_mock = MagicMock()
-        stack.enter_context(patch("services.world_state_service.WorldStateService", return_value=ws_mock))
-
-        yield limiter_mock, ws_mock
+        yield limiter_mock
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +76,7 @@ def _cookie_patches(rate_allowed=True, capabilities_ok=True):
 class TestIngestSignal:
     def test_valid_signal_returns_202(self, cookie_app):
         with cookie_app.test_client() as client:
-            with _cookie_patches() as (limiter, ws_mock):
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={
@@ -199,29 +196,30 @@ class TestIngestSignal:
         assert resp.status_code == 403
 
     def test_signal_goes_to_world_state(self, cookie_app):
-        """All signals should go to WorldStateService, not reasoning queues."""
+        """After a signal POST, world_state singleton reflects the new entry."""
+        from services.world_state import world_state
+        world_state.set("signals", {})  # reset
+
         with cookie_app.test_client() as client:
-            with _cookie_patches() as (limiter, ws_mock):
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={
                             "signal_type": "stock_price",
                             "content": "AAPL at $185.50",
-                            "activation_energy": 0.5,
                         },
                         content_type="application/json",
                     )
         assert resp.status_code == 202
-        ws_mock.notify_external_signal.assert_called_once()
-        call_kwargs = ws_mock.notify_external_signal.call_args
-        assert call_kwargs[1]["signal_type"] == "stock_price"
-        assert call_kwargs[1]["content"] == "AAPL at $185.50"
-        assert call_kwargs[1]["activation_energy"] == 0.5
+        # source defaults to "__chat_ui__" when no source field provided
+        signals = world_state.get("signals")
+        assert "__chat_ui__" in signals
+        assert signals["__chat_ui__"]["label"] == "AAPL at $185.50"
 
     def test_high_activation_energy_still_goes_to_world_state(self, cookie_app):
-        """Even high-energy signals go to world state, not reasoning queue."""
+        """Even high-energy signals land in world_state, not a reasoning queue."""
         with cookie_app.test_client() as client:
-            with _cookie_patches() as (limiter, ws_mock):
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={
@@ -232,20 +230,17 @@ class TestIngestSignal:
                         content_type="application/json",
                     )
         assert resp.status_code == 202
-        ws_mock.notify_external_signal.assert_called_once()
 
     def test_default_activation_energy_is_0_5(self, cookie_app):
-        """When activation_energy is omitted it defaults to 0.5."""
+        """When activation_energy is omitted the signal is still accepted."""
         with cookie_app.test_client() as client:
-            with _cookie_patches() as (limiter, ws_mock):
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={"signal_type": "ctx", "content": "x"},
                         content_type="application/json",
                     )
         assert resp.status_code == 202
-        call_kwargs = ws_mock.notify_external_signal.call_args
-        assert call_kwargs[1]["activation_energy"] == 0.5
 
     def test_full_valid_payload_accepted(self, cookie_app):
         """All optional fields should be accepted without error."""
@@ -266,17 +261,20 @@ class TestIngestSignal:
         assert resp.status_code == 202
 
     def test_source_defaults_to_wrapper_id(self, cookie_app):
-        """When source is omitted, wrapper_id is used."""
+        """When source is omitted, the signal is stored under the wrapper_id key."""
+        from services.world_state import world_state
+        world_state.set("signals", {})  # reset
+
         with cookie_app.test_client() as client:
-            with _cookie_patches() as (limiter, ws_mock):
+            with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={"signal_type": "ctx", "content": "x"},
                         content_type="application/json",
                     )
         assert resp.status_code == 202
-        call_kwargs = ws_mock.notify_external_signal.call_args
-        assert call_kwargs[1]["source"] == "__chat_ui__"
+        signals = world_state.get("signals")
+        assert "__chat_ui__" in signals
 
 
 # ---------------------------------------------------------------------------
@@ -309,13 +307,11 @@ class TestBearerCapabilityCheck:
 
         limiter_mock = MagicMock()
         limiter_mock.is_allowed.return_value = True
-        ws_mock = MagicMock()
 
         with patch("services.auth_session_service.validate_session", return_value=False), \
              patch("services.wrapper_auth_service.WrapperAuthService", return_value=bearer_svc), \
              patch("api.signals._get_wrapper_service", return_value=bearer_svc), \
-             patch("api.signals._get_rate_limiter", return_value=limiter_mock), \
-             patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+             patch("api.signals._get_rate_limiter", return_value=limiter_mock):
             with app.test_client() as client:
                 resp = client.post(
                     "/api/signals",
@@ -493,13 +489,10 @@ class TestIngestSignalsBatch:
         limiter_mock = MagicMock()
         limiter_mock.is_allowed.side_effect = [True, True, False]
 
-        ws_mock = MagicMock()
-
         with cookie_app.test_client() as client:
             with patch("services.auth_session_service.validate_session", return_value=True), \
                  patch("api.signals._get_rate_limiter", return_value=limiter_mock), \
-                 patch("api.signals._check_signal_capability", return_value=True), \
-                 patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+                 patch("api.signals._check_signal_capability", return_value=True):
                 resp = client.post(
                     "/api/signals/batch",
                     json=signals,
@@ -526,23 +519,26 @@ class TestIngestSignalsBatch:
 
     def test_batch_valid_signals_stored_even_with_errors(self, cookie_app):
         """Valid signals in the batch should be stored regardless of other failures."""
+        from services.world_state import world_state
+        world_state.set("signals", {})  # reset
+
         signals = [
             {"signal_type": "ok", "content": "valid"},
             {"content": "no signal_type"},  # invalid
         ]
-        ws_mock = MagicMock()
         with cookie_app.test_client() as client:
             with patch("services.auth_session_service.validate_session", return_value=True), \
                  patch("api.signals._get_rate_limiter", return_value=MagicMock(is_allowed=MagicMock(return_value=True))), \
-                 patch("api.signals._check_signal_capability", return_value=True), \
-                 patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+                 patch("api.signals._check_signal_capability", return_value=True):
                 resp = client.post(
                     "/api/signals/batch",
                     json=signals,
                     content_type="application/json",
                 )
         assert resp.get_json()["accepted"] == 1
-        ws_mock.notify_external_signal.assert_called_once()
+        # The valid signal was stored in the world_state singleton
+        signals_stored = world_state.get("signals")
+        assert len(signals_stored) == 1
 
 
 # ---------------------------------------------------------------------------

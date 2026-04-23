@@ -123,24 +123,14 @@ def _make_situation_service_mock(
     return instance
 
 
-def _make_world_service_mock():
-    """Return a mock WorldStateService *instance*."""
-    instance = MagicMock()
-    instance.get_world_model_summary.return_value = {
-        "scheduled": ["[in 2h] Team standup"],
-        "tasks": ["[ACTIVE] Refactor auth module"],
-        "lists": ["Shopping"],
-        "ambient": [],
-        "topics": ["development"],
-        "reasoning_focus": [],
-    }
-    return instance
+def _make_retrieval_module_mock(results=None):
+    """Return a mock episodic_retrieval_service *module*.
 
-
-def _make_episodic_service_mock(results=None):
-    """Return a mock EpisodicService *instance*."""
-    instance = MagicMock()
-    instance.retrieve_episodes.return_value = results or [
+    api/query.py calls _get_retrieval_module().retrieve(query_text=...) —
+    the retrieval module is a plain module, not a class instance.
+    """
+    mod = MagicMock()
+    mod.retrieve.return_value = results or [
         {
             "id": "ep_001",
             "summary": "User fixed authentication bug",
@@ -148,7 +138,13 @@ def _make_episodic_service_mock(results=None):
             "created_at": "2026-03-01T10:00:00+00:00",
         }
     ]
-    return instance
+    return mod
+
+
+# Keep the old name as an alias so test helpers that reference it still work.
+def _make_episodic_service_mock(results=None):
+    """Alias for _make_retrieval_module_mock — kept for test-helper back-compat."""
+    return _make_retrieval_module_mock(results)
 
 
 def _make_store_mock(style_raw=None):
@@ -275,9 +271,11 @@ class TestSituationEndpoint:
 @pytest.mark.unit
 class TestRelevanceEndpoint:
     def _patch_relevance_services(self, ep_results=None, world_raw=None):
-        """Patch episodic and memory-client services for relevance tests."""
-        ep_instance = _make_episodic_service_mock(ep_results)
-        ep_cls = MagicMock(return_value=ep_instance)
+        """Patch episodic retrieval module and memory-client services for relevance tests.
+
+        api/query.py uses _get_retrieval_module().retrieve() — not EpisodicService.
+        """
+        retrieval_mod = _make_retrieval_module_mock(ep_results)
         db_mock = MagicMock()
         store_mock = _make_store_mock(world_raw)
         mc_cls = MagicMock()
@@ -285,13 +283,13 @@ class TestRelevanceEndpoint:
 
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_service", return_value=ep_cls)
+            patch("api.query._get_retrieval_module", return_value=retrieval_mod)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         stack.enter_context(
             patch("api.query._get_memory_client", return_value=mc_cls)
         )
-        return stack, ep_instance, store_mock
+        return stack, retrieval_mod, store_mock
 
     def test_returns_200_with_valid_query(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -373,10 +371,10 @@ class TestRelevanceEndpoint:
         assert resp.status_code == 403
 
     def test_service_error_returns_defaults(self, cookie_app):
-        """_get_episodic_service failure → relevance 0.0, recommendation defer."""
+        """_get_retrieval_module failure → relevance 0.0, recommendation defer."""
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), \
-                 patch("api.query._get_episodic_service", side_effect=Exception("no db")), \
+                 patch("api.query._get_retrieval_module", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")), \
                  patch("api.query._get_memory_client", side_effect=Exception("no store")):
                 resp = client.get("/api/query/relevance?q=test")
@@ -413,87 +411,6 @@ class TestRelevanceEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# World-state endpoint tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestWorldStateEndpoint:
-    def _patch_world_service(self, svc_instance=None):
-        if svc_instance is None:
-            svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_world_state_service", return_value=cls_mock)
-
-    def test_returns_200(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        assert resp.status_code == 200
-
-    def test_response_has_items_key(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        data = resp.get_json()
-        assert "items" in data
-        assert isinstance(data["items"], list)
-
-    def test_items_have_type_and_label(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        items = resp.get_json()["items"]
-        assert len(items) > 0
-        for item in items:
-            assert "type" in item
-            assert "label" in item
-
-    def test_item_types_come_from_summary_keys(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state")
-        item_types = {i["type"] for i in resp.get_json()["items"]}
-        # The mock has scheduled, tasks, lists, topics
-        assert "scheduled" in item_types
-        assert "task" in item_types
-
-    def test_optional_q_param_accepted(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_world_service():
-                resp = client.get("/api/query/world-state?q=meetings")
-        assert resp.status_code == 200
-
-    def test_service_unavailable_returns_empty(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_world_state_service", side_effect=Exception("unavailable")):
-                resp = client.get("/api/query/world-state")
-        assert resp.status_code == 200
-        assert resp.get_json()["items"] == []
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.get("/api/query/world-state")
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.get(
-                        "/api/query/world-state",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
 # Identity endpoint tests
 # ---------------------------------------------------------------------------
 
@@ -504,16 +421,19 @@ class TestWorldStateEndpoint:
 @pytest.mark.unit
 class TestMemoryEndpoint:
     def _patch_memory_services(self, results=None):
-        ep_instance = _make_episodic_service_mock(results)
-        ep_cls = MagicMock(return_value=ep_instance)
+        """Patch episodic retrieval module for memory endpoint tests.
+
+        api/query.py uses _get_retrieval_module().retrieve() — not EpisodicService.
+        """
+        retrieval_mod = _make_retrieval_module_mock(results)
         db_mock = MagicMock()
 
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_service", return_value=ep_cls)
+            patch("api.query._get_retrieval_module", return_value=retrieval_mod)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
-        return stack, ep_instance
+        return stack, retrieval_mod
 
     def test_returns_200_with_results(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -560,19 +480,21 @@ class TestMemoryEndpoint:
         assert resp.get_json()["results"] == []
 
     def test_radius_forwarded_to_service(self, cookie_app):
+        """retrieve() is called with radius=0.5 (hardcoded in _slice_memory)."""
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                stack, ep_instance = self._patch_memory_services([])
+                stack, retrieval_mod = self._patch_memory_services([])
                 with stack:
                     client.get("/api/query/memory?q=test&k=3")
 
-        call_kwargs = ep_instance.retrieve_episodes.call_args[1]
+        # api/query._slice_memory calls retrieval_mod.retrieve(query_text=..., channel=None, radius=0.5)
+        call_kwargs = retrieval_mod.retrieve.call_args[1]
         assert call_kwargs["radius"] == pytest.approx(0.5)
 
     def test_service_unavailable_returns_empty(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), \
-                 patch("api.query._get_episodic_service", side_effect=Exception("no db")), \
+                 patch("api.query._get_retrieval_module", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")):
                 resp = client.get("/api/query/memory?q=test")
         assert resp.status_code == 200
@@ -612,18 +534,11 @@ class TestCompositeEndpoint:
         cls_mock = MagicMock(return_value=svc_instance)
         return patch("api.query._get_situation_model_service", return_value=cls_mock)
 
-    def _patch_world(self, svc_instance=None):
-        if svc_instance is None:
-            svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_world_state_service", return_value=cls_mock)
-
     def _patch_episodic(self, results=None):
-        ep_instance = _make_episodic_service_mock(results or [])
-        ep_cls = MagicMock(return_value=ep_instance)
+        retrieval_mod = _make_retrieval_module_mock(results or [])
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_service", return_value=ep_cls)
+            patch("api.query._get_retrieval_module", return_value=retrieval_mod)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=MagicMock()))
         return stack
@@ -653,15 +568,14 @@ class TestCompositeEndpoint:
 
     def test_multiple_slices_returned(self, cookie_app):
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(), self._patch_world():
+            with _patch_cookie_auth(), self._patch_situation():
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation", "world-state"]},
+                    json={"slices": ["situation"]},
                     content_type="application/json",
                 )
         data = resp.get_json()
         assert "situation" in data["results"]
-        assert "world-state" in data["results"]
 
     def test_parameterised_relevance_slice(self, cookie_app):
         ep_stack = self._patch_episodic()
@@ -876,31 +790,14 @@ class TestDispatchSlice:
         assert "error" in result
         assert "does_not_exist" in result["error"]
 
-    def test_world_state_hyphen_alias(self):
-        from api.query import _dispatch_slice
-        svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        with patch("api.query._get_world_state_service", return_value=cls_mock):
-            result = _dispatch_slice("world-state")
-        assert "items" in result
-
-    def test_world_state_underscore_alias(self):
-        from api.query import _dispatch_slice
-        svc_instance = _make_world_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        with patch("api.query._get_world_state_service", return_value=cls_mock):
-            result = _dispatch_slice("world_state")
-        assert "items" in result
-
     def test_parameterised_relevance(self):
         from api.query import _dispatch_slice
-        ep_instance = _make_episodic_service_mock([])
-        ep_cls = MagicMock(return_value=ep_instance)
+        retrieval_mod = _make_retrieval_module_mock([])
         store = _make_store_mock()
         mc_cls = MagicMock()
         mc_cls.create_connection.return_value = store
 
-        with patch("api.query._get_episodic_service", return_value=ep_cls), \
+        with patch("api.query._get_retrieval_module", return_value=retrieval_mod), \
              patch("api.query._get_db_service", return_value=MagicMock()), \
              patch("api.query._get_memory_client", return_value=mc_cls):
             result = _dispatch_slice("relevance:unit tests")
@@ -920,10 +817,9 @@ class TestDispatchSlice:
 
     def test_memory_dispatch(self):
         from api.query import _dispatch_slice
-        ep_instance = _make_episodic_service_mock()
-        ep_cls = MagicMock(return_value=ep_instance)
+        retrieval_mod = _make_retrieval_module_mock()
 
-        with patch("api.query._get_episodic_service", return_value=ep_cls), \
+        with patch("api.query._get_retrieval_module", return_value=retrieval_mod), \
              patch("api.query._get_db_service", return_value=MagicMock()):
             result = _dispatch_slice("memory")
 

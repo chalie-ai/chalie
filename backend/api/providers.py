@@ -2,8 +2,12 @@
 Providers blueprint — manage LLM provider configuration via REST API.
 """
 
+import ipaddress
 import logging
 import os
+from urllib.parse import urlparse
+
+import requests as req
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
@@ -11,6 +15,75 @@ from .auth import require_session
 logger = logging.getLogger(__name__)
 
 providers_bp = Blueprint('providers', __name__, url_prefix='/providers')
+
+# SSRF hard denies — cloud metadata, link-local, and common cloud-provider
+# private endpoints. Loopback and RFC1918 ranges are allowed (local-first app).
+_SSRF_BLOCKED_HOSTS = {
+    '169.254.169.254',   # AWS / Azure / GCP metadata
+    '100.100.100.200',   # Alibaba Cloud metadata
+    'metadata.google.internal',
+    'metadata',
+}
+
+
+def _normalise_ollama_host(host: str) -> str:
+    """Strip trailing slash; prepend http:// if no scheme is present."""
+    host = (host or '').strip().rstrip('/')
+    if host and '://' not in host:
+        host = 'http://' + host
+    return host or 'http://localhost:11434'
+
+
+def _validate_ollama_host(host: str) -> tuple[str | None, str | None]:
+    """Return ``(safe_host, error)``. ``safe_host`` is the normalised URL if OK.
+
+    Rejects non-http(s) schemes and cloud-metadata endpoints. Private/loopback
+    IPs are explicitly allowed — this is a local-first app where pointing at
+    192.168.x.y or localhost is the common case.
+    """
+    safe = _normalise_ollama_host(host)
+    parsed = urlparse(safe)
+    if parsed.scheme not in ('http', 'https'):
+        return None, f"Unsupported scheme '{parsed.scheme}' — use http or https"
+    hostname = (parsed.hostname or '').lower()
+    if not hostname:
+        return None, "Host is required"
+    if hostname in _SSRF_BLOCKED_HOSTS:
+        return None, "Host is not allowed"
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
+            return None, "Host is not allowed"
+    except ValueError:
+        pass  # hostname (not an IP literal) — fine
+    return safe, None
+
+
+def _fetch_ollama_models(host: str):
+    """Fetch the model list from an Ollama instance via GET /api/tags.
+
+    Returns ``(model_names, error_str)`` where exactly one is non-None.
+    """
+    safe_host, err = _validate_ollama_host(host)
+    if err is not None:
+        return None, err
+    try:
+        r = req.get(f"{safe_host}/api/tags", timeout=5)
+        r.raise_for_status()
+        models_data = r.json()
+        names = [
+            m.get('name') or m.get('model', '')
+            for m in (models_data.get('models') or [])
+            if m.get('name') or m.get('model', '')
+        ]
+        return names, None
+    except req.exceptions.ConnectionError:
+        return None, f"Cannot connect to {safe_host} — is the service running?"
+    except req.exceptions.Timeout:
+        return None, f"Connection to {safe_host} timed out"
+    except Exception as e:
+        logger.warning(f"[REST API] Ollama model list failed: {type(e).__name__}: {e}")
+        return None, "Failed to fetch Ollama models"
 
 
 def get_provider_service():
@@ -168,12 +241,72 @@ def delete_provider(provider_id):
         return jsonify({"error": "Failed to delete provider"}), 500
 
 
+@providers_bp.route('/ollama/models', methods=['GET'])
+@require_session
+def list_ollama_models():
+    """Proxy GET /api/tags on an Ollama host and return model names.
+
+    Query param:
+      host  — Ollama base URL (default: http://localhost:11434)
+
+    Response 200: {"models": ["name:tag", ...]}
+    Response 502: {"error": "..."}
+    """
+    host = request.args.get('host', 'http://localhost:11434')
+    names, err = _fetch_ollama_models(host)
+    if err is not None:
+        return jsonify({"error": err}), 502
+    return jsonify({"models": names}), 200
+
+
+@providers_bp.route('/anthropic/models', methods=['POST'])
+@require_session
+def list_anthropic_models():
+    """Proxy the Anthropic models list endpoint server-side.
+
+    Body JSON:
+      {"api_key": "sk-ant-..."}
+
+    The key is POSTed (not a query param) so it does not land in Flask access
+    logs, browser history, or reverse-proxy logs.
+
+    Response 200: {"models": ["claude-...", ...]}
+    Response 400: {"error": "api_key is required"}
+    Response 502: {"error": "..."}
+    """
+    body = request.get_json(silent=True) or {}
+    api_key = (body.get('api_key') or '').strip()
+    if not api_key:
+        return jsonify({"error": "api_key is required"}), 400
+
+    try:
+        r = req.get(
+            'https://api.anthropic.com/v1/models',
+            headers={
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+            },
+            timeout=10,
+        )
+        if not r.ok:
+            return jsonify({"error": f"Anthropic API returned {r.status_code}"}), 502
+        data = r.json()
+        model_ids = [m['id'] for m in (data.get('data') or []) if m.get('id')]
+        return jsonify({"models": model_ids}), 200
+    except req.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot connect to Anthropic API"}), 502
+    except req.exceptions.Timeout:
+        return jsonify({"error": "Anthropic API request timed out"}), 502
+    except Exception as e:
+        logger.error(f"[REST API] Anthropic model list failed: {type(e).__name__}: {e}")
+        return jsonify({"error": "Anthropic API request failed"}), 502
+
+
 @providers_bp.route('/test', methods=['POST'])
 @require_session
 def test_provider():
     """Test a provider connection with a lightweight call."""
     import time
-    import requests as req
 
     try:
         data = request.get_json() or {}
@@ -205,54 +338,39 @@ def test_provider():
         start = time.time()
 
         if platform == 'ollama':
-            host = config.get('host', 'http://localhost:11434')
-            try:
-                r = req.get(f"{host}/api/tags", timeout=10)
-                r.raise_for_status()
-                models_data = r.json()
-                available = [m.get('name') or m.get('model', '') for m in (models_data.get('models') or [])]
-                latency_ms = int((time.time() - start) * 1000)
+            available, err = _fetch_ollama_models(config.get('host', ''))
+            latency_ms = int((time.time() - start) * 1000)
 
-                model_base = model.split(':')[0]
-                model_found = any(
-                    m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
-                    for m in available
-                )
+            if err is not None:
+                return jsonify({"success": False, "error": err}), 200
 
-                if not model_found and not available:
-                    return jsonify({
-                        "success": True,
-                        "model": model,
-                        "latency_ms": latency_ms,
-                        "message": "Connected to Ollama (no models installed yet)"
-                    }), 200
+            model_base = model.split(':')[0]
+            model_found = any(
+                m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
+                for m in available
+            )
 
-                if not model_found:
-                    return jsonify({
-                        "success": False,
-                        "error": f"Model '{model}' not found on this Ollama instance.",
-                        "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available[:5])}"
-                    }), 200
-
+            if not model_found and not available:
                 return jsonify({
                     "success": True,
                     "model": model,
                     "latency_ms": latency_ms,
-                    "message": f"Connected · {len(available)} model(s) available"
+                    "message": "Connected to Ollama (no models installed yet)"
                 }), 200
 
-            except req.exceptions.ConnectionError:
+            if not model_found:
                 return jsonify({
                     "success": False,
-                    "error": f"Cannot connect to {host} — is the service running?"
+                    "error": f"Model '{model}' not found on this Ollama instance.",
+                    "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available[:5])}"
                 }), 200
-            except req.exceptions.Timeout:
-                return jsonify({
-                    "success": False,
-                    "error": f"Connection to {host} timed out after 10s"
-                }), 200
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 200
+
+            return jsonify({
+                "success": True,
+                "model": model,
+                "latency_ms": latency_ms,
+                "message": f"Connected · {len(available)} model(s) available"
+            }), 200
 
         else:
             # API-based providers (anthropic, openai, gemini)

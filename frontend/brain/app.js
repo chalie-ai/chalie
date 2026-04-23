@@ -123,34 +123,30 @@ function showToast(message, type = 'info', options = {}) {
 // Init
 // ==========================================
 async function init() {
-    await resolveApiKey();
-}
+    const gate = await globalThis.chalieGateReady;
+    if (!gate.stay) return;
 
-async function resolveApiKey() {
+    if (gate.providersOnly) applyProvidersOnlyMode();
+
     try {
-        const statusUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}/auth/status` : '/auth/status';
-        const res = await fetch(statusUrl, { credentials: 'same-origin' });
-        const data = res.ok ? await res.json() : {};
-
-        // Only redirect to on-boarding for a completely fresh install (no account yet)
-        if (!data.has_master_account) {
-            window.location.replace('/on-boarding/');
-            return;
-        }
-        // No session — redirect to main interface for login
-        if (!data.has_session) {
-            window.location.replace('/login/?next=/brain/');
-            return;
-        }
-        // Logged in — load dashboard regardless of provider state
         await loadData();
-        // Start the background session heartbeat so a vault lock (server
-        // restart, session expiry) kicks the user back to login without
-        // requiring a manual refresh.
         startSessionHeartbeat();
     } catch (err) {
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
+}
+
+// ==========================================
+// Providers-only mode — no providers configured yet, hide everything else.
+// ==========================================
+function applyProvidersOnlyMode() {
+    document.querySelectorAll('#mainTabs .nav-link[data-tab]').forEach(btn => {
+        if (btn.dataset.tab !== 'providers') btn.style.display = 'none';
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        if (panel.id !== 'tab-providers') panel.style.display = 'none';
+    });
+    showToast('Configure a provider to start using Chalie.', 'info', { duration: 60 * 60 * 1000 });
 }
 
 // ==========================================
@@ -217,11 +213,15 @@ async function loadData() {
 async function loadJobDefinitions() {
     try {
         const res = await apiFetch('/providers/jobs/definitions');
-        if (res.ok) {
-            const data = await res.json();
-            jobs = data.jobs || [];
+        if (!res.ok) {
+            console.warn('[Jobs] definitions fetch failed:', res.status);
+            return;
         }
-    } catch (e) { /* non-critical — jobs will be empty */ }
+        const data = await res.json();
+        jobs = data.jobs || [];
+    } catch (e) {
+        console.warn('[Jobs] definitions fetch error:', e);
+    }
 }
 
 // ==========================================
@@ -260,6 +260,12 @@ function selectPlatform(platform, context) {
     // Show/hide api key field
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
+    // Show/hide Ollama model list panel
+    const ollamaListGroup = document.getElementById('ollamaModelListGroup');
+    if (ollamaListGroup) {
+        ollamaListGroup.style.display = platform === 'ollama' ? '' : 'none';
+    }
+
     // Update model input
     const modelInput = document.getElementById('editModelInput');
     modelInput.placeholder = config.modelPlaceholder;
@@ -296,48 +302,47 @@ function debounce(fn, delay) {
 
 async function fetchAnthropicModels(key, datalistId) {
     try {
-        const res = await fetch('https://api.anthropic.com/v1/models', {
-            headers: {
-                'x-api-key': key,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true',
-            }
+        const res = await apiFetch('/providers/anthropic/models', {
+            method: 'POST',
+            body: JSON.stringify({ api_key: key }),
         });
         if (res.ok) {
             const data = await res.json();
             const datalist = document.getElementById(datalistId);
             datalist.innerHTML = '';
-            (data.data || []).forEach(m => {
+            (data.models || []).forEach(id => {
                 const opt = document.createElement('option');
-                opt.value = m.id;
+                opt.value = id;
                 datalist.appendChild(opt);
             });
+        } else {
+            console.warn('[providers] Anthropic model fetch failed:', res.status);
         }
     } catch (e) {
-        // Ignore
+        console.warn('[providers] Anthropic model fetch error:', e);
     }
 }
 
-async function testOllamaConnection(hostInputId, statusId) {
-    const host = document.getElementById(hostInputId).value.trim() || 'http://localhost:11434';
+async function fetchOllamaModels(host, statusId) {
     const statusEl = document.getElementById(statusId);
-    statusEl.textContent = 'Testing...';
+    statusEl.textContent = 'Fetching models…';
     statusEl.className = '';
 
     try {
-        const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(5000) });
+        const res = await apiFetch(`/providers/ollama/models?host=${encodeURIComponent(host || 'http://localhost:11434')}`);
         if (res.ok) {
             const data = await res.json();
-            statusEl.textContent = '✓ Connected';
+            const names = data.models || [];
+            statusEl.textContent = names.length > 0 ? `✓ ${names.length} model(s) found` : '✓ Connected (no models installed)';
             statusEl.className = 'status-ok';
-            return data.models || [];
-        } else {
-            statusEl.textContent = '✗ Connection failed';
-            statusEl.className = 'status-err';
-            return [];
+            return names;
         }
+        const err = await res.json().catch(() => ({}));
+        statusEl.textContent = `✗ ${err.error || 'Connection failed'}`;
+        statusEl.className = 'status-err';
+        return [];
     } catch (e) {
-        statusEl.textContent = '✗ Cannot reach Ollama';
+        statusEl.textContent = '✗ Cannot reach backend';
         statusEl.className = 'status-err';
         return [];
     }
@@ -395,10 +400,13 @@ function renderProviders() {
     el.innerHTML = providers.map(p => {
         const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
         const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        const warnIcon = p.decrypt_failed
+            ? `<span class="provider-warn" title="Provider is misconfigured. Re-enter credentials">&#9888;</span>`
+            : '';
         return `
         <div class="provider-card" data-id="${p.id}">
             <div class="provider-info">
-                <div class="provider-name">${escapeHtml(p.name)}</div>
+                <div class="provider-name">${escapeHtml(p.name)}${warnIcon}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
                     ${modelsDisplay}
@@ -458,6 +466,13 @@ function openEditModal(id) {
 
     selectPlatform(editPlatform, 'edit');
     modal.classList.remove('hidden');
+
+    // Auto-load model list when editing an Ollama provider so the panel isn't
+    // empty until the user clicks Refresh. New-provider flow stays manual —
+    // the host field still has the default value and no key is needed.
+    if (id && editPlatform === 'ollama') {
+        refreshOllamaModels();
+    }
 }
 
 function renderModelTags() {
@@ -520,17 +535,68 @@ document.getElementById('editModelInput').addEventListener('keydown', (e) => {
     }
 });
 
-// Edit test connection (Ollama host quick-check)
-document.getElementById('editTestConnectionBtn').addEventListener('click', async () => {
-    const models = await testOllamaConnection('editHost', 'editConnectionStatus');
-    if (models.length > 0) {
-        const datalist = document.getElementById('editModelSuggestions');
+// Ollama refresh models — single code path used by button click and host blur.
+// Guarded so clicking the Refresh button (which blurs the host input) doesn't
+// fire two simultaneous requests.
+let _ollamaRefreshInFlight = false;
+async function refreshOllamaModels() {
+    if (_ollamaRefreshInFlight) return;
+    _ollamaRefreshInFlight = true;
+    try {
+        const host = document.getElementById('editHost').value.trim();
+        const names = await fetchOllamaModels(host, 'editConnectionStatus');
+        renderOllamaModelList(names);
+    } finally {
+        _ollamaRefreshInFlight = false;
+    }
+}
+
+function renderOllamaModelList(names) {
+    const container = document.getElementById('ollamaModelList');
+    if (!container) return;
+
+    // Also keep datalist in sync so the text input autocomplete still works
+    const datalist = document.getElementById('editModelSuggestions');
+    if (datalist) {
         datalist.innerHTML = '';
-        models.forEach(m => {
+        names.forEach(n => {
             const opt = document.createElement('option');
-            opt.value = m.name || m.model || m;
+            opt.value = n;
             datalist.appendChild(opt);
         });
+    }
+
+    if (names.length === 0) {
+        container.innerHTML = '<span class="ollama-model-empty">No models found — is Ollama running?</span>';
+        return;
+    }
+
+    container.innerHTML = names.map(n => {
+        const selected = editModels.includes(n);
+        return `<button type="button" class="ollama-model-chip${selected ? ' selected' : ''}" data-model="${escapeHtml(n)}">${escapeHtml(n)}</button>`;
+    }).join('');
+
+    container.querySelectorAll('.ollama-model-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const m = chip.dataset.model;
+            if (editModels.includes(m)) {
+                editModels = editModels.filter(x => x !== m);
+            } else {
+                editModels.push(m);
+            }
+            chip.classList.toggle('selected', editModels.includes(m));
+            renderModelTags();
+        });
+    });
+}
+
+// Refresh button click
+document.getElementById('editTestConnectionBtn').addEventListener('click', refreshOllamaModels);
+
+// Host blur → programmatically trigger the same refresh
+document.getElementById('editHost').addEventListener('blur', () => {
+    if (editPlatform === 'ollama') {
+        document.getElementById('editTestConnectionBtn').click();
     }
 });
 
@@ -834,7 +900,7 @@ function renderCognition() {
                     </div>
                     <div class="job-override-selects">
                         <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
-                            <option value="">-- inherit --</option>
+                            <option value="">Inherit from group</option>
                             ${jobProviderOpts}
                         </select>
                         <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
@@ -861,11 +927,11 @@ function renderCognition() {
                 <div class="group-card__assign">
                     <div class="group-card__selects">
                         <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
-                            <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
+                            <option value="">${!isUniform && assignedCount > 0 ? `Assign all ${groupJobs.length} jobs` : 'Select provider'}</option>
                             ${providerOptions}
                         </select>
                         <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">-- Select model --</option>
+                            <option value="">Select model</option>
                             ${modelOptions}
                         </select>
                     </div>
@@ -895,7 +961,7 @@ function wireGroupCardEvents(el) {
 
             // Repopulate model dropdown
             const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = '<option value="">-- Select model --</option>' +
+            modelSel.innerHTML = '<option value="">Select model</option>' +
                 models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
             modelSel.disabled = models.length === 0;
 
@@ -1178,7 +1244,7 @@ function renderScheduler() {
                 <h3>Nothing scheduled</h3>
                 <p>Create a scheduled reminder or task and Chalie will act on it automatically.</p>
             </div>`;
-        footer.style.display = 'none';
+        footer.classList.add('hidden');
         return;
     }
 
@@ -1195,10 +1261,11 @@ function renderScheduler() {
     }
 
     // Show/hide footer controls
-    footer.style.display = 'flex';
-    loadMoreBtn.style.display = scheduleItems.length < scheduleTotal ? '' : 'none';
+    footer.classList.remove('hidden');
+    loadMoreBtn.classList.toggle('hidden', scheduleItems.length >= scheduleTotal);
     const hasHistory = scheduleItems.some(i => i.status !== 'pending');
-    clearBtn.style.display = (scheduleFilter === 'all' || scheduleFilter !== 'pending') && hasHistory ? '' : 'none';
+    const showClear = (scheduleFilter === 'all' || scheduleFilter !== 'pending') && hasHistory;
+    clearBtn.classList.toggle('hidden', !showClear);
 }
 
 function renderScheduleCard(item) {
@@ -1224,8 +1291,8 @@ function renderScheduleCard(item) {
         : '';
 
     const actions = isPending ? `
-        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
-        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+        <button class="tool-card__btn" data-edit-schedule="${escapeHtml(item.id)}">Edit</button>
+        <button class="tool-card__btn --danger" data-cancel-schedule="${escapeHtml(item.id)}">Cancel</button>
     ` : '';
 
     return `
@@ -1508,8 +1575,8 @@ function renderAccordionRow(item, groupId) {
     const typeBadge = `<span class="schedule-badge --type-${escapeHtml(item.item_type)}">${escapeHtml(item.item_type)}</span>`;
     const recurrBadge = `<span class="schedule-badge --recurrence">${escapeHtml(formatRecurrence(item.recurrence))}</span>`;
     const actions = isPending ? `
-        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
-        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+        <button class="tool-card__btn" data-edit-schedule="${escapeHtml(item.id)}">Edit</button>
+        <button class="tool-card__btn --danger" data-cancel-schedule="${escapeHtml(item.id)}">Cancel</button>
     ` : '';
     return `
         <div class="schedule-accordion-row" data-group-id="${escapeHtml(groupId)}" data-loaded="false">
@@ -1593,6 +1660,13 @@ document.getElementById('keepScheduleBtn').addEventListener('click', () => {
     cancellingScheduleId = null;
 });
 document.getElementById('confirmCancelScheduleBtn').addEventListener('click', executeCancelSchedule);
+
+document.getElementById('schedulerList').addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-edit-schedule]');
+    if (editBtn) { openEditSchedule(editBtn.dataset.editSchedule); return; }
+    const cancelBtn = e.target.closest('[data-cancel-schedule]');
+    if (cancelBtn) { confirmCancelSchedule(cancelBtn.dataset.cancelSchedule); }
+});
 document.getElementById('scheduleLoadMoreBtn').addEventListener('click', () => loadScheduler(true));
 document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
 
@@ -2069,20 +2143,22 @@ document.getElementById('cognitionSubtabs').addEventListener('click', (e) => {
 
 // Refresh button
 document.getElementById('obsRefreshBtn').addEventListener('click', () => {
-    delete obsLoaded[activeSubtab];
-    delete obsData[activeSubtab];
+    if (activeSubtab !== 'memory') {
+        delete obsLoaded[activeSubtab];
+        delete obsData[activeSubtab];
+    }
     loadCognitionSubtab(activeSubtab);
 });
 
 function loadCognitionSubtab(subtab) {
     if (subtab === 'jobs') return; // Jobs panel uses existing renderCognition()
+    if (subtab === 'memory') { loadRecordsObs(); return; }
+    if (subtab === 'personality') { loadPersonality(); return; }
     if (obsLoaded[subtab]) return; // Already cached
 
     const loaders = {
-        memory: loadMemoryObs,
         tools: loadToolsObs,
         tasks: loadTasksObs,
-        understanding: loadUnderstandingObs,
         worldstate: loadWorldStateObs,
     };
     if (loaders[subtab]) loaders[subtab]();
@@ -2115,61 +2191,110 @@ function obsPct(n) {
     return Math.round((n || 0) * 100);
 }
 
-// ── Memory ──
+// ── Memory Records ──
 
-async function loadMemoryObs() {
-    const el = document.getElementById('memoryContent');
-    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(100);
+let activeRecordsSource = 'episodes';
+let recordsQuery = '';
+let recordsOffset = 0;
+let recordsRows = [];
+let _recordsDebounceTimer = null;
 
-    try {
-        const res = await apiFetch('/system/observability/memory');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-        obsData.memory = data;
-        obsLoaded.memory = true;
-        obsSetTimestamp(data.generated_at);
-
-        let html = `<p class="obs-summary">Chalie remembers ${data.episodes || 0} episodes and ${data.concepts || 0} concepts, with ${data.facts || 0} facts in short-term memory.</p>`;
-
-        // Long-term stat cards
-        html += '<div class="obs-section-title">Long-Term Memory</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Episodes', data.episodes || 0);
-        html += obsStatCard('Concepts', data.concepts || 0);
-        html += obsStatCard('Traits', data.traits || 0);
-        html += '</div>';
-
-        // Health indicators
-        html += '<div class="obs-section-title">Health</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Avg Episode Activation', (data.avg_episode_activation || 0).toFixed(3), 'Higher = more accessible');
-        html += obsStatCard('Avg Trait Strength', (data.avg_trait_strength || 0).toFixed(3), 'Higher = more confident');
-        html += '</div>';
-
-        // Short-term memory
-        html += '<div class="obs-section-title">Short-Term Memory</div>';
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Working Memory', data.working_memory || 0, 'Active conversation turns');
-        html += obsStatCard('Facts', data.facts || 0, 'Atomic assertions');
-        html += '</div>';
-
-        // Queue depths (only if non-zero)
-        const queues = data.queues || {};
-        const nonZeroQueues = Object.entries(queues).filter(([, v]) => v > 0);
-        if (nonZeroQueues.length > 0) {
-            html += '<div class="obs-section-title">Processing Queues</div>';
-            html += '<div class="obs-stats">';
-            for (const [name, depth] of nonZeroQueues) {
-                html += obsStatCard(name.replace(/-/g, ' '), depth, 'items waiting');
-            }
-            html += '</div>';
-        }
-
-        el.innerHTML = html;
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load memory data.</div>';
+function _recordsSetStatus(msg) {
+    const statusEl = document.getElementById('recordsStatus');
+    const tableEl = document.getElementById('recordsTable');
+    if (msg) {
+        statusEl.textContent = msg;
+        statusEl.style.display = '';
+        tableEl.style.display = 'none';
+    } else {
+        statusEl.style.display = 'none';
+        tableEl.style.display = '';
     }
 }
+
+function _recordsAppendRows(rows) {
+    const tbody = document.getElementById('recordsTableBody');
+    for (const r of rows) {
+        const tr = document.createElement('tr');
+        const createdText = r.created ? new Date(r.created).toLocaleDateString() : '—';
+        const lastAccessedText = r.last_accessed ? timeAgo(r.last_accessed) : '—';
+        const valueFull = r.value == null ? '' : String(r.value);
+        const valueDisplay = valueFull.length > 500 ? valueFull.slice(0, 500) + '…' : valueFull;
+        tr.innerHTML = `<td>${escapeHtml(createdText)}</td>` +
+            `<td>${escapeHtml(lastAccessedText)}</td>` +
+            `<td><code>${escapeHtml(String(r.key))}</code></td>` +
+            `<td title="${escapeHtml(valueFull)}">${escapeHtml(valueDisplay)}</td>`;
+        tbody.appendChild(tr);
+    }
+}
+
+async function _recordsFetch(append) {
+    if (!append) {
+        recordsRows = [];
+        recordsOffset = 0;
+        document.getElementById('recordsTableBody').innerHTML = '';
+    }
+
+    if (!append) _recordsSetStatus('Loading…');
+
+    const params = new URLSearchParams({ source: activeRecordsSource, offset: recordsOffset });
+    if (recordsQuery) params.set('q', recordsQuery);
+
+    try {
+        const res = await apiFetch(`/system/observability/records?${params}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        obsSetTimestamp(data.generated_at);
+
+        recordsRows = recordsRows.concat(data.rows || []);
+        _recordsAppendRows(data.rows || []);
+
+        const loadMoreBtn = document.getElementById('recordsLoadMore');
+        if (data.has_more) {
+            loadMoreBtn.classList.remove('hidden');
+        } else {
+            loadMoreBtn.classList.add('hidden');
+        }
+
+        if (recordsRows.length === 0) {
+            _recordsSetStatus('No records found.');
+        } else {
+            _recordsSetStatus(null);
+        }
+    } catch (e) {
+        _recordsSetStatus('Could not load records.');
+        document.getElementById('recordsLoadMore').classList.add('hidden');
+    }
+}
+
+function loadRecordsObs() {
+    _recordsFetch(false);
+}
+
+document.getElementById('recordsSourceSwitcher').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-tab');
+    if (!btn) return;
+    const src = btn.dataset.source;
+    if (src === activeRecordsSource) return;
+    clearTimeout(_recordsDebounceTimer);
+    activeRecordsSource = src;
+    document.querySelectorAll('#recordsSourceSwitcher .filter-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    _recordsFetch(false);
+});
+
+document.getElementById('recordsSearchInput').addEventListener('input', (e) => {
+    clearTimeout(_recordsDebounceTimer);
+    _recordsDebounceTimer = setTimeout(() => {
+        recordsQuery = e.target.value.trim();
+        _recordsFetch(false);
+    }, 300);
+});
+
+document.getElementById('recordsLoadMore').addEventListener('click', () => {
+    recordsOffset += 250;
+    _recordsFetch(true);
+});
 
 // ── Tools ──
 
@@ -2291,96 +2416,6 @@ async function loadTasksObs() {
     }
 }
 
-// ── Understanding (Autobiography + Traits) ──
-
-const TRAIT_CATEGORY_LABELS = {
-    core: 'About You',
-    communication_style: 'How You Communicate',
-    relationship: 'Our Relationship',
-    preference: 'Your Preferences',
-    physical: 'Physical',
-    general: 'General',
-    micro_preference: 'Small Preferences',
-};
-
-async function loadUnderstandingObs() {
-    const el = document.getElementById('understandingContent');
-    el.innerHTML = obsSkeletonBlock(60) + obsSkeletonBlock(120) + obsSkeletonBlock(80);
-
-    try {
-        const traitsRes = await apiFetch('/system/observability/traits');
-
-        const traitsData = traitsRes.ok ? await traitsRes.json() : {};
-
-        obsData.understanding = { traits: traitsData };
-        obsLoaded.understanding = true;
-        obsSetTimestamp(traitsData.generated_at);
-
-        let html = '';
-
-        // ── Traits section ──
-        html += '<div class="obs-section-title">What I\'ve Learned About You</div>';
-
-        const categories = traitsData.categories || {};
-        const catKeys = Object.keys(categories);
-
-        if (catKeys.length > 0) {
-            for (const cat of catKeys) {
-                const label = TRAIT_CATEGORY_LABELS[cat] || cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                const traits = categories[cat];
-
-                html += `<div class="obs-trait-category">
-                    <div class="obs-trait-category__label">${escapeHtml(label)}</div>`;
-
-                for (const t of traits) {
-                    const conf = Math.round((t.confidence || 0) * 100);
-                    const confClass = conf >= 70 ? '--high' : conf >= 40 ? '--mid' : '--low';
-                    const keyLabel = escapeHtml((t.key || '').replace(/_/g, ' '));
-                    const reinforcements = t.reinforcement_count || 0;
-
-                    html += `<div class="obs-trait-item">
-                        <div class="obs-trait-item__content">
-                            <span class="obs-trait-item__key">${keyLabel}</span>
-                            <span class="obs-trait-item__value">${escapeHtml(t.value || '')}</span>
-                        </div>
-                        <span class="obs-trait-item__confidence ${confClass}" title="${conf}% confidence">${conf}%</span>
-                        <span class="obs-trait-item__reinforcements" title="${reinforcements} reinforcements">${reinforcements}x</span>
-                        <button class="obs-trait-item__delete" data-trait-key="${escapeHtml(t.key)}" title="Remove this">×</button>
-                    </div>`;
-                }
-
-                html += '</div>';
-            }
-        } else {
-            html += '<div class="obs-empty">No traits learned yet. Chalie picks these up naturally from conversations.</div>';
-        }
-
-        el.innerHTML = html;
-
-        // Wire up delete buttons
-        el.querySelectorAll('.obs-trait-item__delete').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = e.target.dataset.traitKey;
-                if (!key) return;
-                if (!confirm(`Remove "${key.replace(/_/g, ' ')}"?`)) return;
-
-                try {
-                    const res = await apiFetch(`/system/observability/traits/${encodeURIComponent(key)}`, { method: 'DELETE' });
-                    if (res.ok) {
-                        showToast("Got it — I'll adjust.");
-                        e.target.closest('.obs-trait-item').remove();
-                    } else {
-                        showToast('Could not remove trait.');
-                    }
-                } catch {
-                    showToast('Could not remove trait.');
-                }
-            });
-        });
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load understanding data.</div>';
-    }
-}
 
 async function loadWorldStateObs() {
     const el = document.getElementById('worldStateContent');
@@ -2392,46 +2427,32 @@ async function loadWorldStateObs() {
         const data = await res.json();
         obsData.worldstate = data;
         obsLoaded.worldstate = true;
-        obsSetTimestamp(data.generated_at);
 
-        const summary = data.summary || {};
-        const formatted = data.formatted || '';
+        const rendered = data.rendered || '';
+        const inputs = data.inputs || {};
 
         let html = '';
 
-        // ── Formatted prompt block (what the LLM sees) ──
-        html += '<div class="obs-section-title">Prompt Injection (what the LLM sees)</div>';
-        if (formatted) {
-            html += `<pre class="obs-world-state-raw">${escapeHtml(formatted)}</pre>`;
+        // ── Rendered block (literal text the LLM sees) ──
+        html += '<div class="obs-section-title">Rendered (what the LLM sees)</div>';
+        if (rendered) {
+            html += `<pre class="obs-world-state-raw" style="font-family:monospace;white-space:pre-wrap">${escapeHtml(rendered)}</pre>`;
         } else {
             html += '<div class="obs-empty">World state is empty — nothing salient right now.</div>';
         }
 
-        // ── Breakdown by category ──
-        const categories = [
-            { key: 'scheduled', label: 'Scheduled Items', icon: '⏰' },
-            { key: 'tasks', label: 'Persistent Tasks', icon: '⚡' },
-            { key: 'lists', label: 'Lists', icon: '📋' },
-            { key: 'topics', label: 'Active Topics', icon: '💬' },
-            { key: 'reasoning_focus', label: 'Reasoning Focus', icon: '🧠' },
-            { key: 'ambient', label: 'Ambient Context', icon: '🌐' },
-            { key: 'external_signals', label: 'External Signals', icon: '📡' },
-        ];
-
-        html += '<div class="obs-section-title">Breakdown</div>';
-        let hasAny = false;
-        for (const cat of categories) {
-            const items = summary[cat.key] || [];
-            if (items.length === 0) continue;
-            hasAny = true;
-            html += `<div class="obs-section-title" style="font-size:13px;margin-top:16px">${cat.label} (${items.length})</div>`;
-            for (const item of items) {
-                html += `<div class="obs-world-state-item">${escapeHtml(item)}</div>`;
-            }
+        // ── Raw inputs table ──
+        html += '<div class="obs-section-title" style="margin-top:20px">Raw Inputs</div>';
+        const inputKeys = ['telemetry', 'signals', 'schedule', 'bg_processes'];
+        html += '<table class="obs-inputs-table" style="width:100%;border-collapse:collapse;font-size:12px">';
+        html += '<thead><tr><th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Source</th><th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Data</th></tr></thead><tbody>';
+        for (const key of inputKeys) {
+            const val = inputs[key];
+            const isEmpty = val == null || (typeof val === 'object' && Object.keys(val).length === 0) || (Array.isArray(val) && val.length === 0);
+            const display = isEmpty ? '<em style="opacity:0.4">empty</em>' : `<pre style="margin:0;white-space:pre-wrap;font-size:11px">${escapeHtml(JSON.stringify(val, null, 2))}</pre>`;
+            html += `<tr><td style="padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;white-space:nowrap">${key}</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">${display}</td></tr>`;
         }
-        if (!hasAny) {
-            html += '<div class="obs-empty">No items in any category.</div>';
-        }
+        html += '</tbody></table>';
 
         el.innerHTML = html;
     } catch (e) {
@@ -2463,6 +2484,23 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+const ACRONYMS = {
+    cot: 'CoT', ai: 'AI', api: 'API', llm: 'LLM', url: 'URL', id: 'ID',
+    ui: 'UI', ux: 'UX', nlp: 'NLP', ocr: 'OCR', sql: 'SQL', html: 'HTML',
+    css: 'CSS', js: 'JS', json: 'JSON', xml: 'XML', pdf: 'PDF', mcp: 'MCP',
+    os: 'OS', io: 'IO', tts: 'TTS', stt: 'STT', rag: 'RAG',
+};
+
+function humanizeSlug(str) {
+    if (!str) return '';
+    return String(str)
+        .replaceAll(/[_-]+/g, ' ')
+        .split(' ')
+        .filter(Boolean)
+        .map(w => ACRONYMS[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+        .join(' ');
 }
 
 // ==========================================
@@ -3307,9 +3345,9 @@ function renderCapabilities() {
 }
 
 function openCapSetup(capId) {
-    document.getElementById('capSetupId').value = capId;
     document.getElementById('capSetupForm').reset();
-    document.getElementById('capSetupId').value = capId; // reset clears hidden too
+    document.getElementById('capSetupId').value = capId;
+    document.getElementById('capServerUrl').value = '';
     document.getElementById('capServerUrlGroup').classList.add('hidden');
     document.getElementById('capPasswordHint').textContent = '';
 
@@ -3417,6 +3455,92 @@ async function disconnectCapability(capId) {
         showToast('Network error', 'error');
     }
 }
+
+// ==========================================
+// Personality
+// ==========================================
+
+const PERSONALITY_SLIDERS = ['warmth', 'mood', 'expressiveness', 'curiosity', 'humor'];
+
+let _personalityDebounceTimer = null;
+
+function _getPersonalitySliderValues() {
+    return PERSONALITY_SLIDERS.map(name => {
+        const el = document.querySelector(`[data-slider="${name}"]`);
+        return el ? Number.parseInt(el.value, 10) : 0;
+    });
+}
+
+function _renderPersonalityVoice(voice) {
+    const preview = document.getElementById('personalityVoicePreview');
+    if (!preview) return;
+    preview.textContent = voice || '';
+}
+
+function _applyPersonalityTuple(tup) {
+    PERSONALITY_SLIDERS.forEach((name, i) => {
+        const el = document.querySelector(`[data-slider="${name}"]`);
+        if (el) el.value = tup[i] ?? 0;
+    });
+}
+
+async function loadPersonality() {
+    try {
+        const res = await apiFetch('/settings/personality');
+        if (!res.ok) {
+            _renderPersonalityVoice('Failed to load personality settings.');
+            return;
+        }
+        const data = await res.json();
+        _applyPersonalityTuple(data.tuple);
+        _renderPersonalityVoice(data.voice);
+    } catch (err) {
+        console.error('[personality] load failed', err);
+        _renderPersonalityVoice('Network error loading personality settings.');
+    }
+}
+
+async function _savePersonality(tup) {
+    try {
+        const res = await apiFetch('/settings/personality', {
+            method: 'PUT',
+            body: JSON.stringify({ tuple: tup }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            _renderPersonalityVoice(data.voice);
+            return true;
+        }
+        showToast(data.error || 'Failed to save personality', 'error');
+        return false;
+    } catch (err) {
+        console.error('[personality] save failed', err);
+        showToast('Network error saving personality', 'error');
+        return false;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Save button
+    const saveBtn = document.getElementById('savePersonalityBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            if (await _savePersonality(_getPersonalitySliderValues())) {
+                showToast('Personality saved', 'success');
+            }
+        });
+    }
+
+    // Live preview on slider drag (debounced 250 ms)
+    document.querySelectorAll('.personality-range').forEach(slider => {
+        slider.addEventListener('input', () => {
+            clearTimeout(_personalityDebounceTimer);
+            _personalityDebounceTimer = setTimeout(() => {
+                _savePersonality(_getPersonalitySliderValues());
+            }, 250);
+        });
+    });
+});
 
 // ==========================================
 // Start

@@ -2,7 +2,7 @@
 Test data factories — produce realistic row tuples matching actual DB column orders.
 
 Usage:
-    from tests.helpers import make_scheduled_item, make_trait_row
+    from tests.helpers import make_scheduled_item
 
 All factories return tuples (matching cursor.fetchone/fetchall) unless
 noted otherwise.  Override any field via keyword argument.
@@ -37,56 +37,36 @@ def make_scheduled_item(
     )
 
 
-# ─── user_traits ─────────────────────────────────────────────────────
-# Column order matches: SELECT trait_key, trait_value, confidence, category
-
-def make_trait_row(
-    trait_key="name",
-    trait_value="Dylan",
-    confidence=0.9,
-    category="core",
-):
-    """Return a 4-element tuple matching user_traits SELECT order."""
-    return (trait_key, trait_value, confidence, category)
-
-
 # ─── episodes ────────────────────────────────────────────────────────
 # Used by episodic_service._hybrid_retrieve() which returns dicts,
 # but the raw query returns tuples.  This factory returns a dict matching
 # the service's output format (since the service converts internally).
 
-def make_episode_row(
-    episode_id=1,
-    intent=None,
-    context=None,
-    action="user asked about weather",
-    emotion=None,
-    outcome="provided forecast",
-    gist="Weather conversation about Malta",
-    salience=5.0,
-    topic="weather",
-    created_at=None,
-    last_accessed_at=None,
-    salience_factors=None,
-    open_loops=None,
-):
+_EPISODE_DEFAULTS = {
+    "id": "ep-001",
+    "gist": "Weather conversation about Malta",
+    "salience": 5,
+    "channel": "weather",
+    "created_at": None,
+    "last_accessed_at": None,
+    "emotional_valence": None,
+    "emotional_arousal": None,
+    "transcript_ids": "[]",
+    "transcript_id_start": None,
+    "transcript_id_end": None,
+    "consolidated_from": "[]",
+    "consolidated_into": None,
+    "storage_strength": 1.0,
+    "retrieval_weight": 1.0,
+}
+
+
+def make_episode_row(**overrides):
     """Return a dict matching episodic retrieval service output."""
-    now = datetime.now(timezone.utc)
-    return {
-        "id": episode_id,
-        "intent": intent or {"type": "exploration", "direction": "open"},
-        "context": context or {},
-        "action": action,
-        "emotion": emotion or {"valence": 0.5, "arousal": 0.5},
-        "outcome": outcome,
-        "gist": gist,
-        "salience": salience,
-        "topic": topic,
-        "created_at": created_at or now,
-        "last_accessed_at": last_accessed_at,
-        "salience_factors": salience_factors or {},
-        "open_loops": open_loops or [],
-    }
+    row = {**_EPISODE_DEFAULTS, **overrides}
+    if row["created_at"] is None:
+        row["created_at"] = datetime.now(timezone.utc)
+    return row
 
 
 # ─── providers ───────────────────────────────────────────────────────

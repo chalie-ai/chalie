@@ -35,6 +35,7 @@ class OutputService:
         original_metadata: dict = None,
         reply_actions: list = None,
         channel: str = None,
+        metrics: dict = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
@@ -65,6 +66,8 @@ class OutputService:
         }
         if reply_actions:
             metadata_dict["reply_actions"] = reply_actions
+        if metrics is not None:
+            metadata_dict["metrics"] = metrics
 
         # Convert response to blocks — the sole output format for all clients
         blocks = _blocks_svc.from_markdown(response)
@@ -109,28 +112,23 @@ class OutputService:
             'confidence': confidence,
             'generated_at': output['created_at'],
         }
+        if metrics is not None:
+            event_payload_dict['metrics'] = metrics
 
         event_payload = json.dumps(event_payload_dict)
 
-        # Only publish to output:events for background outputs (no sync SSE channel).
-        # When a sync /chat SSE connection is open it delivers the response directly;
-        # publishing to output:events as well causes the drift stream to render a
-        # duplicate after _isSending resets to false.
-        if not sse_channel:
+        if sse_channel:
+            # Deliver via per-request channel for sync /chat SSE connections.
+            # Do NOT publish to output:events — that causes the drift stream to
+            # render a duplicate after _isSending resets to false.
+            self.store.publish(f"sse:{sse_channel}", output_id)
+        else:
+            # Background output: publish event, web push, and catch-up buffer.
             self.store.publish('output:events', event_payload)
 
-        # Deliver via per-request channel for sync /chat SSE connections
-        if sse_channel:
-            self.store.publish(f"sse:{sse_channel}", output_id)
-
-        # Web push + catch-up buffer for all background output (no sync SSE connection)
-        if not sse_channel:
             try:
                 from api.push import send_push_to_all
-                send_push_to_all(
-                    title='Chalie',
-                    body=response[:200] if len(response) > 200 else response,
-                )
+                send_push_to_all(title='Chalie', body=response[:200])
             except Exception as e:
                 logger.warning(f"Web push dispatch failed: {e}")
 
@@ -160,6 +158,7 @@ class OutputService:
         topic: str,
         response: str,
         source: str = 'task',
+        metrics: dict = None,
     ) -> str:
         """
         Enqueue a proactive/background output (goal pursuits, reminders, etc.).
@@ -171,6 +170,8 @@ class OutputService:
             topic: Conversation topic / thread identifier
             response: The message text to deliver
             source: Source identifier for SSE event type mapping
+            metrics: Optional per-turn metrics dict (tokens_total, tools,
+                response_time_s, …) for DMN / goal-pursuit / scheduled flows.
 
         Returns:
             str: UUID of the enqueued output
@@ -183,6 +184,7 @@ class OutputService:
             confidence=1.0,
             generation_time=0.0,
             original_metadata=metadata,
+            metrics=metrics,
         )
 
     def _send_to_notification_tools(self, message: str) -> None:

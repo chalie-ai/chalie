@@ -3,11 +3,11 @@ System blueprint — /health, /metrics, /system/status, /system/observability/* 
 """
 
 import logging
-from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,15 @@ def health_check():
                 from services.ambient_inference_service import AmbientInferenceService
                 inference = AmbientInferenceService().infer(data)
                 attention = inference.get('attention') if inference else None
+                # Mirror the saved context into WorldState so the [telemetry]
+                # block surfaces in the user prompt and Cognition tab. /health
+                # is the primary telemetry push site (heartbeat.js every 5min);
+                # /api/updates/context is the secondary wrapper-facing path.
+                try:
+                    from services.world_state import world_state
+                    world_state.set("telemetry", svc.get() or data)
+                except Exception as ws_err:
+                    logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
         from consumer import APP_VERSION
@@ -84,6 +93,17 @@ def readiness_check():
         onnx_svc = get_onnx_inference_service()
         if onnx_svc.ready:
             components['onnx'] = {'status': 'ok'}
+        elif onnx_svc.degraded:
+            # Registration completed but one or more tasks failed (e.g. sha256
+            # gate refused on encoder mismatch). Surface this loudly — the boot
+            # gate exists precisely to catch these cases. Silent fallback would
+            # let the system run with a wrong/incomplete classifier.
+            failed = onnx_svc.failed_registrations
+            components['onnx'] = {
+                'status': 'degraded',
+                'failed_tasks': [t for t, _ in failed],
+                'message': '; '.join(f'{t}: {err}' for t, err in failed),
+            }
         else:
             components['onnx'] = {'status': 'loading'}
     except Exception as e:
@@ -171,91 +191,80 @@ def system_status():
 # ─────────────────────────────────────────────
 
 def _now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now().isoformat()
 
 
+_RECORDS_LIMIT = 250
+_VALID_SOURCES = {'episodes', 'user', 'system'}
 
-@system_bp.route('/system/observability/memory', methods=['GET'])
+
+@system_bp.route('/system/observability/records', methods=['GET'])
 @require_session
-def observability_memory():
-    """Memory layer counts and health indicators.
-
-    Returns flat fields consumed by the brain admin frontend:
-      episodes, concepts, traits, facts,
-      avg_episode_activation, avg_trait_strength,
-      working_memory, queues
-    """
+def observability_records():
+    """Paginated record browser for episodes, user, and system memory sources."""
     try:
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        source = request.args.get('source', '')
+        if source not in _VALID_SOURCES:
+            return jsonify({"error": "invalid source"}), 400
 
+        raw_offset = request.args.get('offset', '0')
+        try:
+            offset = int(raw_offset)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid offset"}), 400
+        if offset < 0:
+            return jsonify({"error": "invalid offset"}), 400
+
+        q = (request.args.get('q', '') or '')[:200]
+
+        from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
-        # ── Long-term counts from SQLite ──
-        episode_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_act "
-            "FROM episodes WHERE deleted_at IS NULL"
-        )
-        episodes = episode_row[0]['cnt'] if episode_row else 0
-        avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
+        if source == 'episodes':
+            rows = db.fetch_all(
+                "SELECT created_at AS created, last_accessed_at AS last_accessed, "
+                "id AS key, gist AS value "
+                "FROM episodes "
+                "WHERE deleted_at IS NULL "
+                "AND (? = '' OR gist LIKE ?) "
+                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, created_at DESC "
+                "LIMIT ? OFFSET ?",
+                (q, f"%{q}%", _RECORDS_LIMIT, offset),
+            )
+        else:
+            kind = 'user_specific' if source == 'user' else 'system'
+            rows = db.fetch_all(
+                "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
+                "key, value "
+                "FROM data_graph "
+                "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
+                "AND (? = '' OR key LIKE ? OR value LIKE ?) "
+                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
+                "LIMIT ? OFFSET ?",
+                (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
+            )
 
-        concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM data_graph "
-            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
-        )
-        concepts = concept_row[0]['cnt'] if concept_row else 0
-
-        trait_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt, COALESCE(AVG(retrieval_weight), 0) AS avg_conf "
-            "FROM data_graph "
-            "WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"
-        )
-        traits = trait_row[0]['cnt'] if trait_row else 0
-        avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
-
-        # ── Short-term counts from MemoryStore ──
-        working_memory_turns = 0
-        facts = 0
-        queues = {}
-
-        try:
-            store = MemoryClientService.create_connection()
-
-            # Count total buffered turns across all active working-memory keys.
-            # Each key is a list of JSON turn entries; sum their lengths.
-            wm_keys = store.keys("working_memory:*")
-            for key in wm_keys:
-                working_memory_turns += store.llen(key)
-
-            # "Facts" = short-term atomic assertions stored in MemoryStore
-            # under the "facts:*" namespace (if any), otherwise fall back to
-            # user_traits count which already covers persistent facts.
-            fact_keys = store.keys("facts:*")
-            facts = len(fact_keys) if fact_keys else traits
-
-            for q in ["output-queue"]:
-                depth = store.llen(q)
-                if depth:
-                    queues[q] = depth
-        except Exception as e:
-            logger.warning(f"[OBS] memory store error: {e}")
-
-        result = {
+        rows = rows or []
+        return jsonify({
             'generated_at': _now_iso(),
-            'episodes': episodes,
-            'concepts': concepts,
-            'traits': traits,
-            'facts': facts,
-            'avg_episode_activation': round(avg_episode_activation, 4),
-            'avg_trait_strength': round(avg_trait_strength, 4),
-            'working_memory': working_memory_turns,
-            'queues': queues,
-        }
-
-        return jsonify(result), 200
+            'source': source,
+            'rows': [
+                {
+                    'created': r['created'],
+                    'last_accessed': r['last_accessed'],
+                    'key': r['key'],
+                    'value': r['value'],
+                }
+                for r in rows
+            ],
+            'offset': offset,
+            'limit': _RECORDS_LIMIT,
+            'returned': len(rows),
+            'has_more': len(rows) == _RECORDS_LIMIT,
+        }), 200
     except Exception as e:
-        logger.error(f"[REST API] observability/memory error: {e}")
-        return jsonify({"error": "Failed to retrieve memory data"}), 500
+        logger.error(f"[REST API] observability/records error: {e}")
+        return jsonify({"error": "Failed to retrieve records"}), 500
 
 
 @system_bp.route('/system/observability/tools', methods=['GET'])
@@ -371,76 +380,22 @@ def observability_tasks():
         return jsonify({"error": "Failed to retrieve task data"}), 500
 
 
-@system_bp.route('/system/observability/traits', methods=['GET'])
-@require_session
-def observability_traits():
-    """User traits grouped by kind."""
-    try:
-        from services.data_graph_service import get_data_graph_service
-
-        rows = get_data_graph_service().fetch(
-            kinds=['user_specific'],
-            order_by='retrieval_weight DESC',
-        )
-        categories = {}
-        for row in rows:
-            cat = 'general'
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append({
-                'key': row.get('key'),
-                'value': row.get('value'),
-                'confidence': round(float(row.get('retrieval_weight') or 0), 3),
-                'reinforcement_count': row.get('evidence_count') or 0,
-                'updated_at': row.get('last_confirmed_at'),
-            })
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'categories': categories,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/traits error: {e}")
-        return jsonify({"error": "Failed to retrieve traits data"}), 500
-
-
-@system_bp.route('/system/observability/traits/<trait_key>', methods=['DELETE'])
-@require_session
-def observability_delete_trait(trait_key):
-    """Delete a specific user trait by key."""
-    try:
-        from services.data_graph_service import get_data_graph_service
-        dgs = get_data_graph_service()
-        rows = dgs.fetch(kinds=['user_specific'])
-        match = next((r for r in rows if r.get('key') == trait_key), None)
-        if not match:
-            return jsonify({'error': 'Trait not found'}), 404
-        dgs.soft_delete_by_id(match['id'])
-        return jsonify({'ok': True, 'deleted': trait_key}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/traits DELETE error: {e}")
-        return jsonify({"error": "Failed to delete trait"}), 500
-
 
 @system_bp.route('/system/observability/world-state', methods=['GET'])
 @require_session
 def observability_world_state():
-    """World state as seen by the ACT loop — same data the LLM receives."""
-    try:
-        from services.world_state_service import WorldStateService
+    """World state as seen by the ACT loop — rendered block + raw inputs."""
+    from services.world_state import world_state, _fetch_schedule_rows, _fetch_bg_process_rows
 
-        svc = WorldStateService()
-        summary = svc.get_world_model_summary()
-        formatted = svc.get_world_state(topic='', message_embedding=None)
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'summary': summary,
-            'formatted': formatted,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/world-state error: {e}")
-        return jsonify({"error": "Failed to retrieve world state"}), 500
+    return jsonify({
+        "rendered": world_state.render(),
+        "inputs": {
+            "telemetry": world_state.get("telemetry"),
+            "signals": world_state.get("signals"),
+            "schedule": _fetch_schedule_rows(),
+            "bg_processes": _fetch_bg_process_rows(),
+        },
+    }), 200
 
 
 @system_bp.route('/system/observability/self-model', methods=['GET'])

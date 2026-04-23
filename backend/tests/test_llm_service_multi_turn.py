@@ -142,7 +142,6 @@ class TestOllamaMultiTurn:
         svc.model = "gemma4:31b"
         svc.host = "http://localhost:11434"
         svc.keep_alive = "0"
-        svc.temperature = 0.5
         svc.timeout = 60
         svc.format = "text"
         svc.max_retries = 2
@@ -224,7 +223,7 @@ class TestFallbackMultiTurn:
         primary.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False, tools=None)
+        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False, tools=None, thinking_mode=None)
         fallback.send_messages.assert_not_called()
         assert result is expected
 
@@ -239,7 +238,7 @@ class TestFallbackMultiTurn:
         fallback.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
-        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
+        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None, thinking_mode=None)
         assert result is expected
 
     def test_rate_limit_triggers_fallback(self):
@@ -273,5 +272,5 @@ class TestRefreshableMultiTurn:
              patch('services.llm_service._log_llm_call'):
             result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
 
-        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
+        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None, thinking_mode=None)
         assert result is expected

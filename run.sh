@@ -40,32 +40,29 @@ done
 #   5. ~/.chalie/venv — installed user running from a source clone
 #   6. None found — create .venv/ in repo root
 
+# Docker detection is separate from venv selection. Since install.sh creates a
+# venv in the container too, Docker no longer implies system-python; it only
+# determines where the dep-sync stamp lives (image layer vs ephemeral /tmp).
+_IN_DOCKER=false
+[[ -f "/.dockerenv" ]] && _IN_DOCKER=true
+
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   PYTHON="$VIRTUAL_ENV/bin/python"
   PIP="$VIRTUAL_ENV/bin/pip"
-  _IN_DOCKER=false
 elif [[ -n "${CHALIE_VENV:-}" ]] && [[ -d "$CHALIE_VENV" ]]; then
   PYTHON="$CHALIE_VENV/bin/python"
   PIP="$CHALIE_VENV/bin/pip"
-  _IN_DOCKER=false
-elif [[ -f "/.dockerenv" ]]; then
-  PYTHON="$(command -v python3)"
-  PIP="$(command -v pip3)"
-  _IN_DOCKER=true
 elif [[ -d "$SCRIPT_DIR/.venv" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
   PIP="$SCRIPT_DIR/.venv/bin/pip"
-  _IN_DOCKER=false
 elif [[ -d "$HOME/.chalie/venv" ]]; then
   PYTHON="$HOME/.chalie/venv/bin/python"
   PIP="$HOME/.chalie/venv/bin/pip"
-  _IN_DOCKER=false
 else
   echo "→ No virtual environment found. Creating .venv/ …"
   python3 -m venv "$SCRIPT_DIR/.venv"
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
   PIP="$SCRIPT_DIR/.venv/bin/pip"
-  _IN_DOCKER=false
 fi
 
 # ─── Incremental Dep Sync ────────────────────────────────────────────────────
@@ -86,7 +83,7 @@ STAMP="$_STAMP_DIR/.deps-installed"
 
 if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
   echo "→ Syncing dependencies from requirements.txt …"
-  "$PIP" install --quiet -r "$REQ"
+  "$PIP" install -r "$REQ"
   touch "$STAMP"
 fi
 
@@ -95,7 +92,7 @@ if [[ "$_VOICE" == "true" ]]; then
   VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
   if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
     echo "→ Syncing voice dependencies …"
-    "$PIP" install --quiet -r "$VOICE_REQ" 2>/dev/null \
+    "$PIP" install -r "$VOICE_REQ" 2>/dev/null \
       || echo "  ⚠ Voice dep install failed — voice will be unavailable"
     touch "$VOICE_STAMP"
   fi
@@ -113,7 +110,7 @@ while true; do
   echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
   if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
     echo "→ Syncing dependencies from requirements.txt …"
-    "$PIP" install --quiet -r "$REQ"
+    "$PIP" install -r "$REQ"
     touch "$STAMP"
   fi
 done

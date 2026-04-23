@@ -150,53 +150,159 @@ class TestSystemAPI:
         assert 'memory_store_error' in data
 
     # ────────────────────────────────────────────
-    # GET /system/observability/memory
+    # GET /system/observability/records
     # ────────────────────────────────────────────
 
-    def test_observability_memory_returns_all_layers(self, client, db):
-        """GET /system/observability/memory returns flat counts from SQLite and MemoryStore."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-
-        # Seed episodes
-        for i in range(42):
-            db.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, channel) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
-                (f'ep-{i}',),
-            )
-        # Seed user_specific data_graph entries — these count as both concepts AND traits
-        # The endpoint counts data_graph WHERE kind='user_specific' for both.
-        for i in range(8):
-            db.execute(
-                "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
-                "first_seen_at, last_confirmed_at) "
-                "VALUES ('user_specific', ?, 'val', 0.6234, ?, ?)",
-                (f'trait-{i}', now_iso, now_iso),
-            )
+    def test_records_episodes_source_returns_gist_and_id(self, client, db):
+        """Episodes source returns key=id, value=gist, ordered by last_accessed DESC (NULLs last)."""
+        db.execute(
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
+            "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00')"
+        )
+        db.execute(
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
+            "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00')"
+        )
+        db.execute(
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
+            "VALUES ('ep-c', 'null access', 5, 'user', '2026-01-03T00:00:00', NULL)"
+        )
         db.commit()
 
-        store = MemoryStore()
-        for _ in range(3):
-            store.rpush('working_memory:t1', 'x')
-        for _ in range(5):
-            store.rpush('working_memory:t2', 'x')
-        # No facts:* keys → falls back to traits count (8).
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            resp = client.get('/system/observability/memory')
+        resp = client.get('/system/observability/records?source=episodes')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['episodes'] == 42
-        # concepts and traits both count data_graph user_specific rows
-        assert data['concepts'] == 8
-        assert data['traits'] == 8
-        assert data['facts'] == 8  # falls back to traits when no facts:* keys
-        assert data['avg_episode_activation'] == pytest.approx(1.0)
-        assert data['avg_trait_strength'] == pytest.approx(0.6234, abs=0.001)
-        assert data['working_memory'] == 8
-        assert 'generated_at' in data
+        assert data['source'] == 'episodes'
+        assert data['returned'] == 3
+        keys = [r['key'] for r in data['rows']]
+        # NULLs last — ep-c should be last
+        assert keys[-1] == 'ep-c'
+        # ep-b accessed more recently than ep-a
+        assert keys.index('ep-b') < keys.index('ep-a')
+        row = next(r for r in data['rows'] if r['key'] == 'ep-a')
+        assert row['value'] == 'first gist'
+
+    def test_records_user_source_returns_user_specific_only(self, client, db):
+        """User source returns only kind='user_specific' rows."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.commit()
+
+        resp = client.get('/system/observability/records?source=user')
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['returned'] == 1
+        assert data['rows'][0]['key'] == 'pref_key'
+
+    def test_records_system_source_returns_system_only(self, client, db):
+        """System source returns only kind='system' rows."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.commit()
+
+        resp = client.get('/system/observability/records?source=system')
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['returned'] == 1
+        assert data['rows'][0]['key'] == 'sys_key'
+
+    def test_records_search_filters_by_like(self, client, db):
+        """Search param filters gist (episodes) and key/value (data_graph)."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'favorite_color', 'blue', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
+            "VALUES ('user_specific', 'pet_name', 'Rex', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.commit()
+
+        resp = client.get('/system/observability/records?source=user&q=blue')
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['returned'] == 1
+        assert data['rows'][0]['key'] == 'favorite_color'
+
+    def test_records_pagination_offset_works(self, client, db):
+        """First page returns 250 rows with has_more=true; offset=250 returns remainder."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+        for i in range(260):
+            db.execute(
+                "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+                "VALUES (?, ?, 5, 'user', ?)",
+                (f'ep-{i:04d}', f'gist {i}', now_iso),
+            )
+        db.commit()
+
+        resp1 = client.get('/system/observability/records?source=episodes')
+        assert resp1.status_code == 200
+        data1 = resp1.get_json()
+        assert data1['returned'] == 250
+        assert data1['has_more'] is True
+
+        resp2 = client.get('/system/observability/records?source=episodes&offset=250')
+        assert resp2.status_code == 200
+        data2 = resp2.get_json()
+        assert data2['returned'] == 10
+        assert data2['has_more'] is False
+
+    def test_records_invalid_source_400(self, client, db):
+        """Unknown source returns 400 with error payload."""
+        resp = client.get('/system/observability/records?source=bogus')
+        assert resp.status_code == 400
+        assert resp.get_json()['error'] == 'invalid source'
+
+    def test_records_negative_offset_400(self, client, db):
+        """Negative offset returns 400."""
+        resp = client.get('/system/observability/records?source=episodes&offset=-1')
+        assert resp.status_code == 400
+
+    def test_records_excluded_soft_deleted(self, client, db):
+        """Soft-deleted episodes and data_graph rows are excluded."""
+        now_iso = '2026-01-01T00:00:00+00:00'
+        db.execute(
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, deleted_at) "
+            "VALUES ('ep-del', 'deleted gist', 5, 'user', ?, ?)",
+            (now_iso, now_iso),
+        )
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at, deleted_at) "
+            "VALUES ('user_specific', 'gone_key', 'gone_val', ?, ?, ?)",
+            (now_iso, now_iso, now_iso),
+        )
+        db.commit()
+
+        resp_ep = client.get('/system/observability/records?source=episodes')
+        assert resp_ep.get_json()['returned'] == 0
+
+        resp_user = client.get('/system/observability/records?source=user')
+        assert resp_user.get_json()['returned'] == 0
 
     # ────────────────────────────────────────────
     # GET /system/observability/tools
@@ -265,123 +371,6 @@ class TestSystemAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'generated_at' in data
-
-    # ────────────────────────────────────────────
-    # GET /system/observability/traits
-    # ────────────────────────────────────────────
-
-    def test_observability_traits_returns_categories(self, client, db):
-        """GET /system/observability/traits returns traits from data_graph."""
-        # Seed data_graph rows (endpoint now reads data_graph, not knowledge)
-        now_iso = '2026-02-25T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
-            "evidence_count, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'favorite_drink', 'coffee', 0.92, 3, ?, ?)",
-            (now_iso, now_iso)
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
-            "evidence_count, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'name', 'Dylan', 0.99, 5, ?, ?)",
-            (now_iso, now_iso)
-        )
-        db.commit()
-
-        resp = client.get('/system/observability/traits')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        categories = data['categories']
-        # All user_specific rows go under 'general' in current implementation
-        assert 'general' in categories
-        assert len(categories['general']) == 2
-
-        keys = {r['key'] for r in categories['general']}
-        assert 'favorite_drink' in keys
-        assert 'name' in keys
-
-        drink = next(r for r in categories['general'] if r['key'] == 'favorite_drink')
-        assert drink['value'] == 'coffee'
-        assert drink['confidence'] == pytest.approx(0.92, abs=0.01)
-        assert drink['reinforcement_count'] == 3
-
-        assert 'generated_at' in data
-
-    # ────────────────────────────────────────────
-    # DELETE /system/observability/traits/<trait_key>
-    # ────────────────────────────────────────────
-
-    def test_delete_trait_returns_200(self, client, db):
-        """DELETE /system/observability/traits/<key> returns 200 when row is deleted."""
-        # Seed a trait to be deleted — data_graph replaces knowledge for user_specific traits
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, retrieval_weight) "
-            "VALUES ('user_specific', 'favorite_drink', 'coffee', 0.9)"
-        )
-        db.commit()
-
-        resp = client.delete('/system/observability/traits/favorite_drink')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['ok'] is True
-        assert data['deleted'] == 'favorite_drink'
-
-    def test_delete_trait_returns_404_when_not_found(self, client, db):
-        """DELETE /system/observability/traits/<key> returns 404 when trait does not exist."""
-        resp = client.delete('/system/observability/traits/nonexistent')
-
-        assert resp.status_code == 404
-        data = resp.get_json()
-        assert data['error'] == 'Trait not found'
-
-    # ────────────────────────────────────────────
-    # Service constructor receives db_service
-    # (regression guards against missing arg 500s)
-    # ────────────────────────────────────────────
-
-    def test_observability_memory_returns_flat_structure(self, client, db):
-        """Memory endpoint returns flat counts (episodes, concepts, traits, etc.)."""
-        # Seed episodes
-        for i in range(10):
-            db.execute(
-                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
-                "gist, salience, channel) "
-                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 't')",
-                (f'ep-flat-{i}',),
-            )
-        # Seed concepts
-        for i in range(5):
-            db.execute(
-                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
-                "VALUES ('concept', 'system', ?, 'val', 0.5)",
-                (f'concept-flat-{i}',),
-            )
-        # Seed traits
-        for i in range(3):
-            db.execute(
-                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
-                "VALUES ('trait', 'user', ?, 'val', 0.4)",
-                (f'trait-flat-{i}',),
-            )
-        db.commit()
-
-        # A fresh MemoryStore naturally returns [] for keys() and 0 for llen() —
-        # no pre-population needed for this structural smoke-test.
-        store = MemoryStore()
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            resp = client.get('/system/observability/memory')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'episodes' in data
-        assert 'concepts' in data
-        assert 'traits' in data
-        assert 'avg_episode_activation' in data
-        assert 'avg_trait_strength' in data
-        assert 'working_memory' in data
 
     # ────────────────────────────────────────────
     # generated_at field on all observability endpoints

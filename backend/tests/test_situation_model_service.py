@@ -75,7 +75,6 @@ def _raw(
         "client": {"device": "desktop", "battery": None, "tz": "Europe/Malta", "hour": 14},
         "engagement": {"score": engagement},
         "spark": {"phase": spark_phase},
-        "world_state": {"items": []},
         "thread": {"exchange_count": exchange_count, "age_minutes": age_minutes},
     }
 
@@ -557,7 +556,6 @@ class TestMetaVersion:
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_world_state", return_value={"items": [], "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_thread", return_value={"exchange_count": 0, "age_minutes": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_phase", return_value={"current": "unknown", "momentum": 0.5, "direction": "sustaining", "updated_at": "2026-01-01T00:00:00+00:00"}):
 
@@ -577,7 +575,6 @@ class TestMetaVersion:
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_world_state", return_value={"items": [], "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_thread", return_value={"exchange_count": 0, "age_minutes": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_phase", return_value={"current": "unknown", "momentum": 0.5, "direction": "sustaining", "updated_at": "2026-01-01T00:00:00+00:00"}):
 
@@ -623,7 +620,6 @@ class TestStalenessTracking:
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_world_state", return_value={"items": [], "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_thread", return_value={"exchange_count": 0, "age_minutes": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_phase", return_value={"current": "unknown", "momentum": 0.5, "direction": "sustaining", "updated_at": "2026-01-01T00:00:00+00:00"}):
 
@@ -650,7 +646,6 @@ class TestGracefulDegradation:
             patch.object(svc, "_collect_client", side_effect=_raise),
             patch.object(svc, "_collect_engagement", side_effect=_raise),
             patch.object(svc, "_collect_spark", side_effect=_raise),
-            patch.object(svc, "_collect_world_state", side_effect=_raise),
             patch.object(svc, "_collect_thread", side_effect=_raise),
             patch.object(svc, "_collect_phase", side_effect=_raise),
         ]
@@ -675,7 +670,6 @@ class TestGracefulDegradation:
             "client": {"device": None, "battery": None, "tz": None, "hour": None},
             "engagement": {"score": 0.7},
             "spark": {"phase": "warm"},
-            "world_state": {"items": []},
             "thread": {"exchange_count": 0, "age_minutes": 0.0},
         }
 
@@ -802,7 +796,6 @@ class TestCacheRead:
              patch.object(svc, "_collect_client", return_value={"device": None, "battery": None, "tz": None, "hour": None, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_engagement", return_value={"score": 0.7, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_spark", return_value={"phase": "warm", "updated_at": "2026-01-01T00:00:00+00:00"}), \
-             patch.object(svc, "_collect_world_state", return_value={"items": [], "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_thread", return_value={"exchange_count": 0, "age_minutes": 0.0, "updated_at": "2026-01-01T00:00:00+00:00"}), \
              patch.object(svc, "_collect_phase", return_value={"current": "unknown", "momentum": 0.5, "direction": "sustaining", "updated_at": "2026-01-01T00:00:00+00:00"}):
 

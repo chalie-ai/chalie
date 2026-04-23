@@ -24,13 +24,56 @@ UnifiedSystemMessagePrompt template.
 """
 
 import logging
+import threading
 from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
 from services.innate_skills.registry import ALL_SKILL_NAMES
+from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
+
+# ── Lazy-synthesis concurrency guard ─────────────────────────────────────────
+# Prevents multiple concurrent getUserDefinition() calls from each spawning a
+# synthesis daemon when the user_summary row is missing.  The flag is cleared
+# in a ``finally`` block so the next call — whether prior synthesis succeeded,
+# failed, or raised — re-arms the guard cleanly.
+_lazy_fire_lock = threading.Lock()
+_lazy_fire_in_flight = False
+
+
+def _fire_lazy_synthesis() -> None:
+    """Spawn a one-shot daemon thread to synthesise the user_summary row.
+
+    Guards against concurrent calls with a module-level flag + lock.
+    If synthesis is already in flight the call is a no-op.
+    The flag is cleared in a ``finally`` block on every daemon exit path
+    (success, exception, or early return) so the guard re-arms for the
+    next call regardless of outcome.
+    """
+    global _lazy_fire_in_flight
+
+    with _lazy_fire_lock:
+        if _lazy_fire_in_flight:
+            return
+        _lazy_fire_in_flight = True
+
+    def _run():
+        global _lazy_fire_in_flight
+        try:
+            from services.user_summary_processor import UserSummaryProcessor
+
+            UserSummaryProcessor().send()
+            logger.info("[USER MSG] Lazy synthesis complete")
+        except Exception as exc:
+            logger.warning("[USER MSG] Lazy synthesis failed: %s", exc)
+        finally:
+            with _lazy_fire_lock:
+                _lazy_fire_in_flight = False
+
+    threading.Thread(target=_run, daemon=True, name="user-summary-lazy").start()
+    logger.info("[USER MSG] Lazy synthesis daemon spawned")
 
 
 class UserMessageProcessor(MessageProcessor):
@@ -46,8 +89,7 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All innate skills available for user turns; voice mode may narrow this
-    # at runtime via metadata['source']=='voice' inside getTools().
+    # All innate skills available for user turns.
     # Sorted for deterministic ordering — ALL_SKILL_NAMES is a frozenset.
     NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
 
@@ -71,8 +113,6 @@ class UserMessageProcessor(MessageProcessor):
         # without this cache each iteration would re-read KnowledgeService DB rows.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
-        # Cached voice modulation string. Per-turn cache — same reasoning as above.
-        # Consumed only by getSystemPrompt() during {{voice_modulation}} weave.
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -84,35 +124,43 @@ class UserMessageProcessor(MessageProcessor):
         that describes the user (e.g. "Dylan is a software engineer based in Malta").
 
         Falls back to a static peer-to-peer framing on empty or missing record, or on
-        any exception.
+        any exception.  When the row is missing but ``user_specific`` traits exist a
+        one-shot background synthesis is fired via the lazy-fallback path below so
+        that future turns find the row populated.
 
-        Writer path: populated at boot by ``run.py`` which synthesises a one-sentence
-        summary from existing ``kind='user_specific'`` rows in data_graph. Traits
-        themselves are written continuously by the LLM-native memory skill
-        (``memory_skill._handle_store`` → ``DataGraphService.store(kind='user_specific', …)``)
-        whenever the user discloses a personal fact. The background trait-extraction
-        pipeline that used to produce user_summary mid-session was removed on
-        2026-04-11 (trait-extraction RIP) — continuous re-synthesis now happens at
-        the next boot, not mid-session. The fallback covers first-session (no traits
-        yet) and any read error.
+        Writer path: ``UserSummaryProcessor`` (30-min cadence worker +
+        ``getUserDefinition()`` lazy fallback).  Traits are written continuously by
+        the LLM-native memory skill (``memory_skill._handle_store`` →
+        ``DataGraphService.store(kind='user_specific', …)``) whenever the user
+        discloses a personal fact.
 
         Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
         """
+        _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
+
         if self._user_definition_cached is not None:
             return self._user_definition_cached
         try:
             from services.data_graph_service import get_data_graph_service
 
-            rows = get_data_graph_service().fetch(kinds=['system'], order_by='retrieval_weight DESC')
+            dgs = get_data_graph_service()
+            rows = dgs.fetch(kinds=['system'], order_by='retrieval_weight DESC')
             entry = next((r for r in rows if r.get('key') == 'user_summary'), None)
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
-            else:
-                self._user_definition_cached = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
+                return self._user_definition_cached
+
+            # user_summary row is missing — check whether any traits exist so we
+            # know if synthesis is worthwhile.
+            trait_rows = dgs.fetch(kinds=['user_specific'], limit=1)
+            if trait_rows:
+                _fire_lazy_synthesis()
+
         except Exception as e:
             logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
-            self._user_definition_cached = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
+
+        self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
 
     def getUserPrompt(self) -> str:
@@ -120,7 +168,6 @@ class UserMessageProcessor(MessageProcessor):
 
         Section order (north star §"Body structure of getUserPrompt()"):
           1. World State block
-          (1b. Voice-mode instruction if source == 'voice')
           2. System Awareness block
           3. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
@@ -133,18 +180,14 @@ class UserMessageProcessor(MessageProcessor):
         """
         parts = []
 
-        # 1. World State
-        world_state = self._get_world_state()
-        if world_state:
-            parts.append(f"## World State\n{world_state}")
-
-        # 1b. Voice mode instruction (per-turn — user may switch mode)
-        if self._metadata.get('source') == 'voice':
-            parts.append(
-                'IMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
-                'Respond in plain conversational text only. No markdown formatting, code blocks, '
-                'tables, bullet lists, links, or structured formatting. Write as you would speak.'
+        # 1. World State — injected verbatim (already contains its own header)
+        rendered_world_state = world_state.render()
+        if rendered_world_state:
+            logger.info(
+                "[WorldState] injected rendered block into user prompt (%d chars)",
+                len(rendered_world_state),
             )
+            parts.append(rendered_world_state)
 
         # 2. System Awareness (degradation signals)
         self_awareness = self._get_self_awareness()
@@ -183,58 +226,28 @@ class UserMessageProcessor(MessageProcessor):
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
     def getSystemPrompt(self) -> str:
-        """Override to weave both dynamic placeholders into the UNIFIED prompt body.
+        """Build the final system prompt for this turn.
 
-        UnifiedSystemMessagePrompt.getPrompt() returns _UNIFIED_PROMPT, an
-        inlined Python constant with two placeholders:
-          - {{voice_modulation}} — mid-prompt in the Voice section; per-turn
-            cached; supplied by _get_voice_modulation().
-          - {{adaptive_directives}} — bottom of prompt; per-turn; supplied by
-            _get_adaptive_directives().
+        Assembly order:
+          1. Voice line — ``"When responding; <personality voice paragraph>"``
+             drawn fresh from PersonalityService (O(1) dict lookup + one
+             SQLite SELECT).
+          2. getUserDefinition() — the user synthesis line prepended below the
+             voice line.
+          3. Template — UnifiedSystemMessagePrompt body with
+             ``{{adaptive_directives}}`` filled in.
 
-        After both are filled, getUserDefinition() (the user synthesis line) is
-        prepended as the first line of the final system prompt.
-
-        Weave order: voice first (mid-prompt), adaptive second (bottom), then
-        prepend user definition. This preserves the stable Identity/Boundaries/
-        Principles prefix for provider-side prompt caching.
+        The voice line sits at the very top so the LLM sees it first.  The
+        stable Identity/Boundaries/Principles prefix follows, keeping the bulk
+        of the prompt hot in the provider's prompt cache.
         """
-        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        from services.personality.personality_service import get_current_voice
 
-        template = template.replace('{{voice_modulation}}', self._get_voice_modulation())
+        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
         template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
-        return f"{self.getUserDefinition()}\n\n{template}"
-
-    def getTools(self) -> list[dict]:
-        """Narrow native tools for voice mode (exclude rich_render).
-
-        Voice responses are spoken aloud via TTS — rich_render output is not
-        speakable, so it is excluded for voice-source turns. All other native
-        tools are kept unchanged.
-
-        Out-of-scope §11 preservation: keeps the voice filter logic that was
-        in the old UserMessageProcessor.process() at lines 69-73.
-        """
-        if self._metadata.get('source') == 'voice':
-            from services.tool_schema_service import get_skill_schemas
-
-            voice_tools = get_skill_schemas(
-                [s for s in self.NATIVE_TOOLS if s != 'rich_render']
-            )
-            dynamic = self.getDynamicTools()
-
-            seen: set[str] = set()
-            result: list[dict] = []
-            for schema in voice_tools + dynamic:
-                name = schema.get('name')
-                if name and name not in seen:
-                    seen.add(name)
-                    result.append(schema)
-            return result
-
-        # Non-voice: standard base resolution
-        return super().getTools()
+        voice_line = f"When responding; {get_current_voice()}"
+        return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
 
     def _run_memory_seed(self) -> None:
         """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
@@ -443,18 +456,6 @@ class UserMessageProcessor(MessageProcessor):
         except Exception:
             return 32_000
 
-    def _get_world_state(self) -> str:
-        """Get world state string from WorldStateService.
-
-        Returns empty string on error — getUserPrompt() skips the section.
-        """
-        try:
-            from services.world_state_service import WorldStateService
-            return WorldStateService().get_world_state(self.CHANNEL)
-        except Exception as e:
-            logger.debug(f"[USER MSG] World state unavailable: {e}")
-            return ''
-
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.
 
@@ -467,10 +468,6 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
-
-    def _get_voice_modulation(self) -> str:
-        """Static voice modulation string for the system prompt."""
-        return "Engage naturally as a peer."
 
     def _get_adaptive_directives(self) -> str:
         """Get adaptive response directives for system prompt placeholder injection.

@@ -1,187 +1,85 @@
-# Chalie Web Interface Specification
+# Chalie Web Interface
 
-The Chalie web interface is a collection of three single-page applications: the main chat interface, the cognitive dashboard ("Brain"), and the onboarding wizard. All follow the **Radiant design system** for a cinematic, restrained dark UI.
+Chalie's frontend is four independent single-page applications — chat, brain, onboarding, and login — all built on the **Radiant design system**: a cinematic dark UI where light is used with restraint, so when something glows, it matters.
 
-## Design System: Radiant
+## Auth + Provider Gate
 
-The visual language is inspired by "blockbuster dark UI" (JARVIS, Tron Legacy, K-pop demon hunter HUDs). The canvas is near-black. Color exists only as atmospheric light (distant orbs on canvas) and precision accents (thin luminous edges, single-color glows on interactive elements).
+Every page loads a shared auth gate before its own bootstrap. The gate calls `/auth/status` once and redirects as needed:
 
-### Core Design Principles
+| Page | No account | No session | No providers | All good |
+|---|---|---|---|---|
+| chat (`/`) | → onboarding | → login | → brain | enter chat |
+| brain (`/brain/`) | → onboarding | → login | providers tab only | full dashboard |
+| onboarding (`/on-boarding/`) | stay | — | — | — |
+| onboarding (account exists) | — | → login | → login | → login |
+| login (`/login/`) | stay | stay | — | → chat |
 
-**Darkness as Canvas**
-- Base color: `#06080e` (near-black, darker than most dark modes)
-- Surfaces: `rgba(255, 255, 255, 0.03)` with `rgba(255, 255, 255, 0.07)` borders
-- No purple-tinted surfaces — color bleeds from canvas atmosphere only
-- Primary accent: `#8A5CFF` (neon violet) for buttons, active borders, focus states
-- Secondary accent: `#FF2FD1` (plasma magenta) for presence indicators
-- Tertiary accent: `#00F0FF` (electric cyan) for processing states
+When brain enters **providers-only mode**, every tab except Providers is hidden and a persistent toast prompts setup. All app code waits for the gate to complete before booting.
 
-**Precision Over Diffusion**
-- One glow color per element, one thin edge highlight
-- No rainbow gradients on small elements
-- No stacked multi-color box-shadows
-- No `inset` box-shadows for decoration
-- Avoid high-alpha accent fills (keep below 0.08)
+## Radiant Design System
 
-**Restraint as Luxury**
-- When nothing glows, the newest Chalie message's thin violet edge catches the eye
-- If everything glowed, nothing would
-- Buttons use solid `#8A5CFF` — glow only appears on hover
-- Transitions use `220ms ease`
+The canvas is near-black — darker than a typical dark mode. Color enters the UI in two forms only: atmospheric orbs drifting in the background canvas, and precision accents on interactive elements. Surfaces carry no tint; they are almost-transparent glass over the dark floor.
 
-**Atmospheric Depth**
-- Canvas renders 4 orbs at very low alpha (0.05–0.08) drifting over 25–35s cycles
-- Two warm (violet, magenta), two cool (cyan, indigo) for natural color temperature
-- Provides color context without competing with UI elements
+Three accent colors do all expressive work: **violet** (primary, buttons and active states), **magenta** (presence and indicators), and **cyan** (processing states). Each element carries one glow, one thin edge highlight. No stacked shadows, no multi-color gradients on small elements. When nothing is active, the newest Chalie message draws the eye with a single thin violet top edge.
 
-### Color Palette
+**Atmospheric depth** comes from a background canvas rendering four low-alpha orbs — two warm (violet, magenta), two cool (cyan, indigo) — drifting on slow 25–35 second cycles. They provide color temperature without competing with the UI.
 
-**Backgrounds & Surfaces**
-- Floor: `#06080e`
-- Surfaces: `rgba(255, 255, 255, 0.025–0.05)`
-- Borders: `rgba(255, 255, 255, 0.06–0.07)`
-- Grain overlay: `opacity: 0.04; mix-blend-mode: overlay`
+Transitions are uniform and quick. Buttons use a solid accent fill and glow only on hover. The restraint is deliberate: luxury is making the user notice the one thing that changed.
 
-**Accents**
-- Violet (primary): `#8A5CFF`
-- Magenta (secondary): `#FF2FD1`
-- Cyan (tertiary): `#00F0FF`
+## Layout
 
-**Text**
-- Primary: `#eae6f2`
-- Secondary: `rgba(234, 230, 242, 0.58)`
-- Tertiary: `rgba(234, 230, 242, 0.30)`
+The chat interface uses three fixed regions:
 
-### Implementation Guardrails
+- **Title bar** (top, fixed) — app name, status indicators, optional media controls during voice playback, navigation
+- **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
+- **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
 
-- No purple-tinted surfaces — color bleeds from canvas atmosphere only
-- One glow color per element, no stacked multi-color box-shadows
-- No fast ambient motion (25–35s drift minimum)
-- `line-height: 1.6`, all transitions `220ms ease`
-- See `frontend/interface/style.css` for exact values
+## Presence Dot
 
-## Layout Structure
+A small dot beneath the chat input communicates what Chalie is doing:
 
-### Title Bar (60px, fixed)
-- Centered app name or section title
-- Optional status indicators
-- Optional media controls (when voice playing)
-- Optional navigation (Brain icon, settings)
-
-### Chat Area (scrollable middle)
-- Messages in chronological order
-- System messages (Chalie) on left with thin violet top-edge gradient
-- User messages on right with distinct background
-- Support for cards: scheduled items, lists, etc.
-- Scroll depth fade at top/bottom
-
-### Prompt Box (80px, fixed bottom)
-- Text input field (full width, `line-height: 1.6`)
-- Left side: Microphone button (voice input)
-- Right side: Send button
-- Visual feedback while processing
-
-## Presence Dot States
-
-All presence dots include soft halo: `box-shadow: 0 0 8px currentColor`
-
-- **Resting** (breathing): Magenta `#FF2FD1`, scale animation
-- **Processing** (pulse): Cyan `#00F0FF`, scale animation
-- **Thinking** (glow): Violet `#8A5CFF`, variable-intensity glow
-- **Retrieving Memory** (ripple): Cyan with expanding ripple shadow
-- **Planning** (shimmer): Gradient cycling violet → cyan
-- **Responding** (waveform): Amber bar with waveform animation
-
-## Active Message Treatment
-
-When Chalie's newest message is active:
-- Border transitions to `rgba(138, 92, 255, 0.30)`
-- Thin top-edge gradient: `transparent → violet → cyan → transparent`
-- Subtle outer glow: `0 0 20px rgba(138, 92, 255, 0.07)`
-- 400ms transition on border-color and box-shadow
-
-## Canvas Atmosphere
-
-A background `<canvas>` renders 4 low-alpha orbs (two warm, two cool) drifting on slow 25–35s cycles. Provides cinematic depth without competing with UI elements. See `frontend/interface/ambient_canvas.js` for implementation.
+| State | Color | Animation |
+|---|---|---|
+| Resting | Magenta | Slow breathing pulse |
+| Processing | Cyan | Faster pulse |
+| Thinking | Violet | Variable-intensity glow |
+| Retrieving memory | Cyan | Expanding ripple |
+| Planning | Violet → cyan | Cycling shimmer |
+| Responding | Amber | Waveform bars |
 
 ## Cards System
 
-Reusable card components render structured data:
+Structured responses render as typed cards rather than prose. All cards share the same dark surface and violet accent language.
 
-**Scheduled Item Cards**
-- Title, description, scheduled time
-- Recurrence indicator
-- Status indicator (pending, completed)
-- Edit/delete actions
+- **Scheduled item** — title, time, recurrence, status (pending/completed), edit/delete actions
+- **List** — name, type, item count, recent items preview, add/manage actions
+- **Goal** — title, progress bar, target date, status (active/completed/abandoned), update actions
+- **Knowledge** — concept name and strength, related concepts, last accessed
 
-**List Cards**
-- List name and type
-- Item count
-- Recent items preview
-- Add/manage actions
+## Voice I/O
 
-**Goal Cards**
-- Goal title and progress bar
-- Target date
-- Status (active, completed, abandoned)
-- Update actions
+Voice is optional. If the voice service is unavailable, the mic button and all speaker icons are hidden automatically.
 
-**Knowledge Cards**
-- Concept name and strength
-- Related concepts
-- Last accessed time
+**Microphone (speech-to-text)** — the mic button sits left of the prompt box. Click to record, click again to stop. The transcript is pasted into the prompt box; the user reviews it and sends. The mic track is released immediately after each recording.
 
-All cards use the same design language: dark surfaces, violet accents, thin borders.
-
-## Voice I/O (Optional)
-
-### Speech-to-Text (Microphone Button)
-- Click to start/stop recording
-- Visual feedback during recording (waveform animation)
-- Transcribed text appears in prompt box
-- User clicks send to submit (not automatic)
-
-### Text-to-Speech (Speaker Icon)
-- Speaker icon appears below Chalie messages
-- Click opens audio player in title bar
-- Player shows: play/pause, close
-- Audio plays immediately
-- Allows listening while multitasking
+**Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. On iOS Safari, the audio element is unlocked synchronously inside the click gesture before any async fetch, satisfying the browser's autoplay policy.
 
 ## Applications
 
-### 1. `frontend/interface/` — Main Chat UI
-- Layout: title bar (60px) + chat (scrollable) + prompt (80px)
-- Presence dot and status indicators
-- Canvas atmosphere rendering
-- Card support for lists, goals, schedules
-- Voice I/O optional
-- Home view shows recent conversations
+### Chat (`/`)
 
-### 2. `frontend/brain/` — Cognitive Dashboard
-- Admin view of memory system
-- Episodic memories with decay visualization
-- Semantic concepts and relationships
-- Routing decision audit trail
-- Tool execution history
-- Settings and configuration
-- Tool management interface
+The primary interface. Title bar + scrollable chat + prompt box. Presence dot indicates cognitive state. Canvas atmosphere renders behind everything. Home view shows recent conversations. Supports all card types and optional voice I/O.
 
-### 3. `frontend/on-boarding/` — Account Setup Wizard
-- Multi-step account creation
-- LLM provider configuration
-- Voice endpoint setup (optional)
-- Tool configuration
-- Welcome screen after setup
+### Brain (`/brain/`)
 
-## Responsive Design
+The cognitive dashboard. Tabs expose episodic memory with decay visualization, semantic concepts, routing audit trails, tool history, settings, and tool management.
 
-- **Mobile**: Full-width, touch-friendly buttons, portrait optimized
-- **Tablet**: Increased spacing, wider chat area
-- **Desktop**: Centered with max-width, comfortable spacing
+The **Personality** subtab (under Cognition) exposes five sliders — warmth, mood, expressiveness, curiosity, humor — each ranging from −2 to +2. The selected combination maps to a voice paragraph prepended to the system prompt for user-facing conversations. Background processors (memory encoding, goal pursuit, scheduled tasks) are unaffected.
 
-All three sizes maintain Radiant design fidelity.
+### Onboarding (`/on-boarding/`)
 
-## References
+Account creation only — username and password. If an account already exists, the page bounces to login. After creating an account it redirects to Brain so the user can add a provider.
 
-See `CLAUDE.md` "Design Philosophy: Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
+### Login (`/login/`)
+
+A dedicated form so browser autofill and OS credential managers (macOS Keychain, etc.) can offer stored credentials. Accepts a `?next=` parameter to resume the original destination after sign-in. Bounces to chat when a session is already active.

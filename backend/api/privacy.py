@@ -58,7 +58,6 @@ def data_summary():
                 "episodes", "knowledge", "transcript",
                 "scheduled_items",
                 "lists", "list_items", "place_fingerprints",
-                "interaction_log", "cortex_iterations",
                 "documents",
             ]:
                 try:
@@ -98,7 +97,6 @@ def export_data():
         "scheduled_items", "lists", "list_items",
         "list_events",
         "place_fingerprints",
-        "interaction_log", "cortex_iterations",
         "user_tool_preferences",
         "documents", "watched_folders",
     ]

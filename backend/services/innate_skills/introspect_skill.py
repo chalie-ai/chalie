@@ -9,7 +9,7 @@ the others.
 
 import logging
 
-from services.time_utils import utc_now, parse_utc
+from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def _query_last_consolidation(db) -> str:
             row = cursor.fetchone()
             cursor.close()
         if row and row[0]:
-            rel = _relative_time(row[0])
+            rel = TimeFormatterService.ago(row[0])
             return f', last consolidation {rel}'
         return ''
     except Exception:
@@ -227,7 +227,7 @@ def _external_tool_rows() -> list:
             usage_count = row[1] or 0
             success_count = row[2] or 0
             last_used_at = row[3] or ''
-            last_used = _relative_time(last_used_at) if last_used_at else 'never'
+            last_used = TimeFormatterService.ago(last_used_at) if last_used_at else 'never'
             last_result = 'success' if success_count >= usage_count * 0.5 else 'failed'
             summary = _tool_summary(tool_name)[:50]
 
@@ -266,15 +266,9 @@ def _tool_summary(tool_name: str) -> str:
 def _scope_reasoning_state() -> str:
     parts = []
 
-    # Upcoming reminders
     reminder_line = _reasoning_upcoming_reminders()
     if reminder_line:
         parts.append(reminder_line)
-
-    # Recent autonomous actions
-    action_line = _reasoning_recent_actions()
-    if action_line:
-        parts.append(action_line)
 
     if not parts:
         return 'No active reasoning state.'
@@ -302,56 +296,12 @@ def _reasoning_upcoming_reminders() -> str:
 
         count = len(rows)
         next_msg = (rows[0][0] or '').strip()[:40]
-        next_due = _relative_time(rows[0][1]) if rows[0][1] else 'soon'
+        next_due = TimeFormatterService.ago(rows[0][1]) if rows[0][1] else 'soon'
         label = 'upcoming reminder' if count == 1 else 'upcoming reminders'
         return f"{count} {label} (next: '{next_msg}' in {next_due})."
     except Exception as e:
         logger.debug(f'[INTROSPECT] reasoning_upcoming_reminders failed: {e}')
         return ''
-
-
-def _reasoning_recent_actions() -> str:
-    RELEVANT_TYPES = ('proactive_sent', 'plan_proposed')
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f'SELECT event_type, payload, created_at '
-                f'FROM interaction_log '
-                f'WHERE event_type IN ({placeholders}) '
-                f'ORDER BY created_at DESC LIMIT 3',
-                RELEVANT_TYPES
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return ''
-
-        summaries = []
-        for row in rows:
-            event_type = row[0] or ''
-            created_at = row[2] or ''
-            when = _relative_time(created_at) if created_at else 'recently'
-            label = _action_label(event_type)
-            summaries.append(f'{label} {when}')
-
-        return 'Recent: ' + ', '.join(summaries) + '.'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_recent_actions failed: {e}')
-        return ''
-
-
-def _action_label(event_type: str) -> str:
-    labels = {
-        'proactive_sent': 'sent proactive message',
-        'plan_proposed': 'proposed plan',
-    }
-    return labels.get(event_type, event_type.replace('_', ' '))
 
 
 # ── Scope 4: Identity Snapshot ───────────────────────────────────
@@ -360,12 +310,6 @@ def _action_label(event_type: str) -> str:
 def _scope_identity_snapshot() -> str:
     parts = []
 
-    # Relationship depth from interaction count
-    interaction_label = _identity_relationship_depth()
-    if interaction_label:
-        parts.append(interaction_label)
-
-    # Communication style
     style_line = _identity_communication_style()
     if style_line:
         parts.append(style_line)
@@ -373,34 +317,6 @@ def _scope_identity_snapshot() -> str:
     if not parts:
         return 'Identity data unavailable.'
     return ' '.join(parts)
-
-
-def _identity_relationship_depth() -> str:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM interaction_log')
-            row = cursor.fetchone()
-            cursor.close()
-
-        count = row[0] if row else 0
-
-        if count < 50:
-            depth = 'new'
-        elif count < 500:
-            depth = 'developing'
-        elif count < 2000:
-            depth = 'established'
-        else:
-            depth = 'deep'
-
-        return f'Relationship: {depth} (~{count:,} interactions).'
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] identity_relationship_depth failed: {e}')
-        return ''
 
 
 def _identity_communication_style() -> str:
@@ -454,31 +370,3 @@ def _identity_communication_style() -> str:
         return ''
 
 
-# ── Time helpers ─────────────────────────────────────────────────
-
-
-def _relative_time(dt_value) -> str:
-    """Convert a datetime string or object to a human-readable relative string."""
-    try:
-        dt = parse_utc(dt_value)
-        now = utc_now()
-        delta = now - dt
-        seconds = int(delta.total_seconds())
-
-        if seconds < 0:
-            return 'in the future'
-        if seconds < 60:
-            return 'just now'
-        if seconds < 3600:
-            mins = seconds // 60
-            unit = 'min' if mins == 1 else 'min'
-            return f'{mins} {unit} ago'
-        if seconds < 86400:
-            hours = seconds // 3600
-            unit = 'hour' if hours == 1 else 'hours'
-            return f'{hours} {unit} ago'
-        days = seconds // 86400
-        unit = 'day' if days == 1 else 'days'
-        return f'{days} {unit} ago'
-    except Exception:
-        return 'unknown'

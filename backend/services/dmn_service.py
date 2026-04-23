@@ -133,8 +133,7 @@ class DMNService:
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT gist, action, outcome, salience, emotional_valence, "
-                "entities, open_loops, created_at "
+                "SELECT gist, salience, emotional_valence, created_at "
                 "FROM episodes "
                 "WHERE deleted_at IS NULL "
                 "ORDER BY created_at DESC "
@@ -168,8 +167,7 @@ class DMNService:
 
             # High-retrieval-weight episodes
             cursor.execute(
-                "SELECT gist, action, outcome, salience, emotional_valence, "
-                "entities, open_loops, created_at "
+                "SELECT gist, salience, emotional_valence, created_at "
                 "FROM episodes "
                 "WHERE deleted_at IS NULL AND retrieval_weight >= 0.7 "
                 "ORDER BY retrieval_weight DESC "
@@ -221,14 +219,10 @@ class DMNService:
     def _format_episodes(self, rows) -> str:
         """Format episode rows into a readable numbered list.
 
-        Each row must be: (gist, action, outcome, salience, emotional_valence,
-        entities, open_loops, created_at)
+        Each row must be: (gist, salience, emotional_valence, created_at)
         """
-        import json
-
         lines = []
-        for i, (gist, action, outcome, salience, emotional_valence,
-                entities, open_loops, created_at) in enumerate(rows, 1):
+        for i, (gist, salience, emotional_valence, created_at) in enumerate(rows, 1):
             # Header: index, timestamp, salience, optional valence
             ts = (created_at or '')[:16].replace('T', ' ')
             header = f"{i}. [{ts}] salience:{salience}"
@@ -242,27 +236,6 @@ class DMNService:
             # Gist (always present per schema NOT NULL)
             if gist:
                 lines.append(f"   {gist}")
-
-            if action:
-                lines.append(f"   Action: {action}")
-            if outcome:
-                lines.append(f"   Outcome: {outcome}")
-
-            # Entities (JSONB list)
-            try:
-                entity_list = json.loads(entities) if entities else []
-                if entity_list:
-                    lines.append(f"   Entities: {', '.join(str(e) for e in entity_list)}")
-            except (ValueError, TypeError):
-                pass
-
-            # Open loops (JSONB list)
-            try:
-                loop_list = json.loads(open_loops) if open_loops else []
-                if loop_list:
-                    lines.append(f"   Open loops: {', '.join(str(item) for item in loop_list)}")
-            except (ValueError, TypeError):
-                pass
 
         return '\n'.join(lines)
 

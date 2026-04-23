@@ -1,43 +1,23 @@
 # First-Party Tools
 
-First-party tools are simple callable Python modules in `backend/tools/`. Each exposes a single `execute(topic, params, config, telemetry) -> dict` function and is invoked directly in-process by `ToolRegistryService`.
+These tools ship with Chalie and are invoked in-process via the ACT loop. The LLM discovers them through `find_tools` (semantic search) — they are not pre-loaded into context. A `browser` tool is also available when Playwright dependencies are installed.
 
-All tool metadata (descriptions, parameters, constraints) is declared in `backend/services/tool_library_service.py`. Tools are discoverable via the `find_tools` innate skill (semantic search over tool profiles) and available on-demand through the ACT loop.
+## Weather
 
-## Current Tools
+Fetches current conditions and tomorrow's forecast using Open-Meteo and wttr.in. No API key required. Results include temperature, precipitation, and wind at the user's location when telemetry is available.
 
-### Weather
+## Search
 
-| | |
-|---|---|
-| **Module** | `backend/tools/weather.py` |
-| **Trigger** | On-demand |
+Searches across multiple sources — Wikipedia, GitHub, Reddit, arXiv, Google News, Stack Overflow, Open Library, and more — using plain natural language. Semantic routing selects the best provider(s) automatically. Returns results with titles, URLs, snippets, and provenance. No API key required.
 
-Fetches current weather conditions and tomorrow's forecast using [Open-Meteo](https://open-meteo.com/) and [wttr.in](https://wttr.in/). No API key required.
+## News
 
-### Web Search
+Searches news articles across global sources including Google News and curated RSS feeds in seven categories: tech, business, sports, science, entertainment, US, UK. Use for current events, headlines, and what's happening now. No API key required.
 
-| | |
-|---|---|
-| **Module** | `backend/tools/web_search.py` |
-| **Trigger** | On-demand |
+## Code Eval
 
-Searches the web via DuckDuckGo. Privacy-focused, no API key required.
+Executes Python snippets in a restricted sandbox. Used to verify formulas, test algorithms, or produce exact numerical results rather than approximations. Execution is isolated — no filesystem access, no network.
 
-### Code Eval
-
-| | |
-|---|---|
-| **Module** | `backend/tools/code_eval.py` |
-| **Trigger** | On-demand |
-
-Executes Python snippets in a restricted sandbox to verify formulas, test algorithms, or compute results precisely.
-
-### Programming Docs Search
-
-| | |
-|---|---|
-| **Module** | `backend/tools/programming_docs_search.py` |
-| **Trigger** | On-demand |
+## Programming Docs Search
 
 Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. No API key required.

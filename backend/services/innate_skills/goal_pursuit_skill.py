@@ -17,9 +17,12 @@ LOG_PREFIX = "[GOAL PURSUIT SKILL]"
 TOOL_SCHEMA = {
     "name": "goal_pursuit",
     "description": (
-        "Use this tool to launch a separate instance of yourself with unconstrained limits "
-        "to research or perform long running tasks. Only use this if you expect a request to "
-        "take longer than 2 minutes to complete. If not, use other tools to resolve the request."
+        "Launch a background copy of yourself for deep, long-running research or multi-source investigation. "
+        "Fire this tool FIRST (before answering inline) when the user asks for: deep research, comprehensive analysis, "
+        "multi-source comparison, deep dive, extended investigation, or anything requiring 2+ minutes of work across many sources. "
+        "Signal phrases: 'deep dive', 'research', 'analyze multiple', 'compare X and Y', 'comprehensive study', "
+        "'competitive analysis', 'find out about', 'investigate thoroughly'. "
+        "When unsure if a request is heavy enough, prefer this tool — surface-level answers to deep-research asks waste the user's time."
     ),
     "input_schema": {
         "type": "object",
@@ -42,6 +45,11 @@ TOOL_SCHEMA = {
 def handle_goal_pursuit(channel: str, params: dict) -> str:
     """Spawn a background GoalPursuitProcessor and return immediately.
 
+    Before spawning the thread, a goal row is persisted to the goals table
+    via GoalEcologyService so downstream scenario queries can confirm the
+    intent was recorded.  Persistence failure is logged but never blocks the
+    pursuit — the background worker spawns regardless.
+
     Args:
         channel: Current conversation channel (unused — pursuit runs in its own channel).
         params: Dict with 'goal' key.
@@ -55,6 +63,21 @@ def handle_goal_pursuit(channel: str, params: dict) -> str:
 
     pursuit_id = uuid.uuid4().hex
 
+    # Persist the goal to the goals table before spawning the worker so the
+    # intent is recorded even if the background thread is slow or fails.
+    goal_id = None
+    try:
+        from services.goal_ecology_service import GoalEcologyService
+        ecology = GoalEcologyService()
+        goal_row = ecology.create_goal(description=goal, type='stated')
+        if goal_row:
+            goal_id = goal_row.get('id')
+            logger.info(f"{LOG_PREFIX} Persisted goal {goal_id[:8] if goal_id else '?'} for pursuit {pursuit_id[:8]}")
+        else:
+            logger.warning(f"{LOG_PREFIX} create_goal returned falsy for pursuit {pursuit_id[:8]}; thread will still spawn")
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Failed to persist goal for pursuit {pursuit_id[:8]}: {e}", exc_info=True)
+
     def _run():
         try:
             from services.goal_pursuit_processor import GoalPursuitProcessor
@@ -62,7 +85,7 @@ def handle_goal_pursuit(channel: str, params: dict) -> str:
 
             response_text = GoalPursuitProcessor(
                 raw_input=goal,
-                metadata={'pursuit_id': pursuit_id},
+                metadata={'pursuit_id': pursuit_id, 'goal_id': goal_id},
             ).send()
             response_text = (response_text or '').strip()
             if not response_text:

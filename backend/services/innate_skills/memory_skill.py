@@ -11,7 +11,7 @@ LOG_PREFIX = "[MEMORY]"
 # ── Dynamic memory radius — tuning constants ────────────────────────────────
 #
 # Composition: effective_input = BASELINE × narrow_factor × expand_factor
-# `EpisodicService.retrieve_episodes` then applies its own population-aware
+# `episodic_retrieval_service.retrieve` then applies its own population-aware
 # adaptive shrink on top. All eight constants are tuned by the meta-harness
 # loop (loop_improve.sh) against the d1-context-recall benchmark suite —
 # see /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
@@ -34,34 +34,85 @@ EXPAND_FACTOR_CEILING: float = 2.2
 TOOL_SCHEMA = {
     "name": "memory",
     "description": (
-        "Store or recall knowledge about the user. Store personal facts "
-        "the moment they're disclosed. Recall before recommending anything."
+        "Store, recall, or forget FIRST-PARTY facts about the user themself — "
+        "the human you are talking to. Their traits, preferences, "
+        "relationships, goals, habits. "
+        "STORE EVERY first-party personal fact the user discloses — no "
+        "judgment, no filtering. Quirky habits, streaks, hobbies, niche "
+        "preferences, throwaway details: store them ALL. The user told you "
+        "because it matters to them. Recall before recommending anything. "
+        "Use forget to remove a specific memory when asked.\n\n"
+        "STORE RULES — read carefully:\n"
+        "1. One fact per call. Never summarize multiple facts into one value. "
+        "If the user mentions pasta AND pizza, call store twice.\n"
+        "2. Use the canonical key from the list below when the fact fits. "
+        "Don't invent variants like 'favorite_food', 'current_role', "
+        "'home_city' — pick the canonical key.\n"
+        "3. Atomic values only. 'Valletta' not 'lives in Valletta, Malta'. "
+        "'CTO' not 'recently promoted to CTO at Acme'.\n"
+        "4. When the user corrects a fact, store the new value under the SAME "
+        "canonical key — the system will supersede the old one automatically.\n"
+        "5. Store on FIRST mention. Don't wait for a second confirmation. "
+        "If the user says 'My favorite food is pasta', store it now — don't "
+        "wait to see if they repeat it.\n\n"
+        "CANONICAL KEYS (kind=user_specific) — all describe THE USER:\n"
+        "  Immutable (set once, never change): birth_date, birth_place, "
+        "biological_parents\n"
+        "  Temporal (latest replaces previous): residence, gender, religion, "
+        "timezone, partner, employment, financial_status\n"
+        "  Coexist (multiple values accumulate): name, heritage, family, "
+        "relationships, education, health, food_and_drink, entertainment, "
+        "sports, style, skills_and_interests, contact_info, tech_setup, "
+        "personality, life_events, goals_and_projects, routines_and_habits\n\n"
+        "NICHE FACTS WITHOUT A CANONICAL KEY: still store them. Pick the "
+        "shortest descriptive snake_case key (e.g. 'dryer_streak' for 'my "
+        "dryer streak is 47 loads', 'coffee_order' for 'I always get oat "
+        "milk lattes'). The system records the miss for later LUT curation. "
+        "Never skip a fact just because no canonical key fits."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["store", "recall", "reflect"],
-                "description": "store: save a fact. recall: search memory - fast. reflect: deep search about a topic",
+                "enum": ["store", "recall", "reflect", "forget"],
+                "description": (
+                    "store: save a fact. recall: search memory - fast. "
+                    "reflect: deep search about a topic. "
+                    "forget: permanently remove a memory."
+                ),
             },
             "kind": {
                 "type": "string",
                 "enum": ["user_specific", "system", "misc"],
                 "description": (
-                    "user_specific: about the human (traits, preferences, "
-                    "relationships, secrets, goals). system: about how Chalie "
-                    "operates (rules, decisions, analysis). misc: short-lived "
-                    "scratchpad."
+                    "user_specific: first-party facts about the human you "
+                    "are talking to (traits, preferences, relationships, "
+                    "secrets, goals). system: about how Chalie operates "
+                    "(rules, decisions, analysis). misc: short-lived "
+                    "scratchpad for Chalie's own working notes — NOT a "
+                    "dumping ground for user-supplied bulk content (use the "
+                    "`document` tool for that)."
                 ),
             },
             "key": {
                 "type": "string",
-                "description": "For store: short identifier (e.g. 'user_name', 'favourite_food').",
+                "description": (
+                    "For store/forget: the canonical key from the list in the "
+                    "tool description (e.g. 'residence', 'food_and_drink', "
+                    "'employment'). Use the exact canonical key when the fact "
+                    "fits one of the 27 concepts."
+                ),
             },
             "value": {
                 "type": "string",
-                "description": "For store: the fact itself.",
+                "description": (
+                    "For store: the fact itself, atomic — a single value. "
+                    "'Valletta' (not 'lives in Valletta'). 'pasta' (not "
+                    "'loves pasta and pizza'). "
+                    "For forget: required when removing one value from a "
+                    "multi-value key."
+                ),
             },
             "query": {
                 "type": "string",
@@ -86,10 +137,12 @@ def handle_memory(channel: str, params: dict) -> str:
             return _handle_recall(channel, params)
         elif action == "reflect":
             return _handle_reflect(channel, params)
+        elif action == "forget":
+            return _handle_forget(params)
         else:
             return (
                 f"{LOG_PREFIX} Unknown action: {action}. "
-                f"Valid: store, recall, reflect"
+                f"Valid: store, recall, reflect, forget"
             )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
@@ -117,24 +170,122 @@ def _handle_store(channel: str, params: dict) -> str:
     if result is None:
         return f"{LOG_PREFIX} Store failed — invalid kind '{kind}' or internal error."
 
-    if result.get("conflict"):
-        classification = result.get("classification", "ambiguous")
-        existing = result.get("existing", {})
-        old_value = existing.get("value", "")
-        proposed_value = result.get("proposed_value", value)
-        proposed_key = result.get("proposed_key", key)
+    return _format_store_response(result)
 
-        if classification == "true_contradiction":
-            return (
-                f"{LOG_PREFIX} Conflict detected: existing '{proposed_key}' says "
-                f"'{old_value}' but new claim is '{proposed_value}'. Which is correct?"
-            )
+
+def _format_store_response(result: dict) -> str:
+    status = result.get("status", "")
+    canonical = result.get("canonical_key", "")
+    provided = result.get("provided_key", "")
+    value = result.get("value", "")
+    date = result.get("date")
+
+    if canonical != provided:
+        key_display = f"'{canonical}' (canonical of '{provided}')"
+    else:
+        key_display = f"'{canonical}'"
+
+    if status == "created":
+        rule = result.get("rule")
+        if rule == "coexist":
+            return f"{key_display} saved as ['{value}']."
+        return f"{key_display} saved as '{value}'."
+
+    if status == "reinforced":
+        return f"{key_display} was already set on {date}. Memory reinforced."
+
+    if status == "superseded":
+        old = result.get("old_value", "")
+        return f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
+
+    if status == "conflict":
+        old = result.get("old_value", "")
         return (
-            f"{LOG_PREFIX} Not sure if this conflicts with existing '{proposed_key}': "
-            f"'{old_value}'. Should I store '{proposed_value}'?"
+            f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
+            f"New value '{value}' rejected. Use 'forget' first if you're sure."
         )
 
-    return f"{LOG_PREFIX} Stored '{key}'."
+    if status == "appended":
+        all_vals = result.get("all_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in all_vals)
+        return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
+
+    if status == "lut_miss_created":
+        return f"'{provided}' saved as '{value}'."
+
+    if status == "lut_miss_reinforced":
+        return f"'{provided}' already set to '{value}'. Memory reinforced."
+
+    if status == "lut_miss_appended":
+        all_vals = result.get("all_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in all_vals)
+        return f"'{provided}' updated. Values now: [{vals_str}]."
+
+    return f"'{provided}' stored."
+
+
+# ── Forget ───────────────────────────────────────────────────────────
+
+
+def _handle_forget(params: dict) -> str:
+    key = params.get("key")
+    value = params.get("value")
+    kind = params.get("kind", "user_specific")
+
+    if not key:
+        return f"{LOG_PREFIX} Error: 'key' is required for forget."
+
+    from services.data_graph_service import get_data_graph_service
+
+    dgs = get_data_graph_service()
+    result = dgs.forget(kind=kind, key=key, value=value)
+
+    if result is None:
+        return f"{LOG_PREFIX} Forget failed — invalid kind or internal error."
+
+    return _format_forget_response(result)
+
+
+def _format_forget_response(result: dict) -> str:
+    status = result.get("status", "")
+    canonical = result.get("canonical_key", "")
+    provided = result.get("provided_key", "")
+    value = result.get("value")
+    date = result.get("date")
+
+    if canonical and provided and canonical != provided:
+        key_display = f"'{canonical}' (canonical of '{provided}')"
+    else:
+        key_display = f"'{canonical or provided}'"
+
+    if status == "forgotten":
+        rule = result.get("rule")
+        if rule == "coexist":
+            remaining = result.get("remaining_values") or []
+            vals_str = ", ".join(f"'{v}'" for v in remaining)
+            return f"'{value}' removed from {key_display}. Remaining: [{vals_str}]."
+        old = result.get("old_value") or value
+        return f"{key_display} forgotten (was '{old}', set {date})."
+
+    if status == "forgotten_all":
+        n = result.get("versions_removed", 0)
+        return f"{key_display} forgotten. All {n} versions removed."
+
+    if status == "forgotten_empty":
+        return f"'{value}' removed from {key_display}. No values remain — key fully forgotten."
+
+    if status == "value_not_found":
+        remaining = result.get("remaining_values") or []
+        vals_str = ", ".join(f"'{v}'" for v in remaining)
+        return f"'{value}' not found in {key_display}. Currently stored: [{vals_str}]."
+
+    if status == "not_found":
+        return f"No memory stored under {key_display}. Nothing to forget."
+
+    if status == "error":
+        return f"{LOG_PREFIX} {result.get('message', 'Unknown error')}"
+
+    return f"{key_display} forget operation completed."
 
 
 # ── Recall ───────────────────────────────────────────────────────────
@@ -574,8 +725,9 @@ def recall_episodes(
     and the pre-turn seed path (``caller='seed'``).
     """
     try:
-        from services.episodic_service import EpisodicService
+        from services import episodic_retrieval_service
         from services.database_service import get_shared_db_service
+        from services.embedding_service import get_embedding_service
         from services.message_processor import current_processor
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
@@ -588,9 +740,9 @@ def recall_episodes(
 
     try:
         db = get_shared_db_service()
-        service = EpisodicService(db)
+        emb_svc = get_embedding_service()
 
-        q_embedding = service._generate_embedding(query)
+        q_embedding = emb_svc.generate_embedding(query)
 
         proc = current_processor()
         history: List[Dict] = []
@@ -602,7 +754,7 @@ def recall_episodes(
                 h.get("caller") == "seed" for h in history
             ):
                 try:
-                    seed_emb = service._generate_embedding(proc._memory_seed)
+                    seed_emb = emb_svc.generate_embedding(proc._memory_seed)
                     history.insert(
                         0,
                         {
@@ -624,10 +776,12 @@ def recall_episodes(
         expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
         input_radius = baseline_radius * narrow_factor * expand_factor
 
-        episodes, telemetry = service.retrieve_episodes(
+        episodes, telemetry = episodic_retrieval_service.retrieve(
             query_text=query,
-            radius=input_radius,
             query_embedding=q_embedding,
+            channel=channel,
+            radius=input_radius,
+            k=limit,
             return_telemetry=True,
         )
 
