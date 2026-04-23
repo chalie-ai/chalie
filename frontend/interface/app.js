@@ -68,7 +68,10 @@ class ChalieApp {
     this._notifications = new Notifications({ getHost: () => this._backendHost });
 
     // Image attach module
-    this._imageAttach = new ImageAttach({ getHost: () => this._backendHost });
+    this._imageAttach = new ImageAttach({
+      getHost: () => this._backendHost,
+      onDocumentDrop: (file) => this._docUpload?.uploadFile(file),
+    });
     this._imageAttach.init();
 
     // Voice recorder (mic → STT → paste into input)
@@ -638,6 +641,70 @@ class ChalieApp {
     this._chat.onSendComplete(() => {
       document.getElementById('messageInput').focus();
     });
+
+    // Drop targets — input-dock and textarea paste
+    this._imageAttach.enableDropTargets({
+      dropzone: document.querySelector('.input-dock'),
+      pasteTarget: textarea,
+    });
+
+    // Global drop overlay — shown when any file is dragged over the viewport
+    this._initGlobalDropOverlay();
+  }
+
+  _initGlobalDropOverlay() {
+    if (document.querySelector('.global-drop-overlay')) return; // idempotent
+    const overlay = document.createElement('div');
+    overlay.className = 'global-drop-overlay';
+    overlay.innerHTML = '<span class="global-drop-overlay__label">Drop image or document here</span>';
+    document.body.appendChild(overlay);
+
+    let enterCount = 0;
+    const hideOverlay = () => {
+      enterCount = 0;
+      overlay.classList.remove('active');
+    };
+
+    document.addEventListener('dragenter', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+      enterCount++;
+      overlay.classList.add('active');
+    });
+
+    document.addEventListener('dragover', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+    });
+
+    document.addEventListener('dragleave', (ev) => {
+      // Only decrement on real exits (relatedTarget is null when leaving the viewport)
+      if (ev.relatedTarget) return;
+      enterCount--;
+      if (enterCount <= 0) hideOverlay();
+    });
+
+    // Safety net — dragend always fires even if the drop is cancelled,
+    // preventing a stuck overlay on drag-out-of-window.
+    document.addEventListener('dragend', hideOverlay);
+    window.addEventListener('blur', hideOverlay);
+
+    overlay.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      hideOverlay();
+      const files = ev.dataTransfer?.files;
+      if (!files?.length) return;
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          this._imageAttach.handleFile(file);
+        } else {
+          this._docUpload.uploadFile(file);
+        }
+      }
+    });
+
+    // Hide overlay when drop is handled elsewhere (e.g. input-dock)
+    document.addEventListener('drop', hideOverlay);
   }
 
   // ---------------------------------------------------------------------------

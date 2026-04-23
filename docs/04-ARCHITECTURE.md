@@ -102,6 +102,21 @@ Tool results flow through a single render-and-record path that formats the outpu
 
 ---
 
+## Chat File Attachments
+
+When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It blocks the turn until every referenced document reaches a terminal state or a shared 10-second deadline expires, then attaches structured tags to `metadata['file_tags']`:
+
+- `[image id=<doc> ocr="..."]` — ready image, OCR text truncated
+- `[image id=<doc> status=failed|timeout|not_found]` — image that never reached ready
+- `[document id=<doc> summary="..."]` — ready PDF/text document
+- `[document id=<doc> status=failed|timeout|not_found]` — document equivalent
+
+`UserMessageProcessor.getUserPrompt()` appends these tags to the turn line so the LLM sees file context inline with the user message. The no-silent-drop invariant applies: every failure mode emits a tag — the model learns a file was attached and what happened to it, never an empty prompt.
+
+Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The 10-second deadline is shared across every file resolved in the turn — worst case one wait, not N.
+
+---
+
 ## Ambient Awareness
 
 A deterministic inference engine (no LLM, under 1 ms) reads browser telemetry from client heartbeats and infers place, attention level, energy, mobility, and tempo. These signals are assembled into a world-state block that is prepended to the user prompt on each turn.

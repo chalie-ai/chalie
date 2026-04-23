@@ -1409,6 +1409,77 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   to { transform: rotate(360deg); }
 }
 
+/* ---- Status badges (warn / error) in the bottom-right of a thumb -------- */
+
+/* Shared positioning: mirrors .image-preview__remove but non-interactive */
+.image-preview__warn,
+.image-preview__error {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 2;
+}
+
+.image-preview__warn {
+  background: rgba(120, 70, 0, 0.95);  /* deep amber — readable vs white text */
+  color: #ffffff;
+}
+
+.image-preview__error {
+  background: rgba(140, 20, 20, 0.95);  /* deep red — readable vs white text */
+  color: #ffffff;
+}
+
+/* ---- Global drag-over overlay ------------------------------------------- */
+
+.global-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 14, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.global-drop-overlay.active {
+  display: flex;
+  pointer-events: auto;
+}
+
+.global-drop-overlay__label {
+  padding: var(--space-lg) var(--space-xl);
+  border: 1.5px dashed var(--accent-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--accent-tertiary);
+  font-size: var(--font-size-lg);
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 32px rgba(0, 240, 255, 0.12);
+  pointer-events: none;
+}
+
+/* ---- Drag-active class on .input-dock ------------------------------------ */
+
+.input-dock.dragover {
+  outline: 1.5px dashed rgba(138, 92, 255, 0.55);
+  outline-offset: -2px;
+  background: rgba(138, 92, 255, 0.04);
+  transition: outline 120ms ease, background 120ms ease;
+}
+
 /* --------------------------------------------------------------------------
    14. Upload Dialog
    -------------------------------------------------------------------------- */
