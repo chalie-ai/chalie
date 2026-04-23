@@ -464,6 +464,40 @@ class TestRenderBgProcess:
         # Should contain 'last_update:2m ago' (125s ≈ 2m)
         assert "last_update:2m ago" in result
 
+    def test_bg_process_truncates_long_content(self, db):
+        long_content = "word " * 120  # 600 chars, well above 200
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
+            (long_content, _recent_iso(seconds=60)),
+        )
+        db.commit()
+
+        ws = _fresh()
+        result = ws.render()
+        bg_line = next((ln for ln in result.splitlines() if "[bg_process(" in ln), None)
+        assert bg_line is not None
+        # Content is capped at 200 chars + '…'; prefix '[bg_process(last_update:Xs ago)] '
+        # adds ~30-35 chars — use 240 as the safe upper bound.
+        assert len(bg_line) <= 240
+        assert bg_line.endswith("…")
+
+    def test_bg_process_short_content_not_truncated(self, db):
+        short_content = "Researching cheap hotels in Valletta"
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
+            (short_content, _recent_iso(seconds=60)),
+        )
+        db.commit()
+
+        ws = _fresh()
+        result = ws.render()
+        assert short_content in result
+        bg_line = next((ln for ln in result.splitlines() if "[bg_process(" in ln), None)
+        assert bg_line is not None
+        assert not bg_line.endswith("…")
+
 
 # ---------------------------------------------------------------------------
 # render() — full-mix section ordering

@@ -274,6 +274,11 @@ class WorldState:
                 last_update = TimeFormatterService.ago(created_at)
             except Exception:
                 last_update = "unknown"
+            if len(content) > 200:
+                cut = content.rfind(" ", 0, 200)
+                if cut == -1:
+                    cut = 200
+                content = content[:cut] + "…"
             lines.append(f"[bg_process(last_update:{last_update})] {content}")
         return lines
 
