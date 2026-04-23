@@ -127,6 +127,51 @@ class TestNormalization:
         assert svc._normalize_preference(-2.0) == pytest.approx(0.0)
 
 
+class TestRecordInvocationChannel:
+    def test_stores_channel_on_insert(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+
+        svc.record_invocation("weather", "exch_u1", True, 100.0, channel="user")
+
+        row = db.execute(
+            "SELECT channel FROM tool_performance_metrics WHERE exchange_id = ?",
+            ("exch_u1",)
+        ).fetchone()
+        assert row is not None
+        assert row["channel"] == "user"
+
+    def test_channel_defaults_to_empty_string(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+
+        svc.record_invocation("weather", "exch_u2", True, 100.0)
+
+        row = db.execute(
+            "SELECT channel FROM tool_performance_metrics WHERE exchange_id = ?",
+            ("exch_u2",)
+        ).fetchone()
+        assert row is not None
+        assert row["channel"] == ""
+
+    def test_channel_filter_isolates_by_channel(self, db):
+        svc = ToolPerformanceService(get_shared_db_service())
+
+        svc.record_invocation("weather", "exch_c1", True, 100.0, channel="user")
+        svc.record_invocation("memory", "exch_c2", True, 80.0, channel="dmn")
+        svc.record_invocation("goals", "exch_c3", True, 90.0, channel="goal_pursuit")
+
+        user_count = db.execute(
+            "SELECT COUNT(*) FROM tool_performance_metrics WHERE channel = ?",
+            ("user",)
+        ).fetchone()[0]
+        dmn_count = db.execute(
+            "SELECT COUNT(*) FROM tool_performance_metrics WHERE channel = ?",
+            ("dmn",)
+        ).fetchone()[0]
+
+        assert user_count == 1
+        assert dmn_count == 1
+
+
 class TestPreferenceDecay:
     def test_decay_updates_old_preferences(self, db):
         svc = ToolPerformanceService(get_shared_db_service())
