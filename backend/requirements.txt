@@ -1,3 +1,4 @@
+# Requires Python >= 3.11
 requests>=2.32.5
 sqlite-vec>=0.1.6
 flask-sock>=0.7.0
