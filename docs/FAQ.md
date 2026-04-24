@@ -119,9 +119,18 @@ No. Docker is optional — it's only used for deploying Chalie itself (via the p
 
 ## Can Chalie use my GPU?
 
-Yes. The embedding model runs on ONNX Runtime, which auto-selects the best available execution provider at startup: **CUDA** on NVIDIA GPUs, **CoreML** on Apple Silicon, **CPU** as the fallback. No configuration needed — whatever hardware ORT detects, it uses.
+Yes, at two levels: install time and runtime.
 
-> **Mac caveat:** if any weight tensor in the embedding model has a dimension larger than **16384** (the Metal 2D-texture ceiling — applies to every Mac, Intel through M4), Chalie drops `CoreMLExecutionProvider` automatically at startup and falls back to CPU. CoreML would otherwise partition the graph across ~177 sub-graphs and balloon virtual memory by ~21 GB. The default `gte-modernbert-base` trips this limit because its vocab embedding is `{50368, 768}`. You'll see `[EMBEDDING] Dropped CoreMLExecutionProvider: model has dim > 16384` in the log when this fires. To force CoreML anyway (not recommended — will almost certainly OOM on <64 GB Macs), pass `providers=["CoreMLExecutionProvider", ...]` explicitly.
+**Install time** — `install.sh` detects the host GPU and installs the matching `onnxruntime` wheel automatically:
+- NVIDIA GPU (`nvidia-smi` found): installs `onnxruntime-gpu`
+- AMD GPU (`/dev/kfd` + `amdgpu` module): installs `onnxruntime-rocm`
+- Everything else: installs `onnxruntime` (CPU)
+
+The GPU wheel is only swapped in after a dry-run confirms it's reachable — machines without access to the GPU package index stay on CPU rather than failing. ORT version is pinned at `1.20.1`. For air-gapped AMD installs, set `ROCM_PIP_INDEX` to a local mirror before running the installer.
+
+**Runtime** — all ONNX sessions are constructed through `backend/services/onnx_session.py`, which auto-selects the best available execution provider: **CUDA** on NVIDIA GPUs, **CoreML** on Apple Silicon, **CPU** as the fallback. No configuration needed.
+
+> **Mac caveat:** if any weight tensor in the model has a dimension larger than **16384** (the Metal 2D-texture ceiling — applies to every Mac, Intel through M4), `onnx_session.py` drops `CoreMLExecutionProvider` automatically and falls back to CPU. CoreML would otherwise partition the graph across ~177 sub-graphs and balloon virtual memory by ~21 GB. The default `gte-modernbert-base` trips this limit because its vocab embedding is `{50368, 768}`. You'll see `[EMBEDDING] Dropped CoreMLExecutionProvider: model has dim > 16384` in the log when this fires. To force CoreML anyway (not recommended — will almost certainly OOM on <64 GB Macs), pass `providers=["CoreMLExecutionProvider", ...]` explicitly.
 
 **Running Chalie in Docker with an NVIDIA GPU?** You must pass the GPU through to the container. Two prerequisites on the host:
 

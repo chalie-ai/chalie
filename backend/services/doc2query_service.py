@@ -42,6 +42,8 @@ class Doc2QueryService:
                 import onnxruntime as ort
                 from transformers import AutoTokenizer
 
+                from services.onnx_session import build_session
+
                 model_dir = os.path.abspath(_MODEL_DIR)
                 encoder_path = os.path.join(model_dir, 'encoder_model.onnx')
                 decoder_path = os.path.join(model_dir, 'decoder_model.onnx')
@@ -55,14 +57,16 @@ class Doc2QueryService:
                     self._available = False
                     return
 
-                opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 1
-                opts.inter_op_num_threads = 1
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                def _opts():
+                    o = ort.SessionOptions()
+                    o.intra_op_num_threads = 1
+                    o.inter_op_num_threads = 1
+                    o.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    return o
 
-                self._encoder = ort.InferenceSession(encoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
-                self._decoder = ort.InferenceSession(decoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
-                self._decoder_past = ort.InferenceSession(decoder_past_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._encoder = build_session(encoder_path, sess_options=_opts(), log_prefix="[DOC2QUERY]")
+                self._decoder = build_session(decoder_path, sess_options=_opts(), log_prefix="[DOC2QUERY]")
+                self._decoder_past = build_session(decoder_past_path, sess_options=_opts(), log_prefix="[DOC2QUERY]")
                 self._tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
                 self._available = True

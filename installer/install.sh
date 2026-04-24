@@ -19,6 +19,16 @@ GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 # Version pinned to match what requirements.txt resolves; bump both together.
 SQLITE_VEC_VERSION="0.1.6"
 
+# onnxruntime: version must match across the three wheels (CPU, CUDA, ROCm).
+# Changing this line is the single source of truth — requirements.txt no longer
+# pins it; _install_onnxruntime_variant() picks the right wheel for the host.
+ORT_VERSION="1.20.1"
+
+# AMD's public ROCm Python wheel index. Microsoft doesn't ship onnxruntime-rocm
+# to PyPI; AMD hosts pre-built wheels here, updated per ROCm release. Override
+# via $CHALIE_ROCM_INDEX for air-gapped installs.
+ROCM_PIP_INDEX="${CHALIE_ROCM_INDEX:-https://repo.radeon.com/rocm/manylinux/latest/}"
+
 # Installer flags (parsed from args)
 _DISABLE_VOICE=false
 _BRANCH=""
@@ -93,6 +103,31 @@ _detect_linux_distro() {
   else
     echo "unknown"
   fi
+}
+
+# Emits "cuda" | "rocm" | "cpu" — nothing else. Only Linux can have GPU wheels;
+# macOS hands CoreML to the default onnxruntime wheel, so it always reports cpu.
+#
+# NVIDIA: nvidia-smi must exist AND succeed (driver loaded). A stale symlink with
+# no kernel module returns non-zero and we fall through to cpu — correct, because
+# onnxruntime-gpu would fail to initialise CUDA at runtime anyway.
+#
+# AMD: /dev/kfd is the ROCm kernel compute interface; /sys/module/amdgpu confirms
+# the kernel driver is loaded. Both must be present — a Radeon with only the
+# display driver (no ROCm stack) would have /sys/module/amdgpu but no /dev/kfd.
+_detect_gpu_variant() {
+  local os
+  os="$(_detect_os)"
+  if [[ "$os" != "linux" ]]; then
+    echo "cpu"; return
+  fi
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    echo "cuda"; return
+  fi
+  if [[ -e /dev/kfd ]] && [[ -d /sys/module/amdgpu ]]; then
+    echo "rocm"; return
+  fi
+  echo "cpu"
 }
 
 # ─── Python 3.11+ Check ─────────────────────────────────────────────────────
@@ -218,6 +253,55 @@ _install_build_deps() {
       ;;
   esac
   _ok "Build dependencies ready"
+}
+
+# ─── ONNX Runtime (GPU wheel swap) ──────────────────────────────────────────
+# requirements.txt pulls the CPU `onnxruntime` wheel in transitively via
+# rapidocr-onnxruntime. If the host has a GPU, we swap that wheel for the
+# matching accelerator build. On any failure the CPU wheel stays in place,
+# so Chalie still boots — just without GPU acceleration. This is the
+# fallback guarantee: the baseline wheel never gets removed until the
+# replacement is confirmed.
+_install_onnxruntime_variant() {
+  local variant
+  variant="$(_detect_gpu_variant)"
+  if [[ "$variant" == "cpu" ]]; then
+    return 0
+  fi
+
+  _section "ONNX Runtime GPU Wheel ($variant)"
+  local venv="$CHALIE_HOME/venv"
+  local pip="$venv/bin/pip"
+
+  local wheel extra=()
+  case "$variant" in
+    cuda)
+      wheel="onnxruntime-gpu==$ORT_VERSION"
+      ;;
+    rocm)
+      wheel="onnxruntime-rocm==$ORT_VERSION"
+      extra=(--extra-index-url "$ROCM_PIP_INDEX")
+      ;;
+  esac
+
+  _info "Detected $variant — installing $wheel"
+
+  # Swap wheels atomically from Python's point of view: uninstall the CPU wheel
+  # only after the accelerator wheel downloads cleanly. --dry-run reserves the
+  # package and catches registry/index errors before we touch the working set.
+  if ! "$pip" install --dry-run "${extra[@]}" "$wheel" >/dev/null 2>&1; then
+    _warn "$wheel not reachable — keeping CPU onnxruntime"
+    _warn "Chalie will run on CPU providers. Fix the GPU toolkit and re-run installer."
+    return 0
+  fi
+
+  "$pip" uninstall -y onnxruntime >/dev/null 2>&1 || true
+  if "$pip" install "${extra[@]}" "$wheel"; then
+    _ok "ONNX Runtime GPU wheel ready ($wheel)"
+  else
+    _warn "$wheel install failed post-download — restoring CPU onnxruntime"
+    "$pip" install "onnxruntime==$ORT_VERSION"
+  fi
 }
 
 # ─── Voice Dependencies (native, no Docker) ────────────────────────────────
@@ -646,6 +730,7 @@ main() {
   _install_deno
   _download_release
   _setup_venv
+  _install_onnxruntime_variant
   _install_playwright_browsers
   _install_sqlite_vec_fix
   _install_cli

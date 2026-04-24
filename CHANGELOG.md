@@ -11,6 +11,17 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 
 ---
 
+## rc-0.4.0
+
+### GPU-aware ORT install + runtime EP fallback
+
+- `installer/install.sh` now detects the host GPU (NVIDIA via `nvidia-smi`; AMD via `/dev/kfd` + `amdgpu` module) and installs the matching `onnxruntime` wheel (`onnxruntime-gpu`, `onnxruntime-rocm`, or CPU) after venv setup. The GPU wheel is only swapped in after `pip install --dry-run` confirms it is reachable — CPU wheel always remains as fallback. ORT version pinned at `1.20.1` as a single source of truth in the installer. `ROCM_PIP_INDEX` env var overrides the AMD package index for air-gapped installs.
+- `backend/requirements.txt`: `onnxruntime==1.20.1` pin dropped; `rapidocr_onnxruntime` transitively pulls the CPU wheel for dev workflows that bypass the installer.
+- `backend/services/onnx_session.py` (new): single chokepoint for all `ort.InferenceSession` construction in the process. `choose_providers(model_path)` returns the ordered provider list and strips `CoreMLExecutionProvider` when any initializer dimension exceeds the Metal 16384 2D-texture ceiling. `build_session(path, opts, providers, log_prefix)` retries with CPU-only on construction failure. Metal texture-limit check previously lived in `embedding_service.py`; it now lives here.
+- `EmbeddingService`, `VoiceService` (`api/voice.py`), and `Doc2QueryService` all route through `build_session` — no service constructs `ort.InferenceSession` directly.
+
+---
+
 ## Recent
 
 ### Brain Memory Sub-Panel Rework (rc-0.3.3)

@@ -114,16 +114,12 @@ def _ensure_models():
         logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
         model_file, voices_file = _download_kokoro_models()
         from kokoro_onnx import Kokoro
-        import onnxruntime as ort
+        from services.onnx_session import build_session
 
-        # Kokoro's default __init__ hardcodes CPUExecutionProvider unless the
-        # separate `onnxruntime-gpu` wheel is installed. Chalie ships standard
-        # `onnxruntime`, which auto-exposes CUDA/CoreML when available — same
-        # path used by embedding_service. Build the session ourselves and hand
-        # it to Kokoro.from_session so accelerated EPs are actually used.
-        providers = ort.get_available_providers()
-        kokoro_sess = ort.InferenceSession(model_file, providers=providers)
-        logger.info("[Voice] Kokoro EP providers: %s", kokoro_sess.get_providers())
+        # Kokoro's default __init__ hardcodes CPUExecutionProvider. The installer
+        # lands the right wheel (CPU/CUDA/ROCm) for the host; build_session picks
+        # the matching EP and falls back to CPU if session construction fails.
+        kokoro_sess = build_session(model_file, log_prefix="[Voice/Kokoro]")
         tts = Kokoro.from_session(kokoro_sess, voices_file)
 
         with _load_lock:
