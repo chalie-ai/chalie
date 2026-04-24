@@ -52,6 +52,17 @@ _model_lock = threading.Lock()
 _CACHE_TTL = 3600
 _CACHE_PREFIX = 'emb:'
 
+# Execution providers that compile graph subgraphs into backend-specific binaries
+# and therefore cannot round-trip back to ONNX — the optimized-graph serializer
+# bails out on any compiled node. When one of these is in the chosen EP list,
+# the optimized cache must be written via a CPU-only prime pass instead.
+_COMPILING_EPS = frozenset({
+    "CoreMLExecutionProvider",
+    "CUDAExecutionProvider",
+    "TensorrtExecutionProvider",
+    "ROCMExecutionProvider",
+})
+
 
 def _model_dir() -> Path:
     """Return path to local model cache directory, creating it if needed."""
@@ -110,6 +121,27 @@ def _build_session(providers: Optional[List[str]] = None):
             logger.error(f"[EMBEDDING] Failed to download model: {e}")
             raise
 
+    chosen = providers if providers is not None else ort.get_available_providers()
+
+    # ORT refuses to serialize a graph once a compiling EP (CoreML/CUDA/TRT/ROCm)
+    # has claimed nodes — session construction crashes mid-way when
+    # ``optimized_model_filepath`` is set. Prime the cache with a throwaway
+    # CPU-only session first, then open the real session from the written graph.
+    # One-off cost on first boot per ORT version; no-op on CPU-only hosts.
+    if not optimized_path.exists() and any(ep in _COMPILING_EPS for ep in chosen):
+        logger.info(
+            f"[EMBEDDING] Priming optimized graph via CPU-only pass (ORT {ort.__version__})"
+        )
+        prime_opts = ort.SessionOptions()
+        prime_opts.intra_op_num_threads = _resolve_thread_count()
+        prime_opts.inter_op_num_threads = 1
+        prime_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+        prime_opts.optimized_model_filepath = str(optimized_path)
+        prime_sess = ort.InferenceSession(
+            str(onnx_path), sess_options=prime_opts, providers=["CPUExecutionProvider"]
+        )
+        del prime_sess
+
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = _resolve_thread_count()
     opts.inter_op_num_threads = 1
@@ -125,7 +157,6 @@ def _build_session(providers: Optional[List[str]] = None):
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
         opts.optimized_model_filepath = str(optimized_path)
 
-    chosen = providers if providers is not None else ort.get_available_providers()
     session = ort.InferenceSession(str(load_path), sess_options=opts, providers=chosen)
     logger.info(
         f"[EMBEDDING] Providers: {session.get_providers()}, "
