@@ -65,6 +65,32 @@ _COMPILING_EPS = frozenset({
     "ROCMExecutionProvider",
 })
 
+# Metal 2D-texture ceiling — every Mac (Intel, M1–M4, all tiers) caps a texture
+# dimension at 16384 px per Apple's Metal Feature Set Tables. ORT's CoreML EP
+# honours the limit via CheckShapeForConvMemoryLimit, but does so by *partitioning*
+# any offending op into CPU sub-graphs rather than refusing. For a wide embedder
+# like ModernBERT (tok_embeddings.weight = {50368, 768}) that produces ~177
+# partitions, each duplicating intermediate tensors → +21 GB VSZ → jetsam SIGKILL
+# on lower-RAM Macs. Check the weight dims up-front and drop CoreML when we can
+# prove the model will trip the limit. CUDA/DirectML/ROCm/TRT all accept dims up
+# to INT_MAX, so only the CoreML EP is affected.
+_METAL_TEXTURE_LIMIT = 16384
+
+
+def _supports_coreml(model_path, limit: int = _METAL_TEXTURE_LIMIT) -> bool:
+    """Return False when any weight tensor in ``model_path`` has a dim > ``limit``.
+
+    Fail-open on inspection errors (missing onnx package, corrupt file): the
+    caller keeps CoreML in the provider list and ORT decides at session load.
+    """
+    try:
+        import onnx
+        m = onnx.load(str(model_path), load_external_data=False)
+        return not any(d > limit for init in m.graph.initializer for d in init.dims)
+    except Exception as e:
+        logger.warning(f"[EMBEDDING] CoreML shape pre-check skipped ({type(e).__name__}: {e})")
+        return True
+
 
 def _model_dir() -> Path:
     """Return path to local model cache directory, creating it if needed."""
@@ -123,7 +149,17 @@ def _build_session(providers: Optional[List[str]] = None):
             logger.error(f"[EMBEDDING] Failed to download model: {e}")
             raise
 
-    chosen = providers if providers is not None else ort.get_available_providers()
+    if providers is not None:
+        # Explicit override — trust the caller, don't second-guess.
+        chosen = list(providers)
+    else:
+        chosen = list(ort.get_available_providers())
+        if "CoreMLExecutionProvider" in chosen and not _supports_coreml(onnx_path):
+            chosen = [p for p in chosen if p != "CoreMLExecutionProvider"]
+            logger.info(
+                "[EMBEDDING] Dropped CoreMLExecutionProvider: model has dim > "
+                f"{_METAL_TEXTURE_LIMIT} (Metal 2D-texture ceiling)"
+            )
 
     # ORT refuses to serialize a graph once a compiling EP (CoreML/CUDA/TRT/ROCm)
     # has claimed nodes — session construction crashes mid-way when
