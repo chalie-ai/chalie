@@ -23,7 +23,7 @@ import uuid
 import numpy as np
 import pytest
 
-from services.embedding_service import EmbeddingService, get_embedding_service
+from services.embedding_service import get_embedding_service
 
 
 # ── Skip guard ───────────────────────────────────────────────────────────────
