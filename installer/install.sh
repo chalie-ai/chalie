@@ -95,7 +95,7 @@ _detect_linux_distro() {
   fi
 }
 
-# ─── Python 3.9+ Check ──────────────────────────────────────────────────────
+# ─── Python 3.11+ Check ─────────────────────────────────────────────────────
 _python_version_ok() {
   local py="${1:-python3}"
   if ! command -v "$py" >/dev/null 2>&1; then
@@ -106,7 +106,7 @@ _python_version_ok() {
   local major minor
   major="$(echo "$ver" | cut -d. -f1)"
   minor="$(echo "$ver" | cut -d. -f2)"
-  [[ "$major" -gt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -ge 9 ]]; }
+  [[ "$major" -gt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -ge 11 ]]; }
 }
 
 _install_python_macos() {
@@ -114,7 +114,7 @@ _install_python_macos() {
     _info "Installing Python 3.12 via Homebrew…"
     brew install python@3.12
   else
-    _error "Python 3.9+ is required but was not found."
+    _error "Python 3.11+ is required but was not found."
     _error "Install options:"
     _error "  • Homebrew: https://brew.sh  (then: brew install python@3.12)"
     _error "  • Direct download: https://www.python.org/downloads/"
@@ -158,7 +158,7 @@ _install_python_linux() {
       ;;
     *)
       _error "Cannot auto-install Python on distro: $distro"
-      _error "Please install Python 3.9+ manually and re-run the installer."
+      _error "Please install Python 3.11+ manually and re-run the installer."
       exit 1
       ;;
   esac
@@ -174,7 +174,7 @@ _check_python() {
     return
   fi
 
-  _warn "Python 3.9+ not found. Attempting to install…"
+  _warn "Python 3.11+ not found. Attempting to install…"
   local os
   os="$(_detect_os)"
   if [[ "$os" == "darwin" ]]; then
@@ -187,7 +187,7 @@ _check_python() {
     PYTHON="$(command -v python3)"
     _ok "Python installed: $(python3 --version 2>&1)"
   else
-    _error "Python installation failed. Please install Python 3.9+ and try again."
+    _error "Python installation failed. Please install Python 3.11+ and try again."
     exit 1
   fi
 }
