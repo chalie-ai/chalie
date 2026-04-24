@@ -32,6 +32,52 @@ export function relativeTime(isoStr) {
   }
 }
 
+/**
+ * Screen Wake Lock helper — keeps the display on during voice record/playback.
+ *
+ * The Screen Wake Lock API auto-releases when the page becomes hidden
+ * (tab-switch, lock-screen), so we re-request on visibilitychange while
+ * still active. No-op on browsers without `navigator.wakeLock`.
+ */
+export function createWakeLock() {
+  let sentinel = null;
+  let active = false;
+
+  const requestLock = async () => {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      sentinel = await navigator.wakeLock.request('screen');
+      sentinel.addEventListener('release', () => { sentinel = null; });
+    } catch (err) {
+      console.debug('[wakelock] request failed:', err);
+    }
+  };
+
+  const onVisibility = () => {
+    if (active && document.visibilityState === 'visible' && !sentinel) {
+      requestLock();
+    }
+  };
+
+  return {
+    async acquire() {
+      if (active) return;
+      active = true;
+      document.addEventListener('visibilitychange', onVisibility);
+      await requestLock();
+    },
+    async release() {
+      if (!active) return;
+      active = false;
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (sentinel) {
+        try { await sentinel.release(); } catch { /* ignore */ }
+        sentinel = null;
+      }
+    },
+  };
+}
+
 /** Show a transient toast notification with an optional undo action. */
 export function showToast(message, onUndo, duration = 4000) {
   // Remove existing toast
