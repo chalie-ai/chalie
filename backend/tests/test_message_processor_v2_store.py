@@ -280,7 +280,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send()
@@ -289,8 +288,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_is_callable(self, db):
         """store() is wired — calls DB, no longer raises NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
         # store() writes assistant row; no exception = pass
 
@@ -300,7 +298,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='done', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send()
@@ -309,8 +306,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_is_wired_in_commit_4(self, db):
         """store() calls DB, does not raise NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
         # store() writes assistant row; no exception = pass
 
@@ -320,7 +316,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send('req-id')
@@ -329,8 +324,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_not_caught_as_plain_exception(self, db):
         """store() calls DB, no longer raises NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('response text')
         # store() writes assistant row; no exception = pass
 

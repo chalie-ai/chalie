@@ -85,6 +85,7 @@ Chalie keeps thinking when you are not typing. Background workers run as daemon 
 - **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate skill. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
 - **Supporting workers** — user summary synthesis, world awareness (weather, news), moment context enrichment, document purge, folder watcher, interface health monitor, self-model health signals, optional profile enrichment, and the `SearchExpanderService` (single FIFO consumer that generates + embeds query variants for every new knowledge/data-graph row).
+- **EmbeddingService** — a module-level singleton that serialises all ONNX inference through a single daemon worker thread via a FIFO queue (`_embedding_queue`). All callers — `generate_embedding(text)`, `generate_embedding_np(text)`, `generate_embeddings_batch(texts)` — check MemoryStore first; cache hits bypass the queue entirely. The worker is started lazily on the first job submission (not at import time) so tests that never call the service never spawn a real ONNX thread. The single-worker model eliminates concurrent `session.run()` calls, which each allocate 500 MB+ of working memory and caused OOM under bulk document ingestion.
 
 No worker shares its processor instance with another. Each channel is fully isolated.
 

@@ -124,7 +124,6 @@ class TestSchemaConvergence:
         assert "episodes_vec" in vec_tables
         assert "knowledge_vec" in vec_tables
         assert "documents_vec" in vec_tables
-        assert "transcript_vec" in vec_tables
 
     def test_fresh_db_creates_indexes(self, tmp_path):
         """Representative indexes are created on a fresh database."""

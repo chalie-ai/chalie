@@ -1,12 +1,10 @@
 """
 Transcript Service — persistent conversation record.
 
-Stores every exchange turn (user, assistant, tool, internal) in SQLite
-with optional vector embeddings for semantic search.
+Stores every exchange turn (user, assistant, tool, internal) in SQLite.
 
 Key operations:
 - append(): Write a turn to the transcript
-- search(): Semantic search via transcript_vec (supports cross-topic)
 - get_recent(): Retrieve the most recent N entries for a topic
 - prune_old(): Delete entries older than TTL (90 days default)
 """
@@ -15,15 +13,8 @@ import logging
 import threading
 from typing import List, Dict, Optional
 
-from services.embedding_utils import pack_embedding
-
-from services.llm_service import estimate_tokens
-
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
-
-# Embedding threshold — entries with fewer estimated tokens are not embedded
-_EMBED_TOKEN_THRESHOLD = 50
 
 # Default TTL for pruning (90 days in seconds)
 _PRUNE_TTL_DAYS = 90
@@ -54,9 +45,6 @@ def append(
 ) -> Optional[int]:
     """Append a turn to the topic transcript.
 
-    Generates an embedding for substantive entries (>50 estimated tokens)
-    and inserts it into the companion vec table.
-
     Returns the rowid of the inserted entry, or None on failure.
     """
     if not channel:
@@ -80,10 +68,6 @@ def append(
             rowid = cursor.lastrowid
             cursor.close()
 
-        # Generate embedding for substantive entries
-        if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-            _embed_entry(rowid, content)
-
         _maybe_trigger_extraction(channel, rowid)
 
         return rowid
@@ -92,96 +76,6 @@ def append(
         logger.warning(f"{LOG_PREFIX} Failed to append: {e}")
         return None
 
-
-
-def search(
-    channel: Optional[str],
-    query: str,
-    limit: int = 5,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-) -> List[Dict]:
-    """Semantic search over transcript entries.
-
-    Uses embedding similarity via transcript_vec.
-
-    Args:
-        channel: Filter to a specific channel, or None for cross-channel (global) search.
-        query: Search text.
-        limit: Max results (1-20).
-        date_from: ISO datetime lower bound (inclusive). Optional.
-        date_to: ISO datetime upper bound (inclusive). Optional.
-
-    Returns list of dicts with: id, role, content, tool_name, created_at, channel, similarity.
-    """
-    limit = min(max(limit, 1), 20)
-
-    try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
-        query_embedding = emb_service.generate_embedding(query)
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Embedding failed, falling back to keyword: {e}")
-        return _keyword_search(channel, query, limit, date_from, date_to)
-
-    blob = pack_embedding(query_embedding)
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        # Build WHERE clause dynamically
-        conditions = ["v.embedding MATCH ?", "k = ?"]
-        params: list = [blob, limit + 10]
-
-        if channel:
-            conditions.append("tt.channel = ?")
-            params.append(channel)
-
-        if date_from:
-            conditions.append("tt.created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("tt.created_at <= ?")
-            params.append(date_to)
-
-        where = " AND ".join(conditions)
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT tt.id, tt.role, tt.content, tt.tool_name, tt.created_at,
-                       v.distance, tt.channel
-                FROM transcript_vec v
-                JOIN transcript tt ON tt.rowid = v.rowid
-                WHERE {where}
-                ORDER BY v.distance
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        results = []
-        for row in rows[:limit]:
-            distance = row[5]
-            similarity = max(0.0, 1.0 - distance / 2.0)
-            results.append({
-                'id': row[0],
-                'role': row[1],
-                'content': row[2],
-                'tool_name': row[3],
-                'created_at': row[4],
-                'similarity': similarity,
-                'channel': row[6],
-            })
-        return results
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Vector search failed: {e}")
-        return _keyword_search(channel, query, limit, date_from, date_to)
 
 
 def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=None) -> List[Dict]:
@@ -322,10 +216,10 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
                     except Exception:
                         pass
 
-                # Find transcript rowids below watermark that are not referenced
+                # Find transcript IDs below watermark that are not referenced
                 cursor.execute(
                     """
-                    SELECT id, rowid FROM transcript
+                    SELECT id FROM transcript
                     WHERE channel = ? AND id < ?
                     """,
                     (t, watermark),
@@ -333,20 +227,13 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
                 candidate_rows = cursor.fetchall()
 
                 to_delete_ids = []
-                to_delete_rowids = []
-                for entry_id, entry_rowid in candidate_rows:
+                for (entry_id,) in candidate_rows:
                     if entry_id not in referenced_ids:
                         to_delete_ids.append(entry_id)
-                        to_delete_rowids.append(entry_rowid)
 
                 if not to_delete_ids:
                     continue
 
-                placeholders = ','.join('?' * len(to_delete_rowids))
-                cursor.execute(
-                    f"DELETE FROM transcript_vec WHERE rowid IN ({placeholders})",
-                    to_delete_rowids,
-                )
                 id_placeholders = ','.join('?' * len(to_delete_ids))
                 cursor.execute(
                     f"DELETE FROM transcript WHERE id IN ({id_placeholders})",
@@ -366,11 +253,7 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
 
 
 def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
-    """Delete transcript entries older than ttl_days.
-
-    Also removes corresponding vec table entries.
-    Returns the number of entries deleted.
-    """
+    """Delete transcript entries older than ttl_days. Returns the number deleted."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -378,7 +261,6 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Find entries to delete
             cursor.execute(
                 """
                 SELECT rowid FROM transcript
@@ -392,14 +274,7 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
                 cursor.close()
                 return 0
 
-            # Delete from vec table first (FK-safe)
             placeholders = ','.join('?' * len(old_rowids))
-            cursor.execute(
-                f"DELETE FROM transcript_vec WHERE rowid IN ({placeholders})",
-                old_rowids,
-            )
-
-            # Delete from main table
             cursor.execute(
                 f"DELETE FROM transcript WHERE rowid IN ({placeholders})",
                 old_rowids,
@@ -950,34 +825,8 @@ def _safe_json_load_object(text: str) -> dict:
         return {}
 
 
-def _embed_entry(rowid: int, content: str) -> None:
-    """Generate and store embedding for a transcript entry."""
-    try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
-        embedding = emb_service.generate_embedding(content)
-        blob = pack_embedding(embedding)
-
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO transcript_vec (rowid, embedding) VALUES (?, ?)",
-                (rowid, blob),
-            )
-            cursor.close()
-
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Embedding failed for rowid {rowid}: {e}")
-
-
 def write_input_row(channel: str, role: str, content: str) -> int:
-    """Write the input transcript row. Returns the row ID.
-
-    Fires an embedding hook in a daemon thread if the content is long enough.
-    """
+    """Write the input transcript row. Returns the row ID."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -990,25 +839,13 @@ def write_input_row(channel: str, role: str, content: str) -> int:
         row_id = cursor.lastrowid
         cursor.close()
 
-    def _embed():
-        try:
-            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(row_id, content)
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} embed-input hook crashed: {exc}")
-
-    threading.Thread(target=_embed, daemon=True).start()
-
     _maybe_trigger_extraction(channel, row_id)
 
     return row_id
 
 
 def write_assistant_row(channel: str, content: str) -> int:
-    """Write the assistant transcript row. Returns the row ID.
-
-    Fires an embedding hook and rolling episode extraction trigger.
-    """
+    """Write the assistant transcript row and fire the rolling episode extraction trigger."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -1021,78 +858,6 @@ def write_assistant_row(channel: str, content: str) -> int:
         row_id = cursor.lastrowid
         cursor.close()
 
-    def _embed():
-        try:
-            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(row_id, content)
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} embed-assistant hook crashed: {exc}")
-
-    threading.Thread(target=_embed, daemon=True).start()
-
     _maybe_trigger_extraction(channel, row_id)
 
     return row_id
-
-
-def _keyword_search(
-    channel: Optional[str],
-    query: str,
-    limit: int,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-) -> List[Dict]:
-    """Keyword fallback when embedding search is unavailable."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        conditions = ["content LIKE ?"]
-        params: list = [f'%{query}%']
-
-        if channel:
-            conditions.append("channel = ?")
-            params.append(channel)
-
-        if date_from:
-            conditions.append("created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("created_at <= ?")
-            params.append(date_to)
-
-        where = " AND ".join(conditions)
-        params.append(limit)
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, role, content, tool_name, created_at, channel
-                FROM transcript
-                WHERE {where}
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        return [
-            {
-                'id': r[0],
-                'role': r[1],
-                'content': r[2],
-                'tool_name': r[3],
-                'created_at': r[4],
-                'similarity': 0.5,
-                'channel': r[5],
-            }
-            for r in rows
-        ]
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Keyword search failed: {e}")
-        return []

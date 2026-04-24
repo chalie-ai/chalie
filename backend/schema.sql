@@ -666,10 +666,6 @@ CREATE TABLE IF NOT EXISTS transcript (
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS transcript_vec USING vec0(
-    embedding float[768]
-);
-
 -- ────────────────────────────────────────────────────────────────
 -- COMPACTIONS — incremental conversation summarization
 -- ────────────────────────────────────────────────────────────────

@@ -15,10 +15,12 @@ Model downloads automatically from HuggingFace on first run (~300MB, cached
 at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 """
 
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
+import queue
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -232,6 +234,10 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
 def _encode_batch(texts: List[str]) -> np.ndarray:
     """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized.
 
+    Called ONLY from the module-level embedding worker. External callers go
+    through the queue via generate_embedding* — direct calls bypass the
+    serialization contract and risk concurrent ORT inference.
+
     Sequence length is set dynamically by the tokenizer (padding=True pads each
     batch to its longest item). _MODEL_MAX_TOKENS only bites for truly
     oversized inputs — it prevents position_ids from exceeding the model's
@@ -289,6 +295,65 @@ def _get_store():
     return MemoryClientService.create_connection()
 
 
+# ── Inference queue ─────────────────────────────────────────────────────────
+#
+# A single daemon worker serializes ALL ORT inference calls.  Multiple
+# EmbeddingService instances (list_service, search router, api/chat_image, …)
+# all share this one queue via the module-level globals, preventing concurrent
+# session.run() calls that otherwise allocate 500 MB+ each and OOM under bulk
+# ingestion.
+#
+# Worker is started lazily on the first job submission so that importing this
+# module in tests never spawns a real ONNX thread.
+
+_embedding_queue: queue.Queue = queue.Queue()
+_embedding_worker_started = threading.Lock()
+_embedding_worker_running = False
+
+
+def _run_embedding_worker() -> None:
+    """Process inference jobs from the module-level queue, one at a time.
+
+    Each job is a (texts, future) pair.  Results are delivered via the future
+    so callers block until their job completes.  Exceptions are forwarded to
+    the future so the caller receives them via future.result().
+    """
+    while True:
+        texts, future = _embedding_queue.get()
+        try:
+            result = _encode_batch(texts)
+            future.set_result(result)
+        except Exception as exc:
+            future.set_exception(exc)
+
+
+def _ensure_worker_started() -> None:
+    """Start the embedding worker thread on first call. Idempotent."""
+    global _embedding_worker_running
+    if _embedding_worker_running:
+        return
+    with _embedding_worker_started:
+        if _embedding_worker_running:
+            return
+        t = threading.Thread(target=_run_embedding_worker, name="embedding-worker", daemon=True)
+        t.start()
+        _embedding_worker_running = True
+
+
+def _submit_for_inference(texts: List[str]) -> np.ndarray:
+    """Submit texts to the inference queue and block until the result is ready.
+
+    Cache checks must be done BEFORE calling this function — submitting a
+    job for a cache-hit text would needlessly queue behind pending work and
+    could cause reentrance if the worker itself ever needed to embed (it does
+    not, but the guard keeps the contract explicit).
+    """
+    _ensure_worker_started()
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    _embedding_queue.put((texts, future))
+    return future.result()
+
+
 # Singleton EmbeddingService instance
 _embedding_service_instance = None
 
@@ -340,15 +405,20 @@ class EmbeddingService:
     def generate_embedding(self, text: str) -> list:
         """Generate a single L2-normalized embedding vector as a list. Cached.
 
+        Cache hit returns immediately without touching the queue — this also
+        prevents reentrance deadlock if an embedding is requested from within
+        the worker thread (impossible today, but guarded explicitly).
+
         Returns:
             Embedding as a plain Python list of floats suitable for SQLite storage.
         """
+        # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return cached
 
         try:
-            embedding = _encode_batch([text])[0].tolist()
+            embedding = _submit_for_inference([text])[0].tolist()
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
@@ -358,15 +428,20 @@ class EmbeddingService:
     def generate_embedding_np(self, text: str) -> np.ndarray:
         """Generate a single L2-normalized embedding vector as a numpy array. Cached.
 
+        Cache hit returns immediately without touching the queue — this also
+        prevents reentrance deadlock if an embedding is requested from within
+        the worker thread (impossible today, but guarded explicitly).
+
         Returns:
             Embedding as a float32 numpy array for cosine similarity math.
         """
+        # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return np.array(cached, dtype=np.float32)
 
         try:
-            embedding = _encode_batch([text])[0]
+            embedding = _submit_for_inference([text])[0]
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
@@ -376,9 +451,11 @@ class EmbeddingService:
     def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
         """Generate L2-normalized embeddings for a batch of texts.
 
-        Batch operations (document chunking, bulk consolidation) bypass per-text
-        caching — the overhead of N cache lookups + JSON serialization would negate
-        the benefit for large batches.
+        Each chunk is submitted as a single queue job so the worker processes
+        chunks sequentially — enforcing the same OOM-prevention contract as
+        single-text calls.  Per-text caching is bypassed for batch operations;
+        the overhead of N cache lookups + JSON serialization negates the
+        benefit for large batches.
 
         Returns:
             List of float32 numpy arrays, one per input text.
@@ -388,11 +465,11 @@ class EmbeddingService:
 
         try:
             results = []
-            # Process in chunks of 32 to bound memory usage
+            # Process in chunks of 32 to bound memory usage per job.
             chunk_size = 32
             for i in range(0, len(texts), chunk_size):
                 chunk = texts[i:i + chunk_size]
-                embeddings = _encode_batch(chunk)
+                embeddings = _submit_for_inference(chunk)
                 results.extend(embeddings)
             return results
         except Exception as e:
