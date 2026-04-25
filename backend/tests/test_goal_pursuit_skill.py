@@ -5,8 +5,6 @@ surface behaviour on both success and failure.
 """
 
 import json
-import sqlite3
-from contextlib import contextmanager
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -66,12 +64,10 @@ class TestHandleGoalPursuitValidation:
 
 class TestHandleGoalPursuitSuccess:
     def _call_with_patched_thread(self, goal='Summarise the latest news'):
-        """Call handle_goal_pursuit with threading.Thread and GoalEcologyService patched."""
-        with patch('threading.Thread') as mock_thread_cls, \
-             patch('services.goal_ecology_service.GoalEcologyService') as mock_ecology_cls:
+        """Call handle_goal_pursuit with threading.Thread patched."""
+        with patch('threading.Thread') as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
-            mock_ecology_cls.return_value = MagicMock()
             raw = handle_goal_pursuit('user', {'goal': goal})
             parsed = json.loads(raw)
             return parsed, mock_thread_cls, mock_thread
@@ -95,10 +91,8 @@ class TestHandleGoalPursuitSuccess:
 
     def test_valid_goal_returns_json_string(self):
         """handle_goal_pursuit must return a JSON-parseable string."""
-        with patch('threading.Thread') as mock_thread_cls, \
-             patch('services.goal_ecology_service.GoalEcologyService') as mock_ecology_cls:
+        with patch('threading.Thread') as mock_thread_cls:
             mock_thread_cls.return_value = MagicMock()
-            mock_ecology_cls.return_value = MagicMock()
             raw = handle_goal_pursuit('user', {'goal': 'do something'})
         assert isinstance(raw, str)
         # Must not raise
@@ -135,12 +129,10 @@ class TestGoalPursuitThreadSuccess:
         mock_output_instance = MagicMock()
 
         with patch('threading.Thread', side_effect=capture_thread), \
-             patch('services.goal_ecology_service.GoalEcologyService') as mock_ecology_cls, \
              patch('services.goal_pursuit_processor.GoalPursuitProcessor',
                    return_value=mock_processor_instance), \
              patch('services.output_service.OutputService',
                    return_value=mock_output_instance):
-            mock_ecology_cls.return_value = MagicMock()
             handle_goal_pursuit('user', {'goal': goal})
             # Invoke the background function synchronously
             captured_target['fn']()
@@ -184,12 +176,10 @@ class TestGoalPursuitThreadSuccess:
             return MagicMock()
 
         with patch('threading.Thread', side_effect=capture_thread), \
-             patch('services.goal_ecology_service.GoalEcologyService') as mock_ecology_cls, \
              patch('services.goal_pursuit_processor.GoalPursuitProcessor',
                    return_value=mock_processor_instance), \
              patch('services.output_service.OutputService',
                    return_value=mock_output_instance):
-            mock_ecology_cls.return_value = MagicMock()
             handle_goal_pursuit('user', {'goal': 'a task'})
             captured_target['fn']()
 
@@ -216,12 +206,10 @@ class TestGoalPursuitThreadFailure:
         mock_output_instance = MagicMock()
 
         with patch('threading.Thread', side_effect=capture_thread), \
-             patch('services.goal_ecology_service.GoalEcologyService') as mock_ecology_cls, \
              patch('services.goal_pursuit_processor.GoalPursuitProcessor',
                    return_value=mock_processor_instance), \
              patch('services.output_service.OutputService',
                    return_value=mock_output_instance):
-            mock_ecology_cls.return_value = MagicMock()
             handle_goal_pursuit('user', {'goal': 'a task'})
             captured_target['fn']()  # must not raise
 
@@ -251,114 +239,3 @@ class TestGoalPursuitThreadFailure:
         self._run_failing_target()
 
 
-# ── Goal persistence ───────────────────────────────────────────────────────────
-
-_GOAL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goals (
-    id TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'emergent'
-        CHECK (type IN ('stated', 'inferred', 'emergent', 'developmental')),
-    status TEXT NOT NULL DEFAULT 'candidate'
-        CHECK (status IN ('candidate', 'strengthening', 'actionable', 'active', 'completed', 'decayed', 'evolved')),
-    salience REAL NOT NULL DEFAULT 0.0,
-    confidence REAL NOT NULL DEFAULT 0.1,
-    commitment REAL DEFAULT 0.0,
-    evidence_count INTEGER DEFAULT 0,
-    outcome_feedback TEXT DEFAULT '[]',
-    is_muted INTEGER DEFAULT 0,
-    urgency REAL DEFAULT 0.0,
-    timescale TEXT DEFAULT 'medium_term',
-    strategy TEXT,
-    strategy_hash INTEGER,
-    parent_motives TEXT DEFAULT '[]',
-    identity_links TEXT DEFAULT '[]',
-    lineage_parent_id TEXT,
-    channel TEXT,
-    last_reinforced_at TEXT,
-    last_acted_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    derived_from TEXT DEFAULT '[]'
-);
-CREATE TABLE IF NOT EXISTS goal_evidence (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-    signal_type TEXT NOT NULL,
-    content TEXT NOT NULL,
-    source TEXT,
-    strength REAL NOT NULL DEFAULT 0.5,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-"""
-
-
-def _make_goals_db():
-    """Return an (db_svc_mock, conn) pair backed by an in-memory SQLite database."""
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.executescript(_GOAL_SCHEMA)
-    conn.commit()
-
-    @contextmanager
-    def _connection():
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-
-    svc = MagicMock()
-    svc.connection = _connection
-    return svc, conn
-
-
-class TestHandleGoalPursuitPersistence:
-    """Verify that handle_goal_pursuit persists a goal row before spawning the thread.
-
-    These tests do NOT patch threading.Thread so the real WriteQueueService drain
-    thread can run.  They DO provide a real in-memory SQLite database so
-    GoalEcologyService.create_goal() can complete its submit_sync() write.
-    """
-
-    def _run(self, goal='research cold water swimming benefits'):
-        db_svc, conn = _make_goals_db()
-        # Patch the name as bound inside goal_ecology_service (from-import), not
-        # the canonical location, so GoalEcologyService.__init__ receives the mock.
-        with patch('services.goal_ecology_service.get_shared_db_service', return_value=db_svc):
-            raw = handle_goal_pursuit('user', {'goal': goal})
-        result = json.loads(raw)
-        return result, conn
-
-    def test_goal_row_written_to_goals_table(self):
-        """A row matching the goal description must exist in the goals table."""
-        _, conn = self._run()
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM goals WHERE description LIKE '%cold water%' OR description LIKE '%swimming%'"
-        )
-        count = cursor.fetchone()[0]
-        assert count >= 1, f"Expected at least 1 goal row, got {count}"
-
-    def test_goal_row_type_is_stated(self):
-        """The persisted goal must have type='stated'."""
-        _, conn = self._run()
-        cursor = conn.execute(
-            "SELECT type FROM goals WHERE description LIKE '%cold water%' OR description LIKE '%swimming%'"
-        )
-        row = cursor.fetchone()
-        assert row is not None
-        assert row[0] == 'stated'
-
-    def test_returns_success_true(self):
-        """The skill must still return success=True when persistence succeeds."""
-        result, _ = self._run()
-        assert result['success'] is True
-
-    def test_persistence_failure_does_not_abort_success_response(self):
-        """Even when GoalEcologyService raises, the skill returns success=True."""
-        with patch('services.goal_ecology_service.GoalEcologyService',
-                   side_effect=RuntimeError('db unavailable')):
-            raw = handle_goal_pursuit('user', {'goal': 'research cold water swimming'})
-        result = json.loads(raw)
-        assert result['success'] is True

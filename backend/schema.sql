@@ -455,58 +455,6 @@ CREATE TABLE IF NOT EXISTS concept_lut_misses (
 CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
 
 -- ────────────────────────────────────────────────────────────────
--- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS goals (
-    id TEXT PRIMARY KEY,
-    description TEXT NOT NULL,                -- natural language goal description
-    type TEXT NOT NULL DEFAULT 'emergent'
-        CHECK (type IN ('stated', 'inferred', 'emergent', 'developmental')),
-    status TEXT NOT NULL DEFAULT 'candidate'
-        CHECK (status IN ('candidate', 'strengthening', 'actionable', 'active', 'completed', 'decayed', 'evolved')),
-    salience REAL NOT NULL DEFAULT 0.0,       -- 0.0–1.0 current strength
-    confidence REAL NOT NULL DEFAULT 0.1,     -- 0.0–1.0 prediction confidence
-    commitment REAL DEFAULT 0.0,              -- 0.0–1.0 commitment level
-    evidence_count INTEGER DEFAULT 0,         -- number of supporting signals
-    outcome_feedback TEXT DEFAULT '[]',       -- JSON array: engagement history
-    is_muted INTEGER DEFAULT 0,               -- fast column: 1 if user has muted this goal
-    urgency REAL DEFAULT 0.0,                 -- 0.0–1.0 time pressure
-    timescale TEXT DEFAULT 'medium_term',     -- immediate, short_term, medium_term, long_term
-    strategy TEXT,                            -- generated approach for actionable goals
-    strategy_hash INTEGER,                    -- hash mod 10000 for tracking strategy versions
-    parent_motives TEXT DEFAULT '[]',         -- JSON: aligned CORE_MOTIVES
-    identity_links TEXT DEFAULT '[]',         -- JSON: aligned identity dimensions
-    lineage_parent_id TEXT,                   -- parent goal for hierarchy
-    channel TEXT,                             -- associated conversation channel (optional)
-    last_reinforced_at TEXT,                  -- when goal last received evidence
-    last_acted_at TEXT,                       -- when goal was last acted upon
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    derived_from TEXT DEFAULT '[]'         -- JSON array of episode IDs that formed this goal
-);
-
-CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
-CREATE INDEX IF NOT EXISTS idx_goals_salience ON goals(salience, status);
-CREATE INDEX IF NOT EXISTS idx_goals_type ON goals(type, status);
-CREATE INDEX IF NOT EXISTS idx_goals_active_salience ON goals(salience DESC) WHERE status IN ('candidate', 'strengthening', 'actionable');
-
--- ────────────────────────────────────────────────────────────────
--- GOAL EVIDENCE — accumulated signals supporting goals
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS goal_evidence (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-    signal_type TEXT NOT NULL,                -- 'topic_mention', 'trait_update', 'explicit', etc.
-    content TEXT NOT NULL,                    -- the raw signal text
-    source TEXT,                              -- which service emitted the signal
-    strength REAL NOT NULL DEFAULT 0.5,       -- 0.0–1.0 how strongly this supports the goal
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_goal_evidence_goal_id ON goal_evidence(goal_id);
-CREATE INDEX IF NOT EXISTS idx_goal_evidence_type ON goal_evidence(signal_type);
-
--- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
@@ -514,7 +462,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embed
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS goals_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access

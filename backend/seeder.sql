@@ -36,7 +36,6 @@ FROM (
     UNION ALL SELECT 'moment-enrichment'
     UNION ALL SELECT 'document-synthesis'
     UNION ALL SELECT 'compaction'
-    UNION ALL SELECT 'goal-strategy'
     UNION ALL SELECT 'reflect-skill'
     UNION ALL SELECT 'failure-analysis'
 )

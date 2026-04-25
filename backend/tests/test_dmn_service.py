@@ -183,7 +183,7 @@ class TestGatherRecentContext:
 # ── TestGatherSalienceContext ──────────────────────────────────────────────────
 
 class TestGatherSalienceContext:
-    """_gather_salience_context() — reads concepts, salient episodes, and goals."""
+    """_gather_salience_context() — reads concepts and salient episodes."""
 
     def test_returns_empty_string_when_all_tables_empty(self, db, store):
         """Empty data_graph + episodes + goals → empty string, no exception."""
@@ -225,59 +225,6 @@ class TestGatherSalienceContext:
 
         assert 'High-priority memories:' in result
 
-    def test_active_goal_description_appears(self, db, store):
-        """An active goal's description appears in the salience context."""
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES (?, ?, 'emergent', 'active', 0.9, 0.85)",
-            ('goal-1', 'Complete the project proposal'),
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._gather_salience_context()
-
-        assert 'Complete the project proposal' in result
-
-    def test_active_goals_section_header_present(self, db, store):
-        """'Active goals:' section header appears when goals exist."""
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES ('g-2', 'Learn Mandarin', 'emergent', 'active', 0.7, 0.6)",
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._gather_salience_context()
-
-        assert 'Active goals:' in result
-
-    def test_goal_confidence_rendered_as_percentage(self, db, store):
-        """Goal confidence (0.0–1.0) is shown as a whole-number percentage."""
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES ('g-3', 'Meditate daily', 'emergent', 'active', 0.6, 0.75)",
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._gather_salience_context()
-
-        assert '75%' in result
-
-    def test_inactive_goals_excluded(self, db, store):
-        """Goals with status != 'active' do not appear in salience context."""
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES ('g-4', 'Archived goal', 'emergent', 'completed', 0.5, 0.5)",
-        )
-        db.commit()
-
-        svc = _make_service(db, store)
-        result = svc._gather_salience_context()
-
-        assert 'Archived goal' not in result
-
     def test_high_retrieval_weight_episode_in_notable_section(self, db, store):
         """Episodes with retrieval_weight >= 0.7 appear under 'Notable episodes:'."""
         _insert_episode(db, 'ep-high', 'Big breakthrough moment',
@@ -315,20 +262,16 @@ class TestGatherSalienceContext:
         # 'misc' kind rows should not be in the High-priority memories section
         assert 'birthday' not in result
 
-    def test_all_three_sections_when_data_present(self, db, store):
-        """When concepts, salient episodes, and goals all exist, all 3 sections appear."""
+    def test_both_sections_when_data_present(self, db, store):
+        """When concepts and salient episodes both exist, both sections appear."""
         from services.time_utils import utc_now
         ts = utc_now().isoformat()
 
-        # Seed data_graph (not knowledge — endpoint reads data_graph now)
+        # Seed data_graph
         db.execute(
             "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
             "first_seen_at, last_confirmed_at) VALUES ('user_specific', 'skill', 'Python', 0.9, ?, ?)",
             (ts, ts),
-        )
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES ('g-all', 'Ship v1', 'emergent', 'active', 0.9, 0.9)",
         )
         db.commit()
         _insert_episode(db, 'ep-notable', 'Key milestone achieved',
@@ -339,7 +282,6 @@ class TestGatherSalienceContext:
 
         assert 'High-priority memories:' in result
         assert 'Notable episodes:' in result
-        assert 'Active goals:' in result
 
 
 # ── TestActiveTopicWhitelist ───────────────────────────────────────────────────

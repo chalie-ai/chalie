@@ -153,28 +153,28 @@ class TestReviewToolCallsSkill:
         center = utc_now()
         center_iso = center.isoformat()
         _insert_tool_call(
-            patched_db, 'goals', {'action': 'list'}, 'goal list here', center_iso
+            patched_db, 'memory', {'action': 'recall'}, 'memory result here', center_iso
         )
 
         result = handle_review_tool_calls('user', {'date_time': center_iso})
 
         text = result['text']
-        assert 'goals' in text
-        assert 'goal list here' in text
+        assert 'memory' in text
+        assert 'memory result here' in text
 
     def test_formats_multiple_records(self, patched_db):
         """Multiple records each appear as a separate line."""
         center = utc_now()
         center_iso = center.isoformat()
         _insert_tool_call(patched_db, 'memory', {}, 'result A', center_iso)
-        _insert_tool_call(patched_db, 'goals', {}, 'result B', center_iso)
+        _insert_tool_call(patched_db, 'schedule', {}, 'result B', center_iso)
 
         result = handle_review_tool_calls('user', {'date_time': center_iso})
 
         text = result['text']
         assert '2 record(s)' in text
         assert 'memory' in text
-        assert 'goals' in text
+        assert 'schedule' in text
 
     def test_excludes_records_outside_window(self, patched_db):
         """Records 10 min before center are NOT returned (outside ±5 min)."""

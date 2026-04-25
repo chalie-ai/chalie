@@ -10,15 +10,6 @@ import logging
 
 from .config_service import ConfigService
 
-try:
-    from services.telemetry_service import (
-        get_telemetry_collector,
-        GOAL_LIFECYCLE,
-    )
-    _TELEMETRY_AVAILABLE = True
-except Exception as e:  # pragma: no cover
-    _TELEMETRY_AVAILABLE = False
-    logging.getLogger(__name__).debug(f"Telemetry import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +58,7 @@ class DecayEngineService:
         """Run one full decay cycle across all memory types.
 
         Sub-cycles: _decay_episodic, _decay_data_graph, _cleanup_transcript,
-        _purge_tool_calls. (Plus _decay_goals while §4.1 rip is pending.)
+        _purge_tool_calls.
 
         Args:
             richness: Current memory richness score in [0.0, 1.0]. Reserved for
@@ -75,7 +66,6 @@ class DecayEngineService:
         """
         episodic_count = self._decay_episodic()
         data_graph_count = self._decay_data_graph()
-        goal_decay_count = self._decay_goals()
         transcript_cleaned = self._cleanup_transcript()
         tool_calls_purged = self._purge_tool_calls()
 
@@ -84,50 +74,8 @@ class DecayEngineService:
             f"episodic={episodic_count} updated, "
             f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
-            f"tool_calls_purged={tool_calls_purged}, "
-            f"goals={goal_decay_count} decayed"
+            f"tool_calls_purged={tool_calls_purged}"
         )
-
-    def _decay_goals(self) -> int:
-        """Decay unreinforced goals via :class:`~services.goal_ecology_service.GoalEcologyService`.
-
-        Delegates to :meth:`~services.goal_ecology_service.GoalEcologyService.decay_unreinforced`
-        to identify goals whose salience has not been reinforced within their
-        configured timescale window.  After the sub-service returns, emits a
-        single ``GOAL_LIFECYCLE`` telemetry event summarising the number of goals
-        transitioned to *decayed* status during this cycle.
-
-        Returns:
-            Number of goals whose status was set to ``'decayed'``, or ``0`` on
-            any error (failure is non-fatal; the rest of the decay cycle
-            continues regardless).
-        """
-        try:
-            from services.goal_ecology_service import GoalEcologyService
-
-            service = GoalEcologyService()
-            decayed_count = service.decay_unreinforced()
-
-            if _TELEMETRY_AVAILABLE:
-                try:
-                    get_telemetry_collector().record(
-                        GOAL_LIFECYCLE,
-                        {
-                            "action": "decay",
-                            "decayed_count": decayed_count,
-                            "source": "decay_engine",
-                        },
-                    )
-                except Exception as _tel_err:
-                    logger.debug(
-                        "[DECAY ENGINE] GOAL_LIFECYCLE 'decay' telemetry emit failed (non-fatal): %s",
-                        _tel_err,
-                    )
-
-            return decayed_count
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Goal decay sub-cycle failed: {e}", exc_info=True)
-            return 0
 
     def _decay_episodic(self) -> int:
         """

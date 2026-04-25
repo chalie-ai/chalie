@@ -476,33 +476,6 @@ class SelfModelService:
                         'severity': 0.7,
                     })
 
-                # 2. Goal evidence empty: 10+ goals, 0 evidence
-                try:
-                    goal_count = conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
-                    evidence_count = conn.execute("SELECT COUNT(*) FROM goal_evidence").fetchone()[0]
-                    if goal_count >= 10 and evidence_count == 0:
-                        checks.append({
-                            'signal': f"Goal evidence inactive: {goal_count} goals, 0 evidence",
-                            'severity': 0.6,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Goal evidence check failed: {e}", exc_info=True)
-
-                # 3. Goal duplication: any goal title appearing 3+ times
-                try:
-                    dup = conn.execute("""
-                        SELECT description, COUNT(*) as c FROM goals
-                        GROUP BY description HAVING c >= 3
-                        ORDER BY c DESC LIMIT 1
-                    """).fetchone()
-                    if dup:
-                        checks.append({
-                            'signal': f"Duplicate goals: '{dup[0][:50]}' x{dup[1]}",
-                            'severity': 0.5,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
-
                 # Orphaned episodes check removed — topics table dropped in migration 035
 
         except Exception as e:

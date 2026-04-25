@@ -31,22 +31,10 @@
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "none", "vision": "none" }
     },
     {
-      "id": "goal-strategy",
-      "name": "Goal Strategy",
-      "desc": "Generates 1-3 sentence strategy for actionable goals. Lightweight, fires once per goal transition.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "failure-analysis",
       "name": "Failure Analysis",
       "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "goal-emergence",
-      "name": "Goal Emergence",
-      "desc": "Detects new goals from episodic memory narratives. Fires per episode batch.",
-      "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "high", "vision": "none" }
     }
   ]
 }

@@ -73,13 +73,12 @@ class TestDecayEngineService:
 
         with patch.object(svc, '_decay_episodic',     side_effect=_record('episodic', 5)), \
              patch.object(svc, '_decay_data_graph',   side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',        side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript', side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',   side_effect=_record('tool_calls', 0)):
 
             svc.run_decay_cycle(richness=1.0)
 
-        for name in ('episodic', 'data_graph', 'goals', 'transcript', 'tool_calls'):
+        for name in ('episodic', 'data_graph', 'transcript', 'tool_calls'):
             assert name in call_log, f"Expected '{name}' sub-cycle to run"
 
     # ── Individual decay targets ──────────────────────────────────────
