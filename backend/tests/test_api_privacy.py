@@ -51,7 +51,6 @@ class TestPrivacyAPI:
             assert "episodes" in data
             assert "transcript" in data
             assert "scheduled_items" in data
-            assert "place_fingerprints" in data
 
             # Verify counts are 0 for an empty database
             assert data["episodes"] == 0
@@ -101,7 +100,7 @@ class TestPrivacyAPI:
 
     def test_delete_all_clears_extended_tables(self, client, db):
         """DELETE /privacy/delete-all wipes data_graph, lists, list_items,
-        goals, scheduled_items, documents, and place_fingerprints."""
+        scheduled_items, and documents."""
         # ── Seed data_graph ───────────────────────────────────────────────────
         db.execute(
             "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
@@ -118,13 +117,6 @@ class TestPrivacyAPI:
             ("item-1", "list-1", "Milk"),
         )
 
-        # ── Seed goals ────────────────────────────────────────────────────────
-        db.execute(
-            "INSERT INTO goals (id, description, type, status, salience, confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("goal-1", "Learn to cook", "stated", "candidate", 0.5, 0.8),
-        )
-
         # ── Seed scheduled_items ──────────────────────────────────────────────
         db.execute(
             "INSERT INTO scheduled_items (id, message, due_at) VALUES (?, ?, ?)",
@@ -138,24 +130,14 @@ class TestPrivacyAPI:
             ("doc-1", "notes.txt", "text/plain", "data/uploads/notes.txt"),
         )
 
-        # ── Seed place_fingerprints ───────────────────────────────────────────
-        db.execute(
-            "INSERT INTO place_fingerprints "
-            "(fingerprint_hash, device_class, hour_bucket, place_label) "
-            "VALUES (?, ?, ?, ?)",
-            ("abc123hash", "laptop", 9, "home"),
-        )
-
         db.commit()
 
         # Pre-conditions: every seeded table has >= 1 row
         assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] >= 1
-        assert db.execute("SELECT COUNT(*) FROM goals").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] >= 1
-        assert db.execute("SELECT COUNT(*) FROM place_fingerprints").fetchone()[0] >= 1
 
         response = client.delete(
             '/privacy/delete-all',
@@ -170,7 +152,5 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM goals").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM place_fingerprints").fetchone()[0] == 0

@@ -99,7 +99,7 @@ class TestDataSummary:
         required_tables = [
             'episodes', 'transcript',
             'scheduled_items',
-            'lists', 'place_fingerprints',
+            'lists',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in data_summary query list"
@@ -117,7 +117,7 @@ class TestExportData:
         required_tables = [
             'episodes',
             'transcript', 'scheduled_items',
-            'lists', 'list_items', 'place_fingerprints',
+            'lists', 'list_items',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in export_data table list"

@@ -216,15 +216,15 @@ class TestSchemaConvergence:
 
         # Drop a non-critical table
         with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS place_fingerprints")
+            conn.execute("DROP TABLE IF EXISTS documents")
 
         with db.connection() as conn:
-            assert "place_fingerprints" not in _table_names(conn)
+            assert "documents" not in _table_names(conn)
 
         _converge(db)
 
         with db.connection() as conn:
-            assert "place_fingerprints" in _table_names(conn)
+            assert "documents" in _table_names(conn)
 
     def test_missing_table_columns_correct_after_restore(self, tmp_path):
         """Restored table has all expected columns."""
