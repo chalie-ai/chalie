@@ -379,6 +379,163 @@ class TestClassAttributes:
         assert UserSummaryProcessor.JOB == 'frontal-cortex-unified'
 
 
+# ── TestShouldSynthesiseBehavioralPattern ─────────────────────────────────────
+
+@pytest.mark.unit
+class TestShouldSynthesiseBehavioralPattern:
+
+    def test_should_synthesise_returns_true_for_pattern_only_update(self, db):
+        """Broadened MAX: a new behavioral_pattern row (no new user_specific) fires synthesis.
+
+        Regression guard: before §5.3 the MAX query only included 'user_specific'.
+        A fresh pattern written after the last synthesis would be invisible to the
+        sentinel and synthesis would never fire — the pattern would never reach the
+        synopsis.  This test proves the broadened IN clause is effective.
+        """
+        from datetime import timedelta
+
+        from services.time_utils import utc_now
+        from services.user_summary_processor import UserSummaryProcessor
+
+        now = utc_now()
+        two_days_ago = (now - timedelta(days=2)).isoformat()
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+
+        # Seed the existing user_summary row (kind='system') at T-2 days.
+        db.execute(
+            """
+            INSERT INTO data_graph
+                (kind, key, value, active, deleted_at, retrieval_weight,
+                 storage_strength, evidence_count, first_seen_at, last_confirmed_at,
+                 source)
+            VALUES ('system', 'user_summary', 'old synopsis', 1, NULL, 0.7, 0.5, 1, ?, ?, 'user_summary_processor')
+            """,
+            (two_days_ago, two_days_ago),
+        )
+
+        # Seed a behavioral_pattern row at T-1 hour (newer than the synopsis).
+        # No user_specific rows at all — the trigger must come purely from this pattern.
+        pattern_content = json.dumps({
+            'vertical': 'meal_times',
+            'class': 'time_routine',
+            'slots': {'event_label': 'dinner', 'day_bucket': 'fri', 'hour_window': '18:30-20:00'},
+            'recurrence': 7,
+            'sigma_confidence': 4.8,
+            'first_seen': two_days_ago,
+            'last_seen': one_hour_ago,
+            'status': 'active',
+            'source': 'llm',
+        })
+        db.execute(
+            """
+            INSERT INTO data_graph
+                (kind, key, value, active, deleted_at, retrieval_weight,
+                 storage_strength, evidence_count, first_seen_at, last_confirmed_at,
+                 source)
+            VALUES ('behavioral_pattern', 'meal_times', ?, 1, NULL, 0.5, 0.5, 1, ?, ?, 'pattern_extractor')
+            """,
+            (pattern_content, two_days_ago, one_hour_ago),
+        )
+        db.commit()
+
+        assert UserSummaryProcessor()._should_synthesise() is True, (
+            "_should_synthesise() returned False despite a behavioral_pattern row "
+            "newer than the user_summary — broadened MAX clause not effective"
+        )
+
+
+# ── TestFormatPatternLine ──────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestFormatPatternLine:
+
+    def test_time_routine_renders_all_slots(self):
+        """time_routine: vertical, class, event_label, day_bucket, hour_window, recurrence, last_seen."""
+        from services.user_summary_processor import _format_pattern_line
+
+        content = {
+            'vertical': 'meal_times',
+            'class': 'time_routine',
+            'slots': {'event_label': 'dinner', 'day_bucket': 'fri', 'hour_window': '18:30-20:00'},
+            'recurrence': 7,
+            'last_seen': '2026-04-22T19:00:00+00:00',
+        }
+        line = _format_pattern_line(content)
+
+        assert 'meal_times' in line
+        assert 'time_routine' in line
+        assert 'dinner' in line
+        assert 'fri' in line
+        assert '18:30-20:00' in line
+        assert 'recurrence=7' in line
+        assert '2026-04-22' in line
+
+    def test_preference_renders_weight_and_choice(self):
+        """preference: vertical, class, category, choice, weight, recurrence, last_seen."""
+        from services.user_summary_processor import _format_pattern_line
+
+        content = {
+            'vertical': 'cuisine_pref',
+            'class': 'preference',
+            'slots': {'category': 'cuisine', 'choice': 'italian', 'weight': 0.85},
+            'recurrence': 5,
+            'last_seen': '2026-04-20T12:00:00+00:00',
+        }
+        line = _format_pattern_line(content)
+
+        assert 'cuisine_pref' in line
+        assert 'preference' in line
+        assert 'italian' in line
+        assert 'weight=0.85' in line
+        assert 'recurrence=5' in line
+        assert '2026-04-20' in line
+
+    def test_recurring_entity_renders_kind_bracket(self):
+        """recurring_entity: vertical, class, name, [kind] bracket, recurrence, last_seen."""
+        from services.user_summary_processor import _format_pattern_line
+
+        content = {
+            'vertical': 'restaurant_pref',
+            'class': 'recurring_entity',
+            'slots': {'kind': 'restaurant', 'name': 'Pizza Hut'},
+            'recurrence': 4,
+            'last_seen': '2026-04-18T20:00:00+00:00',
+        }
+        line = _format_pattern_line(content)
+
+        assert 'restaurant_pref' in line
+        assert 'recurring_entity' in line
+        assert 'Pizza Hut' in line
+        assert '[restaurant]' in line
+        assert 'recurrence=4' in line
+        assert '2026-04-18' in line
+
+    def test_event_cadence_renders_cadence_and_next(self):
+        """event_cadence: vertical, class, event_type, cadence_days, next_expected, recurrence, last_seen."""
+        from services.user_summary_processor import _format_pattern_line
+
+        content = {
+            'vertical': 'meetings',
+            'class': 'event_cadence',
+            'slots': {
+                'event_type': 'meeting',
+                'cadence_days': 7,
+                'next_expected': '2026-04-29T09:00:00+00:00',
+            },
+            'recurrence': 3,
+            'last_seen': '2026-04-18T09:00:00+00:00',
+        }
+        line = _format_pattern_line(content)
+
+        assert 'meetings' in line
+        assert 'event_cadence' in line
+        assert 'meeting' in line
+        assert 'every 7d' in line
+        assert '2026-04-29' in line
+        assert 'recurrence=3' in line
+        assert '2026-04-18' in line
+
+
 # ── Integration tests (require live provider) ──────────────────────────────────
 
 @pytest.mark.integration

@@ -22,6 +22,74 @@ from services.system_message_prompt import UserSummarySystemPrompt
 logger = logging.getLogger(__name__)
 
 _MAX_TRAIT_ROWS = 200
+_MAX_PATTERN_ROWS = 25
+
+
+def _format_pattern_line(content: dict) -> str:
+    """Render a single behavioral_pattern content dict as a compact one-liner.
+
+    Format varies by pattern class so the synthesiser sees the most relevant
+    slots without having to parse raw JSON.
+
+    Examples::
+
+        meal_times / time_routine: dinner fri 18:30-20:00 (recurrence=7, last 2026-04-22)
+        cuisine_pref / preference: italian (weight=0.85, last 2026-04-20)
+        restaurant_pref / recurring_entity: Pizza Hut [restaurant] (recurrence=4, last 2026-04-18)
+        meetings / event_cadence: meeting every 7d next 2026-04-29 (recurrence=3, last 2026-04-18)
+    """
+    vertical = content.get('vertical', 'unknown')
+    cls = content.get('class', 'unknown')
+    slots = content.get('slots') or {}
+    recurrence = content.get('recurrence', 0)
+    last_seen = content.get('last_seen', '')
+    # Trim to date-only portion for brevity.
+    last_seen_short = last_seen[:10] if last_seen else '?'
+
+    if cls == 'time_routine':
+        label = slots.get('event_label', '')
+        day = slots.get('day_bucket', '')
+        window = slots.get('hour_window', '')
+        slot_str = f"{label} {day} {window}".strip()
+        return (
+            f"{vertical} / {cls}: {slot_str} "
+            f"(recurrence={recurrence}, last {last_seen_short})"
+        )
+
+    if cls == 'preference':
+        category = slots.get('category', '')
+        choice = slots.get('choice', '')
+        weight = slots.get('weight', '')
+        slot_str = f"{category} {choice}".strip() if category else choice
+        weight_part = f", weight={weight}" if weight != '' else ''
+        return (
+            f"{vertical} / {cls}: {slot_str} "
+            f"(recurrence={recurrence}{weight_part}, last {last_seen_short})"
+        )
+
+    if cls == 'recurring_entity':
+        kind = slots.get('kind', '')
+        name = slots.get('name', '')
+        bracket = f" [{kind}]" if kind else ''
+        return (
+            f"{vertical} / {cls}: {name}{bracket} "
+            f"(recurrence={recurrence}, last {last_seen_short})"
+        )
+
+    if cls == 'event_cadence':
+        event_type = slots.get('event_type', vertical)
+        cadence = slots.get('cadence_days', '')
+        next_exp = slots.get('next_expected', '')
+        next_exp_short = next_exp[:10] if next_exp else ''
+        cadence_part = f" every {cadence}d" if cadence != '' else ''
+        next_part = f" next {next_exp_short}" if next_exp_short else ''
+        return (
+            f"{vertical} / {cls}: {event_type}{cadence_part}{next_part} "
+            f"(recurrence={recurrence}, last {last_seen_short})"
+        )
+
+    # Fallback for unknown classes: dump vertical/class + recurrence.
+    return f"{vertical} / {cls}: (recurrence={recurrence}, last {last_seen_short})"
 
 
 class UserSummaryProcessor(MessageProcessor):
@@ -54,18 +122,20 @@ class UserSummaryProcessor(MessageProcessor):
         """Return True when re-synthesis is warranted.
 
         Logic:
-        - ``latest_trait_ts`` = MAX(last_confirmed_at) WHERE kind='user_specific' AND active=1
+        - ``latest_trait_ts`` = MAX(last_confirmed_at) WHERE kind IN
+          ('user_specific', 'behavioral_pattern') AND active=1
         - ``current_summary`` = row WHERE kind='system' AND key='user_summary' AND active=1
 
         Cases:
-        - No traits at all → False (nothing to synthesise).
-        - Traits exist, no summary → True (first synthesis needed).
-        - Both exist → True only when latest trait is newer than the summary row.
+        - No traits or patterns at all → False (nothing to synthesise).
+        - Traits/patterns exist, no summary → True (first synthesis needed).
+        - Both exist → True only when latest trait/pattern is newer than the summary row.
 
-        The ``kind='user_specific'`` filter on the MAX query is CRITICAL: querying
-        all kinds would include the ``user_summary`` row itself, which is always
-        confirmed more recently after synthesis, creating a permanent re-synthesis
-        loop.
+        The ``kind IN ('user_specific', 'behavioral_pattern')`` filter on the MAX
+        query is CRITICAL: querying all kinds would include the ``user_summary`` row
+        itself, which is always confirmed more recently after synthesis, creating a
+        permanent re-synthesis loop.  Both user-stated traits AND derived behavioural
+        patterns are valid synthesis triggers.
         """
         try:
             from services.database_service import get_shared_db_service
@@ -77,7 +147,7 @@ class UserSummaryProcessor(MessageProcessor):
                     """
                     SELECT MAX(last_confirmed_at)
                     FROM data_graph
-                    WHERE kind = 'user_specific'
+                    WHERE kind IN ('user_specific', 'behavioral_pattern')
                       AND active = 1
                       AND deleted_at IS NULL
                     """
@@ -138,10 +208,15 @@ class UserSummaryProcessor(MessageProcessor):
         return "You are a synthesiser. The user is a real human whose traits you are distilling."
 
     def getUserPrompt(self) -> str:
-        """Fetch up to 200 user_specific rows and render as ``key: value`` pairs.
+        """Assemble the synthesis prompt from user traits and active behavioural patterns.
 
-        Renders ONLY key and value — no weights, no source, no timestamps.
+        Section 1 — Facts (key: value pairs, up to _MAX_TRAIT_ROWS).
+        Section 2 — Behavioural patterns (compact digest, up to _MAX_PATTERN_ROWS).
+        Section 2 is omitted entirely when no active patterns exist.
+
+        Renders ONLY key and value for traits — no weights, no source, no timestamps.
         """
+        # ── Section 1: user_specific traits ──────────────────────────────────────
         try:
             from services.data_graph_service import get_data_graph_service
 
@@ -151,21 +226,60 @@ class UserSummaryProcessor(MessageProcessor):
                 order_by='retrieval_weight DESC',
             )
         except Exception as exc:
-            logger.warning("[USER SUMMARY] getUserPrompt: fetch failed: %s", exc)
+            logger.warning("[USER SUMMARY] getUserPrompt: trait fetch failed: %s", exc)
             rows = []
 
         if not rows:
-            return "Facts:\n(no facts available)"
+            facts_section = "Facts:\n(no facts available)"
+        else:
+            lines = [
+                f"{r['key']}: {r['value']}"
+                for r in rows
+                if r.get('key') and r.get('value')
+            ]
+            facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
 
-        lines = [
-            f"{r['key']}: {r['value']}"
-            for r in rows
-            if r.get('key') and r.get('value')
-        ]
-        if not lines:
-            return "Facts:\n(no facts available)"
+        # ── Section 2: active behavioural patterns ───────────────────────────────
+        active_patterns = []
+        try:
+            import json as _json
 
-        return "Facts:\n" + "\n".join(lines)
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                pattern_rows = conn.execute(
+                    """
+                    SELECT value
+                    FROM data_graph
+                    WHERE kind = 'behavioral_pattern'
+                      AND active = 1
+                      AND deleted_at IS NULL
+                    ORDER BY last_confirmed_at DESC
+                    LIMIT ?
+                    """,
+                    (_MAX_PATTERN_ROWS,),
+                ).fetchall()
+            for (value_json,) in pattern_rows:
+                try:
+                    content = _json.loads(value_json)
+                    if content.get('status') == 'active':
+                        active_patterns.append(content)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.warning("[USER SUMMARY] active pattern fetch failed: %s", exc)
+
+        if not active_patterns:
+            return facts_section
+
+        pattern_lines = [_format_pattern_line(p) for p in active_patterns]
+        patterns_section = (
+            "## Behavioural patterns (recurrence, last seen)\n"
+            + "\n".join(f"- {line}" for line in pattern_lines)
+        )
+
+        return facts_section + "\n\n" + patterns_section
 
     def store(self, llm_response: str) -> None:
         """Capture the LLM response for postTurn(), then call base (no-op for SKIP_TRANSCRIPT_WRITE)."""
