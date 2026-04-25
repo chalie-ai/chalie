@@ -30,7 +30,6 @@ from services.deliberation_score_service import DeliberationScoreService
 from services.embedding_service import _get_session_and_tokenizer
 from services.onnx_inference_service import (
     OnnxInferenceService,
-    _compute_encoder_sha256,
     _get_encoder_sha256,
 )
 
