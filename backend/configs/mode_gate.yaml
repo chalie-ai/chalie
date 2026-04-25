@@ -1,8 +1,6 @@
 # Mode Gate — runtime knobs for per-turn tool promotion/demotion.
 # Calibrated fire thresholds live in classifier_meta.json (burned in by training).
 
-shadow_mode: true              # v1 ships shadow=true; flipped after nightly verifies
-
 decay_factor: 0.75
 activation_threshold: 0.30
 state_floor: 0.01

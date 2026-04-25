@@ -173,9 +173,8 @@ class UserMessageProcessor(MessageProcessor):
     def getConditionalTools(self) -> list[dict]:  # NOSONAR — overrides MessageProcessor hook (camelCase by contract)
         """Return mode-gated tool schemas for this turn (cached after first call).
 
-        Consults ModeGateService once per turn. In shadow mode the gate returns
-        [] so tool injection is identical to today. In live mode the gate returns
-        names for tools whose modes are active, which are resolved to schemas here.
+        Consults ModeGateService once per turn. The gate returns names for tools
+        whose modes are active, which are resolved to schemas here.
 
         Exceptions are caught: any failure logs at WARN and caches [] so
         subsequent ACT iterations also get the empty list (consistent state).

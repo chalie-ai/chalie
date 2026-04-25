@@ -220,7 +220,6 @@ class TestLoadConfigFallback:
         try:
             mgm._CONFIG_PATH = "/nonexistent/path/mode_gate.yaml"
             cfg = mgm._load_config()
-            assert cfg['shadow_mode'] is True
             assert cfg['decay_factor'] == pytest.approx(0.75)
             assert cfg['activation_threshold'] == pytest.approx(0.30)
         finally:
@@ -255,7 +254,6 @@ class TestLoadConfigFallback:
         mgm._fire_thresholds_cache = None
 
         yaml_content = (
-            "shadow_mode: false\n"
             "decay_factor: 0.75\n"
             "activation_threshold: 0.30\n"
             "state_floor: 0.01\n"
@@ -344,18 +342,15 @@ class TestStateRoundTrip:
 
 
 @pytest.mark.integration
-class TestShadowModeReturnsEmpty:
-    """In shadow_mode=True, get_promoted_tool_names always returns [] while still
-    persisting state and emitting the [MODE-GATE] log line."""
+class TestGatePromotesLive:
+    """get_promoted_tool_names returns the resolved tool names and persists state."""
 
-    def test_shadow_mode_returns_empty_list(self, store):
+    def test_returns_resolved_tool_names(self, store):
         import services.mode_gate_service as mgm
         mgm._config_loaded = None
         mgm._fire_thresholds_cache = None
 
         svc = _fresh_service()
-        # Force shadow mode on
-        svc._shadow = True
         # Force classifier to return high probs (would promote many tools)
         svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
 
@@ -366,12 +361,13 @@ class TestShadowModeReturnsEmpty:
         svc._classify = _fake_classify
 
         result = svc.get_promoted_tool_names("search news about Mars rovers")
-        assert result == []
+        # With every mode firing at 0.90, at least one tool should promote.
+        assert result, f"expected promoted tools, got {result}"
+        assert result == sorted(result), "result must be deterministically sorted"
 
-    def test_shadow_mode_still_persists_state(self, store):
-        """Even in shadow mode the state must be written so warm-up happens."""
+    def test_persists_state(self, store):
+        """State must be written so warm-up happens on the next turn."""
         svc = _fresh_service()
-        svc._shadow = True
         svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
 
         def _fake_classify(text):
@@ -403,11 +399,11 @@ class TestResolveActiveTools:
         assert 'read' in tools
         assert 'document' in tools
 
-    def test_plan_mode_includes_goals(self):
-        """goals innate skill is mapped to plan mode."""
+    def test_plan_mode_includes_schedule(self):
+        """schedule innate skill is mapped to plan mode."""
         svc = _fresh_service()
         tools = svc._resolve_active_tools({'plan'})
-        assert 'goals' in tools
+        assert 'schedule' in tools
 
     def test_empty_active_set_returns_empty(self):
         svc = _fresh_service()
@@ -447,8 +443,9 @@ class TestGetToolsByMode:
         # introspect → converse, analyze (spec §5.3)
         assert 'introspect' in index.get('converse', set())
         assert 'introspect' in index.get('analyze', set())
-        # goals → plan only
-        assert 'goals' in index.get('plan', set())
+        # goal_pursuit → plan, research
+        assert 'goal_pursuit' in index.get('plan', set())
+        assert 'goal_pursuit' in index.get('research', set())
         # schedule → plan, brainstorm
         assert 'schedule' in index.get('plan', set())
         assert 'schedule' in index.get('brainstorm', set())
@@ -525,8 +522,8 @@ class TestModeDeclarationValidation:
         """A non-primitive skill with no SKILL_MODES entry must fail at boot."""
         from services.innate_skills.registry import SKILL_MODES
 
-        # Remove 'goals' from SKILL_MODES — ALL_SKILL_NAMES still contains it (enforced by registry)
-        trimmed_modes = {k: v for k, v in SKILL_MODES.items() if k != 'goals'}
+        # Remove 'schedule' from SKILL_MODES — ALL_SKILL_NAMES still contains it (enforced by registry)
+        trimmed_modes = {k: v for k, v in SKILL_MODES.items() if k != 'schedule'}
 
         import services.innate_skills.registry as reg
         import services.tool_registry_service as trs
@@ -539,7 +536,7 @@ class TestModeDeclarationValidation:
             trs._instance = None
             trs._tools_by_mode_cache = None
             from services.tool_registry_service import ToolRegistryService
-            with pytest.raises(RuntimeError, match="goals"):
+            with pytest.raises(RuntimeError, match="schedule"):
                 svc = ToolRegistryService()
                 svc._validate_mode_declarations()
         finally:
@@ -551,9 +548,9 @@ class TestModeDeclarationValidation:
         """modes: [] on an innate skill must NOT raise — it means find_tools only."""
         from services.innate_skills.registry import SKILL_MODES
 
-        # Set 'goals' to empty list — should be valid
+        # Set 'schedule' to empty list — should be valid
         patched_modes = dict(SKILL_MODES)
-        patched_modes['goals'] = []
+        patched_modes['schedule'] = []
 
         import services.innate_skills.registry as reg
         import services.tool_registry_service as trs

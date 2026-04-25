@@ -3,13 +3,12 @@ ModeGateService — per-turn tool promotion via the mode_detector classifier.
 
 State machine:
   load → (cold: bootstrap) → classify → update (snap-up/decay) → persist →
-  resolve active tools → return promoted names (or [] in shadow mode)
+  resolve active tools → return promoted names
 
 State is persisted in MemoryStore under ``mode_gate:state`` as a JSON string.
 No database writes — pure MemoryStore, cleared by /privacy/delete-all.
 
 Config (backend/configs/mode_gate.yaml):
-  shadow_mode: true            — log-only; never injects tools until flipped
   decay_factor: 0.75           — per-mode decay on miss
   activation_threshold: 0.30  — state >= this → mode is active
   state_floor: 0.01            — decay bottoms out at 0.01; below → 0.0
@@ -51,7 +50,6 @@ _CONFIG_PATH = os.path.join(
 )
 
 _DEFAULT_CONFIG = {
-    "shadow_mode": True,
     "decay_factor": 0.75,
     "activation_threshold": 0.30,
     "state_floor": 0.01,
@@ -84,7 +82,7 @@ def _load_config() -> dict:
             raw = yaml.safe_load(f)
         if not isinstance(raw, dict):
             raise ValueError(f"Expected YAML dict, got {type(raw)}")
-        # Surface unknown keys so operator typos (e.g. ``shadow-mode`` with a
+        # Surface unknown keys so operator typos (e.g. ``decay-factor`` with a
         # hyphen) don't silently retain defaults. Every recognised top-level
         # key must match a _DEFAULT_CONFIG entry.
         unknown = [k for k in raw.keys() if k not in _DEFAULT_CONFIG]
@@ -193,7 +191,6 @@ class ModeGateService:
 
     def __init__(self) -> None:
         cfg = _load_config()
-        self._shadow: bool = bool(cfg.get("shadow_mode", True))
         self._decay_factor: float = float(cfg.get("decay_factor", 0.75))
         self._activation_threshold: float = float(cfg.get("activation_threshold", 0.30))
         self._state_floor: float = float(cfg.get("state_floor", 0.01))
@@ -216,7 +213,7 @@ class ModeGateService:
           5. _save_state(state_after)
           6. resolve active modes → promoted names
           7. Emit [MODE-GATE] + [MODE-GATE-PROMOTE] logs
-          8. Return [] in shadow mode, else promoted names
+          8. Return promoted names
 
         All exceptions are trapped. Returns [] on any failure.
 
@@ -251,19 +248,17 @@ class ModeGateService:
             if not probs:
                 elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                 logger.info(
-                    "%s shadow=%s bootstrap=%s turn_id=%s "
+                    "%s bootstrap=%s turn_id=%s "
                     "probs=%s fires=%s state_before=%s state_after=%s "
-                    "active=%s would_promote=%s actually_promoted=%s "
+                    "active=%s promoted=%s "
                     "classifier=unavailable elapsed_ms=%d",
                     LOG_PREFIX,
-                    str(self._shadow).lower(),
                     str(bootstrapped).lower(),
                     turn_id or "?",
                     json.dumps(dict.fromkeys(self.MODES, 0.0)),
                     json.dumps([]),
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
-                    json.dumps([]),
                     json.dumps([]),
                     json.dumps([]),
                     elapsed_ms,
@@ -274,24 +269,22 @@ class ModeGateService:
             self._save_state(state_after)
 
             active = {m for m in self.MODES if state_after.get(m, 0.0) >= self._activation_threshold}
-            would_promote = self._resolve_active_tools(active)
             # Sort defensively so the emitted JSON is deterministic even if
             # _resolve_active_tools ever returns an unsorted structure.
-            actually_promoted = [] if self._shadow else sorted(would_promote)
+            promoted = sorted(self._resolve_active_tools(active))
 
             fires = [m for m in self.MODES if probs.get(m, 0.0) >= self._fire_thresholds.get(m, 0.5)]
 
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
-            # Emit ONE structured [MODE-GATE] line (spec §6.5)
-            # Booleans are lowercased so log greps use the JSON-canonical form
-            # ("shadow=true" / "bootstrap=false") rather than Python's title-case.
+            # Emit ONE structured [MODE-GATE] line (spec §6.5).
+            # Boolean is lowercased so log greps use the JSON-canonical form
+            # ("bootstrap=false") rather than Python's title-case.
             logger.info(
-                "%s shadow=%s bootstrap=%s turn_id=%s "
+                "%s bootstrap=%s turn_id=%s "
                 "probs=%s fires=%s state_before=%s state_after=%s "
-                "active=%s would_promote=%s actually_promoted=%s elapsed_ms=%d",
+                "active=%s promoted=%s elapsed_ms=%d",
                 LOG_PREFIX,
-                str(self._shadow).lower(),
                 str(bootstrapped).lower(),
                 turn_id or "?",
                 json.dumps({m: round(probs.get(m, 0.0), 4) for m in self.MODES}),
@@ -299,19 +292,18 @@ class ModeGateService:
                 json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                 json.dumps({m: round(state_after.get(m, 0.0), 4) for m in self.MODES}),
                 json.dumps(sorted(active)),
-                json.dumps(sorted(would_promote)),
-                json.dumps(actually_promoted),
+                json.dumps(promoted),
                 elapsed_ms,
             )
 
-            # Emit ONE [MODE-GATE-PROMOTE] line per tool in would_promote
-            for tool_name in sorted(would_promote):
+            # Emit ONE [MODE-GATE-PROMOTE] line per promoted tool
+            for tool_name in promoted:
                 logger.info(
                     "[MODE-GATE-PROMOTE] turn=%s tool=%s",
                     turn_id or "?", tool_name,
                 )
 
-            return actually_promoted
+            return promoted
 
         except Exception as exc:
             logger.warning(
