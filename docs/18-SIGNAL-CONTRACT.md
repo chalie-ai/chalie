@@ -37,7 +37,7 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | Layer | Analogy | What it does | If it fails... |
 |-------|---------|--------------|----------------|
 | **Cognitive** | Brain | Memory formation, consolidation, decay, planning, reflection, reasoning | ...you stop reasoning well, but you can still perceive and use tools |
-| **Embodiment** | Body/Senses | Ambient awareness, place learning, context tracking, voice I/O, session events | ...you lose situational awareness, but the reasoning loop continues on what it knows |
+| **Embodiment** | Body/Senses | Context tracking, voice I/O, session events, WorldState ambient snapshot | ...you lose situational awareness, but the reasoning loop continues on what it knows |
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 Cross-layer rules:
@@ -72,7 +72,7 @@ Emission is always fire-and-forget. Emitters never wait for a response and never
 | `memory_pressure` | Knowledge is fading or contradicted | 0.5–0.7 |
 | `new_knowledge` | New concept formed from experience | 0.6 |
 | `novel_observation` | Surprising tool output stored to data graph | 0.6 |
-| `ambient_context` | Environment changed (place, attention, energy) | From confidence |
+| `ambient_context` | Environment changed (device class, local time) | From confidence |
 | `idle_discovery` | Nothing happened; engine self-seeds | 0.4–0.5 |
 | `episode_created` | New narrative episode consolidated | 0.5 |
 | `trait_changed` | User trait created, updated, or corrected | 0.3–0.7 |

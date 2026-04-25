@@ -394,15 +394,14 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Six-service fan-out, each individually error-isolated.
+        """Five-service fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
-          2. SituationModelService
-          3. SaveSuggestionService — user-side trigger THEN response-side detect
-          4. DMNService.on_turn() — R10 critical
-          5. MetricsService — last ("turn closed" signal)
-          6. compaction_service.check_and_compact — end-turn backstop
+          2. SaveSuggestionService — user-side trigger THEN response-side detect
+          3. DMNService.on_turn() — R10 critical
+          4. MetricsService — last ("turn closed" signal)
+          5. compaction_service.check_and_compact — end-turn backstop
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
@@ -422,20 +421,13 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 2. Situation model (sync, MemoryStore-only write)
-        try:
-            from services.situation_model_service import get_situation_model_service
-            get_situation_model_service().update_on_message(channel)
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Situation update failed: {e}", exc_info=True)
-
-        # 3. Save suggestion scan — TWO paths in correct order:
-        #    3a: user-side trigger must fire BEFORE 3b detect (ordering constraint #3)
+        # 2. Save suggestion scan — TWO paths in correct order:
+        #    2a: user-side trigger must fire BEFORE 2b detect (ordering constraint)
         try:
             from services.save_suggestion_service import SaveSuggestionService
             save_svc = SaveSuggestionService()
 
-            # 3a: User-side completion/deferral trigger — clears existing flag
+            # 2a: User-side completion/deferral trigger — clears existing flag
             save_flag = save_svc.get_saveable_flag()
             if save_flag:
                 trigger = save_svc.detect_save_trigger(text)
@@ -443,7 +435,7 @@ class UserMessageProcessor(MessageProcessor):
                     save_svc.emit_save_card(save_flag['content_type'])
                     save_svc.clear_flag()
 
-            # 3b: Response-side saveable content detection — sets new flag.
+            # 2b: Response-side saveable content detection — sets new flag.
             # NOTE: flag_saveable expects exchange_id (UUID string) for window
             # correlation, not the integer transcript row id (self._uid). Prefer
             # the UUID from metadata; fall back to a stringified row id if absent.
@@ -460,7 +452,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
 
-        # 4. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 3. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -470,7 +462,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 5. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 4. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -481,7 +473,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 6. End-turn compaction backstop (safety net; mid-loop compaction in send()
+        # 5. End-turn compaction backstop (safety net; mid-loop compaction in send()
         # should handle most cases).
         # WARNING level — silent compaction failure leads to context overflow
         # (Commit 8 critic P1-2).

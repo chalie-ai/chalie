@@ -96,33 +96,6 @@ def _patch_no_auth():
 # Service mock builders
 # ---------------------------------------------------------------------------
 
-def _make_situation_service_mock(
-    scores=None,
-    directive="Test directive.",
-    phase=None,
-):
-    """Return a mock SituationModelService *instance*.
-
-    The fixture patches ``api.query._get_situation_model_service`` to return
-    a class whose constructor yields this mock.
-    """
-    if scores is None:
-        scores = {
-            "interruptibility": {"value": 0.35},
-            "receptiveness": {"value": 0.72},
-            "cognitive_load": {"value": 0.45},
-            "proactivity_budget": {"value": 0.58},
-            "stability": {"value": 0.85},
-        }
-    if phase is None:
-        phase = {"current": "deepening", "momentum": 0.75}
-
-    instance = MagicMock()
-    instance.get_current.return_value = {"scores": scores, "phase": phase, "raw": {}}
-    instance.get_directive.return_value = directive
-    return instance
-
-
 def _make_retrieval_module_mock(results=None):
     """Return a mock episodic_retrieval_service *module*.
 
@@ -152,116 +125,6 @@ def _make_store_mock(style_raw=None):
     store = MagicMock()
     store.get.return_value = style_raw
     return store
-
-
-# ---------------------------------------------------------------------------
-# Situation endpoint tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestSituationEndpoint:
-    def _patch_situation(self, svc_instance):
-        """Patch _get_situation_model_service to return a class yielding svc_instance."""
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_situation_model_service", return_value=cls_mock)
-
-    def test_cookie_auth_returns_200(self, cookie_app):
-        svc = _make_situation_service_mock()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        assert resp.status_code == 200
-
-    def test_response_has_required_keys(self, cookie_app):
-        svc = _make_situation_service_mock()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        data = resp.get_json()
-        assert "scores" in data
-        assert "directive" in data
-        assert "phase" in data
-
-    def test_scores_are_floats(self, cookie_app):
-        svc = _make_situation_service_mock()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        for key, val in resp.get_json()["scores"].items():
-            assert isinstance(val, float), f"{key} score is not a float"
-
-    def test_phase_has_current_and_momentum(self, cookie_app):
-        svc = _make_situation_service_mock()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        phase = resp.get_json()["phase"]
-        assert "current" in phase
-        assert "momentum" in phase
-
-    def test_directive_is_string(self, cookie_app):
-        svc = _make_situation_service_mock(directive="Be brief.")
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        directive = resp.get_json()["directive"]
-        assert isinstance(directive, str)
-
-    def test_directive_none_is_allowed(self, cookie_app):
-        svc = _make_situation_service_mock(directive=None)
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation(svc):
-                resp = client.get("/api/query/situation")
-        assert resp.get_json()["directive"] is None
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.get("/api/query/situation")
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.get(
-                        "/api/query/situation",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 403
-
-    def test_bearer_with_permission_returns_200(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = True
-        svc = _make_situation_service_mock()
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc), \
-                     self._patch_situation(svc):
-                    resp = client.get(
-                        "/api/query/situation",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 200
-
-    def test_service_unavailable_returns_defaults(self, cookie_app):
-        """If _get_situation_model_service raises, return 200 with defaults."""
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_situation_model_service", side_effect=Exception("unavailable")):
-                resp = client.get("/api/query/situation")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["scores"] == {}
-        assert data["directive"] is None
-        assert data["phase"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +245,17 @@ class TestRelevanceEndpoint:
         assert data["relevance"] == 0.0
         assert data["recommendation"] == "defer"
 
+    def test_related_traits_present_and_empty_list(self, cookie_app):
+        """related_traits key is always present and is a list (goals table removed)."""
+        with cookie_app.test_client() as client:
+            with _patch_cookie_auth():
+                stack, _, _ = self._patch_relevance_services([])
+                with stack:
+                    resp = client.get("/api/query/relevance?q=auth")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert "related_traits" in data
+        assert isinstance(data["related_traits"], list)
 
 
 # ---------------------------------------------------------------------------
@@ -502,12 +376,6 @@ class TestMemoryEndpoint:
 
 @pytest.mark.unit
 class TestCompositeEndpoint:
-    def _patch_situation(self, svc_instance=None):
-        if svc_instance is None:
-            svc_instance = _make_situation_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        return patch("api.query._get_situation_model_service", return_value=cls_mock)
-
     def _patch_episodic(self, results=None):
         retrieval_mod = _make_retrieval_module_mock(results or [])
         stack = ExitStack()
@@ -518,21 +386,23 @@ class TestCompositeEndpoint:
         return stack
 
     def test_single_slice_returns_200(self, cookie_app):
+        ep_stack = self._patch_episodic()
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation():
+            with _patch_cookie_auth(), ep_stack:
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation"]},
+                    json={"slices": ["memory"]},
                     content_type="application/json",
                 )
         assert resp.status_code == 200
 
     def test_composite_response_structure(self, cookie_app):
+        ep_stack = self._patch_episodic()
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation():
+            with _patch_cookie_auth(), ep_stack:
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation"]},
+                    json={"slices": ["memory"]},
                     content_type="application/json",
                 )
         data = resp.get_json()
@@ -540,16 +410,17 @@ class TestCompositeEndpoint:
         assert "denied" in data
         assert "errors" in data
 
-    def test_multiple_slices_returned(self, cookie_app):
+    def test_memory_slice_returned(self, cookie_app):
+        ep_stack = self._patch_episodic()
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation():
+            with _patch_cookie_auth(), ep_stack:
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation"]},
+                    json={"slices": ["memory"]},
                     content_type="application/json",
                 )
         data = resp.get_json()
-        assert "situation" in data["results"]
+        assert "memory" in data["results"]
 
     def test_parameterised_relevance_slice(self, cookie_app):
         ep_stack = self._patch_episodic()
@@ -583,7 +454,7 @@ class TestCompositeEndpoint:
             with _patch_cookie_auth():
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": "situation"},
+                    json={"slices": "relevance"},
                     content_type="application/json",
                 )
         assert resp.status_code == 400
@@ -619,39 +490,39 @@ class TestCompositeEndpoint:
                      patch("api.query._get_wrapper_service", return_value=bearer_svc):
                     resp = client.post(
                         "/api/query/composite",
-                        json={"slices": ["situation", "memory"]},
+                        json={"slices": ["relevance", "memory"]},
                         content_type="application/json",
                         headers={"Authorization": "Bearer fake_token"},
                     )
         data = resp.get_json()
         assert resp.status_code == 200
-        assert "situation" in data["denied"]
+        assert "relevance" in data["denied"]
         assert "memory" in data["denied"]
         assert data["results"] == {}
 
     def test_partial_permissions(self, bearer_app):
-        """Bearer with situation but not memory gets situation result, memory denied."""
+        """Bearer with memory but not relevance gets memory result, relevance denied."""
         bearer_svc = MagicMock()
-        # situation → allowed, memory → denied
+        # memory → allowed, relevance → denied
         bearer_svc.check_permission.side_effect = (
-            lambda wid, op, res: res == "situation"
+            lambda wid, op, res: res == "memory"
         )
-        situation_mock = _make_situation_service_mock()
+        ep_stack = self._patch_episodic()
 
         with bearer_app.test_client() as client:
             with _patch_bearer_auth() as stack:
                 with stack, \
                      patch("api.query._get_wrapper_service", return_value=bearer_svc), \
-                     self._patch_situation(situation_mock):
+                     ep_stack:
                     resp = client.post(
                         "/api/query/composite",
-                        json={"slices": ["situation", "memory"]},
+                        json={"slices": ["memory", "relevance"]},
                         content_type="application/json",
                         headers={"Authorization": "Bearer fake_token"},
                     )
         data = resp.get_json()
-        assert "situation" in data["results"]
-        assert "memory" in data["denied"]
+        assert "memory" in data["results"]
+        assert "relevance" in data["denied"]
 
     def test_unauthenticated_returns_401(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -659,7 +530,7 @@ class TestCompositeEndpoint:
                 with stack:
                     resp = client.post(
                         "/api/query/composite",
-                        json={"slices": ["situation"]},
+                        json={"slices": ["memory"]},
                         content_type="application/json",
                     )
         assert resp.status_code == 401
@@ -680,16 +551,17 @@ class TestCompositeEndpoint:
 
     def test_cookie_auth_bypasses_permission_checks(self, cookie_app):
         """Cookie-authenticated requests skip all permission enforcement."""
+        ep_stack = self._patch_episodic()
         with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), self._patch_situation():
+            with _patch_cookie_auth(), ep_stack:
                 resp = client.post(
                     "/api/query/composite",
-                    json={"slices": ["situation"]},
+                    json={"slices": ["memory"]},
                     content_type="application/json",
                 )
         data = resp.get_json()
         assert resp.status_code == 200
-        assert "situation" in data["results"]
+        assert "memory" in data["results"]
         assert data["denied"] == []
 
 
@@ -778,16 +650,6 @@ class TestDispatchSlice:
 
         assert "relevance" in result
         assert "recommendation" in result
-
-    def test_situation_dispatch(self):
-        from api.query import _dispatch_slice
-        svc_instance = _make_situation_service_mock()
-        cls_mock = MagicMock(return_value=svc_instance)
-        with patch("api.query._get_situation_model_service", return_value=cls_mock):
-            result = _dispatch_slice("situation")
-        assert "scores" in result
-        assert "directive" in result
-        assert "phase" in result
 
     def test_memory_dispatch(self):
         from api.query import _dispatch_slice

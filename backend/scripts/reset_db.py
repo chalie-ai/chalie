@@ -26,7 +26,6 @@ DATA_TABLES = [
     'list_items',
     'list_events',
     'documents',
-    'place_fingerprints',
 ]
 
 

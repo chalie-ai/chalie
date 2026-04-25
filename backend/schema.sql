@@ -329,28 +329,12 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
 -- and kind='moment_context' (enrichment context rows). The old dedicated
 -- moments table and documents-table path (source_type='moment') are removed.
 
--- ────────────────────────────────────────────────────────────────
--- PLACE FINGERPRINTS — learned place patterns
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS place_fingerprints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fingerprint_hash TEXT UNIQUE NOT NULL,
-    device_class TEXT NOT NULL,
-    hour_bucket INTEGER NOT NULL,
-    location_hash TEXT,
-    connection_type TEXT,
-    place_label TEXT NOT NULL,
-    count INTEGER DEFAULT 1,
-    last_seen_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
-
 -- Note: tables that disappear from this schema are dropped automatically by
 -- SchemaConvergenceService on the next boot.  No explicit DROP statements
 -- needed here.  Past examples: cortex_iterations, persistent_tasks,
 -- cognitive_reflexes, triage_calibration_events, document_chunks,
--- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec, goals_vec.
+-- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec,
+-- goals_vec, place_fingerprints, ambient_inferences, situation_states.
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────

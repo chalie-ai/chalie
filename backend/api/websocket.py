@@ -476,6 +476,13 @@ def _handle_chat(ws, store, msg, active_request=None):
     if not text and image_ids:
         text = '[Image attached]'
 
+    # Absorb typed signal so WorldState snapshot stays current.
+    try:
+        from services.world_state import world_state, Signal
+        world_state.absorb(Signal(source='ws', kind='user_message', payload={'text': text[:200]}))
+    except Exception as _ws_err:
+        logger.debug("[WS] world_state.absorb failed: %s", _ws_err)
+
     source = msg.get('source', 'text')
     request_id = str(uuid.uuid4())
 

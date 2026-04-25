@@ -44,34 +44,31 @@ class TestSystemAPI:
     # POST /health
     # ────────────────────────────────────────────
 
-    def test_post_health_saves_context_and_returns_attention(self, client):
-        """POST /health saves client context and returns inferred attention."""
+    def test_post_health_saves_context_and_returns_ok(self, client):
+        """POST /health saves client context and returns status ok (no attention field)."""
         mock_ctx_svc = MagicMock()
-        mock_ambient_svc = MagicMock()
-        mock_ambient_svc.infer.return_value = {'attention': 'focused'}
 
         with patch('consumer.APP_VERSION', '2.5.0'), \
              patch('services.client_context_service.ClientContextService', return_value=mock_ctx_svc), \
-             patch('services.ambient_inference_service.AmbientInferenceService', return_value=mock_ambient_svc):
+             patch('services.world_state.world_state'):
             resp = client.post('/health', json={'battery': 80, 'screen': 'on'})
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['status'] == 'ok'
         assert data['version'] == '2.5.0'
-        assert data['attention'] == 'focused'
+        assert 'attention' not in data
         mock_ctx_svc.save.assert_called_once_with({'battery': 80, 'screen': 'on'})
-        mock_ambient_svc.infer.assert_called_once_with({'battery': 80, 'screen': 'on'})
 
     def test_post_health_empty_body_returns_ok(self, client):
-        """POST /health with an empty JSON body still returns 200 ok with attention=None."""
+        """POST /health with an empty JSON body still returns 200 ok."""
         with patch('consumer.APP_VERSION', '1.0.0'):
             resp = client.post('/health', data='{}', content_type='application/json')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['status'] == 'ok'
-        assert data['attention'] is None
+        assert 'attention' not in data
 
     # ────────────────────────────────────────────
     # GET /metrics

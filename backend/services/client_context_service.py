@@ -7,7 +7,7 @@ The raw heartbeat payload (whatever the frontend sends) is persisted to the
 The frontend (heartbeat.js) is the single source of truth for which keys are
 collected; this service blindly persists what it receives and reconstructs the
 nested dict on read so existing consumers (time_utils, scheduler_skill,
-ambient inference, …) see the same shape they always did.
+…) see the same shape they always did.
 
 Side concerns that stay in MemoryStore (NOT telemetry):
   - location-history ring buffer (mobility inference)
@@ -35,10 +35,6 @@ TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 REENTRY_KEY = "ambient:session_reentry"
 REENTRY_THRESHOLD = 1800  # 30 min
 REENTRY_TTL = 300  # 5 min flag
-
-# Place transition
-PLACE_TRANSITION_KEY = "ambient:place_transition"
-PLACE_TRANSITION_TTL = 300  # 5 min
 
 # Demographic seeding
 CULTURE_SEED_KEY = "ambient:culture_seeded"
@@ -178,8 +174,7 @@ class ClientContextService:
         Save client context to MemoryStore with extended processing.
 
         Handles: location resolution, behavioral data merging, location history,
-        place transition detection, session re-entry, demographic seeding,
-        and place fingerprint recording.
+        session re-entry, and demographic seeding.
         """
         cached_ctx = self.get()
 
@@ -238,14 +233,8 @@ class ClientContextService:
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
 
-        # Place transition detection
-        self._detect_place_transition(cached_ctx, ctx)
-
         # Demographic trait seeding (once per session)
         self._seed_demographic_traits(ctx)
-
-        # Record place fingerprint for learning (after all context is saved)
-        self._record_place_fingerprint(ctx)
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={ctx.get('device', {}).get('class')}")
@@ -299,36 +288,6 @@ class ClientContextService:
             self._store.expire(HISTORY_KEY, TTL)
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to push history: {e}")
-
-    # ── Place Transition Detection ─────────────────────────────────────
-
-    def _detect_place_transition(self, old_ctx: dict, new_ctx: dict):
-        """Detect place transitions and set MemoryStore flag for downstream consumers."""
-        if not old_ctx:
-            return
-
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            inference.infer(new_ctx)
-            old_place = inference._infer_place(old_ctx)
-            new_place = inference._infer_place(new_ctx)
-
-            if old_place and new_place and old_place != new_place:
-                transition = json.dumps({
-                    "from": old_place,
-                    "to": new_place,
-                    "at": time.time(),
-                })
-                self._store.setex(PLACE_TRANSITION_KEY, PLACE_TRANSITION_TTL, transition)
-                logging.debug(f"[CLIENT CONTEXT] Place transition: {old_place} → {new_place}")
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Place transition detection failed: {e}")
 
     # ── Session Re-entry Detection ─────────────────────────────────────
 
@@ -455,21 +414,4 @@ class ClientContextService:
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
 
-    # ── Place Fingerprint Recording ────────────────────────────────────
-
-    def _record_place_fingerprint(self, ctx: dict):
-        """Record place observation for place learning service."""
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            place = inference._infer_place(ctx)
-            if place:
-                place_learning.record(ctx, place)
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Place fingerprint recording failed: {e}")
 
