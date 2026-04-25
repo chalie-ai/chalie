@@ -390,14 +390,13 @@ class TestUserSummaryProcessorIntegration:
         Proves no infinite re-synthesis loop.
         """
         from services.user_summary_processor import UserSummaryProcessor
-        from workers.user_summary_worker import _should_synthesise
 
         _insert_trait(db, 'name', 'Bob')
         _insert_trait(db, 'city', 'Valletta')
 
         UserSummaryProcessor().send()
 
-        assert not _should_synthesise(), (
+        assert not UserSummaryProcessor()._should_synthesise(), (
             "_should_synthesise() returned True immediately after synthesis — "
             "infinite loop risk"
         )

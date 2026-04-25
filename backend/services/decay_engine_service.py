@@ -159,16 +159,6 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}", exc_info=True)
             return 0
 
-    def _cleanup_legacy_store_keys(self) -> None:
-        """Remove stale MemoryStore keys left by previous pipeline versions."""
-        try:
-            from .memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            for key in store.keys("semantic_consolidation:*"):
-                store.delete(key)
-        except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Legacy store key cleanup non-fatal: {e}")
-
     def _cleanup_transcript(self) -> int:
         """Delete unlinked transcript entries below compaction watermark."""
         try:
