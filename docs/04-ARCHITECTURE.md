@@ -128,6 +128,8 @@ Two distinct on-disk directories separate runtime-downloaded weights from pre-sh
 
 `OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
 
+The pre-shipped `<task>-classifier_meta.json` is the authoritative calibration source for each head — alpha, bucket thresholds, sha256 pin. Missing or corrupt meta files raise at boot rather than falling back to baked-in defaults; per-turn callers (e.g. `UserMessageProcessor`) catch the construction error and degrade to a safe default (`thinking_level='low'` for the deliberation gate). If `_preload_models` itself raises before the singleton finishes registering tasks, the outer except annotates `OnnxInferenceService._failed_registrations = [("preload", ...)]` and flips `_ready = True` so the `/health` endpoint can explain the degraded state instead of reporting a generic not-ready.
+
 ---
 
 ## Tools and Skills
