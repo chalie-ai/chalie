@@ -40,7 +40,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 - `memory_skill.handle_memory()` now handles `forget` action; `store` returns one of 12 structured response templates so the LLM can self-correct on canonicalization surprises
 - `memory_skill.TOOL_SCHEMA` description injects all 27 canonical keys + 5 store rules + niche-fact fallback so the LLM canonicalizes at extraction time, not only at write time
 - `pending_contradictions` table and `PendingContradictionService` deleted (no call sites outside the cleanup loop; immutable conflicts surface via the returned conflict dict)
-- `("contradiction", "contradiction")` removed from `onnx_inference_service.MODEL_REGISTRY`; contradiction `.npz` head no longer loaded or downloaded; `thinking_level` head unaffected
+- `("contradiction", "contradiction")` removed from `onnx_inference_service.MODEL_REGISTRY`; contradiction `.npz` head no longer loaded or downloaded; deliberation-score head unaffected
 - Generator script `backend/utils/generate_concept_lut.py`: reads YAML, embeds canonical keys via gte-modernbert, writes `lut_concepts` + `lut_embeddings` vec0 virtual table into `concept_lut.sqlite`; run with `python -m utils.generate_concept_lut` after YAML changes
 - One-shot migration `backend/utils/migrate_canonicalize_user_keys.py`: backfills existing `user_specific` rows to canonical keys; idempotent
 - Cosine formula: `cos = max(0.0, 1.0 - distance ** 2 / 2.0)` via `_l2_dist_to_cosine()`

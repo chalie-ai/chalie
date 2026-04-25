@@ -34,33 +34,27 @@ _meta_cache: Optional[dict] = None
 def _load_meta() -> dict:
     """Load deliberation-score classifier_meta.json once per process.
 
-    Falls back to training-calibrated defaults if the file is unreadable.
+    The pre-shipped meta file is the authoritative calibration source. If it
+    is missing or corrupt, the original exception (FileNotFoundError,
+    PermissionError, JSONDecodeError) propagates so boot fails loudly rather
+    than running on stale baked-in defaults. UserMessageProcessor catches the
+    error at construction time and degrades to thinking_level='low'.
+
     Raises RuntimeError if required keys are missing — boot-time contract.
     """
     global _meta_cache
     if _meta_cache is not None:
         return _meta_cache
 
-    try:
-        import runtime_config
-        _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pre-trained")
-        pretrained_dir = runtime_config.get(
-            "pretrained_dir",
-            os.environ.get("PRETRAINED_DIR", _default),
-        )
-        meta_path = Path(pretrained_dir) / "deliberation_score" / "deliberation-score-classifier_meta.json"
-        with open(meta_path) as f:
-            meta = json.load(f)
-    except Exception as exc:
-        logger.warning(
-            "%s could not load classifier_meta.json (%s) — using fallback defaults",
-            LOG_PREFIX, exc,
-        )
-        # Fallback: values from the v0.11.0 release (non-authoritative)
-        meta = {
-            "ema_alpha": 0.6,
-            "bucket_thresholds": {"high": 0.67, "medium": 0.46},
-        }
+    import runtime_config
+    _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pre-trained")
+    pretrained_dir = runtime_config.get(
+        "pretrained_dir",
+        os.environ.get("PRETRAINED_DIR", _default),
+    )
+    meta_path = Path(pretrained_dir) / "deliberation_score" / "deliberation-score-classifier_meta.json"
+    with open(meta_path) as f:
+        meta = json.load(f)
 
     # Validate required keys
     if "ema_alpha" not in meta:

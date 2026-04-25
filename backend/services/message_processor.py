@@ -1110,7 +1110,10 @@ class MessageProcessor:
                             (scalar, self._uid),
                         )
                 except Exception as exc:
-                    logger.debug("[DELIBERATION] persist failed: %s", exc)
+                    logger.warning(
+                        "[DELIBERATION] persist failed for uid=%s: %s",
+                        self._uid, exc,
+                    )
 
         except Exception:
             logger.exception("[DELIBERATION] gate failed; defaulting to 'low'")

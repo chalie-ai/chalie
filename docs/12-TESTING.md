@@ -57,7 +57,7 @@ def onnx_svc():
 class TestDeliberationScoreClassifier:
 
     def test_architecture_question_scores_high(self, onnx_svc):
-        score = onnx_svc.predict(
+        score = onnx_svc.predict_scalar(
             "deliberation_score",
             "Design a fault-tolerant multi-region distributed system for a "
             "high-traffic e-commerce platform.",

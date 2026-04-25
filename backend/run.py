@@ -79,6 +79,7 @@ def main():
             logger.warning(f"[System] Embedding model preload failed: {e}")
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
+        svc = None
         try:
             logger.info("[System] Registering ONNX classifier heads (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
@@ -112,7 +113,13 @@ def main():
             else:
                 logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
-            logger.warning(f"[System] ONNX preload failed: {e}")
+            # Surface failure metadata on the singleton so /health can explain the
+            # degraded state. If get_onnx_inference_service() itself raised, svc
+            # is None and there is no singleton to annotate — skip in that case.
+            if svc is not None:
+                svc._failed_registrations = [("preload", str(e))]
+                svc._ready = True
+            logger.exception("[System] ONNX preload failed")
 
     import threading as _threading
     _threading.stack_size(2 * 1024 * 1024)
