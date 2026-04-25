@@ -1,33 +1,36 @@
 """
 WorldState — in-process singleton for ambient world context.
 
-Zero DB writes, zero worker threads, zero polling.
 render() is called on demand: once per user turn and once per Cognition
-endpoint hit.  Signals are stored in an internal dict, TTL-pruned on read.
+endpoint hit.  Signals are stored in an internal dict, TTL-pruned on read;
+telemetry, schedule, and bg_process are read directly from the database.
 
 Push sites:
-  - POST /api/updates/context → world_state.set("telemetry", ctx)
-  - POST /api/signals         → world_state.push_signal(source, label)
-  - WorldAwarenessService     → world_state.push_signal("news", headline)
-  - IMAPHandler               → world_state.push_signal("inbox", summary)
+  - POST /health (heartbeat.js) → ClientContextService.save() →
+                                  upserts ``telemetry`` table rows
+  - POST /api/signals           → world_state.push_signal(source, label)
+  - WorldAwarenessService       → world_state.push_signal("news", headline)
+  - IMAPHandler                 → world_state.push_signal("inbox", summary)
 
 Pull sites (read inside render()):
+  - telemetry        — flat key/value rows persisted from the FE heartbeat
   - scheduled_items  — upcoming / recently-fired schedule entries
   - transcript WHERE channel='goal_pursuit' — active pursuits
 
 Output format (literal):
   ### Background Telemetry,Processes & Signals
   [telemetry]
-
-  * **user**;time:{HH:MM}{±HH:MM},location:{location},mobility:{mobility}
-  * **device**;name:{device-name},battery:{power}
+  * **user**;<flat top-level keys, k:v comma-separated>
+  * **device**;<keys nested under "device", k:v comma-separated>
+  * **behavioral**;<keys nested under "behavioral", k:v comma-separated>
+  …one bullet per top-level group the FE sent…
   [schedule]
-
   * {message} (due-in:{duration})
   [bg_process(last_update:{duration} ago)] {content}
   [signal:{source}] {label}
 """
 
+import json
 import logging
 import threading
 import time as _time
@@ -41,14 +44,14 @@ _SECTION_HEADER = "### Background Telemetry,Processes & Signals"
 
 # Schedule query — pending items due in ≤7 days, or fired in last 24 hours, not hidden
 _SCHEDULE_SQL = """
-SELECT message, due_at, last_fired_at, recurrence
+SELECT message, due_at, last_fired_at, recurrence, status
 FROM scheduled_items
 WHERE (
     (status = 'pending' AND due_at <= datetime('now', '+7 days'))
-    OR (status = 'fired' AND last_fired_at >= datetime('now', '-24 hours'))
+    OR (status = 'fired' AND last_fired_at >= datetime('now', '-6 hours'))
 ) AND hidden = 0
 ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, due_at ASC
-LIMIT 20
+LIMIT 200
 """
 
 # bg_process query — recent goal_pursuit transcript rows (schema uses created_at, not updated_at)
@@ -65,34 +68,69 @@ LIMIT 10
 # ── Render helpers (module-level, pure functions) ─────────────────────────────
 
 
-def _telemetry_user_fields(ctx: dict) -> list[str]:
-    """Extract the user-line fields (time, location, mobility) from telemetry ctx."""
-    fields = []
-    time_val = ctx.get("local_time") or ctx.get("time")
-    offset_val = ctx.get("utc_offset") or ctx.get("timezone_offset")
-    if time_val:
-        fields.append(f"time:{time_val}{offset_val}" if offset_val else f"time:{time_val}")
-    location = ctx.get("location") or ctx.get("place")
-    if location:
-        fields.append(f"location:{location}")
-    mobility = ctx.get("mobility")
-    if mobility:
-        fields.append(f"mobility:{mobility}")
-    return fields
+# Top-level telemetry keys that should not be surfaced in the rendered block —
+# they are internal bookkeeping or noise the LLM does not need.
+_TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale"}
 
 
-def _telemetry_device_fields(device) -> list[str]:
-    """Extract the device-line fields (name, battery) from telemetry ctx.device."""
-    if not isinstance(device, dict):
-        return []
-    fields = []
-    name = device.get("name")
-    if name:
-        fields.append(f"name:{name}")
-    battery = device.get("battery")
-    if battery is not None:
-        fields.append(f"battery:{battery}")
-    return fields
+def _format_telemetry_value(value) -> str | None:
+    """Render a leaf telemetry value as a string, or None to suppress the field.
+
+    Suppresses null/empty values so absent fields do not clutter the output.
+    Booleans render as ``true``/``false`` (LLM-friendly, matches JSON).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value if value else None
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v) for v in value) if value else None
+    if isinstance(value, dict):
+        # Nested dicts should have been split into separate rows by the
+        # flattener; if one slips through, JSON-encode as a fallback.
+        return json.dumps(value, separators=(",", ":")) if value else None
+    return str(value)
+
+
+def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
+    """Group a nested telemetry dict into ``[(group_label, [k:v, ...])]`` entries.
+
+    - Top-level scalar keys collect under the synthetic ``user`` group.
+    - Top-level dict keys form their own groups (``device``, ``behavioral``, …).
+    - Hidden bookkeeping keys (``saved_at``, ``_location_name_stale``) drop.
+    - Empty groups are omitted entirely.
+    """
+    user_fields: list[str] = []
+    grouped: dict[str, list[str]] = {}
+
+    for key, value in ctx.items():
+        if key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_"):
+            continue
+        if isinstance(value, dict):
+            sub_fields = []
+            for sub_key, sub_value in value.items():
+                if sub_key in _TELEMETRY_HIDDEN_KEYS or sub_key.startswith("_"):
+                    continue
+                rendered = _format_telemetry_value(sub_value)
+                if rendered is not None:
+                    sub_fields.append(f"{sub_key}:{rendered}")
+            if sub_fields:
+                grouped[key] = sub_fields
+        else:
+            rendered = _format_telemetry_value(value)
+            if rendered is not None:
+                user_fields.append(f"{key}:{rendered}")
+
+    out: list[tuple[str, list[str]]] = []
+    if user_fields:
+        out.append(("user", user_fields))
+    for group_name in sorted(grouped.keys()):
+        out.append((group_name, grouped[group_name]))
+    return out
 
 
 def _schedule_due_field(due_at_str: str, now) -> str:
@@ -206,7 +244,6 @@ class WorldState:
         schedule_lines = self._render_schedule()
         if schedule_lines:
             parts.append("[schedule]")
-            parts.append("")
             parts.extend(schedule_lines)
 
         # ── bg_process ─────────────────────────────────────────────────────
@@ -225,31 +262,64 @@ class WorldState:
     # ── Private render helpers ─────────────────────────────────────────────
 
     def _render_telemetry(self) -> list[str]:
-        """Produce bullet lines for the [telemetry] section."""
-        with self._lock:
-            ctx = dict(self._store.get("telemetry") or {})
+        """Produce bullet lines for the [telemetry] section.
+
+        Reads the latest heartbeat from the ``telemetry`` table (populated by
+        ``ClientContextService.save()``) and surfaces every key the frontend
+        sent, grouped by top-level prefix.  Top-level scalar keys aggregate
+        under the synthetic ``user`` group; nested dicts (``device``,
+        ``behavioral``, …) form their own groups.
+        """
+        ctx = _fetch_telemetry()
         if not ctx:
             return []
 
         lines = []
-        user_fields = _telemetry_user_fields(ctx)
-        if user_fields:
-            lines.append("* **user**;" + ",".join(user_fields))
-        device_fields = _telemetry_device_fields(ctx.get("device"))
-        if device_fields:
-            lines.append("* **device**;" + ",".join(device_fields))
+        for group_name, fields in _group_telemetry(ctx):
+            lines.append(f"* **{group_name}**;" + ",".join(fields))
         return lines
 
     def _render_schedule(self) -> list[str]:
-        """Produce bullet lines for the [schedule] section from scheduled_items."""
+        """Produce bullet lines for the [schedule] section from scheduled_items.
+
+        Per unique message:
+          1. If any pending row exists, surface the earliest-due one.
+          2. Else, surface the most-recent fired row (SQL already constrains
+             fired rows to the last 6 hours; older fires are excluded).
+        """
         rows = _fetch_schedule_rows()
         if not rows:
             return []
 
-        now = utc_now()
-        lines = []
+        pending_by_msg: dict[str, dict] = {}
+        fired_by_msg: dict[str, dict] = {}
         for row in rows:
             message = row.get("message") or ""
+            if row.get("status") == "pending":
+                current = pending_by_msg.get(message)
+                if current is None or (row.get("due_at") or "") < (current.get("due_at") or ""):
+                    pending_by_msg[message] = row
+            elif row.get("status") == "fired":
+                current = fired_by_msg.get(message)
+                if current is None or (row.get("last_fired_at") or "") > (current.get("last_fired_at") or ""):
+                    fired_by_msg[message] = row
+
+        # Display order: pending entries first (by due_at asc), then fired-only entries (by last_fired_at desc).
+        ordered_messages = sorted(
+            pending_by_msg.keys(),
+            key=lambda m: pending_by_msg[m].get("due_at") or "",
+        )
+        seen = set(ordered_messages)
+        ordered_messages.extend(sorted(
+            (m for m in fired_by_msg if m not in seen),
+            key=lambda m: fired_by_msg[m].get("last_fired_at") or "",
+            reverse=True,
+        ))
+
+        now = utc_now()
+        lines = []
+        for message in ordered_messages:
+            row = pending_by_msg.get(message) or fired_by_msg[message]
             fields = [_schedule_due_field(row.get("due_at") or "", now)]
             last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
             if last_fired_field:
@@ -341,6 +411,42 @@ def _fetch_bg_process_rows() -> list[dict]:
             return [dict(zip(cols, row)) for row in cursor.fetchall()]
         finally:
             cursor.close()
+
+
+def _fetch_telemetry() -> dict:
+    """Read the telemetry table and return the unflattened nested dict.
+
+    Each row is ``key TEXT PRIMARY KEY, value TEXT`` (JSON-encoded leaf).
+    Dotted keys reconstruct into nested dicts so the renderer can group by
+    top-level prefix without knowing the schema in advance.
+    """
+    db = _get_db()
+    with db.connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT key, value FROM telemetry")
+            rows = cursor.fetchall()
+        finally:
+            cursor.close()
+    if not rows:
+        return {}
+
+    out: dict = {}
+    for flat_key, raw_value in rows:
+        try:
+            value = json.loads(raw_value) if raw_value is not None else None
+        except (TypeError, ValueError):
+            value = raw_value
+        parts = flat_key.split(".")
+        cursor_dict = out
+        for part in parts[:-1]:
+            existing = cursor_dict.get(part)
+            if not isinstance(existing, dict):
+                existing = {}
+                cursor_dict[part] = existing
+            cursor_dict = existing
+        cursor_dict[parts[-1]] = value
+    return out
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────

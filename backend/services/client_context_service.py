@@ -1,31 +1,35 @@
 """
 Client Context Service — Stores and retrieves client timezone, location, device info,
-behavioral signals, and system info from MemoryStore.
+behavioral signals, and system info.
 
-This provides a single source of truth for the user's context, accessible
-by all services (frontal cortex, scheduler, date_time tool, weather tool, etc.).
+The raw heartbeat payload (whatever the frontend sends) is persisted to the
+``telemetry`` table as flat key/value rows, e.g. ``device.name`` → ``"iPhone"``.
+The frontend (heartbeat.js) is the single source of truth for which keys are
+collected; this service blindly persists what it receives and reconstructs the
+nested dict on read so existing consumers (time_utils, scheduler_skill,
+ambient inference, …) see the same shape they always did.
 
-Extended with:
-- Location history ring buffer for mobility inference
-- Place transition detection
-- Session re-entry detection
-- Demographic trait seeding from locale/location
-- Rich format_for_prompt with ambient inference
+Side concerns that stay in MemoryStore (NOT telemetry):
+  - location-history ring buffer (mobility inference)
+  - session re-entry / place-transition flags (ephemeral inference state)
+  - culture-seeding cookie
+
+Side concerns persisted elsewhere:
+  - timezone → settings table (survives restarts, used by scheduler/CalDAV)
+  - demographic traits → data_graph
 """
 
 import json
 import time
 import logging
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import requests
 from services.memory_client import MemoryClientService
+from services.database_service import get_shared_db_service
 
 
-STORE_KEY = "client_context:primary"
 HISTORY_KEY = "client_context:history"
 HISTORY_MAX = 12  # ~1hr at 5min intervals
-TTL = 3600  # 1 hour
+TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 
 # Session re-entry: user returned after extended absence
 REENTRY_KEY = "ambient:session_reentry"
@@ -84,11 +88,56 @@ LOCALE_REGION_OVERRIDES = {
 
 
 class ClientContextService:
-    """Manages client context (timezone, location, device, behavioral signals) in MemoryStore."""
+    """Manages client context (timezone, location, device, behavioral signals).
+
+    Telemetry is persisted to the ``telemetry`` table (flat key/value).  The
+    MemoryStore connection is retained for ephemeral inference flags
+    (place-transition, session-reentry, culture-seed) and the location-history
+    ring buffer — not for telemetry itself.
+    """
 
     def __init__(self):
         """Initialize the service and open a MemoryStore connection."""
         self._store = MemoryClientService.create_connection()
+
+    # ── Telemetry table helpers ────────────────────────────────────────
+
+    @staticmethod
+    def _flatten(ctx: dict, prefix: str = "") -> dict[str, str]:
+        """Flatten a nested dict into ``{"a.b.c": json_str_value}``.
+
+        Leaf values (anything that isn't a non-empty dict) are JSON-encoded
+        so type fidelity round-trips through the TEXT column.  Empty dicts
+        are dropped — they carry no information once persisted as rows.
+        """
+        out: dict[str, str] = {}
+        for key, value in ctx.items():
+            full_key = f"{prefix}{key}"
+            if isinstance(value, dict) and value:
+                out.update(ClientContextService._flatten(value, prefix=f"{full_key}."))
+            else:
+                out[full_key] = json.dumps(value)
+        return out
+
+    @staticmethod
+    def _unflatten(rows: dict[str, str]) -> dict:
+        """Rebuild the nested dict from the flat ``{key: json_str}`` rows."""
+        out: dict = {}
+        for flat_key, raw_value in rows.items():
+            try:
+                value = json.loads(raw_value)
+            except (TypeError, ValueError):
+                value = raw_value
+            parts = flat_key.split(".")
+            cursor = out
+            for part in parts[:-1]:
+                existing = cursor.get(part)
+                if not isinstance(existing, dict):
+                    existing = {}
+                    cursor[part] = existing
+                cursor = existing
+            cursor[parts[-1]] = value
+        return out
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
         """Resolve a human-readable city/country name from coordinates.
@@ -169,9 +218,22 @@ class ClientContextService:
         if tz_name := ctx.get("timezone"):
             self._persist_timezone(tz_name, cached_ctx.get("timezone"))
 
-        # Save primary context
+        # Persist the heartbeat to the telemetry table — replace-all so deleted
+        # FE keys disappear from the next render.
         ctx["saved_at"] = time.time()
-        self._store.set(STORE_KEY, json.dumps(ctx), ex=TTL)
+        flat = self._flatten(ctx)
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM telemetry")
+                cursor.executemany(
+                    "INSERT INTO telemetry (key, value) VALUES (?, ?)",
+                    list(flat.items()),
+                )
+                conn.commit()
+            finally:
+                cursor.close()
 
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
@@ -189,9 +251,16 @@ class ClientContextService:
                      f"device={ctx.get('device', {}).get('class')}")
 
     def get(self) -> dict:
-        """Retrieve client context from MemoryStore."""
-        raw = self._store.get(STORE_KEY)
-        return json.loads(raw) if raw else {}
+        """Retrieve client context from the telemetry table as a nested dict."""
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT key, value FROM telemetry")
+                rows = dict(cursor.fetchall())
+            finally:
+                cursor.close()
+        return self._unflatten(rows) if rows else {}
 
     def is_stale(self, max_age_seconds: int = 600) -> bool:
         """Check whether the stored client context is older than the allowed age.
@@ -211,86 +280,6 @@ class ClientContextService:
             age = time.time() - saved_at
             logging.debug(f"[CLIENT CONTEXT] Context is stale (age={age:.0f}s, max={max_age_seconds}s)")
         return is_stale
-
-    def format_for_prompt(self) -> str:
-        """
-        Format client context as human-readable prompt string with ambient inference.
-
-        Uses hedging language for confidence framing:
-        "likely" / "probably" / "seems like" — never assertive surveillance language.
-        """
-        ctx = self.get()
-        if not ctx:
-            return ""
-
-        parts = []
-
-        # Format time using live server clock in user's timezone
-        if timezone := ctx.get("timezone"):
-            try:
-                user_dt = datetime.now(ZoneInfo(timezone))
-                time_str = user_dt.strftime("%I:%M %p, %A %d %B %Y").lstrip("0")
-                parts.append(f"Current time: {time_str}")
-            except Exception as e:
-                logging.debug(f"[CLIENT CONTEXT] Failed to compute time: {e}")
-
-        # Location (never expose raw coordinates to LLM)
-        if location_name := ctx.get("location_name"):
-            parts.append(f"Location: {location_name}")
-
-        # Device class
-        device = ctx.get("device", {})
-        if device_class := device.get("class"):
-            parts.append(f"Device: {device_class}")
-
-        # Ambient inferences (with confidence framing)
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            inferences = inference.infer(ctx)
-
-            attention = inferences.get("attention")
-            place = inferences.get("place")
-            energy = inferences.get("energy")
-
-            if attention:
-                attention_labels = {
-                    "deep_focus": "likely in a focused session",
-                    "casual": "seems to be casually browsing",
-                    "distracted": "appears to be multitasking",
-                    "away": "seems to be away",
-                }
-                if label := attention_labels.get(attention):
-                    parts.append(f"State: {label}")
-
-            if place:
-                place_labels = {
-                    "home": "probably at home",
-                    "work": "probably at work",
-                    "transit": "likely in transit",
-                    "out": "likely out and about",
-                }
-                if label := place_labels.get(place):
-                    parts.append(f"Context: {label}")
-
-            if energy:
-                energy_labels = {
-                    "high": "high",
-                    "moderate": "moderate",
-                    "low": "low",
-                }
-                if label := energy_labels.get(energy):
-                    parts.append(f"Energy: {label}")
-
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Inference failed: {e}")
-
-        return " | ".join(parts)
 
     # ── Location History ───────────────────────────────────────────────
 

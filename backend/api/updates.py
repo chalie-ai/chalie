@@ -1,11 +1,10 @@
 """
 Updates API — State mutation endpoints for external wrappers and the chat UI.
 
-Four classified update types, each with its own endpoint:
+Three classified update types, each with its own endpoint:
 
   POST /api/updates/belief  — set or correct a user trait
   POST /api/updates/memory  — encode an episodic/semantic memory
-  POST /api/updates/context — update ambient/session context signals
   POST /api/updates/feedback — report intent execution outcome
 
 All endpoints require authentication (cookie session or bearer token).
@@ -188,77 +187,6 @@ def update_memory():
         return jsonify({"error": "Internal error encoding memory"}), 500
 
     logger.info("[Updates API] memory update: topic=%r salience=%d", topic, salience)
-    return jsonify({"ok": True}), 200
-
-
-# ---------------------------------------------------------------------------
-# POST /api/updates/context
-# ---------------------------------------------------------------------------
-
-@updates_bp.route("/context", methods=["POST"])
-@require_auth
-def update_context():
-    """Update ambient/session context signals.
-
-    Merges the provided signals into the current client context stored in
-    MemoryStore.  Standard keys (``place``, ``energy``) are mapped to the
-    expected context structure; arbitrary key-value pairs may be passed via
-    ``custom`` and are stored under an ``external_signals`` sub-key.
-
-    Body (JSON):
-        place (str): Human-readable place label, e.g. ``"office"``.
-        energy (str): Energy level, e.g. ``"high"``, ``"low"``.
-        custom (dict): Arbitrary context signals.
-
-    Returns:
-        200 with ``{ok: true}`` on success.
-        400 if none of ``place``, ``energy``, or ``custom`` are provided.
-        403 if bearer token lacks the ``update/context`` permission.
-    """
-    denied = _check_update_permission("context")
-    if denied is not None:
-        return denied
-
-    body = request.get_json(silent=True) or {}
-    place = body.get("place")
-    energy = body.get("energy")
-    custom = body.get("custom")
-
-    if place is None and energy is None and custom is None:
-        return jsonify({"error": "At least one of place, energy, or custom is required"}), 400
-
-    if custom is not None and not isinstance(custom, dict):
-        return jsonify({"error": "custom must be a JSON object"}), 400
-
-    try:
-        from services.memory_client import MemoryClientService
-
-        store = MemoryClientService.create_connection()
-        STORE_KEY = "client_context:primary"
-        TTL = 3600
-
-        raw = store.get(STORE_KEY)
-        ctx = json.loads(raw) if raw else {}
-
-        if place is not None:
-            ctx["place"] = str(place)
-        if energy is not None:
-            ctx["energy"] = str(energy)
-        if custom:
-            existing = ctx.get("external_signals") or {}
-            existing.update(custom)
-            ctx["external_signals"] = existing
-
-        store.set(STORE_KEY, json.dumps(ctx), ex=TTL)
-
-        from services.world_state import world_state
-        world_state.set("telemetry", ctx)
-    except Exception as exc:
-        logger.error("[Updates API] context update failed: %s", exc)
-        return jsonify({"error": "Internal error updating context"}), 500
-
-    logger.info("[Updates API] context update: place=%r energy=%r custom_keys=%s",
-                place, energy, list((custom or {}).keys()))
     return jsonify({"ok": True}), 200
 
 

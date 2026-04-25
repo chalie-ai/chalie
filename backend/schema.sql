@@ -821,3 +821,17 @@ CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
     AFTER DELETE ON expanded_semantic BEGIN
     DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
 END;
+
+-- ============================================================================
+-- TELEMETRY — flat key/value store for the latest client heartbeat.
+-- ============================================================================
+-- Populated by /health POST. The frontend (heartbeat.js) is the source of
+-- truth for which keys are collected; the backend persists whatever is sent.
+-- Nested payload keys are flattened with dots, e.g.
+--   {"device": {"name": "iPhone"}}  →  key='device.name', value='iPhone'
+-- One row per key; UPSERT on every push. WorldState renders by reading the
+-- whole table and grouping by the top-level prefix.
+CREATE TABLE IF NOT EXISTS telemetry (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);

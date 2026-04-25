@@ -23,21 +23,13 @@ def health_check():
             from services.client_context_service import ClientContextService
             data = request.get_json() or {}
             if data:
-                svc = ClientContextService()
-                svc.save(data)
-                # Run ambient inference on the saved context
+                # ClientContextService.save() is the single chokepoint for
+                # heartbeat persistence — it writes to the telemetry table,
+                # which WorldState reads at render time.
+                ClientContextService().save(data)
                 from services.ambient_inference_service import AmbientInferenceService
                 inference = AmbientInferenceService().infer(data)
                 attention = inference.get('attention') if inference else None
-                # Mirror the saved context into WorldState so the [telemetry]
-                # block surfaces in the user prompt and Cognition tab. /health
-                # is the primary telemetry push site (heartbeat.js every 5min);
-                # /api/updates/context is the secondary wrapper-facing path.
-                try:
-                    from services.world_state import world_state
-                    world_state.set("telemetry", svc.get() or data)
-                except Exception as ws_err:
-                    logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
         from consumer import APP_VERSION
@@ -385,12 +377,17 @@ def observability_tasks():
 @require_session
 def observability_world_state():
     """World state as seen by the ACT loop — rendered block + raw inputs."""
-    from services.world_state import world_state, _fetch_schedule_rows, _fetch_bg_process_rows
+    from services.world_state import (
+        world_state,
+        _fetch_schedule_rows,
+        _fetch_bg_process_rows,
+        _fetch_telemetry,
+    )
 
     return jsonify({
         "rendered": world_state.render(),
         "inputs": {
-            "telemetry": world_state.get("telemetry"),
+            "telemetry": _fetch_telemetry(),
             "signals": world_state.get("signals"),
             "schedule": _fetch_schedule_rows(),
             "bg_processes": _fetch_bg_process_rows(),

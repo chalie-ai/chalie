@@ -1,13 +1,18 @@
 """
-Feature tests for WorldState — in-process singleton.
+Feature tests for WorldState — the singleton that renders ambient world context
+into the literal block consumed by prompt assembly.
 
-All tests use the real production WorldState class with real in-memory SQLite
-built from schema.sql (via the conftest `db` fixture). Zero mocks of our own code.
+Real WorldState class, real in-memory SQLite (built from schema.sql via the
+``db`` fixture), zero mocks. Each test uses a fresh WorldState instance to
+avoid cross-test contamination from the module singleton.
 
-Each test isolates WorldState state by using a fresh WorldState instance
-(not the module singleton) to avoid cross-test contamination.
+Per tester.md: every test asserts a real-world behaviour someone depends on —
+no plumbing, no shape checks, no "did we store the dict" tests. The render
+output is the only contract that matters; everything observable flows through
+``WorldState.render()``.
 """
 
+import json
 import time as _time
 import uuid
 from datetime import timedelta
@@ -29,568 +34,319 @@ def _fresh() -> WorldState:
     return WorldState()
 
 
-def _future_iso(minutes: int = 60) -> str:
+def _future_iso(minutes: int) -> str:
     return (utc_now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _past_iso(minutes: int = 60) -> str:
+def _past_iso(minutes: int) -> str:
     return (utc_now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _recent_iso(seconds: int = 30) -> str:
-    return (utc_now() - timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+def _seed_telemetry(db, ctx: dict) -> None:
+    """Persist a heartbeat-shaped dict into the telemetry table (flat key/value).
+
+    Mirrors what ClientContextService.save() does on a /health POST so render
+    tests can drive the full pipeline without spinning up the API.
+    """
+    def _flatten(payload, prefix=""):
+        for key, value in payload.items():
+            full = f"{prefix}{key}"
+            if isinstance(value, dict) and value:
+                yield from _flatten(value, prefix=f"{full}.")
+            else:
+                yield full, json.dumps(value)
+
+    db.execute("DELETE FROM telemetry")
+    db.executemany(
+        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
+        list(_flatten(ctx)),
+    )
+    db.commit()
+
+
+def _seed_pending(db, message: str, due_minutes_ahead: int, *, recurrence: str | None = None) -> None:
+    db.execute(
+        "INSERT INTO scheduled_items (id, message, due_at, status, hidden, recurrence) "
+        "VALUES (?, ?, ?, 'pending', 0, ?)",
+        (str(uuid.uuid4()), message, _future_iso(due_minutes_ahead), recurrence),
+    )
+
+
+def _seed_fired(db, message: str, fired_minutes_ago: int) -> None:
+    iso = _past_iso(fired_minutes_ago)
+    db.execute(
+        "INSERT INTO scheduled_items (id, message, due_at, status, hidden, last_fired_at) "
+        "VALUES (?, ?, ?, 'fired', 0, ?)",
+        (str(uuid.uuid4()), message, iso, iso),
+    )
 
 
 # ---------------------------------------------------------------------------
-# set / get roundtrip
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestSetGet:
-    def test_set_returns_self_for_chaining(self):
-        ws = _fresh()
-        result = ws.set("foo", {"x": 1})
-        assert result is ws
-
-    def test_chainable_multiple_types(self):
-        ws = _fresh()
-        ws.set("a", {"v": 1}).set("b", {"v": 2})
-        assert ws.get("a") == {"v": 1}
-        assert ws.get("b") == {"v": 2}
-
-    def test_get_returns_stored_dict(self):
-        ws = _fresh()
-        ws.set("telemetry", {"place": "Valletta"})
-        assert ws.get("telemetry") == {"place": "Valletta"}
-
-    def test_get_unset_type_returns_empty_dict(self):
-        ws = _fresh()
-        assert ws.get("nonexistent") == {}
-
-    def test_set_overwrites_prior_value(self):
-        ws = _fresh()
-        ws.set("telemetry", {"place": "Valletta"})
-        ws.set("telemetry", {"place": "Sliema"})
-        assert ws.get("telemetry")["place"] == "Sliema"
-
-    def test_arbitrary_type_keys_supported(self):
-        ws = _fresh()
-        ws.set("custom_type_x", {"data": 42})
-        assert ws.get("custom_type_x") == {"data": 42}
-
-    def test_get_returns_copy_not_reference(self):
-        ws = _fresh()
-        ws.set("foo", {"x": 1})
-        retrieved = ws.get("foo")
-        retrieved["x"] = 999
-        assert ws.get("foo")["x"] == 1
-
-
-# ---------------------------------------------------------------------------
-# push_signal
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestPushSignal:
-    def test_push_signal_adds_entry_keyed_by_source(self):
-        ws = _fresh()
-        ws.push_signal("news", "Malta heatwave warning")
-        signals = ws.get("signals")
-        assert "news" in signals
-        assert signals["news"]["label"] == "Malta heatwave warning"
-
-    def test_push_signal_second_push_same_source_overwrites(self):
-        ws = _fresh()
-        ws.push_signal("news", "first headline")
-        ws.push_signal("news", "second headline")
-        signals = ws.get("signals")
-        assert signals["news"]["label"] == "second headline"
-
-    def test_push_signal_multiple_sources_coexist(self):
-        ws = _fresh()
-        ws.push_signal("news", "headline")
-        ws.push_signal("inbox", "you have 3 emails")
-        signals = ws.get("signals")
-        assert "news" in signals
-        assert "inbox" in signals
-
-    def test_push_signal_expired_entry_pruned_on_get(self):
-        ws = _fresh()
-        # Push a signal with TTL 0 → immediately expired
-        ws.push_signal("stale", "old news", ttl=0)
-        _time.sleep(0.01)  # ensure it's past expiry
-        signals = ws.get("signals")
-        assert "stale" not in signals
-
-    def test_push_signal_non_expired_entry_survives(self):
-        ws = _fresh()
-        ws.push_signal("live", "live signal", ttl=3600)
-        signals = ws.get("signals")
-        assert "live" in signals
-
-    def test_push_signal_expires_at_stored(self):
-        ws = _fresh()
-        before = _time.time()
-        ws.push_signal("src", "label", ttl=60)
-        signals = ws.get("signals")
-        assert signals["src"]["expires_at"] > before
-        assert signals["src"]["expires_at"] < before + 61
-
-
-# ---------------------------------------------------------------------------
-# render() — empty state
+# Empty state
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestRenderEmpty:
-    def test_render_empty_state_returns_empty_string(self, db):
+    def test_empty_state_renders_nothing(self, db):
         ws = _fresh()
-        result = ws.render()
-        assert result == ""
+        assert ws.render() == ""
 
 
 # ---------------------------------------------------------------------------
-# render() — telemetry section
+# Telemetry section
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestRenderTelemetry:
-    def test_render_with_only_telemetry_includes_header_and_section(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
+    def test_telemetry_groups_by_top_level_prefix_and_surfaces_every_fe_key(self, db):
+        # End-to-end shape: whatever the FE persists into the telemetry table
+        # must reach the rendered block, grouped by top-level prefix. The
+        # renderer never knows the schema in advance — that's the whole point
+        # of the refactor.
+        _seed_telemetry(db, {
             "local_time": "10:47",
             "utc_offset": "+02:00",
-            "location": "Valletta, MT",
+            "location_name": "Valletta, Malta",
+            "device": {"name": "MacBook", "battery": 82, "os": "macOS"},
+            "behavioral": {"focus_state": "deep", "tab_count": 7},
         })
-        result = ws.render()
+
+        result = _fresh().render()
+
         assert result.startswith(_HEADER)
         assert "[telemetry]" in result
-        assert "* **user**;" in result
 
-    def test_render_telemetry_user_line_with_full_fields(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "10:47",
-            "utc_offset": "+02:00",
-            "location": "Valletta",
-            "mobility": "stationary",
-        })
-        result = ws.render()
-        assert "time:10:47+02:00" in result
-        assert "location:Valletta" in result
-        assert "mobility:stationary" in result
+        # Top-level scalars collapse into a single **user** bullet.
+        user_line = next(ln for ln in result.splitlines() if ln.startswith("* **user**"))
+        assert "local_time:10:47" in user_line
+        assert "utc_offset:+02:00" in user_line
+        assert "location_name:Valletta, Malta" in user_line
 
-    def test_render_telemetry_no_battery_when_absent(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "10:00",
-            "location": "Home",
-            "device": {"name": "iPhone"},
-        })
-        result = ws.render()
-        assert "battery" not in result
-        assert "name:iPhone" in result
+        # Each nested dict becomes its own bullet, alphabetically sorted.
+        device_line = next(ln for ln in result.splitlines() if ln.startswith("* **device**"))
+        assert "name:MacBook" in device_line
+        assert "battery:82" in device_line
+        assert "os:macOS" in device_line
 
-    def test_render_telemetry_no_mobility_when_absent(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "09:00",
-            "location": "Office",
-        })
-        result = ws.render()
-        assert "mobility" not in result
+        behavioral_line = next(ln for ln in result.splitlines() if ln.startswith("* **behavioral**"))
+        assert "focus_state:deep" in behavioral_line
+        assert "tab_count:7" in behavioral_line
 
-    def test_render_telemetry_no_schedule_or_signals_section(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "09:00",
-            "location": "Sliema",
-        })
-        result = ws.render()
-        assert "[schedule]" not in result
-        assert "[signal:" not in result
-        assert "[bg_process" not in result
-
-    def test_render_telemetry_no_space_after_colon_or_comma(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "10:47",
-            "utc_offset": "+02:00",
-            "location": "Valletta",
-            "mobility": "stationary",
-        })
-        result = ws.render()
-        # Find the user bullet
-        lines = result.splitlines()
-        user_line = next((ln for ln in lines if "**user**" in ln), None)
-        assert user_line is not None
-        fields_part = user_line.split(";", 1)[1] if ";" in user_line else ""
-        # No ': ' or ', ' in the fields part
-        assert ": " not in fields_part
-        assert ", " not in fields_part
-
-    def test_render_telemetry_device_line_with_battery(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "09:00",
-            "device": {"name": "MacBook", "battery": "82%"},
-        })
-        result = ws.render()
-        assert "* **device**;" in result
-        assert "name:MacBook" in result
-        assert "battery:82%" in result
+        # Bookkeeping keys must never leak.
+        assert "saved_at" not in result
+        assert "_location_name_stale" not in result
 
 
 # ---------------------------------------------------------------------------
-# render() — signals section
+# Schedule section
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRenderSchedule:
+    def test_upcoming_pending_renders_with_due_in_and_repeats(self, db):
+        # Single recurring upcoming item — covers the happy path: it appears,
+        # gets a positive due-in, and the recurrence is formatted as repeats:every.
+        _seed_pending(db, "Daily standup", due_minutes_ahead=60, recurrence="86400")
+        db.commit()
+
+        result = _fresh().render()
+        assert "[schedule]" in result
+        bullet = next(ln for ln in result.splitlines() if "Daily standup" in ln)
+        assert bullet.startswith("* Daily standup (due-in:")
+        assert "ago" not in bullet.split("(", 1)[1].split(",")[0]
+        assert "repeats:every 1d 0h" in bullet
+
+    def test_past_due_pending_renders_with_ago_suffix(self, db):
+        _seed_pending(db, "Overdue task", due_minutes_ahead=-30)
+        db.commit()
+
+        result = _fresh().render()
+        bullet = next(ln for ln in result.splitlines() if "Overdue task" in ln)
+        assert "due-in:" in bullet
+        assert "ago" in bullet
+
+    def test_hidden_items_excluded(self, db):
+        db.execute(
+            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
+            "VALUES (?, ?, ?, 'pending', 1)",
+            (str(uuid.uuid4()), "Secret task", _future_iso(60)),
+        )
+        db.commit()
+
+        assert "Secret task" not in _fresh().render()
+
+    def test_fired_older_than_6h_excluded(self, db):
+        _seed_fired(db, "Old alarm", fired_minutes_ago=400)  # >6h
+        db.commit()
+
+        assert "Old alarm" not in _fresh().render()
+
+    def test_repeated_fires_collapse_to_most_recent_within_6h(self, db):
+        # A recurring job fires every hour for 5 hours. The schedule view must
+        # surface ONE bullet for the most-recent fire only — not a wall of dupes.
+        for minutes_ago in (300, 240, 180, 120, 30):
+            _seed_fired(db, "Mail sync", fired_minutes_ago=minutes_ago)
+        db.commit()
+
+        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Mail sync")]
+        assert len(bullets) == 1, f"Expected 1 bullet for repeated fires, got {len(bullets)}: {bullets!r}"
+        assert "last-fired:30m" in bullets[0]
+        assert "5h" not in bullets[0]
+
+    def test_upcoming_pending_supersedes_recent_fire_for_same_message(self, db):
+        # Same job has both "just fired" and "due again soon" — show the upcoming one.
+        _seed_fired(db, "Mail sync", fired_minutes_ago=30)
+        _seed_pending(db, "Mail sync", due_minutes_ahead=45)
+        db.commit()
+
+        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Mail sync")]
+        assert len(bullets) == 1
+        due_in_field = bullets[0].split("(", 1)[1].split(",")[0]
+        assert due_in_field.startswith("due-in:") and "ago" not in due_in_field, (
+            f"Expected upcoming due-in (no 'ago'), got: {due_in_field!r}"
+        )
+
+    def test_repeated_pending_shows_only_next_upcoming(self, db):
+        for minutes_ahead in (300, 90, 600):
+            _seed_pending(db, "Sync run", due_minutes_ahead=minutes_ahead)
+        db.commit()
+
+        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Sync run")]
+        assert len(bullets) == 1
+        # Earliest is 90m → "1h Xm"; the 5h and 10h variants must NOT appear.
+        assert "due-in:1h" in bullets[0], f"Expected earliest (90m → 1h…), got: {bullets[0]!r}"
+        assert "5h" not in bullets[0]
+        assert "10h" not in bullets[0]
+
+
+# ---------------------------------------------------------------------------
+# bg_process section
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRenderBgProcess:
+    def test_recent_goal_pursuit_appears_with_last_update(self, db):
+        # A row from ~2 minutes ago must surface with a formatted "Xm ago" timestamp,
+        # rendered as a [bg_process(...)] line (not a bullet).
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', 'Researching hotels in Valletta', ?)",
+            ((utc_now() - timedelta(seconds=125)).strftime("%Y-%m-%d %H:%M:%S"),),
+        )
+        db.commit()
+
+        result = _fresh().render()
+        line = next(ln for ln in result.splitlines() if "[bg_process(" in ln)
+        assert not line.startswith("*")
+        assert "last_update:2m ago" in line
+        assert "Researching hotels in Valletta" in line
+
+    def test_older_than_24h_excluded_and_other_channels_ignored(self, db):
+        # Two rows that must NOT surface: a goal_pursuit row >24h old, and a
+        # recent row on a non-goal_pursuit channel.
+        old_iso = _past_iso(1500)  # >24h
+        recent_iso = (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', 'Old pursuit', ?)",
+            (old_iso,),
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('user', 'assistant', 'regular chat content', ?)",
+            (recent_iso,),
+        )
+        db.commit()
+
+        result = _fresh().render()
+        assert "Old pursuit" not in result
+        assert "regular chat content" not in result
+
+    def test_long_content_is_truncated_with_ellipsis(self, db):
+        long_content = "word " * 120  # 600 chars
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
+            (long_content, (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        db.commit()
+
+        line = next(ln for ln in _fresh().render().splitlines() if "[bg_process(" in ln)
+        assert line.endswith("…")
+        assert len(line) <= 240  # 200 content cap + ~30 char prefix
+
+
+# ---------------------------------------------------------------------------
+# Signals section
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestRenderSignals:
-    def test_render_with_only_signals_has_no_other_sections(self, db):
-        ws = _fresh()
-        ws.push_signal("news", "Malta heatwave")
-        result = ws.render()
-        assert "[telemetry]" not in result
-        assert "[schedule]" not in result
-        assert "[bg_process" not in result
-        assert "[signal:news] Malta heatwave" in result
-
-    def test_render_signals_sorted_by_source_key(self, db):
+    def test_signals_render_sorted_by_source(self, db):
         ws = _fresh()
         ws.push_signal("zzz", "last")
         ws.push_signal("aaa", "first")
         ws.push_signal("mmm", "middle")
         result = ws.render()
-        idx_aaa = result.index("[signal:aaa]")
-        idx_mmm = result.index("[signal:mmm]")
-        idx_zzz = result.index("[signal:zzz]")
-        assert idx_aaa < idx_mmm < idx_zzz
+        # Each appears as `[signal:src] label` (no bullet prefix), in alphabetical order.
+        assert "[signal:aaa] first" in result
+        assert "[signal:mmm] middle" in result
+        assert "[signal:zzz] last" in result
+        assert result.index("[signal:aaa]") < result.index("[signal:mmm]") < result.index("[signal:zzz]")
 
-    def test_render_signals_format_no_bullet(self, db):
+    def test_expired_signals_pruned_on_render(self, db):
         ws = _fresh()
-        ws.push_signal("news", "headline")
+        ws.push_signal("stale", "old news", ttl=0)
+        ws.push_signal("fresh", "live news", ttl=3600)
+        _time.sleep(0.01)
         result = ws.render()
-        lines = result.splitlines()
-        signal_line = next((ln for ln in lines if "[signal:news]" in ln), None)
-        assert signal_line is not None
-        assert not signal_line.startswith("*")
-
-    def test_render_signals_space_between_bracket_and_label(self, db):
-        ws = _fresh()
-        ws.push_signal("src", "the label")
-        result = ws.render()
-        assert "[signal:src] the label" in result
+        assert "[signal:fresh] live news" in result
+        assert "stale" not in result
+        assert "old news" not in result
 
 
 # ---------------------------------------------------------------------------
-# render() — schedule section (requires real DB)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderSchedule:
-    def test_future_item_appears_with_due_in(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "Call Mum", _future_iso(120)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "[schedule]" in result
-        assert "Call Mum" in result
-        assert "due-in:" in result
-
-    def test_past_due_item_renders_with_ago_suffix(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "Overdue task", _past_iso(30)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Overdue task" in result
-        assert "due-in:" in result
-        assert "ago" in result
-
-    def test_recurring_item_includes_repeats_field(self, db):
-        item_id = str(uuid.uuid4())
-        # recurrence is stored as seconds in a string
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden, recurrence) "
-            "VALUES (?, ?, ?, 'pending', 0, ?)",
-            (item_id, "Daily standup", _future_iso(60), "86400"),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Daily standup" in result
-        assert "repeats:every" in result
-        assert "1d 0h" in result
-
-    def test_recently_fired_item_appears_within_24h(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden, last_fired_at) "
-            "VALUES (?, ?, ?, 'fired', 0, ?)",
-            (item_id, "Morning alarm", _past_iso(1), _past_iso(1)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Morning alarm" in result
-
-    def test_hidden_item_does_not_appear(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 1)",
-            (item_id, "Secret task", _future_iso(60)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Secret task" not in result
-
-    def test_non_recurring_item_no_repeats_field(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "One-off task", _future_iso(30)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "One-off task" in result
-        assert "repeats" not in result
-
-    def test_fired_item_older_than_24h_does_not_appear(self, db):
-        item_id = str(uuid.uuid4())
-        old_fired = _past_iso(minutes=1500)  # >24h ago
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden, last_fired_at) "
-            "VALUES (?, ?, ?, 'fired', 0, ?)",
-            (item_id, "Old alarm", old_fired, old_fired),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Old alarm" not in result
-
-
-# ---------------------------------------------------------------------------
-# render() — bg_process section (requires real DB)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderBgProcess:
-    def test_recent_goal_pursuit_row_appears(self, db):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Researching hotels in Valletta', ?)",
-            (_recent_iso(seconds=120),),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "[bg_process(" in result
-        assert "last_update:" in result
-        assert "Researching hotels in Valletta" in result
-
-    def test_bg_process_format_no_bullet(self, db):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Active pursuit', ?)",
-            (_recent_iso(seconds=60),),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        lines = result.splitlines()
-        bg_line = next((ln for ln in lines if "[bg_process(" in ln), None)
-        assert bg_line is not None
-        assert not bg_line.startswith("*")
-
-    def test_bg_process_older_than_24h_excluded(self, db):
-        old = _past_iso(minutes=1500)  # >24h
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Old pursuit', ?)",
-            (old,),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "Old pursuit" not in result
-
-    def test_non_goal_pursuit_channel_not_included(self, db):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('user', 'assistant', 'regular chat content', ?)",
-            (_recent_iso(seconds=60),),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert "regular chat content" not in result
-
-    def test_last_update_field_uses_time_formatter(self, db):
-        # Seed a row from exactly ~2 minutes ago (should render as '2m ago')
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Finding flights', ?)",
-            (_recent_iso(seconds=125),),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        # Should contain 'last_update:2m ago' (125s ≈ 2m)
-        assert "last_update:2m ago" in result
-
-    def test_bg_process_truncates_long_content(self, db):
-        long_content = "word " * 120  # 600 chars, well above 200
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
-            (long_content, _recent_iso(seconds=60)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        bg_line = next((ln for ln in result.splitlines() if "[bg_process(" in ln), None)
-        assert bg_line is not None
-        # Content is capped at 200 chars + '…'; prefix '[bg_process(last_update:Xs ago)] '
-        # adds ~30-35 chars — use 240 as the safe upper bound.
-        assert len(bg_line) <= 240
-        assert bg_line.endswith("…")
-
-    def test_bg_process_short_content_not_truncated(self, db):
-        short_content = "Researching cheap hotels in Valletta"
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
-            (short_content, _recent_iso(seconds=60)),
-        )
-        db.commit()
-
-        ws = _fresh()
-        result = ws.render()
-        assert short_content in result
-        bg_line = next((ln for ln in result.splitlines() if "[bg_process(" in ln), None)
-        assert bg_line is not None
-        assert not bg_line.endswith("…")
-
-
-# ---------------------------------------------------------------------------
-# render() — full-mix section ordering
+# Full mix — section ordering and structural rules
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestRenderFullMix:
-    def test_section_order_telemetry_schedule_bgprocess_signals(self, db):
-        """Sections must appear in fixed order: telemetry → schedule → bg_process → signals."""
-        # Seed all four sections
+    def test_sections_appear_in_fixed_order(self, db):
+        _seed_telemetry(db, {"local_time": "10:00", "location_name": "Malta"})
         ws = _fresh()
-        ws.set("telemetry", {"local_time": "10:00", "location": "Malta"})
         ws.push_signal("news", "heatwave")
-
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "Team meeting", _future_iso(60)),
-        )
+        _seed_pending(db, "Team meeting", due_minutes_ahead=60)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES ('goal_pursuit', 'assistant', 'Active goal', ?)",
-            (_recent_iso(seconds=30),),
+            ((utc_now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         db.commit()
 
         result = ws.render()
-
+        assert result.startswith(_HEADER)
         idx_telemetry = result.index("[telemetry]")
         idx_schedule = result.index("[schedule]")
         idx_bg = result.index("[bg_process(")
         idx_signal = result.index("[signal:news]")
-
         assert idx_telemetry < idx_schedule < idx_bg < idx_signal
 
-    def test_render_starts_with_exact_header(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {"local_time": "08:00", "location": "Home"})
-        result = ws.render()
-        assert result.startswith(_HEADER)
-
-    def test_empty_sections_fully_omitted(self, db):
-        """Only non-empty sections appear — no phantom headers."""
-        ws = _fresh()
-        ws.set("telemetry", {"local_time": "08:00", "location": "Office"})
-        # No schedule, no bg_process, no signals
-        result = ws.render()
+    def test_empty_sections_are_fully_omitted(self, db):
+        # Only telemetry seeded — schedule, bg_process, signals headers must be absent.
+        _seed_telemetry(db, {"local_time": "08:00", "location_name": "Office"})
+        result = _fresh().render()
         assert "[schedule]" not in result
         assert "[bg_process" not in result
         assert "[signal:" not in result
 
-    def test_render_has_blank_line_after_telemetry_header(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {"local_time": "08:00", "location": "Office"})
-        result = ws.render()
-        lines = result.splitlines()
-        telem_idx = next(i for i, ln in enumerate(lines) if "[telemetry]" in ln)
-        # Next line after [telemetry] must be blank
-        assert lines[telem_idx + 1] == ""
-
-    def test_render_schedule_has_blank_line_after_header(self, db):
-        item_id = str(uuid.uuid4())
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "Doctor appointment", _future_iso(60)),
-        )
+    def test_schedule_header_has_no_blank_line_before_first_bullet(self, db):
+        # Regression: the [schedule] header used to be followed by a blank line,
+        # producing visual gap before the first bullet. The bullet must come next.
+        _seed_pending(db, "Doctor appointment", due_minutes_ahead=60)
         db.commit()
 
-        ws = _fresh()
-        result = ws.render()
-        lines = result.splitlines()
+        lines = _fresh().render().splitlines()
         sched_idx = next(i for i, ln in enumerate(lines) if "[schedule]" in ln)
-        assert lines[sched_idx + 1] == ""
-
-    def test_bullet_uses_star_single_space(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {"local_time": "09:00", "location": "Home"})
-        result = ws.render()
-        lines = result.splitlines()
-        bullet_lines = [ln for ln in lines if ln.startswith("* ")]
-        assert len(bullet_lines) >= 1
-        for line in bullet_lines:
-            assert line.startswith("* "), f"Expected '* ' prefix, got: {line!r}"
-
-    def test_semicolon_separates_entity_from_fields(self, db):
-        ws = _fresh()
-        ws.set("telemetry", {
-            "local_time": "10:00",
-            "location": "Sliema",
-        })
-        result = ws.render()
-        user_line = next((ln for ln in result.splitlines() if "**user**" in ln), None)
-        assert user_line is not None
-        assert "**user**;" in user_line
+        assert lines[sched_idx + 1].startswith("* "), (
+            f"Expected first schedule bullet immediately after header, got: {lines[sched_idx + 1]!r}"
+        )
