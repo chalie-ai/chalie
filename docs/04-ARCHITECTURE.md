@@ -80,7 +80,7 @@ Four layers, each optimised for a different timescale and purpose:
 
 Chalie keeps thinking when you are not typing. Background workers run as daemon threads in the same process:
 
-- **Decay engine** — periodically applies power-law decay to episode retrieval weights and data-graph entries, consolidates similar episodes into super-episodes, and purges old transcript entries below the compaction watermark.
+- **Decay engine** — applies power-law decay to episode retrieval weights, data-graph entries, and purges old transcript entries and tool-call rows. The engine itself (`DecayEngineService`) has no daemon thread of its own; it exposes `run_once()` and is called by the `SubconsciousWorker` tick (v0.5.0 Phase 2).
 - **DMN (Default Mode Network)** — after a period of idle time, Chalie initiates a proactive thought using recent or high-salience episodes as context. Uses its own `MessageProcessor` subclass; exits silently when nothing warrants a response.
 - **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate skill. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
