@@ -171,7 +171,6 @@ The Brain dashboard (`http://localhost:8081/brain/`) is the admin and observabil
 - Routing decision distribution
 - Memory layer health
 - User traits and data graph
-- Tool performance metrics
 - Personality controls and provider settings
 
 It is read-only for observability panels — settings panels write to Chalie's configuration.
