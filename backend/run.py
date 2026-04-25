@@ -293,17 +293,6 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
-    # User-summary cadence worker — 30-min tick; lazy cold-start handled
-    # by UserMessageProcessor.getUserDefinition() fallback instead of boot hook.
-    try:
-        from workers.user_summary_worker import run as _user_summary_run
-        threading.Thread(
-            target=_user_summary_run, daemon=True, name="user-summary-worker"
-        ).start()
-        logger.info("[Startup] User summary worker started")
-    except Exception as e:
-        logger.warning(f"[Startup] User summary worker start failed: {e}")
-
     # Verify search routing embeddings are present
     try:
         import os as _os
