@@ -113,8 +113,6 @@ Both stages produce their own audit records stored with the turn. The wall-clock
 After the turn is stored, the user processor triggers a set of services synchronously. Because the response is already on the wire (sent via narration callbacks during the loop), this fan-out does not affect perceived latency.
 
 - **Conversation phase tracking** — updates the current phase based on both the user message and the response.
-- **Situation model** — updates the running model of context and state.
-- **Adaptive signals** — detects and stores behavioural patterns from the response.
 - **DMN timer reset** — defers the idle-trigger so proactive thoughts don't interrupt an active conversation.
 - **Metrics counter** — increments request and user-message totals.
 - **Compaction backstop** — safety check at turn boundary in case mid-loop compaction was not triggered.
