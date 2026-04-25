@@ -270,6 +270,11 @@ def main():
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
+    # Subconscious worker (v0.5.0 §5 — idle-gated 5-minute cognition tick:
+    # super-episode consolidation → decay → pattern extraction → user synthesis).
+    from services.subconscious_worker import subconscious_worker
+    manager.register_service("subconscious-worker", subconscious_worker)
+
     # Capability sync — bootstrap connected capabilities into scheduler system handlers
     _bootstrap_capability_sync()
 

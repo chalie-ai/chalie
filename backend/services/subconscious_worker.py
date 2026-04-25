@@ -1,0 +1,417 @@
+"""
+SubconsciousWorker — idle-gated 5-minute cognition tick.
+
+A single daemon thread that owns latent cognition: super-episode consolidation,
+decay, pattern extraction, and user synthesis.  Fires only when the user is
+not active.
+
+Spec: ``/Volumes/llm/chalie-plans/v0.5.0/2026-04-24-subconscious-worker-design.md``.
+
+Tick body (sequential, per §5.3):
+    1. Consolidate episodes → super-episodes  (per channel with unconsolidated rows).
+    2. Run decay engine.
+    3. Run pattern extraction.
+    4. Run user synthesis.
+
+Gates (both must pass — §5.2):
+    - User-active: ``last_user_message_at`` is older than 30 minutes.
+    - Already-fired: ``subconscious_last_fired_at > last_user_message_at``.
+
+Each step is wrapped in ``try/except``; one bad step does not skip the rest.
+Steps 3 and 4 are LLM-heavy and skip when the background-LLM queue is saturated
+(spec §5.6).
+
+State persistence — ``subconscious_last_fired_at``:
+    - MemoryStore key ``subconscious:last_fired_at`` (fast read).
+    - data_graph row ``kind='system' key='subconscious_last_fired_at'``
+      (durable across restarts; reloaded into MemoryStore on first run).
+"""
+
+import logging
+import os
+import threading
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
+from services.time_utils import utc_now, parse_utc
+
+logger = logging.getLogger(__name__)
+
+LOG_PREFIX = "[SUBCONSCIOUS]"
+
+# ── Tunables (env-overridable) ────────────────────────────────────────────────
+
+DEFAULT_TICK_SEC = 300              # 5 minutes — spec §5.1
+DEFAULT_IDLE_WINDOW_SEC = 1800      # 30 minutes — spec §5.2 user-active gate
+DEFAULT_BG_QUEUE_THRESHOLD = 20     # below MAX_QUEUE_DEPTH=25 — spec §5.6
+
+_MEMORY_KEY_LAST_FIRED = "subconscious:last_fired_at"
+_DG_KEY_LAST_FIRED = "subconscious_last_fired_at"
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int env-var with a default fallback. Invalid values fall through."""
+    try:
+        raw = os.environ.get(name)
+        return int(raw) if raw else default
+    except (TypeError, ValueError):
+        return default
+
+
+class SubconsciousWorker:
+    """Idle-gated tick orchestrator. Stateless across ticks, except for last_fired_at.
+
+    Public API:
+        - ``run_once()`` — fire one tick (gates, steps, state update).
+        - ``last_fired_at`` property — current persisted value (or None).
+
+    Re-entrancy: a non-blocking lock guards against overlapping ticks. Cheap
+    insurance even though the 5-minute spacing makes overlap unlikely.
+    """
+
+    def __init__(
+        self,
+        tick_sec: int = DEFAULT_TICK_SEC,
+        idle_window_sec: int = DEFAULT_IDLE_WINDOW_SEC,
+        bg_queue_threshold: int = DEFAULT_BG_QUEUE_THRESHOLD,
+    ):
+        self.tick_sec = tick_sec
+        self.idle_window = timedelta(seconds=idle_window_sec)
+        self.bg_queue_threshold = bg_queue_threshold
+        self._lock = threading.Lock()
+        self._cached_last_fired: Optional[datetime] = None
+        # Hydrate from durable state on construction so the first tick after a
+        # restart sees the correct already-fired value. Failure is non-fatal —
+        # worst case we run one extra tick on first idle window after a crash.
+        try:
+            self._cached_last_fired = self._load_last_fired_from_storage()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} hydrate last_fired_at failed: {exc}")
+
+    # ── Public entry ─────────────────────────────────────────────────────────
+
+    def run_once(self) -> dict:
+        """Run one full tick. Returns a structured summary.
+
+        Summary keys:
+            - ``skipped``: gate name when both-gates check rejects the tick
+              (``user_active`` | ``already_fired``); absent when steps run.
+            - ``steps``: dict per step with ``status`` (``ok`` | ``skipped`` |
+              ``error``) and optional ``detail`` / ``error`` fields.
+            - ``last_fired_at``: ISO string when state was bumped, else ``None``.
+        """
+        if not self._lock.acquire(blocking=False):
+            logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
+            return {"skipped": "re_entrant", "steps": {}, "last_fired_at": None}
+
+        try:
+            return self._tick()
+        finally:
+            self._lock.release()
+
+    @property
+    def last_fired_at(self) -> Optional[datetime]:
+        """Current cached last-fired timestamp. ``None`` when never fired."""
+        return self._cached_last_fired
+
+    # ── Tick orchestration ───────────────────────────────────────────────────
+
+    def _tick(self) -> dict:
+        """Body of one tick after the re-entry guard fires."""
+        gate_skip = self._check_gates()
+        if gate_skip is not None:
+            logger.debug(f"{LOG_PREFIX} tick skipped: {gate_skip}")
+            return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
+
+        steps: dict = {}
+        steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
+        steps["decay"] = self._safe_step("decay", self._step_decay)
+
+        # Backpressure check — skip LLM-heavy steps 3 + 4 when queue is saturated.
+        bg_saturated = self._is_bg_llm_saturated()
+        if bg_saturated:
+            steps["patterns"] = {"status": "skipped", "detail": "bg_llm_saturated"}
+            steps["synthesis"] = {"status": "skipped", "detail": "bg_llm_saturated"}
+            logger.info(f"{LOG_PREFIX} bg LLM queue saturated — skipping pattern + synthesis")
+        else:
+            steps["patterns"] = self._safe_step("patterns", self._step_patterns)
+            steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
+
+        now = utc_now()
+        try:
+            self._persist_last_fired(now)
+            self._cached_last_fired = now
+            last_iso = now.isoformat()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} persist last_fired_at failed: {exc}")
+            last_iso = None
+
+        logger.info(
+            f"{LOG_PREFIX} tick complete: "
+            f"consolidate={steps['consolidate']['status']} "
+            f"decay={steps['decay']['status']} "
+            f"patterns={steps['patterns']['status']} "
+            f"synthesis={steps['synthesis']['status']}"
+        )
+        return {"steps": steps, "last_fired_at": last_iso}
+
+    def _safe_step(self, name: str, fn) -> dict:
+        """Run a single step under try/except. Returns step status dict."""
+        try:
+            detail = fn()
+            return {"status": "ok", "detail": detail}
+        except Exception as exc:
+            logger.exception(f"{LOG_PREFIX} step '{name}' failed")
+            return {"status": "error", "error": str(exc)}
+
+    # ── Gates ────────────────────────────────────────────────────────────────
+
+    def _check_gates(self) -> Optional[str]:
+        """Return the name of the failing gate, or ``None`` when both pass.
+
+        Gate 1 (user-active) — Skip when ``last_user_message_at`` is within the
+        idle window. We are conservative: when the snapshot does not yet have
+        a user-message timestamp (cold boot, no traffic), Gate 1 passes (we
+        treat the system as idle so latent cognition can run).
+
+        Gate 2 (already-fired) — Skip when ``last_fired_at`` is newer than
+        ``last_user_message_at``. The worker has already covered this idle
+        window; a new user message must reset the comparison before it fires
+        again.
+        """
+        from services.world_state import world_state
+
+        snapshot = world_state.snapshot()
+        last_msg = snapshot.get("last_user_message_at")
+        now = utc_now()
+
+        if last_msg is not None:
+            if now - last_msg < self.idle_window:
+                return "user_active"
+
+        last_fired = self._cached_last_fired
+        if last_fired is not None and last_msg is not None:
+            if last_fired > last_msg:
+                return "already_fired"
+
+        return None
+
+    # ── Steps ────────────────────────────────────────────────────────────────
+
+    def _step_consolidate(self) -> str:
+        """Step 1 — consolidate apex episodes into super-episodes per channel.
+
+        The trigger that previously lived in transcript_service's daemon thread
+        moves here. SuperEpisodeEncoderProcessor is self-gating: ``send()``
+        returns '' immediately when ``find_super_candidates(channel)`` finds
+        nothing, so iterating every channel with unconsolidated rows is cheap.
+        """
+        from services.database_service import get_shared_db_service
+        from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cur = conn.execute(
+                "SELECT DISTINCT channel FROM episodes "
+                "WHERE consolidated_into IS NULL AND deleted_at IS NULL"
+            )
+            channels = [row[0] for row in cur.fetchall() if row[0]]
+
+        if not channels:
+            return "no channels with unconsolidated episodes"
+
+        summaries: list[str] = []
+        for channel in channels:
+            try:
+                summary = SuperEpisodeEncoderProcessor(channel=channel).send()
+                if summary:
+                    summaries.append(f"{channel}: {summary}")
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} consolidate channel={channel} failed: {exc}"
+                )
+
+        return "; ".join(summaries) if summaries else f"checked {len(channels)} channel(s), no clusters formed"
+
+    def _step_decay(self) -> str:
+        """Step 2 — run the unified decay cycle.
+
+        DecayEngineService owns episodic + data_graph + transcript cleanup +
+        tool_calls purge + behavioural-pattern stale flips. Engine logic
+        unchanged; only the trigger surface lives here now.
+        """
+        from services.decay_engine_service import DecayEngineService
+        DecayEngineService().run_once()
+        return "ok"
+
+    def _step_patterns(self) -> str:
+        """Step 3 — extract behavioural patterns from new super-episodes.
+
+        Iterates the six verticals; one LLM call per vertical when there are
+        new super-episodes since the last watermark. The extractor itself
+        isolates per-vertical exceptions.
+        """
+        from services.pattern_extractor import get_pattern_extractor
+
+        summary = get_pattern_extractor().run_once()
+        promoted = sum(
+            (v.get("promotions") or 0)
+            for v in summary.values()
+            if isinstance(v, dict)
+        )
+        added = sum(
+            (v.get("candidates_added") or 0)
+            for v in summary.values()
+            if isinstance(v, dict)
+        )
+        return f"candidates_added={added} promotions={promoted}"
+
+    def _step_synthesis(self) -> str:
+        """Step 4 — refresh the user synopsis (short + long).
+
+        UserSummaryProcessor self-gates via ``_should_synthesise()`` — when no
+        new traits or behavioural patterns have arrived since the last
+        synthesis it silently returns ''.  Inputs are now the union of
+        Episodes + Data Graph + Extracted Patterns.
+        """
+        from services.user_summary_processor import UserSummaryProcessor
+
+        result = UserSummaryProcessor().send()
+        return "ok" if result else "no new traits/patterns; skipped"
+
+    # ── Backpressure ─────────────────────────────────────────────────────────
+
+    def _is_bg_llm_saturated(self) -> bool:
+        """Return True when the background-LLM queue depth ≥ threshold.
+
+        Conservative — when the queue check itself fails we return False so
+        the tick proceeds. The dropped-job logging in BackgroundLLMProxy will
+        catch saturation at call time anyway.
+        """
+        try:
+            from services.memory_client import MemoryClientService
+            from services.background_llm_queue import QUEUE_KEY
+
+            store = MemoryClientService.create_connection()
+            depth = store.llen(QUEUE_KEY) or 0
+            return depth >= self.bg_queue_threshold
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} bg queue depth check failed: {exc}")
+            return False
+
+    # ── State persistence ───────────────────────────────────────────────────
+
+    def _load_last_fired_from_storage(self) -> Optional[datetime]:
+        """Read last_fired_at from MemoryStore first, fall back to data_graph.
+
+        MemoryStore is the fast path; data_graph survives MemoryStore eviction
+        and process restarts.
+        """
+        # Fast path — MemoryStore.
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            raw = store.get(_MEMORY_KEY_LAST_FIRED)
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                return parse_utc(raw)
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} memory hydrate skipped: {exc}")
+
+        # Durable fallback — data_graph kind='system'.
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT value FROM data_graph "
+                    "WHERE kind='system' AND key=? AND active=1 AND deleted_at IS NULL "
+                    "LIMIT 1",
+                    (_DG_KEY_LAST_FIRED,),
+                ).fetchone()
+            if row and row[0]:
+                return parse_utc(row[0])
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} data_graph hydrate skipped: {exc}")
+        return None
+
+    def _persist_last_fired(self, when: datetime) -> None:
+        """Write last_fired_at to MemoryStore + data_graph.
+
+        Best-effort across both stores; either failure is logged but does not
+        abort the tick. The next tick's gate logic still sees the cached
+        in-process value via ``self._cached_last_fired``.
+        """
+        iso = when.isoformat()
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            store.set(_MEMORY_KEY_LAST_FIRED, iso)
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} memory persist skipped: {exc}")
+
+        try:
+            from services.data_graph_service import get_data_graph_service, KIND_SYSTEM
+            get_data_graph_service().store(
+                kind=KIND_SYSTEM,
+                key=_DG_KEY_LAST_FIRED,
+                value=iso,
+                source="subconscious_worker",
+            )
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} data_graph persist skipped: {exc}")
+
+
+# ── Module-level worker entry (registered in run.py) ─────────────────────────
+
+_DEFAULT_INSTANCE: Optional[SubconsciousWorker] = None
+_DEFAULT_INSTANCE_LOCK = threading.Lock()
+
+
+def get_subconscious_worker() -> SubconsciousWorker:
+    """Return the process-wide SubconsciousWorker singleton (lazy-init)."""
+    global _DEFAULT_INSTANCE
+    if _DEFAULT_INSTANCE is None:
+        with _DEFAULT_INSTANCE_LOCK:
+            if _DEFAULT_INSTANCE is None:
+                tick_sec = _env_int("SUBCONSCIOUS_TICK_SEC", DEFAULT_TICK_SEC)
+                idle_sec = _env_int("SUBCONSCIOUS_IDLE_WINDOW_SEC", DEFAULT_IDLE_WINDOW_SEC)
+                bg_threshold = _env_int(
+                    "SUBCONSCIOUS_BG_QUEUE_THRESHOLD", DEFAULT_BG_QUEUE_THRESHOLD
+                )
+                _DEFAULT_INSTANCE = SubconsciousWorker(
+                    tick_sec=tick_sec,
+                    idle_window_sec=idle_sec,
+                    bg_queue_threshold=bg_threshold,
+                )
+    return _DEFAULT_INSTANCE
+
+
+def subconscious_worker(shared_state=None):  # noqa: ARG001 — required by WorkerManager
+    """WorkerManager entry point. Tick loop with a stable cadence.
+
+    The first tick is delayed by the configured tick interval so the worker
+    does not fire during boot before any user message has arrived (which
+    would defeat the user-active gate's intent).
+    """
+    worker = get_subconscious_worker()
+    interval = max(1, worker.tick_sec)
+    logger.info(f"{LOG_PREFIX} Service started (tick={interval}s)")
+
+    next_tick = time.monotonic() + interval
+    while True:
+        try:
+            sleep_secs = max(0.0, next_tick - time.monotonic())
+            time.sleep(sleep_secs)
+            next_tick += interval
+            worker.run_once()
+        except KeyboardInterrupt:
+            logger.info(f"{LOG_PREFIX} Shutting down")
+            return
+        except Exception as exc:
+            # Worker.run_once() already swallows step exceptions; this catch
+            # only matters for un-anticipated failures (e.g. import errors).
+            logger.exception(f"{LOG_PREFIX} unexpected tick error: {exc}")
+            next_tick = time.monotonic() + interval
