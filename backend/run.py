@@ -255,8 +255,6 @@ def main():
                   "services.routing_stability_regulator_service", "routing_stability_regulator_worker")
     _try_register(manager, "triage-calibration-service",
                   "services.triage_calibration_service", "triage_calibration_worker")
-    _try_register(manager, "profile-enrichment-service",
-                  "services.profile_enrichment_service", "profile_enrichment_worker")
     # SearchExpanderService: centralised doc2query + embedding daemon.
     # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
     # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.

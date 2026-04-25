@@ -14,7 +14,6 @@ Cost metadata is appended to every result.
 
 import logging
 import threading
-import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)

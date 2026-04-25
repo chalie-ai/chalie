@@ -60,18 +60,16 @@ class TestOutputStructure:
         result = _invoke()
         assert result.startswith('[INTROSPECT]')
 
-    def test_returns_all_four_scope_headers(self, db, store):
+    def test_returns_all_three_scope_headers(self, db, store):
         result = _invoke()
-        assert '## Memory Health'      in result
-        assert '## Skill & Tool Usage' in result
-        assert '## Reasoning State'    in result
-        assert '## Identity'           in result
+        assert '## Memory Health'   in result
+        assert '## Reasoning State' in result
+        assert '## Identity'        in result
 
     def test_sections_appear_in_order(self, db, store):
         result = _invoke()
         positions = [
             result.index('## Memory Health'),
-            result.index('## Skill & Tool Usage'),
             result.index('## Reasoning State'),
             result.index('## Identity'),
         ]
@@ -183,96 +181,6 @@ class TestMemoryHealthScope:
         assert '[INTROSPECT]'      in result
         assert '## Memory Health'  in result
         assert 'unavailable'       in result
-
-
-# ── Tests: Skill & Tool Usage scope ──────────────────────────────────────────
-
-def _seed_tool_pref(db, tool_name, usage_count=5, success_count=4,
-                    last_used_at='2026-03-18 08:00:00'):
-    """Insert a user_tool_preferences row for testing."""
-    import uuid
-    db.execute(
-        "INSERT INTO user_tool_preferences "
-        "(id, tool_name, usage_count, success_count, last_used_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (str(uuid.uuid4()), tool_name, usage_count, success_count, last_used_at),
-    )
-    db.commit()
-
-
-@pytest.mark.unit
-class TestSkillUsageScope:
-
-    def test_skill_usage_table_has_name_header(self, db):
-        _seed_tool_pref(db, 'web_search')
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert '| Name' in result
-
-    def test_skill_usage_table_has_uses_header(self, db):
-        _seed_tool_pref(db, 'web_search')
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert '| Uses' in result
-
-    def test_skill_usage_table_has_last_used_header(self, db):
-        _seed_tool_pref(db, 'web_search')
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert '| Last Used' in result
-
-    def test_skill_usage_table_has_last_result_header(self, db):
-        _seed_tool_pref(db, 'web_search')
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert '| Last Result' in result
-
-    def test_skill_usage_table_includes_tool_row(self, db):
-        _seed_tool_pref(db, 'memory_recall')
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert 'memory_recall' in result
-
-    def test_skill_usage_shows_attempt_count(self, db):
-        _seed_tool_pref(db, 'web_search', usage_count=7, success_count=5)
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert '7' in result
-
-    def test_skill_usage_empty_when_no_data(self, db):
-        # No rows in user_tool_preferences
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert 'No usage data' in result
-
-    def test_skill_usage_success_label(self, db):
-        _seed_tool_pref(db, 'web_search', usage_count=4, success_count=4)
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert 'success' in result
-
-    def test_skill_usage_failed_label_when_mostly_failed(self, db):
-        _seed_tool_pref(db, 'web_search', usage_count=4, success_count=1)
-
-        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
-        result = _scope_skill_tool_usage()
-
-        assert 'failed' in result
 
 
 # ── Tests: Reasoning State scope ─────────────────────────────────────────────

@@ -35,8 +35,8 @@ Place fingerprints accumulate at geohash precision (~1km cell, never raw coordin
 
 On each connection and reconnection, the system evaluates session-level context beyond moment-to-moment inference:
 
-- **Re-entry detection** — a return after 30+ minutes of absence emits a `session_resume` event
-- **Transition detection** — a sustained place change triggers a place transition event
+- **Re-entry detection** — a return after 30+ minutes of absence is flagged in MemoryStore for downstream readers
+- **Transition detection** — a sustained place change is flagged in MemoryStore for downstream readers
 - **Locale-derived trait seeding** — browser locale informs approximate region and language on first session, stored as low-confidence traits, not assertions
 - **Circadian data** — hourly interaction counts are recorded for behavioral pattern mining
 

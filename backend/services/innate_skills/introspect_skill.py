@@ -17,11 +17,10 @@ TOOL_SCHEMA = {
     "name": "introspect",
     "description": (
         "Perception directed inward. Returns a comprehensive internal state report "
-        "covering four scopes: memory health (episode/concept counts, working memory depth, "
-        "consolidation recency), skill and tool usage (table with counts and last results), "
-        "reasoning state (active focus, upcoming reminders, recent autonomous actions), "
-        "and identity (relationship depth, communication style, personality). "
-        "All deterministic — no LLM calls. "
+        "covering three scopes: memory health (episode/concept counts, working memory depth, "
+        "consolidation recency), reasoning state (active focus, upcoming reminders, "
+        "recent autonomous actions), and identity (relationship depth, communication style, "
+        "personality). All deterministic — no LLM calls. "
         "Use when the user asks about system state, capabilities, or what you have been doing, "
         "or when you need to gauge how much context you have before deciding what to do."
     ),
@@ -56,7 +55,6 @@ def handle_introspect(channel: str, params: dict) -> str:
     sections = [
         ('[INTROSPECT]', ''),
         ('## Memory Health', _scope_memory_health()),
-        ('## Skill & Tool Usage', _scope_skill_tool_usage()),
         ('## Reasoning State', _scope_reasoning_state()),
         ('## Identity', _scope_identity_snapshot()),
     ]
@@ -183,84 +181,7 @@ def _query_semantic_structure(db) -> str:
         return ''
 
 
-# ── Scope 2: Skill & Tool Usage ──────────────────────────────────
-
-
-def _scope_skill_tool_usage() -> str:
-    rows = []
-
-    # External tools via user_tool_preferences
-    rows.extend(_external_tool_rows())
-
-    if not rows:
-        return 'No usage data recorded yet.'
-
-    header = (
-        '| Name            | Summary                                           '
-        '| Uses | Last Used     | Last Result |\n'
-        '|-----------------|---------------------------------------------------|'
-        '------|---------------|-------------|'
-    )
-    table_rows = '\n'.join(rows)
-    return f'{header}\n{table_rows}'
-
-
-def _external_tool_rows() -> list:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT tool_name, usage_count, success_count, last_used_at '
-                'FROM user_tool_preferences '
-                'WHERE usage_count > 0 '
-                'ORDER BY last_used_at DESC'
-            )
-            tool_rows = cursor.fetchall()
-            cursor.close()
-
-        rows = []
-        for row in tool_rows:
-            tool_name = row[0]
-            usage_count = row[1] or 0
-            success_count = row[2] or 0
-            last_used_at = row[3] or ''
-            last_used = TimeFormatterService.ago(last_used_at) if last_used_at else 'never'
-            last_result = 'success' if success_count >= usage_count * 0.5 else 'failed'
-            summary = _tool_summary(tool_name)[:50]
-
-            rows.append(
-                f'| {tool_name:<15} | {summary:<50}| {usage_count:<4} | {last_used:<13} | {last_result:<11} |'
-            )
-        return rows
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] external_tool_rows failed: {e}')
-        return []
-
-
-def _tool_summary(tool_name: str) -> str:
-    try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT short_summary FROM tool_capability_profiles WHERE tool_name = ? LIMIT 1',
-                (tool_name,)
-            )
-            row = cursor.fetchone()
-            cursor.close()
-        if row and row[0]:
-            return row[0]
-    except Exception:
-        pass
-    return ''
-
-
-# ── Scope 3: Reasoning State ─────────────────────────────────────
+# ── Scope 2: Reasoning State ─────────────────────────────────────
 
 
 def _scope_reasoning_state() -> str:

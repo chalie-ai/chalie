@@ -512,8 +512,6 @@ BUILTIN_TOOL_PROFILES: dict = {
         "effort": "light",
         "domain": "Research",
         "descriptor": "search",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     },
 
     "weather": {
@@ -527,8 +525,6 @@ BUILTIN_TOOL_PROFILES: dict = {
         "effort": "trivial",
         "domain": "Context",
         "descriptor": "weather",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     },
 
     "news": {
@@ -543,8 +539,6 @@ BUILTIN_TOOL_PROFILES: dict = {
         "effort": "light",
         "domain": "Research",
         "descriptor": "news",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     },
 
     "code_eval": {
@@ -557,8 +551,6 @@ BUILTIN_TOOL_PROFILES: dict = {
         "effort": "trivial",
         "domain": "Productivity",
         "descriptor": "code_eval",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     },
 
     "programming_docs_search": {
@@ -573,8 +565,6 @@ BUILTIN_TOOL_PROFILES: dict = {
         "effort": "light",
         "domain": "Productivity",
         "descriptor": "programming_docs_search",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     },
 }
 
@@ -590,8 +580,6 @@ if _BROWSER_AVAILABLE:
         "effort": "moderate",
         "domain": "Research",
         "descriptor": "browser",
-        "usage_scenarios": ["see full_profile"],
-        "triage_triggers": ["see full_profile"],
     }
 
 

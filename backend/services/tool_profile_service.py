@@ -185,8 +185,6 @@ class ToolProfileService:
             logger.warning(f"{LOG_PREFIX} LLM profile build failed for {tool_name}: {e}")
             profile_data = self._fallback_profile(tool_name, manifest)
 
-        # Cap scenarios
-        usage_scenarios = profile_data.get('usage_scenarios', [])[:MAX_SCENARIOS]
         anti_scenarios = profile_data.get('anti_scenarios', [])[:20]
 
         # Generate embedding from short_summary + keywords
@@ -203,7 +201,6 @@ class ToolProfileService:
         # Upsert into database
         db = self._get_db()
         try:
-            triage_triggers = profile_data.get('triage_triggers', [])[:10]
             with db.connection() as conn:
                 cursor = conn.cursor()
                 effort_tier = profile_data.get('effort_tier', 'moderate')
@@ -215,20 +212,18 @@ class ToolProfileService:
                 cursor.execute(
                     """
                     INSERT INTO tool_capability_profiles
-                        (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                        (tool_name, tool_type, short_summary, full_profile,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, effort, descriptor, keywords, updated_at)
-                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                         effort, descriptor, keywords, updated_at)
+                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'tool',
                         short_summary = EXCLUDED.short_summary,
                         full_profile = EXCLUDED.full_profile,
-                        usage_scenarios = EXCLUDED.usage_scenarios,
                         anti_scenarios = EXCLUDED.anti_scenarios,
                         complementary_skills = EXCLUDED.complementary_skills,
                         manifest_hash = EXCLUDED.manifest_hash,
                         domain = EXCLUDED.domain,
-                        triage_triggers = EXCLUDED.triage_triggers,
                         effort = EXCLUDED.effort,
                         descriptor = EXCLUDED.descriptor,
                         keywords = EXCLUDED.keywords,
@@ -238,12 +233,10 @@ class ToolProfileService:
                         tool_name,
                         profile_data.get('short_summary', f'{tool_name} tool')[:100],
                         profile_data.get('full_profile', description),
-                        json.dumps(usage_scenarios),
                         json.dumps(anti_scenarios),
                         json.dumps(profile_data.get('complementary_skills', [])),
                         manifest_hash,
                         profile_data.get('domain', 'Other'),
-                        json.dumps(triage_triggers),
                         effort_tier,
                         descriptor,
                         keywords,

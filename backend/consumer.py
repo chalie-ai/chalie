@@ -244,13 +244,6 @@ if __name__ == "__main__":
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
-    # Profile enrichment service
-    try:
-        from services.profile_enrichment_service import profile_enrichment_worker
-        manager.register_service("profile-enrichment-service", profile_enrichment_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
-
     # Load tool registry
     try:
         from services.tool_registry_service import ToolRegistryService
