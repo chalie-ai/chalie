@@ -163,6 +163,24 @@ def main():
     except Exception as _fts_err:
         logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
 
+    # Purge stale AdaptiveLayer data_graph rows (v0.5.0 §4.3 — idempotent)
+    # AdaptiveLayerService was removed in v0.5.0. These keys have no remaining
+    # consumer and become stale rows after the rip.
+    try:
+        _adaptive_keys = (
+            'prefers_concise', 'prefers_depth', 'enjoys_challenge',
+            'prefers_bullet_format', 'challenge_tolerance',
+        )
+        with database_service.connection() as _conn:
+            _placeholders = ','.join('?' * len(_adaptive_keys))
+            _conn.execute(
+                f"DELETE FROM data_graph WHERE kind='user_specific' AND key IN ({_placeholders})",
+                _adaptive_keys,
+            )
+            _conn.commit()
+    except Exception as _adl_err:
+        logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
+
     # Clean up expired auth sessions from SQLite
     try:
         from services.auth_session_service import cleanup_expired_sessions

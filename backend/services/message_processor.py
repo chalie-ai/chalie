@@ -249,14 +249,12 @@ class MessageProcessor:
 
         **Zero-arg construction is the contract.** Every `SystemMessagePrompt`
         subclass takes no constructor parameters — its `getPrompt()` returns
-        either a static body or a template string with placeholder tokens
-        (e.g. `UnifiedSystemMessagePrompt` exposes `{{adaptive_directives}}`).
+        a static body string.
         That keeps this base-class call site pure — no knowledge of
         subclass-specific args leaks up. Subclasses of `MessageProcessor` that
-        need richer system-prompt inputs (adaptive directives bound to real
-        metadata, personality voice, …) override `getSystemPrompt()` themselves
-        and weave their own placeholder values into the template returned by
-        `SYSTEM_PROMPT_CLASS().getPrompt()`.
+        need richer system-prompt inputs (personality voice, …) override
+        `getSystemPrompt()` themselves and weave in the extra context around the
+        template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.

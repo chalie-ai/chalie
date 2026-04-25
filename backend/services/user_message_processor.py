@@ -18,9 +18,8 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-Implements the full postTurn() eight-service fan-out, memory seeding, narration
-callback, and getSystemPrompt() override weaving {{adaptive_directives}} into the
-UnifiedSystemMessagePrompt template.
+Implements the full postTurn() seven-service fan-out, memory seeding, narration
+callback, and getSystemPrompt() override.
 """
 
 import logging
@@ -290,8 +289,7 @@ class UserMessageProcessor(MessageProcessor):
           1. Voice line — ``"When responding; <personality voice paragraph>"``
              drawn fresh from PersonalityService (O(1) dict lookup + one
              SQLite SELECT).
-          2. Template — UnifiedSystemMessagePrompt body with
-             ``{{adaptive_directives}}`` filled in.
+          2. Template — UnifiedSystemMessagePrompt body.
 
         The user_definition (user_summary short) is intentionally NOT emitted
         here — it is prepended at the top of getUserPrompt() instead so it
@@ -306,7 +304,6 @@ class UserMessageProcessor(MessageProcessor):
         from services.personality.personality_service import get_current_voice
 
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
-        template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
         voice_line = f"When responding; {get_current_voice()}"
         return f"{voice_line}\n\n{template}"
@@ -397,16 +394,15 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Seven-service fan-out, each individually error-isolated.
+        """Six-service fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
           2. SituationModelService
           3. SaveSuggestionService — user-side trigger THEN response-side detect
-          4. _detect_fork_response + _store_adaptive_signals
-          5. DMNService.on_turn() — R10 critical
-          6. MetricsService — last ("turn closed" signal)
-          7. compaction_service.check_and_compact — end-turn backstop
+          4. DMNService.on_turn() — R10 critical
+          5. MetricsService — last ("turn closed" signal)
+          6. compaction_service.check_and_compact — end-turn backstop
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
@@ -464,15 +460,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
 
-        # 4. Adaptive layer — fork detection + signal write (sync, MemoryStore)
-        try:
-            from workers.post_exchange_hooks import _store_adaptive_signals, _detect_fork_response
-            _detect_fork_response(text)
-            _store_adaptive_signals(text)
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Adaptive signals failed: {e}", exc_info=True)
-
-        # 5. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 4. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -482,7 +470,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 6. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 5. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -493,7 +481,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 7. End-turn compaction backstop (safety net; mid-loop compaction in send()
+        # 6. End-turn compaction backstop (safety net; mid-loop compaction in send()
         # should handle most cases).
         # WARNING level — silent compaction failure leads to context overflow
         # (Commit 8 critic P1-2).
@@ -531,38 +519,3 @@ class UserMessageProcessor(MessageProcessor):
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
 
-    def _get_adaptive_directives(self) -> str:
-        """Get adaptive response directives for system prompt placeholder injection.
-
-        The {{adaptive_directives}} placeholder in the UNIFIED template receives
-        this value. Reads adaptive signals from MemoryStore.
-        """
-        try:
-            from services.adaptive_layer_service import AdaptiveLayerService
-            from services.database_service import get_shared_db_service
-
-            db = get_shared_db_service()
-            service = AdaptiveLayerService(db)
-
-            current_signals = {
-                'prompt_token_count': len(self._raw_input.split()),
-            }
-            try:
-                from services.memory_client import MemoryClientService
-                import json as _json
-                store = MemoryClientService.create_connection()
-                snapshot_raw = store.get('adaptive_signals')
-                if snapshot_raw:
-                    snapshot = _json.loads(snapshot_raw)
-                    current_signals.update(snapshot)
-            except Exception:
-                pass
-
-            return service.generate_directives(
-                working_memory_turns=[],
-                current_signals=current_signals,
-                current_message=self._raw_input,
-            ) or ''
-        except Exception as e:
-            logger.warning(f"[USER MSG] Adaptive directives unavailable: {e}")
-            return ''
