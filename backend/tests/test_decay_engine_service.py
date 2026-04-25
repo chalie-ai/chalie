@@ -14,20 +14,6 @@ class TestDecayEngineService:
 
     # ── Constructor / Configuration ───────────────────────────────────
 
-    def test_constructor_loads_config_rates(self):
-        """Constructor should load decay rates from ConfigService."""
-        mock_config = {
-            'retrieval_decay_exponent': 0.08,
-        }
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value=mock_config,
-        ):
-            svc = DecayEngineService(decay_interval=600)
-
-        assert svc.retrieval_decay_exponent == 0.08
-        assert svc.decay_interval == 600
-
     def test_constructor_uses_defaults_on_config_failure(self):
         """When ConfigService raises, default decay rates should be used."""
         with patch(
@@ -37,16 +23,6 @@ class TestDecayEngineService:
             svc = DecayEngineService()
 
         assert svc.retrieval_decay_exponent == 0.5
-
-    def test_default_decay_interval(self):
-        """Default decay interval should be 1800 seconds (30 minutes)."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        assert svc.decay_interval == 1800
 
     # ── run_decay_cycle — richness gating ────────────────────────────
 

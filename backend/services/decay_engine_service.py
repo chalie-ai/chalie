@@ -1,8 +1,9 @@
 """
-Decay Engine Service - Unified periodic decay scheduler across all memory types.
+Decay Engine Service — unified decay across all memory types.
 
-Background service that periodically decays episodic activation scores and
-semantic concept strength. Follows IdleConsolidationService pattern.
+Triggered once per :class:`SubconsciousWorker` tick (v0.5.0 §5).  The engine
+itself is stateless apart from the config-loaded ``retrieval_decay_exponent``;
+cadence is owned by the caller.
 """
 
 import math
@@ -15,18 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class DecayEngineService:
-    """Background service that applies decay to all memory types periodically."""
+    """Applies decay to every memory type in one cycle."""
 
-    def __init__(self, decay_interval: int = 1800):
-        """
-        Initialize decay engine.
-
-        Args:
-            decay_interval: Seconds between decay cycles (default: 1800 = 30 minutes)
-        """
-        self.decay_interval = decay_interval
-
-        # Load decay rates from config
+    def __init__(self):
+        """Load the retrieval-decay exponent from ``episodic-memory`` config."""
         try:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
@@ -36,8 +29,7 @@ class DecayEngineService:
 
         logger.info(
             f"[DECAY ENGINE] Initialized "
-            f"(interval={decay_interval}s, "
-            f"retrieval_decay_exponent={self.retrieval_decay_exponent})"
+            f"(retrieval_decay_exponent={self.retrieval_decay_exponent})"
         )
 
     def run_once(self) -> None:

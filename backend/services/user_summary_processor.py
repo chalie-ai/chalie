@@ -7,8 +7,8 @@ by retrieval_weight DESC) and asks the LLM to return a JSON object with a
 writes both synopses back to data_graph as ``kind='system'`` rows.
 
 ``send()`` self-skips via ``_should_synthesise()`` when no new traits have
-arrived since the last synthesis.  This preserves the sentinel logic that
-previously lived in the deleted ``user_summary_worker``.
+arrived since the last synthesis.  Triggered once per :class:`SubconsciousWorker`
+tick (v0.5.0 §5 step 4); the sentinel keeps repeated ticks idempotent.
 
 North star: /Volumes/llm/chalie-plans/message-processing.md
 """

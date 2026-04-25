@@ -36,6 +36,13 @@ from typing import Optional
 
 from services.time_utils import utc_now, parse_utc
 
+# Top-level canary import — guarantees the QUEUE_KEY symbol exists at module
+# load time. The lazy import inside ``_is_bg_llm_saturated`` still wins at
+# runtime (so test patching of ``services.background_llm_queue`` still works),
+# but a missing module fails loud here instead of silently bypassing
+# backpressure forever via the broad except in ``_is_bg_llm_saturated``.
+from services.background_llm_queue import QUEUE_KEY as _BG_QUEUE_KEY_CANARY  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SUBCONSCIOUS]"
@@ -81,6 +88,11 @@ class SubconsciousWorker:
         self.bg_queue_threshold = bg_queue_threshold
         self._lock = threading.Lock()
         self._cached_last_fired: Optional[datetime] = None
+        # Single DecayEngineService instance — the engine reads
+        # ``ConfigService.get_agent_config('episodic-memory')`` in __init__,
+        # so re-instantiating per tick would burn a config read every 5 min.
+        # Lazy-built on first use so import failures surface as a step error.
+        self._decay_engine = None
         # Hydrate from durable state on construction so the first tick after a
         # restart sees the correct already-fired value. Failure is non-fatal —
         # worst case we run one extra tick on first idle window after a crash.
@@ -121,7 +133,7 @@ class SubconsciousWorker:
         """Body of one tick after the re-entry guard fires."""
         gate_skip = self._check_gates()
         if gate_skip is not None:
-            logger.debug(f"{LOG_PREFIX} tick skipped: {gate_skip}")
+            logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
             return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
 
         steps: dict = {}
@@ -179,6 +191,13 @@ class SubconsciousWorker:
         ``last_user_message_at``. The worker has already covered this idle
         window; a new user message must reset the comparison before it fires
         again.
+
+        Post-restart hydrated-state edge case — when ``last_fired_at`` is
+        present (loaded from durable storage) but ``last_user_message_at`` is
+        still ``None`` (WorldState is cold and no user has talked since boot),
+        we have already fired during the previous process lifetime and
+        nothing has changed since. Skip with ``already_fired`` until a real
+        user message arrives.
         """
         from services.world_state import world_state
 
@@ -191,7 +210,11 @@ class SubconsciousWorker:
                 return "user_active"
 
         last_fired = self._cached_last_fired
-        if last_fired is not None and last_msg is not None:
+        if last_fired is not None:
+            if last_msg is None:
+                # Hydrated last_fired with no user activity since boot — the
+                # tick has nothing new to consolidate. Wait for a real signal.
+                return "already_fired"
             if last_fired > last_msg:
                 return "already_fired"
 
@@ -240,9 +263,14 @@ class SubconsciousWorker:
         DecayEngineService owns episodic + data_graph + transcript cleanup +
         tool_calls purge + behavioural-pattern stale flips. Engine logic
         unchanged; only the trigger surface lives here now.
+
+        The engine is cached on the worker instance so we avoid the
+        ``ConfigService.get_agent_config`` read on every 5-minute tick.
         """
-        from services.decay_engine_service import DecayEngineService
-        DecayEngineService().run_once()
+        if self._decay_engine is None:
+            from services.decay_engine_service import DecayEngineService
+            self._decay_engine = DecayEngineService()
+        self._decay_engine.run_once()
         return "ok"
 
     def _step_patterns(self) -> str:
@@ -288,6 +316,11 @@ class SubconsciousWorker:
         Conservative — when the queue check itself fails we return False so
         the tick proceeds. The dropped-job logging in BackgroundLLMProxy will
         catch saturation at call time anyway.
+
+        ImportError is surfaced at WARNING level (rather than DEBUG) so that
+        if ``services.background_llm_queue`` ever moves we notice — silent
+        swallow would permanently bypass backpressure. Other connection-style
+        errors stay at DEBUG to avoid log spam under transient failures.
         """
         try:
             from services.memory_client import MemoryClientService
@@ -296,6 +329,12 @@ class SubconsciousWorker:
             store = MemoryClientService.create_connection()
             depth = store.llen(QUEUE_KEY) or 0
             return depth >= self.bg_queue_threshold
+        except ImportError as exc:
+            logger.warning(
+                f"{LOG_PREFIX} bg queue depth check could not import "
+                f"backpressure deps — backpressure is now permanently OFF: {exc}"
+            )
+            return False
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} bg queue depth check failed: {exc}")
             return False
@@ -343,6 +382,10 @@ class SubconsciousWorker:
         Best-effort across both stores; either failure is logged but does not
         abort the tick. The next tick's gate logic still sees the cached
         in-process value via ``self._cached_last_fired``.
+
+        Both write paths log at WARNING — split-brain (one written, one not)
+        is real state divergence we want operators to see. DEBUG would have
+        made it silent.
         """
         iso = when.isoformat()
         try:
@@ -350,7 +393,7 @@ class SubconsciousWorker:
             store = MemoryClientService.create_connection()
             store.set(_MEMORY_KEY_LAST_FIRED, iso)
         except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} memory persist skipped: {exc}")
+            logger.warning(f"{LOG_PREFIX} memory persist skipped: {exc}")
 
         try:
             from services.data_graph_service import get_data_graph_service, KIND_SYSTEM
@@ -361,7 +404,7 @@ class SubconsciousWorker:
                 source="subconscious_worker",
             )
         except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} data_graph persist skipped: {exc}")
+            logger.warning(f"{LOG_PREFIX} data_graph persist skipped: {exc}")
 
 
 # ── Module-level worker entry (registered in run.py) ─────────────────────────
@@ -405,8 +448,14 @@ def subconscious_worker(shared_state=None):  # noqa: ARG001 — required by Work
         try:
             sleep_secs = max(0.0, next_tick - time.monotonic())
             time.sleep(sleep_secs)
-            next_tick += interval
             worker.run_once()
+            # Schedule the next tick from the moment the current one finished.
+            # If a tick takes longer than ``interval`` (e.g. a slow consolidate
+            # step), the previous ``next_tick += interval`` would land in the
+            # past and immediately re-fire — burning CPU and starving idle
+            # gates. Anchoring on ``monotonic()`` after the work runs gives
+            # us a stable cadence under variable workload.
+            next_tick = time.monotonic() + interval
         except KeyboardInterrupt:
             logger.info(f"{LOG_PREFIX} Shutting down")
             return

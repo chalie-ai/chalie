@@ -279,3 +279,93 @@ def test_persist_called_with_recent_timestamp(isolated_world_state, stub_worker)
     assert persisted is not None
     assert before <= persisted <= after
     assert result["last_fired_at"] is not None
+
+
+# ── Backpressure default (P0 gap) ────────────────────────────────────────────
+
+
+def test_bg_saturated_check_returns_false_on_exception(isolated_world_state, monkeypatch):
+    """_is_bg_llm_saturated must return False when the queue check itself raises.
+
+    The production defensive contract: a broken MemoryStore connection or missing
+    import must never flip the default to True and start suppressing steps 3+4.
+    Calling the real method with a poisoned import confirms the fallback.
+    """
+    import sys
+
+    # Poison the MemoryClientService import so the queue-depth path raises.
+    original = sys.modules.get("services.memory_client")
+    broken = type(sys)("services.memory_client")
+
+    class _BrokenService:
+        @staticmethod
+        def create_connection():
+            raise RuntimeError("connection refused")
+
+    broken.MemoryClientService = _BrokenService
+    sys.modules["services.memory_client"] = broken
+
+    try:
+        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+        result = worker._is_bg_llm_saturated()
+    finally:
+        if original is None:
+            sys.modules.pop("services.memory_client", None)
+        else:
+            sys.modules["services.memory_client"] = original
+
+    assert result is False, (
+        "_is_bg_llm_saturated must default to False on exception "
+        "so that steps 3+4 are not silently suppressed when the queue check breaks"
+    )
+
+
+# ── Synthesis result propagation (P0 gap) ────────────────────────────────────
+
+
+def test_synthesis_skipped_result_propagates_to_step_detail(isolated_world_state, monkeypatch):
+    """_step_synthesis returns a 'skipped' string when UserSummaryProcessor returns falsy.
+
+    If the branch `return "ok" if result else "no new traits/patterns; skipped"` is
+    accidentally collapsed to always return "ok", the step dict will carry the wrong
+    detail and observability breaks.
+    """
+    monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", lambda _self: "ok")
+    monkeypatch.setattr(SubconsciousWorker, "_step_decay", lambda _self: "ok")
+    monkeypatch.setattr(SubconsciousWorker, "_step_patterns",
+                        lambda _self: "candidates_added=0 promotions=0")
+    monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
+    monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
+    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: False)
+
+    # Patch UserSummaryProcessor inside the method's import scope so .send() returns "".
+    import types as _types
+    fake_usp_mod = _types.ModuleType("services.user_summary_processor")
+
+    class _SkippingProcessor:
+        def __init__(self):
+            pass
+
+        def send(self):
+            return ""  # falsy → synthesis self-gated
+
+    fake_usp_mod.UserSummaryProcessor = _SkippingProcessor
+    import sys
+    original_usp = sys.modules.get("services.user_summary_processor")
+    sys.modules["services.user_summary_processor"] = fake_usp_mod
+
+    try:
+        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+        result = worker.run_once()
+    finally:
+        if original_usp is None:
+            sys.modules.pop("services.user_summary_processor", None)
+        else:
+            sys.modules["services.user_summary_processor"] = original_usp
+
+    synthesis_step = result["steps"]["synthesis"]
+    assert synthesis_step["status"] == "ok"
+    assert "skipped" in synthesis_step["detail"], (
+        "When UserSummaryProcessor.send() returns falsy, step detail must signal "
+        "that synthesis was self-gated, not claim 'ok'"
+    )

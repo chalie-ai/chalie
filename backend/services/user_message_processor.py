@@ -135,8 +135,9 @@ class UserMessageProcessor(MessageProcessor):
         one-shot background synthesis is fired via the lazy-fallback path below so
         that future turns find the row populated.
 
-        Writer path: ``UserSummaryProcessor`` (30-min cadence worker +
-        ``getUserDefinition()`` lazy fallback).  Traits are written continuously by
+        Writer path: ``UserSummaryProcessor`` (driven by SubconsciousWorker
+        idle tick, plus ``getUserDefinition()`` lazy fallback).  Traits are
+        written continuously by
         the LLM-native memory skill (``memory_skill._handle_store`` →
         ``DataGraphService.store(kind='user_specific', …)``) whenever the user
         discloses a personal fact.
