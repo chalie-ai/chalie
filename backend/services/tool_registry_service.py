@@ -200,29 +200,20 @@ class ToolRegistryService:
         Returns:
             Dict with 'text' key (plain result text).
         """
-        from services.invocation_tracker import track
-
         interface_id = tool.get("interface_id")
         if not interface_id:
             return {'text': 'No interface_id for interface tool'}
 
-        start_time = time.time()
         try:
             from services.interface_registry_service import InterfaceRegistryService
             result = InterfaceRegistryService().execute_capability(interface_id, tool_name, params)
         except Exception as e:
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return {'text': f'Interface execution error: {e}'}
 
-        elapsed_ms = int((time.time() - start_time) * 1000)
-
         if not isinstance(result, dict):
-            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return {'text': str(result) if result else '(no output)'}
 
         if result.get("error"):
-            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return {'text': f"Error: {result['error']}"}
 
         text = result.get("text", "")
@@ -239,7 +230,6 @@ class ToolRegistryService:
         if len(output) > self.MAX_OUTPUT_CHARS:
             output = output[:self.MAX_OUTPUT_CHARS] + "\n...(truncated)"
 
-        track(name=tool_name, success=True, latency_ms=elapsed_ms)
         return {'text': output}
 
     def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
@@ -303,8 +293,6 @@ class ToolRegistryService:
         if not handler:
             return {'text': f"No handler registered for '{tool_name}'"}
 
-        start_time = time.time()
-        success = False
         try:
             result = handler(
                 topic=channel,
@@ -312,14 +300,9 @@ class ToolRegistryService:
                 config=settings,
                 telemetry=flattened_telemetry,
             )
-            success = True
         except Exception as e:
-            elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
-            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class="internal")
             return {'text': f"Error: {str(e)[:200]}"}
-
-        elapsed_ms = int((time.time() - start_time) * 1000)
 
         result_text = ""
         result_html = None
@@ -335,8 +318,6 @@ class ToolRegistryService:
             result_text = str(result) if result else ""
 
         if result_error:
-            tool_failure_class = result.get("failure_class", "internal") if isinstance(result, dict) else "internal"
-            self._log_outcome(tool_name, False, channel, elapsed_ms, failure_class=tool_failure_class)
             return {'text': f"Error: {result_error}"}
 
         import re
@@ -348,7 +329,6 @@ class ToolRegistryService:
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
-        self._log_outcome(tool_name, success, channel, elapsed_ms)
         return {'text': result_text}
 
     def invoke(self, tool_name: str, channel: str, params: dict, exchange_id: str = '') -> str:
@@ -442,18 +422,6 @@ class ToolRegistryService:
         """Convert result dict to plain text (not JSON)."""
         from services.tool_output_utils import format_tool_result
         return format_tool_result(result)
-
-    def _log_outcome(self, tool_name: str, success: bool, channel: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
-        """Log tool invocation outcome via unified tracker."""
-        from services.invocation_tracker import track
-        track(
-            name=tool_name,
-            success=success,
-            latency_ms=elapsed_ms,
-            channel=channel,
-            exchange_id=exchange_id,
-            failure_class=failure_class,
-        )
 
     def unregister_tool(self, tool_name: str):
         """Unregister a tool from the registry (e.g., when disabling it)."""

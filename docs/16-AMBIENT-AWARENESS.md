@@ -19,7 +19,7 @@ The inference engine runs in under 1ms with zero LLM involvement. Context awaren
 | `tempo` | Pace of interaction | `rushed`, `relaxed`, `reflective` |
 | `device_context` | Narrative description of device state | `"morning work session"`, `"evening commute"` |
 
-All classification is rule-based and deterministic. When a dimension value changes, a transition event is emitted to the Event Bridge for further gating.
+All classification is rule-based and deterministic.
 
 ---
 
@@ -42,25 +42,9 @@ On each connection and reconnection, the system evaluates session-level context 
 
 ---
 
-## Event Bridge and Gates
-
-Transition events do not trigger autonomous actions directly. Every event passes through a gating layer before anything fires:
-
-| Gate | Purpose |
-|------|---------|
-| Stabilization window (90s) | A dimension must hold its new value for 90s before it is treated as real — filters transient noise |
-| Per-event cooldowns | Prevents the same event type from firing repeatedly within a cooldown window |
-| Confidence gating | Low-confidence inferences do not trigger actions |
-| Aggregation window (60s) | Multiple events within 60s are bundled into a single action trigger |
-| Focus gate | When attention is `deep_focus`, all autonomous event-driven actions are suppressed entirely |
-
-The sequence is: telemetry arrives, dimensions are classified, a transition is detected, the event enters the gate pipeline, and only if all gates pass does an autonomous action fire.
-
----
-
 ## Attention Protection
 
-The ambient layer exists to protect attention, not to create more interruptions. The focus gate is the most important gate in the pipeline: when the user is in deep focus — high interaction rate, low pause duration, single sustained topic — all event-driven autonomous actions are suppressed entirely. Chalie does not interrupt deep work.
+The ambient layer exists to protect attention, not to create more interruptions. When the user is in deep focus — high interaction rate, low pause duration, single sustained topic — Chalie does not interrupt deep work.
 
 Reducing noise is as valuable as completing tasks.
 

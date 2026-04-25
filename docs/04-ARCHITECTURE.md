@@ -154,7 +154,7 @@ Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + sce
 
 A deterministic inference engine (no LLM, under 1 ms) reads browser telemetry from client heartbeats and infers place, attention level, energy, mobility, and tempo. These signals are assembled into a world-state block that is prepended to the user prompt on each turn.
 
-Place learning accumulates fingerprints over time and promotes learned patterns over heuristic defaults. Context changes (arriving home, leaving focus mode) can trigger event-bridge rules that initiate autonomous actions. See `docs/16-AMBIENT-AWARENESS.md`.
+Place learning accumulates fingerprints over time and promotes learned patterns over heuristic defaults. See `docs/16-AMBIENT-AWARENESS.md`.
 
 ---
 
