@@ -210,21 +210,30 @@ class UserMessageProcessor(MessageProcessor):
     def getUserPrompt(self) -> str:
         """Build the user-message body for one ACT iteration.
 
-        Section order (north star §"Body structure of getUserPrompt()"):
-          1. World State block
-          2. System Awareness block
-          3. ## Previous Messages block (via getPreviousMessages())
+        Section order:
+          1. User definition (user_summary short) — placed at the top of the
+             user prompt so the model sees identity in the same recency window
+             as the current turn line. The base-class system-prompt slot for
+             user_definition is suppressed in getSystemPrompt() below.
+          2. World State block
+          3. System Awareness block
+          4. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
-          4. Memory seed line: [memory(radius=X)] ...
-          5. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
-          6. ACT loop trail (empty string on iteration 1)
+          5. Memory seed line: [memory(radius=X)] ...
+          6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
+          7. ACT loop trail (empty string on iteration 1)
 
         Note: The ## Checkpoint / ## Current State envelope is NOT emitted
         here — send() wraps this output with it.
         """
         parts = []
 
-        # 1. World State — injected verbatim (already contains its own header)
+        # 1. User definition (identity anchor)
+        user_def = self.getUserDefinition()
+        if user_def:
+            parts.append(user_def)
+
+        # 2. World State — injected verbatim (already contains its own header)
         rendered_world_state = world_state.render()
         if rendered_world_state:
             logger.info(
@@ -281,10 +290,14 @@ class UserMessageProcessor(MessageProcessor):
           1. Voice line — ``"When responding; <personality voice paragraph>"``
              drawn fresh from PersonalityService (O(1) dict lookup + one
              SQLite SELECT).
-          2. getUserDefinition() — the user synthesis line prepended below the
-             voice line.
-          3. Template — UnifiedSystemMessagePrompt body with
+          2. Template — UnifiedSystemMessagePrompt body with
              ``{{adaptive_directives}}`` filled in.
+
+        The user_definition (user_summary short) is intentionally NOT emitted
+        here — it is prepended at the top of getUserPrompt() instead so it
+        sits in the same recency window as the current turn line. This
+        overrides the base-class behaviour which would otherwise prepend the
+        user_definition to the system prompt body.
 
         The voice line sits at the very top so the LLM sees it first.  The
         stable Identity/Boundaries/Principles prefix follows, keeping the bulk
@@ -296,7 +309,7 @@ class UserMessageProcessor(MessageProcessor):
         template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
         voice_line = f"When responding; {get_current_voice()}"
-        return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
+        return f"{voice_line}\n\n{template}"
 
     def _run_memory_seed(self) -> None:
         """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
