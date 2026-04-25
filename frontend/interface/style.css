@@ -582,11 +582,11 @@ body {
 .speech-form {
   position: relative;
   padding: var(--space-lg);
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.025);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
   backdrop-filter: blur(16px) saturate(120%);
   -webkit-backdrop-filter: blur(16px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
   animation: formEntry 200ms var(--ease-out) both;
   transition: border-color 400ms ease, box-shadow 400ms ease;
@@ -597,11 +597,29 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Neon accent stripe — left for Chalie (violet), right for user (cyan) */
+.speech-form::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .speech-form--user {
   background: var(--bg-surface-user);
-  border-color: rgba(138, 92, 255, 0.12);
+  border-color: rgba(0, 240, 255, 0.12);
   align-self: flex-end;
   max-width: 85%;
+}
+
+.speech-form--user::before {
+  right: -1px;
+  background: linear-gradient(180deg, transparent 0%, var(--dusk-blue) 20%, var(--dusk-blue) 80%, transparent 100%);
+  box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px rgba(0, 240, 255, 0.33);
 }
 
 .speech-form--chalie {
@@ -610,14 +628,20 @@ body {
   max-width: 90%;
 }
 
-/* Active form — newest Chalie message gets a single clean accent edge */
+.speech-form--chalie::before {
+  left: -1px;
+  background: linear-gradient(180deg, transparent 0%, var(--violet) 20%, var(--violet) 80%, transparent 100%);
+  box-shadow: 0 0 8px var(--violet), 0 0 18px rgba(138, 92, 255, 0.33);
+}
+
+/* Active form — newest Chalie message gets a top-edge highlight */
 .speech-form--active {
-  border-color: rgba(138, 92, 255, 0.15);
+  border-color: rgba(138, 92, 255, 0.18);
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
 }
 
 /* Thin top-edge highlight — like light catching a glass panel edge */
-.speech-form--active::before {
+.speech-form--active::after {
   content: '';
   position: absolute;
   top: -1px;
@@ -626,10 +650,13 @@ body {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(138, 92, 255, 0.25), rgba(0, 240, 255, 0.15), transparent);
   border-radius: 1px;
+  pointer-events: none;
 }
 
 .speech-form__text {
   word-break: break-word;
+  position: relative;
+  z-index: 2;
 }
 
 /* Preserve newlines in user-typed messages */
@@ -861,6 +888,8 @@ body {
   gap: var(--space-sm);
   margin-top: var(--space-md);
   flex-wrap: wrap;
+  position: relative;
+  z-index: 2;
 }
 
 .speech-form__action-btn {
@@ -904,6 +933,8 @@ body {
   gap: 8px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 2;
 }
 
 .speech-form__image-thumb {
@@ -923,6 +954,10 @@ body {
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   justify-content: flex-start;
+  position: relative;
+  z-index: 2;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  letter-spacing: 0.04em;
 }
 
 .speech-form--user .speech-form__meta {
@@ -932,8 +967,8 @@ body {
 .speech-form__timestamp {
   font-size: 0.72rem;
   color: var(--text-tertiary);
-  opacity: 0.7;
-  letter-spacing: 0.01em;
+  opacity: 0.85;
+  letter-spacing: 0.04em;
 }
 
 .speech-form__topic {
@@ -1158,16 +1193,25 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  background: #0d0f15;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: var(--radius-full);
   padding: var(--space-sm) var(--space-md);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 24px rgba(138, 92, 255, 0.08);
   transition: border-color 220ms ease, box-shadow 220ms ease;
 }
 
 .input-dock__inner:focus-within {
-  border-color: rgba(138, 92, 255, 0.20);
-  box-shadow: 0 0 16px rgba(138, 92, 255, 0.06);
+  border-color: rgba(138, 92, 255, 0.22);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(138, 92, 255, 0.18),
+    0 0 28px rgba(138, 92, 255, 0.18);
 }
 
 .input-dock__textarea {
@@ -1230,9 +1274,14 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   transition: all 220ms ease;
 }
 
+.btn-action--send:not(:disabled) {
+  filter: drop-shadow(0 0 8px rgba(138, 92, 255, 0.40));
+}
+
 .btn-action--send:hover:not(:disabled) {
   color: #9B6FFF;
   transform: translateY(-1px);
+  filter: drop-shadow(0 0 12px rgba(138, 92, 255, 0.65));
 }
 
 .btn-action--send:active:not(:disabled) {
@@ -2157,7 +2206,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   box-shadow: none;
 }
 
-.speech-form--ambient.speech-form--active::before {
+.speech-form--ambient::before,
+.speech-form--ambient.speech-form--active::after {
   display: none;
 }
 
@@ -2224,6 +2274,11 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .speech-form--escalation::before {
+  background: linear-gradient(180deg, transparent 0%, rgba(255, 180, 50, 0.85) 20%, rgba(255, 180, 50, 0.85) 80%, transparent 100%);
+  box-shadow: 0 0 8px rgba(255, 180, 50, 0.6), 0 0 18px rgba(255, 180, 50, 0.33);
+}
+
+.speech-form--escalation::after {
   content: '';
   position: absolute;
   top: 0;
@@ -2231,6 +2286,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   right: 0;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 180, 50, 0.3), transparent);
+  pointer-events: none;
 }
 
 /* --------------------------------------------------------------------------
