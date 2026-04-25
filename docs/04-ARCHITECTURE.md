@@ -18,7 +18,7 @@ Inside `send()`:
 2. **Thinking gate** — a lightweight ONNX classifier reads the message and assigns a deliberation depth: low (conversational), medium, or high. High depth triggers a one-shot pre-reasoning pass before the tool loop begins.
 3. **ACT loop** — the processor assembles a single user message containing the literal conversation history, world state, memory seed, and the current input, then calls the LLM. If the LLM invokes a tool, the result is appended to the trail and the loop continues. This repeats until the LLM returns a plain text response or hits the iteration cap.
 4. **Atomic write** — one SQLite transaction commits the user turn, every tool call from the loop, and the assistant response. Nothing is written to the database mid-loop.
-5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, situation model refresh, adaptive signals, DMN timer reset, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins.
+5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, adaptive signals, DMN timer reset, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins.
 
 ```
 WebSocket frame
@@ -104,9 +104,11 @@ Tool results flow through a single render-and-record path that formats the outpu
 
 ## Ambient Awareness
 
-A deterministic inference engine (no LLM, under 1 ms) reads browser telemetry from client heartbeats and infers place, attention level, energy, mobility, and tempo. These signals are assembled into a world-state block that is prepended to the user prompt on each turn.
+`WorldState` maintains a lightweight in-process snapshot of four typed facts: last user message timestamp, last heartbeat timestamp, current device class, and client-reported local time. The snapshot is updated via `world_state.absorb(Signal(...))` — called from the WebSocket handler on every user message and from POST `/health` on every client heartbeat.
 
-Place learning accumulates fingerprints over time and promotes learned patterns over heuristic defaults. Context changes (arriving home, leaving focus mode) can trigger event-bridge rules that initiate autonomous actions. See `docs/16-AMBIENT-AWARENESS.md`.
+`absorb()` and `snapshot()` operate on an in-process dict with no database writes and no LLM calls. Unknown signal kinds are silently ignored. All four snapshot fields default to `None` when no signal of that kind has been received since boot.
+
+See `docs/16-AMBIENT-AWARENESS.md` for the full `Signal` dataclass contract and call sites.
 
 ---
 
