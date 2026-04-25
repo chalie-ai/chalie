@@ -117,6 +117,17 @@ All session construction goes through `backend/services/onnx_session.py`:
 
 `EmbeddingService`, `VoiceService`, and `Doc2QueryService` all call `build_session` — no service constructs `ort.InferenceSession` directly.
 
+### Asset layout
+
+Two distinct on-disk directories separate runtime-downloaded weights from pre-shipped classifier files:
+
+| Path | Tracked in git | Contents |
+|------|----------------|----------|
+| `backend/data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
+| `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads. Currently `deliberation_score/` and `mode_detector/`. Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
+
+`OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
+
 ---
 
 ## Tools and Skills

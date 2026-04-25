@@ -45,12 +45,13 @@ from pathlib import Path
 pytestmark = pytest.mark.integration
 
 _MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
+_PRETRAINED_DIR = str(Path(__file__).parent.parent / "data" / "pre-trained")
 
 
 @pytest.fixture(scope="module")
 def onnx_svc():
     from services.onnx_inference_service import OnnxInferenceService
-    return OnnxInferenceService(_MODELS_DIR)
+    return OnnxInferenceService(_MODELS_DIR, _PRETRAINED_DIR)
 
 
 class TestDeliberationScoreClassifier:
