@@ -90,7 +90,7 @@ class DecayEngineService:
     def run_decay_cycle(self, richness: float = 1.0):
         """Run one full decay cycle across all memory types.
 
-        When richness < 0.3, only essential sub-cycles run (episodic + knowledge).
+        When richness < 0.3, only essential sub-cycles run (episodic + data_graph).
         Non-essential sub-cycles (external knowledge) are skipped to conserve
         resources on sparse memory systems.
 
@@ -99,7 +99,6 @@ class DecayEngineService:
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
-        knowledge_count = self._decay_knowledge()
         data_graph_count = self._decay_data_graph()
         goal_decay_count = self._decay_goals()
         transcript_cleaned = self._cleanup_transcript()
@@ -115,7 +114,6 @@ class DecayEngineService:
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
-            f"knowledge={knowledge_count} updated, "
             f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
             f"tool_calls_purged={tool_calls_purged}, "
@@ -229,30 +227,6 @@ class DecayEngineService:
 
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
-            return 0
-
-    def _decay_knowledge(self) -> int:
-        """Apply decay to unified knowledge table via KnowledgeService.
-
-        Delegates to :meth:`KnowledgeService.decay_cycle` which handles
-        per-decay-class rates, reliability multipliers, soft-deletion at
-        confidence floor, and memory_pressure signal emission.
-
-        Returns:
-            Number of knowledge entries updated, or 0 on any error.
-        """
-        try:
-            from .database_service import get_shared_db_service
-            from .knowledge_service import KnowledgeService
-
-            db = get_shared_db_service()
-            try:
-                svc = KnowledgeService(db)
-                return svc.decay_cycle()
-            finally:
-                db.close_pool()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
             return 0
 
     def _decay_data_graph(self) -> int:

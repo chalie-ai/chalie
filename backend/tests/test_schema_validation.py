@@ -86,20 +86,20 @@ class TestSchemaValidation:
 
     # ── Scenario 200 ─────────────────────────────────────────────────────────
 
-    def test_reliability_columns_on_memory_tables(self, schema_db):
-        """Absorbs scenario 200: reliability column exists on knowledge.
+    def test_legacy_tables_removed_from_schema(self, schema_db):
+        """Absorbs scenario 200: knowledge table has been removed from schema.sql.
 
-        uncertainties table was removed from schema.sql (dropped by migration
-        025). Reliability column is still
-        present on knowledge (for migration 026 compat).
+        The knowledge table is dead code — all trait/concept/procedure storage
+        routes through DataGraphService. SchemaConvergenceService auto-drops it
+        on the next boot.
         """
-        cols = _get_columns(schema_db, 'knowledge')
-        assert 'reliability' in cols, (
-            "reliability column missing from knowledge"
+        tables = _get_tables(schema_db)
+        assert 'knowledge' not in tables, (
+            "knowledge table should not exist in schema.sql "
+            "(removed — all storage routes through data_graph)"
         )
 
-        # uncertainties should NOT be in schema.sql (removed; migration 025 drops it)
-        tables = _get_tables(schema_db)
+        # uncertainties should also NOT be in schema.sql (removed; migration 025 drops it)
         assert 'uncertainties' not in tables, (
             "uncertainties table should not exist in schema.sql "
             "(dropped by migration 025)"
@@ -108,27 +108,13 @@ class TestSchemaValidation:
     # ── Scenario 201 ─────────────────────────────────────────────────────────
 
     def test_reliability_default_values(self, schema_db):
-        """Absorbs scenario 201: reliability columns default to 'reliable'.
+        """Absorbs scenario 201: episodes table inserts without error.
 
-        Inserts a minimal row into knowledge and episodes
-        without specifying reliability and confirms the column defaults correctly.
+        The reliability column concept only applied to the removed knowledge table.
+        We verify episodes inserts still work correctly.
         """
         import uuid
 
-        # knowledge (replaces user_traits and semantic_concepts)
-        schema_db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value) VALUES ('trait', 'user', ?, ?)",
-            ('test_key', 'test_value')
-        )
-        row = schema_db.execute(
-            "SELECT reliability FROM knowledge WHERE key = 'test_key'"
-        ).fetchone()
-        assert row is not None, "knowledge INSERT failed"
-        assert row[0] == 'reliable', (
-            f"knowledge.reliability default is {row[0]!r}, expected 'reliable'"
-        )
-
-        # episodes
         ep_id = str(uuid.uuid4())
         schema_db.execute(
             "INSERT INTO episodes (id, gist, salience, channel) VALUES (?, ?, ?, ?)",
@@ -140,24 +126,3 @@ class TestSchemaValidation:
         assert row is not None, "episodes INSERT failed"
 
         schema_db.rollback()
-
-    # ── Scenario 231 ─────────────────────────────────────────────────────────
-
-    def test_knowledge_table_supports_procedures(self, schema_db):
-        """Absorbs scenario 231: knowledge table supports procedure entries.
-
-        Procedures (formerly procedural_memory) are stored in the unified
-        knowledge table with kind='procedure'. Reward data (weight, success_rate)
-        lives in the JSON `data` column.
-        """
-        tables = _get_tables(schema_db)
-        assert 'knowledge' in tables, (
-            "knowledge table missing from schema"
-        )
-
-        columns = _get_columns(schema_db, 'knowledge')
-        required = {'kind', 'entity', 'key', 'value', 'data', 'confidence', 'decay_class'}
-        missing = required - columns
-        assert not missing, (
-            f"knowledge missing columns for procedure support: {missing}"
-        )

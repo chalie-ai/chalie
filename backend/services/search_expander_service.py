@@ -1,14 +1,12 @@
 """
-Search Expander Service — singleton daemon that expands stored knowledge rows
+Search Expander Service — singleton daemon that expands stored data_graph rows
 into doc2query variants and embeds each variant for vector retrieval.
 
 Replaces the fire-and-forget _schedule_doc2query / _schedule_embeddings thread
-pattern in KnowledgeService and DataGraphService with a single sequential
-FIFO worker, eliminating thundering-herd contention on the doc2query ONNX
-sessions under write bursts.
+pattern in DataGraphService with a single sequential FIFO worker, eliminating
+thundering-herd contention on the doc2query ONNX sessions under write bursts.
 
 Dependents:
-  - services.knowledge_service  calls enqueue("knowledge", rowid)
   - services.data_graph_service calls enqueue("data_graph", rowid)
   - backend/run.py              registers search_expander_worker via _try_register
 """
@@ -26,9 +24,8 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _QUEUE_KEY = "ses:queue"          # MemoryStore list key — FIFO via rpush/lpop
-_TABLE_KNOWLEDGE = "knowledge"
 _TABLE_DATA_GRAPH = "data_graph"
-_VALID_TABLES = frozenset({_TABLE_KNOWLEDGE, _TABLE_DATA_GRAPH})
+_VALID_TABLES = frozenset({_TABLE_DATA_GRAPH})
 
 
 # ── Module-level singleton references ─────────────────────────────────────────
@@ -51,12 +48,12 @@ def _get_service() -> "SearchExpanderService":
 def enqueue(table: str, rowid: int) -> None:
     """Enqueue a row for semantic expansion.
 
-    Called by KnowledgeService and DataGraphService after a successful store().
+    Called by DataGraphService after a successful store().
     Idempotent — if the worker processes the same rowid twice it skips the
     second pass because search_queries will already be set.
 
     Args:
-        table:  'knowledge' or 'data_graph'
+        table:  'data_graph'
         rowid:  integer primary key of the stored row
     """
     if table not in _VALID_TABLES:
@@ -127,19 +124,13 @@ class SearchExpanderService:
     # ── Private: self-heal ────────────────────────────────────────────────────
 
     def _self_heal(self) -> None:
-        """Scan both tables for rows with search_queries IS NULL and re-enqueue them.
+        """Scan data_graph for rows with search_queries IS NULL and re-enqueue them.
 
         Handles the case where the process crashed mid-flight and the MemoryStore
         queue was lost. Runs once at boot, before the event wait loop.
         """
         try:
             with self._db.connection() as conn:
-                knowledge_ids = [
-                    r[0] for r in conn.execute(
-                        "SELECT rowid FROM knowledge "
-                        "WHERE search_queries IS NULL AND deleted_at IS NULL"
-                    ).fetchall()
-                ]
                 data_graph_ids = [
                     r[0] for r in conn.execute(
                         "SELECT id FROM data_graph "
@@ -147,17 +138,14 @@ class SearchExpanderService:
                     ).fetchall()
                 ]
 
-            for rowid in knowledge_ids:
-                self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_KNOWLEDGE, "rowid": rowid}))
-
             for rowid in data_graph_ids:
                 self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_DATA_GRAPH, "rowid": rowid}))
 
-            total = len(knowledge_ids) + len(data_graph_ids)
+            total = len(data_graph_ids)
             if total:
                 logger.info(
-                    "[SES] Self-heal enqueued %d row(s) (knowledge=%d, data_graph=%d)",
-                    total, len(knowledge_ids), len(data_graph_ids),
+                    "[SES] Self-heal enqueued %d row(s) (data_graph=%d)",
+                    total, len(data_graph_ids),
                 )
                 self._event.set()
         except Exception as e:
@@ -184,31 +172,9 @@ class SearchExpanderService:
             return
 
         try:
-            if table == _TABLE_KNOWLEDGE:
-                self._process_knowledge(rowid)
-            else:
-                self._process_data_graph(rowid)
+            self._process_data_graph(rowid)
         except Exception as e:
             logger.warning("[SES] Processing failed for %s rowid=%s: %s", table, rowid, e)
-
-    def _process_knowledge(self, rowid: int) -> None:
-        """Expand one knowledge row."""
-        with self._db.connection() as conn:
-            row = conn.execute(
-                "SELECT key, value, kind, entity FROM knowledge WHERE rowid = ?",
-                (rowid,)
-            ).fetchone()
-
-        if row is None:
-            logger.debug("[SES] knowledge rowid=%s gone — skipping", rowid)
-            return
-
-        key, value, kind, entity = row[0], row[1], row[2], row[3]
-        variants = self._generate_variants(key, value)
-
-        with self._db.connection() as conn:
-            self._write_variants(conn, _TABLE_KNOWLEDGE, rowid, variants)
-            self._update_search_queries_knowledge(conn, rowid, key, value, kind, entity, variants)
 
     def _process_data_graph(self, rowid: int) -> None:
         """Expand one data_graph row, also backfilling key_vec/value_vec if absent."""
@@ -334,35 +300,6 @@ class SearchExpanderService:
         except Exception as e:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 
-    def _update_search_queries_knowledge(
-        self, conn, rowid: int, key: str, value: str,
-        kind: str, entity: str, variants: list
-    ) -> None:
-        """Persist variant texts in knowledge.search_queries and resync FTS."""
-        old = conn.execute(
-            "SELECT key, value, kind, entity, search_queries FROM knowledge WHERE rowid = ?",
-            (rowid,)
-        ).fetchone()
-        if old is None:
-            return
-
-        # Delete stale FTS entry before overwriting content
-        self._delete_knowledge_fts(conn, rowid, old[0], old[1], old[2], old[3], old[4] or '')
-
-        conn.execute(
-            "UPDATE knowledge SET search_queries = ? WHERE rowid = ?",
-            (json.dumps(variants), rowid)
-        )
-        # Re-insert FTS entry with updated search_queries
-        try:
-            conn.execute(
-                "INSERT INTO knowledge_fts(rowid, key, value, kind, entity, search_queries) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (rowid, old[0], old[1] or '', old[2], old[3], json.dumps(variants))
-            )
-        except Exception as e:
-            logger.warning("[SES] knowledge FTS sync failed for rowid=%s: %s", rowid, e)
-
     def _update_search_queries_data_graph(
         self, conn, rowid: int, key: str, value: str, kind: str, variants: list
     ) -> None:
@@ -390,23 +327,7 @@ class SearchExpanderService:
         except Exception as e:
             logger.warning("[SES] data_graph FTS sync failed for rowid=%s: %s", rowid, e)
 
-    # ── Private: FTS helpers (mirror KS/DGS delete conventions) ──────────────
-
-    def _delete_knowledge_fts(self, conn, rowid: int, key: str, value: str,
-                               kind: str, entity: str, search_queries: str) -> None:
-        """Remove a knowledge FTS entry using the external-content delete command."""
-        try:
-            conn.execute(
-                "INSERT INTO knowledge_fts"
-                "(knowledge_fts, rowid, key, value, kind, entity, search_queries) "
-                "VALUES('delete', ?, ?, ?, ?, ?, ?)",
-                (rowid, key, value or '', kind, entity, search_queries)
-            )
-        except Exception:
-            try:
-                conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (rowid,))
-            except Exception as e:
-                logger.warning("[SES] knowledge FTS delete failed for rowid=%s: %s", rowid, e)
+    # ── Private: FTS helpers ──────────────────────────────────────────────────
 
     def _delete_data_graph_fts(self, conn, rowid: int, key: str, value: str,
                                 kind: str, search_queries: str) -> None:

@@ -2,9 +2,9 @@
 Tests for services/innate_skills/introspect_skill.py
 
 Tests use the real `db` fixture (fully-migrated SQLite) for all database
-interactions.  Non-DB services (SelfModelService, KnowledgeService,
-MemoryClientService) remain mocked where needed because they pull data from
-Redis/memory stores or perform complex internal logic that is not under test here.
+interactions.  Non-DB services (SelfModelService, MemoryClientService) remain
+mocked where needed because they pull data from memory stores or perform complex
+internal logic that is not under test here.
 """
 
 import pytest
@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 
 _SELF_MODEL  = 'services.self_model_service.SelfModelService'
 _DB          = 'services.database_service.get_shared_db_service'
-_KNOWLEDGE   = 'services.knowledge_service.KnowledgeService'
 _MEMORY_CLI  = 'services.memory_client.MemoryClientService'
 
 # A fixed "now" for deterministic relative-time assertions.
@@ -378,10 +377,9 @@ class TestIdentityScope:
         assert 'formal' in result
 
     @patch('services.data_graph_service.get_data_graph_service', side_effect=RuntimeError('dgs fail'))
-    @patch(_KNOWLEDGE)
     @patch(_DB)
     def test_identity_graceful_degradation(
-        self, mock_db_fn, mock_ks_cls, mock_dgs_fn
+        self, mock_db_fn, mock_dgs_fn
     ):
         """When every identity sub-service fails the scope returns the fallback string."""
         mock_db_fn.return_value = MagicMock(
@@ -389,7 +387,6 @@ class TestIdentityScope:
                 side_effect=RuntimeError('connection refused')
             )
         )
-        mock_ks_cls.return_value.get.side_effect = RuntimeError
 
         from services.innate_skills.introspect_skill import _scope_identity_snapshot
         result = _scope_identity_snapshot()

@@ -49,14 +49,12 @@ class TestPrivacyAPI:
             data = response.get_json()
             # Table counts should be present (all 0 from empty test DB)
             assert "episodes" in data
-            assert "knowledge" in data
             assert "transcript" in data
             assert "scheduled_items" in data
             assert "place_fingerprints" in data
 
             # Verify counts are 0 for an empty database
             assert data["episodes"] == 0
-            assert data["knowledge"] == 0
 
     # ------------------------------------------------------------------
     # DELETE /privacy/delete-all
@@ -102,18 +100,12 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 0
 
     def test_delete_all_clears_extended_tables(self, client, db):
-        """DELETE /privacy/delete-all wipes data_graph, knowledge, lists, list_items,
+        """DELETE /privacy/delete-all wipes data_graph, lists, list_items,
         goals, scheduled_items, documents, and place_fingerprints."""
         # ── Seed data_graph ───────────────────────────────────────────────────
         db.execute(
             "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
             ("fact", "favourite_colour", "blue"),
-        )
-
-        # ── Seed knowledge ────────────────────────────────────────────────────
-        db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value) VALUES (?, ?, ?, ?)",
-            ("trait", "user", "prefers_dark_mode", "true"),
         )
 
         # ── Seed lists + list_items (list_items FK → lists) ───────────────────
@@ -158,7 +150,6 @@ class TestPrivacyAPI:
 
         # Pre-conditions: every seeded table has >= 1 row
         assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] >= 1
-        assert db.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM goals").fetchone()[0] >= 1
@@ -177,7 +168,6 @@ class TestPrivacyAPI:
 
         # Post-conditions: every seeded table must be empty
         assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM goals").fetchone()[0] == 0

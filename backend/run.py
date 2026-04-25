@@ -131,13 +131,6 @@ def main():
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
-    # Seed data_graph from legacy knowledge table (runs once — idempotent check inside)
-    try:
-        from services.data_graph_service import seed_from_legacy_knowledge
-        seed_from_legacy_knowledge(database_service)
-    except Exception as _seed_err:
-        logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
-
     # Drop zombie `invoked_by` column from tool_calls (NOT NULL, never populated by new code)
     try:
         import os as _os
@@ -266,8 +259,7 @@ def main():
                   "services.profile_enrichment_service", "profile_enrichment_worker")
     # SearchExpanderService: centralised doc2query + embedding daemon.
     # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
-    # in KnowledgeService and DataGraphService. Falls back gracefully when the
-    # doc2query ONNX model files are absent.
+    # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
     # Load tool registry

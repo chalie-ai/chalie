@@ -1,7 +1,7 @@
 """Tests for DataGraphService — typed knowledge graph with decay, edges, and LUT canonicalization.
 
 Covers store, recall, fetch, edge operations, reinforce/demote, deletion,
-decay_cycle, seed_from_legacy_knowledge, and LUT-based upsert paths.
+decay_cycle, and LUT-based upsert paths.
 """
 
 import contextlib
@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 from services.data_graph_service import (
     DataGraphService,
-    seed_from_legacy_knowledge,
     KIND_USER_SPECIFIC,
     KIND_SYSTEM,
     KIND_MISC,
@@ -32,7 +31,7 @@ pytestmark = pytest.mark.unit
 
 # Standalone (non-content-table) FTS so manual INSERT/DELETE work in tests.
 # The production schema uses content='data_graph' with triggers, but for unit
-# tests we control FTS sync explicitly — same as test_knowledge_service.py approach.
+# tests we control FTS sync explicitly.
 DATA_GRAPH_DDL = [
     """
     CREATE TABLE IF NOT EXISTS data_graph (
@@ -94,28 +93,6 @@ DATA_GRAPH_DDL = [
     CREATE TABLE IF NOT EXISTS data_graph_value_vec (
         rowid INTEGER PRIMARY KEY,
         embedding BLOB
-    )
-    """,
-    # Legacy knowledge table needed for seed tests
-    """
-    CREATE TABLE IF NOT EXISTS knowledge (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        kind        TEXT NOT NULL,
-        entity      TEXT NOT NULL DEFAULT 'user',
-        key         TEXT NOT NULL,
-        value       TEXT,
-        data        TEXT,
-        decay_class TEXT NOT NULL DEFAULT 'standard',
-        confidence  REAL NOT NULL DEFAULT 0.5,
-        reliability TEXT NOT NULL DEFAULT 'reliable',
-        source      TEXT,
-        evidence_count INTEGER NOT NULL DEFAULT 1,
-        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-        last_accessed_at TEXT,
-        deleted_at  TEXT,
-        search_queries TEXT DEFAULT NULL,
-        UNIQUE(entity, key)
     )
     """,
     # LUT miss tracking — required by the LUT miss path in store()
@@ -1086,139 +1063,6 @@ class TestDecayCycle:
         count = svc.decay_cycle()
         assert isinstance(count, int)
         assert count >= 1
-
-
-# ══════════════════════════════════════════════════════════════════
-# TestSeed
-# ══════════════════════════════════════════════════════════════════
-
-@pytest.mark.unit
-class TestSeed:
-
-    def _insert_knowledge(self, db_service, *, entity, kind, key, value,
-                          source=None, evidence_count=1, created_at=None):
-        """Insert a row into the legacy knowledge table for seed tests."""
-        now = created_at or utc_now().isoformat()
-        with db_service.connection() as conn:
-            conn.execute("""
-                INSERT OR IGNORE INTO knowledge
-                    (kind, entity, key, value, source, evidence_count, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (kind, entity, key, value, source, evidence_count, now, now))
-
-    def test_seed_migrates_user_entity_to_user_specific(self, svc, db_service):
-        """knowledge rows with entity='user' migrate to user_specific kind."""
-        self._insert_knowledge(db_service, entity='user', kind='trait',
-                               key='user_name', value='Dylan')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT kind, value FROM data_graph WHERE key='user_name'"
-            ).fetchone()
-        assert row is not None
-        assert row[0] == KIND_USER_SPECIFIC
-        assert row[1] == 'Dylan'
-
-    def test_seed_migrates_chalie_rule_to_system_kind(self, svc, db_service):
-        """entity='chalie' + kind='rule' migrates to system kind."""
-        self._insert_knowledge(db_service, entity='chalie', kind='rule',
-                               key='verbosity', value='concise')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT kind FROM data_graph WHERE key='verbosity'"
-            ).fetchone()
-        assert row is not None
-        assert row[0] == KIND_SYSTEM
-
-    def test_seed_skips_unrecognised_entity(self, db_service):
-        """knowledge rows with an entity that doesn't match any heuristic are skipped.
-
-        The seed heuristic only maps:
-          - entity in ('', 'dylan', 'user') or key in _USER_SPECIFIC_KEYS → user_specific
-          - entity=='chalie' AND kind=='rule' → system
-        All other combinations hit the else: continue path.
-        """
-        self._insert_knowledge(db_service, entity='external_service', kind='moment',
-                               key='moment_001', value='morning run')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
-        assert count == 0, "Rows with unrecognised entity should not be migrated"
-
-    def test_seed_skips_procedure_kind(self, svc, db_service):
-        """knowledge rows with kind='procedure' are skipped by the seeder."""
-        self._insert_knowledge(db_service, entity='user', kind='procedure',
-                               key='proc_key', value='proc_val')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM data_graph WHERE key='proc_key'"
-            ).fetchone()
-        assert row is None
-
-    def test_seed_skips_moment_context_kind(self, svc, db_service):
-        """knowledge rows with kind='moment_context' are skipped by the seeder."""
-        self._insert_knowledge(db_service, entity='user', kind='moment_context',
-                               key='ctx_key', value='some context')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM data_graph WHERE key='ctx_key'"
-            ).fetchone()
-        assert row is None
-
-    def test_seed_idempotent_does_not_duplicate(self, svc, db_service):
-        """Running seed twice exits early on second call — no duplicate rows created."""
-        self._insert_knowledge(db_service, entity='user', kind='trait',
-                               key='email', value='dylan@example.com')
-
-        seed_from_legacy_knowledge(db_service)
-        seed_from_legacy_knowledge(db_service)  # second call must be a no-op
-
-        with db_service.connection() as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM data_graph WHERE key='email'"
-            ).fetchone()[0]
-        assert count == 1
-
-    def test_seed_preserves_evidence_count(self, svc, db_service):
-        """seed preserves evidence_count from the source knowledge row."""
-        self._insert_knowledge(db_service, entity='user', kind='fact',
-                               key='age', value='30', evidence_count=5)
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT evidence_count FROM data_graph WHERE key='age'"
-            ).fetchone()
-        assert row is not None
-        assert row[0] == 5
-
-    def test_seed_skips_ambiguous_entity(self, svc, db_service):
-        """knowledge rows whose entity doesn't match any heuristic are not migrated."""
-        # entity is not 'user'/'dylan'/'chalie'/''/'' and key not in _USER_SPECIFIC_KEYS
-        self._insert_knowledge(db_service, entity='weather_service', kind='fact',
-                               key='temperature_format', value='celsius')
-
-        seed_from_legacy_knowledge(db_service)
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM data_graph WHERE key='temperature_format'"
-            ).fetchone()
-        assert row is None
 
 
 # ══════════════════════════════════════════════════════════════════

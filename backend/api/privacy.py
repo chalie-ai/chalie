@@ -1,5 +1,11 @@
 """
 Privacy blueprint — /privacy/data-summary, /privacy/export, /privacy/delete-all.
+
+User data tables covered: episodes, transcript, tool_calls, compactions,
+goal_evidence, list_items, list_events, data_graph_edges, data_graph, goals,
+lists, scheduled_items, documents, watched_folders, place_fingerprints,
+user_tool_preferences, tool_performance_metrics, memory_recall_log, llm_call_log,
+concept_lut_misses, browser_snapshots, browser_credentials.
 """
 
 import json
@@ -29,7 +35,6 @@ _DELETE_ALL_TABLES = (
     # ── Parents / independents ────────────────────────────────────────────
     "transcript",
     "episodes",
-    "knowledge",
     "data_graph",
     "goals",
     "lists",
@@ -92,7 +97,7 @@ def data_summary():
         # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
-                "episodes", "knowledge", "transcript",
+                "episodes", "transcript",
                 "scheduled_items",
                 "lists", "list_items", "place_fingerprints",
                 "documents",
@@ -129,7 +134,7 @@ def export_data():
     """Export all user data as a streaming JSON download."""
 
     user_data_tables = [
-        "episodes", "knowledge",
+        "episodes",
         "transcript",
         "scheduled_items", "lists", "list_items",
         "list_events",
@@ -250,7 +255,7 @@ def delete_all():
 
     Wipes every user-owned table (episodes, transcript, tool_calls,
     compactions, goal_evidence, list_items, list_events, data_graph_edges,
-    data_graph, knowledge, goals, lists, scheduled_items, documents,
+    data_graph, goals, lists, scheduled_items, documents,
     watched_folders, place_fingerprints, user_tool_preferences,
     tool_performance_metrics, memory_recall_log, llm_call_log,
     concept_lut_misses, browser_snapshots, browser_credentials)

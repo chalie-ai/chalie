@@ -186,7 +186,7 @@ class TestGatherSalienceContext:
     """_gather_salience_context() — reads concepts, salient episodes, and goals."""
 
     def test_returns_empty_string_when_all_tables_empty(self, db, store):
-        """Empty knowledge + episodes + goals → empty string, no exception."""
+        """Empty data_graph + episodes + goals → empty string, no exception."""
         svc = _make_service(db, store)
         result = svc._gather_salience_context()
 
@@ -298,13 +298,13 @@ class TestGatherSalienceContext:
 
         assert 'Routine note' not in result
 
-    def test_non_concept_knowledge_excluded(self, db, store):
-        """Knowledge rows with kind != 'concept' do not appear in salience context."""
+    def test_non_user_specific_data_graph_excluded(self, db, store):
+        """data_graph rows with kind != 'user_specific' do not appear in salience context."""
         from services.time_utils import utc_now
         ts = utc_now().isoformat()
         db.execute(
-            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
-            "created_at, updated_at) VALUES ('fact', 'user', 'birthday', '1990-01-01', 0.9, ?, ?)",
+            "INSERT INTO data_graph (kind, key, value, retrieval_weight, "
+            "first_seen_at, last_confirmed_at) VALUES ('misc', 'birthday', '1990-01-01', 0.9, ?, ?)",
             (ts, ts),
         )
         db.commit()
@@ -312,7 +312,7 @@ class TestGatherSalienceContext:
         svc = _make_service(db, store)
         result = svc._gather_salience_context()
 
-        # 'fact' kind rows should not be in the High-priority memories section
+        # 'misc' kind rows should not be in the High-priority memories section
         assert 'birthday' not in result
 
     def test_all_three_sections_when_data_present(self, db, store):

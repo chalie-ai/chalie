@@ -50,10 +50,10 @@ class TestDecayEngineService:
 
     # ── run_decay_cycle — richness gating ────────────────────────────
 
-    def test_run_decay_cycle_low_richness_skips_identity_and_external(self):
-        """With richness < 0.3, identity inertia and external knowledge decay must not run.
+    def test_run_decay_cycle_low_richness_skips_external(self):
+        """With richness < 0.3, external knowledge decay must not run.
 
-        We verify actual gating behaviour — identity/external sub-cycles return 0
+        We verify actual gating behaviour — external sub-cycle returns 0
         without being called — not just that internal helper methods were invoked.
         """
         with patch(
@@ -71,7 +71,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
-             patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
@@ -81,14 +80,14 @@ class TestDecayEngineService:
             svc.run_decay_cycle(richness=0.1)  # below 0.3 gate
 
         # Essential cycles ran
-        assert 'episodic'  in call_log
-        assert 'knowledge' in call_log
-        assert 'goals'     in call_log
+        assert 'episodic'    in call_log
+        assert 'data_graph'  in call_log
+        assert 'goals'       in call_log
         # Non-essential cycles were skipped
         assert 'external' not in call_log
 
     def test_run_decay_cycle_normal_richness_runs_all_cycles(self):
-        """With richness >= 0.3, all decay sub-cycles including identity must run."""
+        """With richness >= 0.3, all decay sub-cycles must run."""
         with patch(
             'services.decay_engine_service.ConfigService.get_agent_config',
             return_value={},
@@ -104,7 +103,6 @@ class TestDecayEngineService:
             return _fn
 
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
-             patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
              patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
@@ -114,7 +112,7 @@ class TestDecayEngineService:
             svc.run_decay_cycle(richness=1.0)  # above 0.3 gate
 
         # All cycles must have run
-        for name in ('episodic', 'knowledge', 'goals', 'external'):
+        for name in ('episodic', 'data_graph', 'goals', 'external'):
             assert name in call_log, f"Expected '{name}' to run at full richness"
 
     # ── Individual decay targets ──────────────────────────────────────
@@ -132,22 +130,6 @@ class TestDecayEngineService:
             side_effect=Exception('DB unavailable'),
         ):
             result = svc._decay_episodic()
-
-        assert result == 0
-
-    def test_decay_knowledge_returns_zero_on_db_failure(self):
-        """Knowledge decay should return 0 when DB is unavailable."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        with patch(
-            'services.database_service.get_shared_db_service',
-            side_effect=Exception('DB unavailable'),
-        ):
-            result = svc._decay_knowledge()
 
         assert result == 0
 

@@ -79,7 +79,6 @@ class TestSchemaConvergence:
         # Spot-check a representative cross-section of schema tables
         expected = {
             "episodes",
-            "knowledge",
             "transcript",
             "goals",
             "settings",
@@ -109,7 +108,6 @@ class TestSchemaConvergence:
 
         fts_tables = {t for t in virtual_tables if t.endswith("_fts")}
         assert "episodes_fts" in fts_tables
-        assert "knowledge_fts" in fts_tables
         assert "documents_fts" in fts_tables
 
     def test_fresh_db_creates_vec0_virtual_tables(self, tmp_path):
@@ -122,7 +120,6 @@ class TestSchemaConvergence:
 
         vec_tables = {t for t in virtual_tables if t.endswith("_vec")}
         assert "episodes_vec" in vec_tables
-        assert "knowledge_vec" in vec_tables
         assert "documents_vec" in vec_tables
 
     def test_fresh_db_creates_indexes(self, tmp_path):
@@ -134,7 +131,6 @@ class TestSchemaConvergence:
             indexes = _index_names(conn)
 
         assert "idx_episodes_channel" in indexes
-        assert "idx_knowledge_kind" in indexes
         assert "idx_transcript_channel" in indexes
         assert "idx_goals_status" in indexes
 
@@ -272,7 +268,7 @@ class TestSchemaConvergence:
         db = _make_db(tmp_path)
         _converge(db)
 
-        dropped = ["idx_knowledge_kind", "idx_goals_salience", "idx_transcript_channel"]
+        dropped = ["idx_goals_salience", "idx_transcript_channel"]
         with db.connection() as conn:
             for idx in dropped:
                 conn.execute(f"DROP INDEX IF EXISTS {idx}")
@@ -335,15 +331,15 @@ class TestSchemaConvergence:
         _converge(db)
 
         with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS knowledge_vec")
+            conn.execute("DROP TABLE IF EXISTS episodes_vec")
 
         with db.connection() as conn:
-            assert "knowledge_vec" not in _virtual_table_names(conn)
+            assert "episodes_vec" not in _virtual_table_names(conn)
 
         _converge(db)
 
         with db.connection() as conn:
-            assert "knowledge_vec" in _virtual_table_names(conn)
+            assert "episodes_vec" in _virtual_table_names(conn)
 
     def test_fts5_table_is_queryable_after_creation(self, tmp_path):
         """Newly created FTS5 table accepts an FTS query without error."""
@@ -647,27 +643,27 @@ class TestSchemaConvergence:
 
     # ── 12. DDL extraction with comments ──────────────────────────────────────
 
-    def test_comment_with_semicolon_does_not_break_ddl_extraction(self, tmp_path):
-        """SQL comments containing semicolons inside CREATE TABLE blocks don't
-        cause _extract_table_ddl() to truncate the DDL prematurely."""
+    def test_comment_does_not_break_ddl_extraction(self, tmp_path):
+        """SQL comments inside CREATE TABLE blocks don't cause _extract_table_ddl()
+        to truncate the DDL prematurely."""
         db = _make_db(tmp_path)
         svc = SchemaConvergenceService(db, embedding_dimensions=256)
 
-        # The knowledge table has a column with a comment containing a semicolon:
-        #   reliability TEXT ...  -- dropped by migration 026; kept here for migration compat
+        # data_graph has an inline comment on the kind column:
+        #   -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
         # If the extractor is broken it will truncate before the final ')'.
         schema_sql = svc._schema_path.read_text()
-        ddl = svc._extract_table_ddl(schema_sql, "knowledge")
+        ddl = svc._extract_table_ddl(schema_sql, "data_graph")
 
-        assert ddl is not None, "Failed to extract knowledge table DDL"
+        assert ddl is not None, "Failed to extract data_graph table DDL"
         # DDL must be a complete CREATE TABLE statement — ends with );
         stripped = ddl.strip().rstrip(";").strip()
         assert stripped.endswith(")"), (
-            f"knowledge DDL appears truncated (missing closing paren): ...{stripped[-60:]}"
+            f"data_graph DDL appears truncated (missing closing paren): ...{stripped[-60:]}"
         )
-        # Must contain columns that appear after the comment-with-semicolon line
+        # Must contain columns that appear after the comment line
         assert "search_queries" in ddl.lower(), (
-            "search_queries column absent — DDL was likely cut at the comment semicolon"
+            "search_queries column absent — DDL was likely cut at the comment"
         )
 
     def test_extract_table_ddl_strips_inline_comments(self, tmp_path):
@@ -800,6 +796,7 @@ class TestSchemaConvergence:
             tables = _table_names(conn)
 
         for legacy in (
+            "knowledge",
             "cognitive_reflexes",
             "triage_calibration_events",
             "persistent_tasks",

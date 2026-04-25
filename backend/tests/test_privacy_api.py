@@ -97,7 +97,7 @@ class TestDataSummary:
         src = inspect.getsource(data_summary)
 
         required_tables = [
-            'episodes', 'knowledge', 'transcript',
+            'episodes', 'transcript',
             'scheduled_items',
             'lists', 'place_fingerprints',
         ]
@@ -115,7 +115,7 @@ class TestExportData:
         src = inspect.getsource(export_data)
 
         required_tables = [
-            'episodes', 'knowledge',
+            'episodes',
             'transcript', 'scheduled_items',
             'lists', 'list_items', 'place_fingerprints',
         ]

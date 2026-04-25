@@ -187,7 +187,7 @@ def client(db_service, dgs):
 
 class TestPostMoments:
 
-    def test_happy_path_stores_moment_in_knowledge(self, client, db_service):
+    def test_happy_path_stores_moment_in_data_graph(self, client, db_service):
         """POST /moments with a valid assistant transcript_id stores kind='moment' in data_graph."""
         tid = _insert_transcript(db_service, role='assistant', content='Great insight here')
 

@@ -113,7 +113,7 @@ class UserMessageProcessor(MessageProcessor):
         # for interaction logging and phase updates (call AFTER store()).
         self._last_response: str = ''
         # Cached user synthesis string. getSystemPrompt() runs every ACT iteration;
-        # without this cache each iteration would re-read KnowledgeService DB rows.
+        # without this cache each iteration would re-read user_summary from data_graph.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
         # Per-turn cache for getConditionalTools(). Set on first call and reused

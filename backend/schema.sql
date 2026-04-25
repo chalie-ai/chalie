@@ -47,46 +47,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
 
--- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
+-- semantic_concepts, semantic_relationships removed — replaced by data_graph table.
 -- semantic_schemas table removed — never used by any service.
 
--- procedural_memory removed — replaced by unified knowledge table.
+-- procedural_memory removed — replaced by data_graph table.
 
--- ────────────────────────────────────────────────────────────────
--- KNOWLEDGE — unified knowledge store (traits, procedures, concepts, relationships)
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS knowledge (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind        TEXT NOT NULL,
-    entity      TEXT NOT NULL DEFAULT 'user',
-    key         TEXT NOT NULL,
-    value       TEXT,
-    data        TEXT,
-    decay_class TEXT NOT NULL DEFAULT 'standard',
-    confidence  REAL NOT NULL DEFAULT 0.5,
-    reliability TEXT NOT NULL DEFAULT 'reliable',  -- dropped by migration 026; kept here for migration compat
-    source      TEXT,
-    evidence_count INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    last_accessed_at TEXT,
-    deleted_at  TEXT,
-    search_queries TEXT DEFAULT NULL,
-    UNIQUE(entity, key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind);
-CREATE INDEX IF NOT EXISTS idx_knowledge_entity ON knowledge(entity);
-CREATE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge(key);
-CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC);
-CREATE INDEX IF NOT EXISTS idx_knowledge_decay_class ON knowledge(decay_class);
-CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_knowledge_kind_entity_active ON knowledge(kind, entity) WHERE deleted_at IS NULL;
-
-CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-    key, value, kind, entity, search_queries, content='knowledge', content_rowid='rowid',
-    tokenize='porter unicode61'
-);
+-- knowledge table removed — all trait/concept/procedure storage routes through DataGraphService.
 
 -- topics table removed — dropped by migration 035_channel_migration.sql
 
@@ -329,17 +295,10 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     tool_type TEXT NOT NULL DEFAULT 'tool',
     short_summary TEXT NOT NULL,
     full_profile TEXT NOT NULL,
-    usage_scenarios TEXT NOT NULL DEFAULT '[]',    -- JSONB
     anti_scenarios TEXT NOT NULL DEFAULT '[]',     -- JSONB
     complementary_skills TEXT DEFAULT '[]',        -- JSONB
-    triage_triggers TEXT DEFAULT '[]',             -- JSONB
     manifest_hash TEXT,
-    enrichment_episode_ids TEXT DEFAULT '[]',      -- JSONB
-    enrichment_count INTEGER DEFAULT 0,
-    last_enriched_at TEXT,
-    avg_latency_ms REAL DEFAULT 0,
     cost_tier TEXT DEFAULT 'free',
-    reliability_score REAL DEFAULT 1.0,
     domain TEXT DEFAULT 'Other',
     effort TEXT DEFAULT 'moderate',
     skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
@@ -350,24 +309,6 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tcp_tool_name ON tool_capability_profiles(tool_name);
-
--- ────────────────────────────────────────────────────────────────
--- TOOL PERFORMANCE METRICS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS tool_performance_metrics (
-    id TEXT PRIMARY KEY,
-    tool_name TEXT NOT NULL,
-    exchange_id TEXT,
-    channel TEXT DEFAULT '',                  -- 'user', 'dmn', 'goal_pursuit', 'scheduled', ...
-    invocation_success INTEGER NOT NULL,      -- BOOLEAN
-    latency_ms REAL,
-    cost_estimate REAL DEFAULT 0,
-    user_correction INTEGER DEFAULT 0,        -- BOOLEAN
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tpm_tool_created ON tool_performance_metrics(tool_name, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tpm_channel_created ON tool_performance_metrics(channel, created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- USER TOOL PREFERENCES
@@ -384,7 +325,7 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
 );
 
 
--- NOTE: moments are stored in the knowledge table as kind='moment' (parent)
+-- NOTE: moments are stored in data_graph as kind='moment' (parent)
 -- and kind='moment_context' (enrichment context rows). The old dedicated
 -- moments table and documents-table path (source_type='moment') are removed.
 
@@ -409,7 +350,7 @@ CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_h
 -- SchemaConvergenceService on the next boot.  No explicit DROP statements
 -- needed here.  Past examples: cortex_iterations, persistent_tasks,
 -- cognitive_reflexes, triage_calibration_events, document_chunks,
--- knowledge_vec, scheduled_items_vec, lists_vec, goals_vec.
+-- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec, goals_vec.
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -571,7 +512,6 @@ CREATE INDEX IF NOT EXISTS idx_goal_evidence_type ON goal_evidence(signal_type);
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS goals_vec USING vec0(embedding float[768]);
@@ -786,12 +726,12 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, 
 -- Populated by SearchExpanderService (search_expander_service.py) after
 -- every knowledge / data_graph write. Each row is one doc2query variant
 -- whose embedding lives in the companion vec0 table, keyed by this row's id.
--- Callers: knowledge_service.recall() and data_graph_service.recall() join
+-- Callers: data_graph_service.recall() joins
 --          expanded_semantic_vec → expanded_semantic to surface variant hits.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS expanded_semantic (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    relates_to_table TEXT NOT NULL,   -- 'knowledge' or 'data_graph'
+    relates_to_table TEXT NOT NULL,   -- 'data_graph'
     related_to_id   INTEGER NOT NULL, -- rowid of the source row
     str             TEXT NOT NULL     -- the variant query string
 );
@@ -801,13 +741,6 @@ CREATE INDEX IF NOT EXISTS idx_expanded_semantic_lookup
 
 -- One vec row per expanded_semantic row; rowid matches expanded_semantic.id.
 CREATE VIRTUAL TABLE IF NOT EXISTS expanded_semantic_vec USING vec0(embedding float[768]);
-
--- Cascade: DELETE knowledge row → purge its expanded_semantic rows.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_knowledge
-    AFTER DELETE ON knowledge BEGIN
-    DELETE FROM expanded_semantic
-        WHERE relates_to_table = 'knowledge' AND related_to_id = OLD.rowid;
-END;
 
 -- Cascade: DELETE data_graph row → purge its expanded_semantic rows.
 CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_data_graph
