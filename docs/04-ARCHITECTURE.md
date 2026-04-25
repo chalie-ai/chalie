@@ -15,7 +15,7 @@ A user message arrives over WebSocket. The handler spawns a daemon thread, const
 Inside `send()`:
 
 1. **Memory seed** — recent episodes are retrieved and attached to the turn context.
-2. **Thinking gate** — a lightweight ONNX classifier reads the message and assigns a deliberation depth: low (conversational), medium, or high. High depth triggers a one-shot pre-reasoning pass before the tool loop begins.
+2. **Deliberation gate** — a lightweight ONNX classifier reads the message and assigns a continuous deliberation score (0.0–1.0) on the transcript row. Higher scores nudge the prompt toward more careful reasoning; very high scores trigger a one-shot pre-reasoning pass before the tool loop begins.
 3. **ACT loop** — the processor assembles a single user message containing the literal conversation history, world state, memory seed, and the current input, then calls the LLM. If the LLM invokes a tool, the result is appended to the trail and the loop continues. This repeats until the LLM returns a plain text response or hits the iteration cap.
 4. **Atomic write** — one SQLite transaction commits the user turn, every tool call from the loop, and the assistant response. Nothing is written to the database mid-loop.
 5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, situation model refresh, adaptive signals, DMN timer reset, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins.
@@ -25,7 +25,7 @@ WebSocket frame
   └─ daemon thread
        └─ UserMessageProcessor.send()
             ├─ memory seed
-            ├─ thinking gate  (classify → optional exploration pass)
+            ├─ deliberation gate  (classify → optional exploration pass)
             ├─ ACT loop ──────────────────────────────────────────┐
             │    assemble prompt (history + world state + seed)   │
             │    → LLM call                                       │

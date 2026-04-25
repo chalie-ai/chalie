@@ -33,7 +33,7 @@ User (WebSocket)
   │  Pre-loop                   │
   │  · seed memory from         │
   │    past episodes            │
-  │  · thinking-level gate      │
+  │  · deliberation-score gate  │
   │    (exploration pass)       │
   └────────────┬────────────────┘
                │
