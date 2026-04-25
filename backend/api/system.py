@@ -18,30 +18,30 @@ system_bp = Blueprint('system', __name__)
 def health_check():
     """Health check endpoint (no auth required). POST saves client context."""
     if request.method == 'POST':
-        attention = None
         try:
             from services.client_context_service import ClientContextService
             data = request.get_json() or {}
             if data:
                 svc = ClientContextService()
                 svc.save(data)
-                # Run ambient inference on the saved context
-                from services.ambient_inference_service import AmbientInferenceService
-                inference = AmbientInferenceService().infer(data)
-                attention = inference.get('attention') if inference else None
                 # Mirror the saved context into WorldState so the [telemetry]
                 # block surfaces in the user prompt and Cognition tab. /health
                 # is the primary telemetry push site (heartbeat.js every 5min);
                 # /api/updates/context is the secondary wrapper-facing path.
                 try:
-                    from services.world_state import world_state
+                    from services.world_state import world_state, Signal
                     world_state.set("telemetry", svc.get() or data)
+                    world_state.absorb(Signal(source='/health', kind='heartbeat', payload=data))
+                    if device_class := data.get('device_class') or (data.get('device') or {}).get('class'):
+                        world_state.absorb(Signal(source='/health', kind='device', payload={'device_class': device_class}))
+                    if local_time := data.get('local_time'):
+                        world_state.absorb(Signal(source='/health', kind='local_time', payload={'local_time': local_time}))
                 except Exception as ws_err:
                     logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
         from consumer import APP_VERSION
-        return jsonify({"status": "ok", "version": APP_VERSION, "attention": attention}), 200
+        return jsonify({"status": "ok", "version": APP_VERSION}), 200
     from consumer import APP_VERSION
     return jsonify({"status": "ok", "version": APP_VERSION}), 200
 
@@ -425,25 +425,6 @@ def observability_pipeline_health():
         logger.error(f"[REST API] observability/pipeline-health error: {e}")
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
 
-
-
-@system_bp.route('/system/observability/situation', methods=['GET'])
-@require_session
-def observability_situation():
-    """Returns the full situation model state for debugging/observability."""
-    try:
-        from services.situation_model_service import get_situation_model_service
-        svc = get_situation_model_service()
-        state = svc.get_current()
-        directive = svc.get_directive()
-        return jsonify({
-            'ok': True,
-            'situation': state,
-            'directive': directive,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/situation error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @system_bp.route('/system/observability/write-queue', methods=['GET'])

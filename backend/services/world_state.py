@@ -31,6 +31,9 @@ Output format (literal):
 import logging
 import threading
 import time as _time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 from services.time_utils import utc_now, parse_utc
 from services.time_formatter_service import TimeFormatterService
@@ -128,6 +131,16 @@ def _schedule_recurrence_field(recurrence_str) -> str | None:
     return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
 
 
+@dataclass(frozen=True)
+class Signal:
+    """Typed event pushed by an interface. Short-lived, absorbed and discarded."""
+
+    source: str
+    kind: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    received_at: datetime = field(default_factory=utc_now)
+
+
 class WorldState:
     """In-process singleton. Sole owner of world-state data + rendering.
 
@@ -185,6 +198,50 @@ class WorldState:
                 "expires_at": _time.time() + ttl,
             }
             self._store["signals"] = signals
+
+    def absorb(self, signal: Signal) -> None:
+        """Process an incoming typed signal. Updates the snapshot fields atomically.
+
+        Recognised kinds:
+        - "user_message" -> updates last_user_message_at
+        - "heartbeat"    -> updates last_heartbeat_at
+        - "device"       -> sets current_device_class from payload['device_class']
+        - "local_time"   -> sets current_local_time from payload['local_time']
+
+        Unknown kinds are silently ignored (forward-compatibility).
+        """
+        with self._lock:
+            if signal.kind == "user_message":
+                self._store["world_state:last_user_message_at"] = signal.received_at.isoformat()
+            elif signal.kind == "heartbeat":
+                self._store["world_state:last_heartbeat_at"] = signal.received_at.isoformat()
+            elif signal.kind == "device":
+                dc = signal.payload.get("device_class")
+                if dc:
+                    self._store["world_state:current_device_class"] = dc
+            elif signal.kind == "local_time":
+                lt = signal.payload.get("local_time")
+                if lt:
+                    self._store["world_state:current_local_time"] = (
+                        lt if isinstance(lt, str) else lt.isoformat()
+                    )
+
+    def snapshot(self) -> dict[str, Any]:
+        """Read-only snapshot of the four typed ambient fields. Caller treats as immutable.
+
+        Datetime fields are ``None`` when not yet set; once set they return a
+        timezone-aware UTC ``datetime``.
+        """
+        with self._lock:
+            raw_msg = self._store.get("world_state:last_user_message_at")
+            raw_hb = self._store.get("world_state:last_heartbeat_at")
+            raw_lt = self._store.get("world_state:current_local_time")
+            return {
+                "last_user_message_at": parse_utc(raw_msg) if raw_msg is not None else None,
+                "last_heartbeat_at": parse_utc(raw_hb) if raw_hb is not None else None,
+                "current_device_class": self._store.get("world_state:current_device_class"),
+                "current_local_time": parse_utc(raw_lt) if raw_lt is not None else None,
+            }
 
     def render(self) -> str:
         """Combine in-memory fragments and DB reads into the literal output block.

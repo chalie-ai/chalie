@@ -57,7 +57,7 @@ def data_summary():
             for table in [
                 "episodes", "knowledge", "transcript",
                 "scheduled_items",
-                "lists", "list_items", "place_fingerprints",
+                "lists", "list_items",
                 "documents",
             ]:
                 try:
@@ -96,7 +96,6 @@ def export_data():
         "transcript",
         "scheduled_items", "lists", "list_items",
         "list_events",
-        "place_fingerprints",
         "user_tool_preferences",
         "documents", "watched_folders",
     ]

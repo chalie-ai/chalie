@@ -7,10 +7,8 @@ by all services (frontal cortex, scheduler, date_time tool, weather tool, etc.).
 
 Extended with:
 - Location history ring buffer for mobility inference
-- Place transition detection
 - Session re-entry detection
 - Demographic trait seeding from locale/location
-- Rich format_for_prompt with ambient inference
 """
 
 import json
@@ -31,10 +29,6 @@ TTL = 3600  # 1 hour
 REENTRY_KEY = "ambient:session_reentry"
 REENTRY_THRESHOLD = 1800  # 30 min
 REENTRY_TTL = 300  # 5 min flag
-
-# Place transition
-PLACE_TRANSITION_KEY = "ambient:place_transition"
-PLACE_TRANSITION_TTL = 300  # 5 min
 
 # Demographic seeding
 CULTURE_SEED_KEY = "ambient:culture_seeded"
@@ -129,8 +123,7 @@ class ClientContextService:
         Save client context to MemoryStore with extended processing.
 
         Handles: location resolution, behavioral data merging, location history,
-        place transition detection, session re-entry, demographic seeding,
-        and place fingerprint recording.
+        session re-entry, and demographic seeding.
         """
         cached_ctx = self.get()
 
@@ -176,14 +169,8 @@ class ClientContextService:
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
 
-        # Place transition detection
-        self._detect_place_transition(cached_ctx, ctx)
-
         # Demographic trait seeding (once per session)
         self._seed_demographic_traits(ctx)
-
-        # Record place fingerprint for learning (after all context is saved)
-        self._record_place_fingerprint(ctx)
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={ctx.get('device', {}).get('class')}")
@@ -213,12 +200,7 @@ class ClientContextService:
         return is_stale
 
     def format_for_prompt(self) -> str:
-        """
-        Format client context as human-readable prompt string with ambient inference.
-
-        Uses hedging language for confidence framing:
-        "likely" / "probably" / "seems like" — never assertive surveillance language.
-        """
+        """Format client context as human-readable prompt string."""
         ctx = self.get()
         if not ctx:
             return ""
@@ -243,53 +225,6 @@ class ClientContextService:
         if device_class := device.get("class"):
             parts.append(f"Device: {device_class}")
 
-        # Ambient inferences (with confidence framing)
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            inferences = inference.infer(ctx)
-
-            attention = inferences.get("attention")
-            place = inferences.get("place")
-            energy = inferences.get("energy")
-
-            if attention:
-                attention_labels = {
-                    "deep_focus": "likely in a focused session",
-                    "casual": "seems to be casually browsing",
-                    "distracted": "appears to be multitasking",
-                    "away": "seems to be away",
-                }
-                if label := attention_labels.get(attention):
-                    parts.append(f"State: {label}")
-
-            if place:
-                place_labels = {
-                    "home": "probably at home",
-                    "work": "probably at work",
-                    "transit": "likely in transit",
-                    "out": "likely out and about",
-                }
-                if label := place_labels.get(place):
-                    parts.append(f"Context: {label}")
-
-            if energy:
-                energy_labels = {
-                    "high": "high",
-                    "moderate": "moderate",
-                    "low": "low",
-                }
-                if label := energy_labels.get(energy):
-                    parts.append(f"Energy: {label}")
-
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Inference failed: {e}")
-
         return " | ".join(parts)
 
     # ── Location History ───────────────────────────────────────────────
@@ -310,36 +245,6 @@ class ClientContextService:
             self._store.expire(HISTORY_KEY, TTL)
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to push history: {e}")
-
-    # ── Place Transition Detection ─────────────────────────────────────
-
-    def _detect_place_transition(self, old_ctx: dict, new_ctx: dict):
-        """Detect place transitions and set MemoryStore flag for downstream consumers."""
-        if not old_ctx:
-            return
-
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            inference.infer(new_ctx, emit_events=True)
-            old_place = inference._infer_place(old_ctx)
-            new_place = inference._infer_place(new_ctx)
-
-            if old_place and new_place and old_place != new_place:
-                transition = json.dumps({
-                    "from": old_place,
-                    "to": new_place,
-                    "at": time.time(),
-                })
-                self._store.setex(PLACE_TRANSITION_KEY, PLACE_TRANSITION_TTL, transition)
-                logging.debug(f"[CLIENT CONTEXT] Place transition: {old_place} → {new_place}")
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Place transition detection failed: {e}")
 
     # ── Session Re-entry Detection ─────────────────────────────────────
 
@@ -488,21 +393,4 @@ class ClientContextService:
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
 
-    # ── Place Fingerprint Recording ────────────────────────────────────
-
-    def _record_place_fingerprint(self, ctx: dict):
-        """Record place observation for place learning service."""
-        try:
-            from services.ambient_inference_service import AmbientInferenceService
-            from services.place_learning_service import PlaceLearningService
-            from services.database_service import DatabaseService
-
-            db = DatabaseService()
-            place_learning = PlaceLearningService(db)
-            inference = AmbientInferenceService(place_learning_service=place_learning)
-            place = inference._infer_place(ctx)
-            if place:
-                place_learning.record(ctx, place)
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Place fingerprint recording failed: {e}")
 

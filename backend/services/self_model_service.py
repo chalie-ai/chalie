@@ -8,7 +8,7 @@ Continuously aggregates three signal categories into a cached MemoryStore snapsh
 
 Design:
   - Deterministic, zero-LLM, <50ms refresh
-  - Follows AmbientInferenceService pattern (cached, always-fresh)
+  - Cached snapshot in MemoryStore, always-fresh on demand
   - Noteworthy list is EMPTY when healthy — only populated on degradation
   - Each noteworthy item carries a severity weight (0.0-1.0) for downstream consumers
 """
