@@ -142,7 +142,7 @@ Three loading tiers stack on every user turn and are merged first-seen, so the u
 
 **Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. External tools without a `modes` declaration are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
-A single per-turn `[MODE-GATE]` log line records the probability vector, state transition, active modes, and promoted tool list; one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line fires per promoted tool. The gate ships with `shadow_mode: true` in `configs/mode_gate.yaml` — the full pipeline runs and persists state, but no tools are actually promoted until the flag is flipped after nightly verification.
+A single per-turn `[MODE-GATE]` log line records the probability vector, state transition, active modes, and promoted tool list; one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line fires per promoted tool.
 
 Tool results flow through a single render-and-record path that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 

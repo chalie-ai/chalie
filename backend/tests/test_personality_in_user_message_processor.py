@@ -133,7 +133,7 @@ _BACKGROUND_PROCESSOR_CASES = [
     (
         'SuperEpisodeEncoderProcessor',
         'services.super_episode_encoder_processor',
-        {'source_episodes': [], 'transcript_spans': ''},
+        {'channel': 'test-channel'},
     ),
 ]
 

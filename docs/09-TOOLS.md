@@ -22,8 +22,6 @@ Which innate skills serve which modes is declared at the top of `backend/service
 
 Observability: every user turn emits one `[MODE-GATE]` INFO log line with the full probability vector, state before/after, active modes, and the promoted tool list, plus one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line per promoted tool. These are grep-friendly anchors for nightly scenarios.
 
-Shadow rollout: the gate ships with `shadow_mode: true` in `configs/mode_gate.yaml`. The full pipeline runs and persists state, but the returned promoted list is `[]` — so turn behaviour is identical to pre-feature. Flipping `shadow_mode: false` is a post-ship config change once nightly verifies stability.
-
 ## Tool status
 
 Three status values appear in the tools list:
