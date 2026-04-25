@@ -418,9 +418,24 @@ class OnnxInferenceService:
             start = time.perf_counter()
             embedding = self._embed(text)  # (1, 768)
 
+            if not np.isfinite(embedding).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_scalar non-finite embedding for '{task_name}'"
+                )
+                return None
+
             logits = head.forward(embedding)  # (1, 1)
             logit = float(logits[0, 0])
             scalar = float(1.0 / (1.0 + np.exp(-logit)))
+
+            # Guard the contract: regression heads must yield finite scalars in [0, 1].
+            # NaN/Inf weights or NaN embeddings would otherwise propagate silently.
+            if not np.isfinite(scalar) or scalar < 0.0 or scalar > 1.0:
+                logger.warning(
+                    f"{LOG_PREFIX} predict_scalar out-of-contract output for '{task_name}': "
+                    f"scalar={scalar!r} (must be finite in [0,1])"
+                )
+                return None
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.debug(
@@ -481,8 +496,20 @@ class OnnxInferenceService:
                 )
                 return None, 0.0
 
+            if not np.isfinite(features).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict non-finite features for '{task_name}'"
+                )
+                return None, 0.0
+
             logits = head.forward(features)           # (1, num_classes)
             probs = _softmax(logits.astype(np.float32))[0]  # (num_classes,)
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict non-finite probs for '{task_name}'"
+                )
+                return None, 0.0
 
             winner_idx = int(np.argmax(probs))
             confidence = float(probs[winner_idx])
@@ -525,6 +552,12 @@ class OnnxInferenceService:
             logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
 
             probs = 1.0 / (1.0 + np.exp(-logits))
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_multi_label non-finite probs for '{model_name}'"
+                )
+                return []
 
             default_threshold = 0.5
             results = []
@@ -578,6 +611,12 @@ class OnnxInferenceService:
             logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
 
             probs = 1.0 / (1.0 + np.exp(-logits))
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_all_sigmoids non-finite probs for '{task}'"
+                )
+                return {}
 
             return {label: float(probs[i]) for i, label in enumerate(head.labels) if i < len(probs)}
 
