@@ -195,7 +195,6 @@ if __name__ == "__main__":
 
     # Deferred imports
     from workers import rest_api_worker
-    from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -230,7 +229,6 @@ if __name__ == "__main__":
     manager = WorkerManager()
 
     # Register service workers (all run as daemon threads)
-    manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("rest-api-worker-1", rest_api_worker)
     manager.register_service("scheduler-service", scheduler_worker)

@@ -215,7 +215,6 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -225,7 +224,6 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
