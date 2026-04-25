@@ -43,12 +43,12 @@ def _load_meta() -> dict:
 
     try:
         import runtime_config
-        _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "models")
-        models_dir = runtime_config.get(
-            "models_dir",
-            os.environ.get("MODELS_DIR", _default),
+        _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pre-trained")
+        pretrained_dir = runtime_config.get(
+            "pretrained_dir",
+            os.environ.get("PRETRAINED_DIR", _default),
         )
-        meta_path = Path(models_dir) / "deliberation_score" / "deliberation-score-classifier_meta.json"
+        meta_path = Path(pretrained_dir) / "deliberation_score" / "deliberation-score-classifier_meta.json"
         with open(meta_path) as f:
             meta = json.load(f)
     except Exception as exc:

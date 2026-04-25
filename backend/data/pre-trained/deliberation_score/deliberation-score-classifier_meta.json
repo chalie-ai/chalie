@@ -1,0 +1,43 @@
+{
+  "labels": [
+    "score"
+  ],
+  "model_name": "deliberation_score",
+  "model_type": "sequence_classifier",
+  "task_type": "regression",
+  "base_encoder": "Alibaba-NLP/gte-modernbert-base",
+  "base_encoder_revision": "e7f32e3c00f91d699e8c43b53106206bcc72bb22",
+  "base_encoder_sha256": "947f31df7effaeec4edb57c50e4ed7e0f2034d9336063f92615b92e3e0d24d78",
+  "embedding_dim": 768,
+  "extra_feature_dim": 0,
+  "input_dim": 768,
+  "hidden_dim": 256,
+  "num_outputs": 1,
+  "num_classes": 1,
+  "head_asset": "deliberation-score_head.npz",
+  "activation": "gelu",
+  "mlp_activation": "gelu",
+  "mlp_layout": {
+    "W1": [
+      256,
+      768
+    ],
+    "b1": [
+      256
+    ],
+    "W2": [
+      1,
+      256
+    ],
+    "b2": [
+      1
+    ]
+  },
+  "output_activation": "sigmoid",
+  "num_heads": 1,
+  "bucket_thresholds": {
+    "high": 0.67,
+    "medium": 0.46
+  },
+  "ema_alpha": 0.6
+}

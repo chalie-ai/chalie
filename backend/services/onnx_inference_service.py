@@ -10,11 +10,13 @@
 ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 
 Architecture:
-    1 shared ONNX encoder (gte-modernbert-base, already loaded by embedding_service)
-    N 2-layer MLP heads loaded from per-task .npz files
+    1 shared ONNX encoder (gte-modernbert-base, downloaded into backend/data/models/)
+    N 2-layer MLP heads loaded from per-task .npz files (shipped in
+    backend/data/pre-trained/<task>/)
 
-Model files are pre-packaged in the repo under backend/data/models/<task>/.
-No runtime download path exists — boot must succeed from local files alone.
+Pre-shipped classifier files (meta + .npz) live under backend/data/pre-trained/
+and are tracked in git. Runtime-downloaded models (encoders, voice, doc2query)
+stay under backend/data/models/ and are NOT tracked.
 
 Boot-time sha256 pin:
     Computed once (streaming) against backend/data/models/gte-modernbert-base/onnx/model.onnx.
@@ -41,15 +43,14 @@ LOG_PREFIX = "[ONNX]"
 
 # Tasks to register on boot.
 # Each entry: (task_name, asset_name_prefix)
-# - meta asset: <prefix>-classifier_meta.json → models/<task>/classifier_meta.json
-# - head asset: name read from meta["head_asset"]
+# - meta file:  pre-trained/<task>/<prefix>-classifier_meta.json
+# - head file:  pre-trained/<task>/<name from meta["head_asset"]>
 MODEL_REGISTRY = [
     ("deliberation_score", "deliberation-score"),
     ("mode_detector", "mode-detector"),
 ]
 
-# Asset filename constant
-_CLASSIFIER_META_FILENAME = "classifier_meta.json"
+_TASK_PREFIXES: Dict[str, str] = dict(MODEL_REGISTRY)
 
 # sha256 of the shared encoder ONNX — computed once, cached here
 _encoder_sha256_cache: Optional[str] = None
@@ -164,8 +165,9 @@ class OnnxInferenceService:
     """
     Shared gte-modernbert encoder + swappable 2-layer MLP classifier heads.
 
-    All classifier files are pre-packaged under backend/data/models/<task>/.
-    No network access at runtime.
+    Classifier heads (meta + .npz) are pre-shipped under
+    backend/data/pre-trained/<task>/. The shared encoder ONNX is downloaded
+    into backend/data/models/gte-modernbert-base/. No network access for heads.
 
     Usage:
         svc = get_onnx_inference_service()
@@ -173,9 +175,10 @@ class OnnxInferenceService:
         label, confidence = svc.predict("mode_detector", input_text)
     """
 
-    def __init__(self, models_dir: str):
+    def __init__(self, models_dir: str, pretrained_dir: str):
         self._models_dir = Path(models_dir)
         self._models_dir.mkdir(parents=True, exist_ok=True)
+        self._pretrained_dir = Path(pretrained_dir)
 
         # Registered classifier heads (task_name → _ClassifierHead)
         self._heads: Dict[str, _ClassifierHead] = {}
@@ -257,11 +260,13 @@ class OnnxInferenceService:
             output_activation != sigmoid)
         Returns None if the task directory or meta is missing.
         """
-        task_dir = self._models_dir / task_name
-        meta_path = task_dir / _CLASSIFIER_META_FILENAME
+        task_dir = self._pretrained_dir / task_name
+        prefix = _TASK_PREFIXES.get(task_name, task_name)
+        meta_filename = f"{prefix}-classifier_meta.json"
+        meta_path = task_dir / meta_filename
 
         if not meta_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing {_CLASSIFIER_META_FILENAME} for task '{task_name}'")
+            logger.warning(f"{LOG_PREFIX} Missing {meta_filename} for task '{task_name}' at {task_dir}")
             return None
 
         try:
@@ -603,12 +608,21 @@ def get_onnx_inference_service() -> OnnxInferenceService:
 
         import runtime_config
 
-        _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "models")
+        _backend_data = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        _default_models = os.path.join(_backend_data, "models")
+        _default_pretrained = os.path.join(_backend_data, "pre-trained")
         models_dir = runtime_config.get(
             "models_dir",
-            os.environ.get("MODELS_DIR", _default),
+            os.environ.get("MODELS_DIR", _default_models),
+        )
+        pretrained_dir = runtime_config.get(
+            "pretrained_dir",
+            os.environ.get("PRETRAINED_DIR", _default_pretrained),
         )
 
-        _instance = OnnxInferenceService(models_dir)
-        logger.info(f"{LOG_PREFIX} Initialized with models_dir={models_dir}")
+        _instance = OnnxInferenceService(models_dir, pretrained_dir)
+        logger.info(
+            f"{LOG_PREFIX} Initialized with models_dir={models_dir} "
+            f"pretrained_dir={pretrained_dir}"
+        )
         return _instance

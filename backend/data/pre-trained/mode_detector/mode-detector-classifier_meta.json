@@ -1,0 +1,56 @@
+{
+  "labels": [
+    "research",
+    "coding",
+    "brainstorm",
+    "analyze",
+    "plan",
+    "write",
+    "math",
+    "converse"
+  ],
+  "model_name": "mode_detector",
+  "model_type": "sequence_classifier",
+  "task_type": "multi_label",
+  "base_encoder": "Alibaba-NLP/gte-modernbert-base",
+  "base_encoder_revision": "e7f32e3c00f91d699e8c43b53106206bcc72bb22",
+  "base_encoder_sha256": "947f31df7effaeec4edb57c50e4ed7e0f2034d9336063f92615b92e3e0d24d78",
+  "embedding_dim": 768,
+  "extra_feature_dim": 0,
+  "input_dim": 768,
+  "hidden_dim": 256,
+  "num_classes": 8,
+  "prev_level_onehot": false,
+  "head_asset": "mode-detector_head.npz",
+  "activation": "gelu",
+  "mlp_activation": "gelu",
+  "mlp_layout": {
+    "W1": [
+      256,
+      768
+    ],
+    "b1": [
+      256
+    ],
+    "W2": [
+      8,
+      256
+    ],
+    "b2": [
+      8
+    ]
+  },
+  "output_activation": "sigmoid",
+  "num_heads": 8,
+  "default_threshold": 0.4,
+  "per_mode_thresholds": {
+    "research": 0.33,
+    "coding": 0.82,
+    "brainstorm": 0.6,
+    "analyze": 0.5,
+    "plan": 0.8,
+    "write": 0.72,
+    "math": 0.93,
+    "converse": 0.55
+  }
+}

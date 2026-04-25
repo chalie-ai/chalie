@@ -134,14 +134,14 @@ def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, 
     try:
         import os as _os
         import runtime_config
-        _default_models = _os.path.join(
-            _os.path.dirname(_os.path.dirname(__file__)), "data", "models"
+        _default_pretrained = _os.path.join(
+            _os.path.dirname(_os.path.dirname(__file__)), "data", "pre-trained"
         )
-        models_dir = runtime_config.get(
-            "models_dir",
-            _os.environ.get("MODELS_DIR", _default_models),
+        pretrained_dir = runtime_config.get(
+            "pretrained_dir",
+            _os.environ.get("PRETRAINED_DIR", _default_pretrained),
         )
-        meta_path = Path(models_dir) / "mode_detector" / "classifier_meta.json"
+        meta_path = Path(pretrained_dir) / "mode_detector" / "mode-detector-classifier_meta.json"
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = json.load(f)

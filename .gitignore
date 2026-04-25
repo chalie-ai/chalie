@@ -5,9 +5,8 @@
 backend/.env
 backend/.key
 backend/data/*
-!backend/data/models/
-!backend/data/models/*
-!backend/data/models/**
+!backend/data/pre-trained/
+!backend/data/pre-trained/**
 backend/*.db
 backend/*.db-journal
 backend/*.db-wal
