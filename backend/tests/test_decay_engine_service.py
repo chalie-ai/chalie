@@ -50,11 +50,12 @@ class TestDecayEngineService:
 
     # ── run_decay_cycle — richness gating ────────────────────────────
 
-    def test_run_decay_cycle_low_richness_skips_external(self):
-        """With richness < 0.3, external knowledge decay must not run.
+    def test_run_decay_cycle_invokes_all_subcycles(self):
+        """run_decay_cycle invokes every decay sub-cycle.
 
-        We verify actual gating behaviour — external sub-cycle returns 0
-        without being called — not just that internal helper methods were invoked.
+        After §4.4 the richness gate was removed (external knowledge decay was
+        deleted along with the daemon-thread driver). The remaining sub-cycles
+        all run unconditionally on each invocation.
         """
         with patch(
             'services.decay_engine_service.ConfigService.get_agent_config',
@@ -70,50 +71,16 @@ class TestDecayEngineService:
                 return retval
             return _fn
 
-        with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
-             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
-             patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
-             patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
+        with patch.object(svc, '_decay_episodic',     side_effect=_record('episodic', 5)), \
+             patch.object(svc, '_decay_data_graph',   side_effect=_record('data_graph', 0)), \
+             patch.object(svc, '_decay_goals',        side_effect=_record('goals', 0)), \
+             patch.object(svc, '_cleanup_transcript', side_effect=_record('transcript', 0)), \
+             patch.object(svc, '_purge_tool_calls',   side_effect=_record('tool_calls', 0)):
 
-            svc.run_decay_cycle(richness=0.1)  # below 0.3 gate
+            svc.run_decay_cycle(richness=1.0)
 
-        # Essential cycles ran
-        assert 'episodic'    in call_log
-        assert 'data_graph'  in call_log
-        assert 'goals'       in call_log
-        # Non-essential cycles were skipped
-        assert 'external' not in call_log
-
-    def test_run_decay_cycle_normal_richness_runs_all_cycles(self):
-        """With richness >= 0.3, all decay sub-cycles must run."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        call_log = []
-
-        def _record(name, retval):
-            def _fn(*args, **kwargs):
-                call_log.append(name)
-                return retval
-            return _fn
-
-        with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
-             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
-             patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
-             patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
-
-            svc.run_decay_cycle(richness=1.0)  # above 0.3 gate
-
-        # All cycles must have run
-        for name in ('episodic', 'data_graph', 'goals', 'external'):
-            assert name in call_log, f"Expected '{name}' to run at full richness"
+        for name in ('episodic', 'data_graph', 'goals', 'transcript', 'tool_calls'):
+            assert name in call_log, f"Expected '{name}' sub-cycle to run"
 
     # ── Individual decay targets ──────────────────────────────────────
 
