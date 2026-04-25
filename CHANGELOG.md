@@ -13,6 +13,15 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 
 ## rc-0.4.0
 
+### v0.5.0 §5 SubconsciousWorker — idle-gated 5-minute cognition tick (Phase 2 final)
+
+- **`SubconsciousWorker`** (new — `backend/services/subconscious_worker.py`) — single daemon thread `subconscious-worker` that owns latent cognition. Tick interval `SUBCONSCIOUS_TICK_SEC` (default 300). Two gates: user-active (`last_user_message_at` within `SUBCONSCIOUS_IDLE_WINDOW_SEC`, default 1800), already-fired (`subconscious_last_fired_at > last_user_message_at`). When both pass, runs four steps in order, each isolated in its own `try/except`: (1) consolidate apex episodes per channel via `SuperEpisodeEncoderProcessor`, (2) `DecayEngineService.run_once()`, (3) `PatternExtractor.run_once()`, (4) `UserSummaryProcessor.send()`.
+- Backpressure: when `bg_llm:queue` depth ≥ `SUBCONSCIOUS_BG_QUEUE_THRESHOLD` (default 20, headroom under `MAX_QUEUE_DEPTH=25`), steps 3 + 4 (LLM-heavy) are skipped; steps 1 + 2 still run.
+- Re-entrancy: a non-blocking `threading.Lock` guards against overlapping ticks; concurrent `run_once()` returns `skipped='re_entrant'` without doing work.
+- State persistence (`subconscious_last_fired_at`): MemoryStore key `subconscious:last_fired_at` for fast read; mirrored to `data_graph` (`kind='system'`, `key='subconscious_last_fired_at'`) for durability across restarts. Hydrated into the cached property on construction.
+- Wiring: `WorkerManager.register_service('subconscious-worker', subconscious_worker)` in `backend/run.py`, between `background-llm-worker` and the optional services block.
+- Tests (`backend/tests/test_subconscious_worker.py`, 10 unit, real `WorldState`, monkeypatched step methods): cold-boot fires; user-active gate skips; already-fired gate skips; fresh user message resets gate; one step raising does not block the others; bg-LLM saturated → only steps 1+2 run; concurrent `run_once()` returns `skipped='re_entrant'`; hydrate from durable store loads cached value across simulated restart; persist bumps timestamp to ~now.
+
 ### GPU-aware ORT install + runtime EP fallback
 
 - `installer/install.sh` now detects the host GPU (NVIDIA via `nvidia-smi`; AMD via `/dev/kfd` + `amdgpu` module) and installs the matching `onnxruntime` wheel (`onnxruntime-gpu`, `onnxruntime-rocm`, or CPU) after venv setup. The GPU wheel is only swapped in after `pip install --dry-run` confirms it is reachable — CPU wheel always remains as fallback. ORT version pinned at `1.20.1` as a single source of truth in the installer. `ROCM_PIP_INDEX` env var overrides the AMD package index for air-gapped installs.
