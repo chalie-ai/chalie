@@ -257,22 +257,6 @@ class TestPostExchangeHooksDeadFunctionsRemoved:
             "it was only called by the deleted digest_worker pipeline"
         )
 
-    def test_surviving_hooks_still_present(self):
-        """_detect_fork_response and _store_adaptive_signals must still exist.
-
-        These are wired into UserMessageProcessor.postTurn() and must not be
-        deleted as collateral damage.
-        """
-        import workers.post_exchange_hooks as mod
-        assert hasattr(mod, "_detect_fork_response"), (
-            "_detect_fork_response missing from post_exchange_hooks — "
-            "it is wired into UserMessageProcessor.postTurn and must survive"
-        )
-        assert hasattr(mod, "_store_adaptive_signals"), (
-            "_store_adaptive_signals missing from post_exchange_hooks — "
-            "it is wired into UserMessageProcessor.postTurn and must survive"
-        )
-
 
 # ── Part H: Webhook endpoints return 404 ──────────────────────────────────────
 

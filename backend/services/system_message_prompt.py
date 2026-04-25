@@ -28,10 +28,6 @@ base so any concrete subclass that forgets to override it becomes
 non-instantiable (Python's ABC machinery raises ``TypeError`` at
 construction time). Setting ``_SYSTEM_PROMPT = "..."`` as a plain class
 attribute on a subclass is enough to satisfy the abstract contract.
-
-Placeholders that survive into the prompt (``{{adaptive_directives}}``)
-are woven in per-turn by the owning ``MessageProcessor`` subclass —
-see ``UserMessageProcessor.getSystemPrompt()``.
 """
 
 from abc import ABC, abstractmethod
@@ -60,13 +56,10 @@ class UnifiedSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for user-facing (unified) turns.
 
     **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
-    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim,
-    leaving ``{{adaptive_directives}}`` as a literal placeholder for
-    ``UserMessageProcessor.getSystemPrompt()`` to weave in per-turn.
+    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim.
 
     The identity/boundaries/principles prefix is stable across turns so
-    provider-side prompt caching keeps it hot. ``{{adaptive_directives}}``
-    sits at the bottom as the per-turn cache-busting suffix.
+    provider-side prompt caching keeps it hot.
     """
 
     _SYSTEM_PROMPT = """\
@@ -121,9 +114,7 @@ When all tool calls are complete, your final response must be a comprehensive fa
 
 Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born 1942, revenue $50B in 2023, ~190K employees."
 
-────────────────────────────────
-
-{{adaptive_directives}}\
+────────────────────────────────\
 """
 
 

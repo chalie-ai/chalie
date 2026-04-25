@@ -128,10 +128,7 @@ class TestUnifiedSystemMessagePrompt:
     """Unified prompt is an inlined Python constant (Decision Y1).
 
     ``getPrompt()`` returns ``_SYSTEM_PROMPT`` directly — no file reads,
-    no config loading, no turn-specific state. ``{{adaptive_directives}}``
-    rides through as a literal placeholder;
-    ``UserMessageProcessor.getSystemPrompt()`` weaves the per-turn value
-    in before the prompt is sent.
+    no config loading, no turn-specific state.
     """
 
     # ── Zero-arg contract (Y1) ────────────────────────────────────────────────
@@ -200,20 +197,6 @@ class TestUnifiedSystemMessagePrompt:
         result = UnifiedSystemMessagePrompt().getPrompt()
         assert '## Core Principles' in result
 
-    def test_adaptive_directives_placeholder_present(self):
-        """``{{adaptive_directives}}`` is present for UserMessageProcessor to weave in."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        assert '{{adaptive_directives}}' in result
-
-    def test_adaptive_directives_at_bottom(self):
-        """``{{adaptive_directives}}`` sits at the end of the prompt (cache-busting suffix)."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        idx = result.rfind('{{adaptive_directives}}')
-        assert idx != -1
-        assert result[idx + len('{{adaptive_directives}}'):].strip() == ''
-
     def test_no_identity_modulation_placeholder(self):
         """``{{identity_modulation}}`` must not appear — identity is inlined,
         not injected via template substitution."""
@@ -222,30 +205,20 @@ class TestUnifiedSystemMessagePrompt:
         assert '{{identity_modulation}}' not in result
 
     def test_no_dead_placeholders(self):
-        """No stale {{...}} placeholders other than the one live one.
+        """No ``{{...}}`` placeholders of any kind in the unified prompt.
 
-        ``{{adaptive_directives}}`` is intentionally live —
-        UserMessageProcessor.getSystemPrompt() weaves it in per-turn.
-        Any other ``{{...}}`` is a bug.
+        AdaptiveLayerService was removed in v0.5.0 §4.3 — ``{{adaptive_directives}}``
+        no longer exists in the template. Any remaining ``{{...}}`` is a bug.
         """
         import re
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         result = UnifiedSystemMessagePrompt().getPrompt()
         placeholders = set(re.findall(r'\{\{(\w+)\}\}', result))
-        allowed = {'adaptive_directives'}
-        unexpected = placeholders - allowed
-        assert not unexpected, (
-            f"Unexpected dead placeholders in _SYSTEM_PROMPT: {unexpected}"
+        assert not placeholders, (
+            f"Unexpected placeholders in _SYSTEM_PROMPT: {placeholders}"
         )
 
     # ── No side effects on DB / services ──────────────────────────────────────
-
-    def test_get_prompt_does_not_touch_adaptive_layer_service(self):
-        """Y1: the class must not import or instantiate AdaptiveLayerService."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with patch('services.adaptive_layer_service.AdaptiveLayerService') as mock_adl:
-            UnifiedSystemMessagePrompt().getPrompt()
-        mock_adl.assert_not_called()
 
     def test_get_prompt_returns_non_empty_string(self):
         """Prompt is a Python constant — getPrompt() returns a non-empty string."""
