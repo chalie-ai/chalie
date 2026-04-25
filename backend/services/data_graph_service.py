@@ -21,7 +21,11 @@ KIND_SYSTEM = 'system'
 KIND_MISC = 'misc'
 KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
-VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
+KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
+VALID_KINDS = frozenset({
+    KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
+    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN,
+})
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
     "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
@@ -39,11 +43,15 @@ class _StoreRequest:
 
 
 _KIND_POLICY = {
-    KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
-    KIND_SYSTEM:        {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
-    KIND_MISC:          {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
-    KIND_MOMENT:        {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
-    KIND_DOCUMENT:      {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
+    KIND_USER_SPECIFIC:      {'ttl_days': 30,    'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
+    KIND_SYSTEM:             {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
+    KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
+    KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
+    KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
+    # behavioral_pattern: ttl_days=None disables the generic power-law decay loop.
+    # DecayEngineService._decay_behavioral_patterns() owns the active->stale
+    # transition based on per-vertical decay_days encoded in the row's content JSON.
+    KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
 }
 
 # Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).
