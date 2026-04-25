@@ -77,10 +77,9 @@ def main():
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
         try:
-            logger.info("[System] Checking ONNX models (background)...")
+            logger.info("[System] Registering ONNX classifier heads (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            svc.ensure_models()
             # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
             # fire before any user request arrives. The encoder session is already
             # warm (loaded by embedding preload above), so registration is fast.

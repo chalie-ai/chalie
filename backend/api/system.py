@@ -271,6 +271,7 @@ def observability_tools():
             "       p.short_summary, p.domain, p.effort "
             "FROM tool_calls tc "
             "LEFT JOIN tool_capability_profiles p ON p.tool_name = tc.tool_name "
+            "WHERE tc.tool_name NOT IN ('compaction', 'tool_compaction', 'thinking') "
             "GROUP BY tc.tool_name "
             "ORDER BY last_used_at DESC"
         )

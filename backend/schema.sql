@@ -599,7 +599,7 @@ CREATE TABLE IF NOT EXISTS transcript (
     tool_call_id TEXT,
     tool_name   TEXT,
     internal    INTEGER DEFAULT 0,
-    thinking_level TEXT,
+    deliberation_score REAL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -42,14 +42,15 @@ def _seed_profile(db, tool_name="test_tool", **overrides):
         'domain': 'Other',
         'effort': 'moderate',
         'descriptor': tool_name,
+        'keywords': 'test,keywords',
     }
     defaults.update(overrides)
     db.execute("""
         INSERT OR REPLACE INTO tool_capability_profiles
             (tool_name, tool_type, short_summary, full_profile,
              anti_scenarios, complementary_skills, manifest_hash, domain,
-             effort, descriptor, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             effort, descriptor, keywords, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
         tool_name,
         defaults['tool_type'],
@@ -61,6 +62,7 @@ def _seed_profile(db, tool_name="test_tool", **overrides):
         defaults['domain'],
         defaults['effort'],
         defaults['descriptor'],
+        defaults['keywords'],
     ))
     db.commit()
 
@@ -445,8 +447,6 @@ class TestProfileNeedsRebuild:
         base = {
             'tool_type': 'tool',
             'domain': 'Research',
-            'triage_triggers': ['some trigger'],
-            'usage_scenarios': ['some scenario'],
             'descriptor': 'my_tool',
             'keywords': 'search,web',
         }

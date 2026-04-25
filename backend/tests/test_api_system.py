@@ -309,14 +309,20 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_tools_returns_stats(self, client, db):
-        """GET /system/observability/tools returns per-tool usage counts from tool_calls."""
+        """GET /system/observability/tools returns per-tool usage counts from tool_calls.
+
+        Verifies: aggregation (COUNT, MAX), ORDER BY last_used_at DESC,
+        LEFT JOIN defaults for missing profile rows, and exclusion of
+        pseudo-tool audit rows (compaction/thinking).
+        """
         # Seed a transcript row so FK constraint is satisfied
-        row = db.execute(
+        db.execute(
             "INSERT INTO transcript (role, content, channel) VALUES ('user', 'hi', 'test')"
-        ).fetchone()
+        )
         transcript_id = db.execute(
             "SELECT id FROM transcript ORDER BY id DESC LIMIT 1"
         ).fetchone()[0]
+        # weather: 2 calls, has profile (tests JOIN metadata path)
         db.execute(
             "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
             "VALUES (?, ?, ?, ?)",
@@ -325,7 +331,32 @@ class TestSystemAPI:
         db.execute(
             "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
             "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'weather', 'cloudy', '2025-01-03T00:00:00'),
+        )
+        # code_exec: 1 call, no profile (tests LEFT JOIN defaults path)
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
             (transcript_id, 'code_exec', 'ok', '2025-01-02T00:00:00'),
+        )
+        # Pseudo-tool rows must NOT surface in the panel
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'compaction', '{}', '2025-01-04T00:00:00'),
+        )
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'thinking', '{}', '2025-01-05T00:00:00'),
+        )
+        # Profile row for weather only
+        db.execute(
+            "INSERT INTO tool_capability_profiles "
+            "(tool_name, tool_type, short_summary, full_profile, manifest_hash, "
+            " domain, effort, descriptor, keywords, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            ('weather', 'tool', 'Weather lookup', 'Full', 'h', 'Information', 'cheap', 'weather', 'forecast,temp'),
         )
         db.commit()
 
@@ -333,10 +364,40 @@ class TestSystemAPI:
 
         assert resp.status_code == 200
         data = resp.get_json()
-        tool_names = {t['tool_name'] for t in data['tools']}
-        assert 'weather' in tool_names
-        assert 'code_exec' in tool_names
         assert 'generated_at' in data
+        tools = data['tools']
+
+        # Pseudo-tool rows excluded
+        names = [t['tool_name'] for t in tools]
+        assert 'compaction' not in names
+        assert 'thinking' not in names
+
+        # Two real tools surfaced
+        assert {'weather', 'code_exec'} == set(names)
+
+        weather = next(t for t in tools if t['tool_name'] == 'weather')
+        code_exec = next(t for t in tools if t['tool_name'] == 'code_exec')
+
+        # COUNT aggregation
+        assert weather['count'] == 2
+        assert code_exec['count'] == 1
+
+        # MAX(last_used_at) — weather's latest is 2025-01-03
+        assert weather['last_used_at'] == '2025-01-03T00:00:00'
+        assert code_exec['last_used_at'] == '2025-01-02T00:00:00'
+
+        # ORDER BY last_used_at DESC — weather (Jan 3) before code_exec (Jan 2)
+        assert names.index('weather') < names.index('code_exec')
+
+        # JOIN metadata populated for tool with profile
+        assert weather['short_summary'] == 'Weather lookup'
+        assert weather['domain'] == 'Information'
+        assert weather['effort'] == 'cheap'
+
+        # LEFT JOIN defaults for tool without profile
+        assert code_exec['short_summary'] == ''
+        assert code_exec['domain'] == 'Other'
+        assert code_exec['effort'] == 'moderate'
 
 
 

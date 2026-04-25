@@ -54,6 +54,7 @@ _DELETE_ALL_TABLES = (
 _DELETE_ALL_STORE_PATTERNS = (
     "working_memory:*",
     "mode_gate:*",
+    "deliberation_score:*",
 )
 
 

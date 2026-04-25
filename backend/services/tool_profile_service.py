@@ -698,32 +698,6 @@ class ToolProfileService:
             logger.debug(f"{LOG_PREFIX} Episode retrieval failed: {e}")
             return "No past interactions available."
 
-    def _get_episodes_by_ids(self, episode_ids: list) -> str:
-        """Fetch episode content by IDs."""
-        if not episode_ids:
-            return ""
-        db = self._get_db()
-        try:
-            placeholders = ','.join(['?'] * len(episode_ids))
-            rows = db.fetch_all(
-                f"SELECT outcome, gist FROM episodes WHERE CAST(id AS TEXT) IN ({placeholders})",
-                tuple(str(eid) for eid in episode_ids)
-            )
-            if not rows:
-                return ""
-            texts = []
-            for r in rows:
-                text = r.get('gist') or r.get('outcome', '')
-                if text:
-                    texts.append(f"- {text[:200]}")
-            return "\n".join(texts)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Episode fetch by IDs failed: {e}")
-            return ""
-        finally:
-            if not self._db:
-                db.close_pool()
-
     def _fallback_profile(self, tool_name: str, manifest: dict) -> dict:
         """Simple fallback profile when LLM is unavailable.
 

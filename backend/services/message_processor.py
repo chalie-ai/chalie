@@ -176,6 +176,8 @@ class MessageProcessor:
         # turn where the gate wasn't run (non-user channels) or crashed —
         # regressing benchmark behaviour on simple recall/chit-chat.
         self._thinking_level: str = 'low'
+        self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
+        self._deliberation_ema: float | None = None      # EMA after this turn's update
         self._thinking_exploration: str | None = None
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
@@ -1039,32 +1041,40 @@ class MessageProcessor:
     # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
 
     def _run_thinking_gate(self) -> None:
-        """Classify deliberation depth for this turn; persist on the input row.
+        """Regression-head deliberation scoring. Writes self._thinking_level.
 
         No-op for non-user channels (classifier is OOD for autonomous flows).
-        All exceptions trapped — gate failure must never kill the turn.
-        Result stored on self._thinking_level and, for high-mode turns,
-        self._thinking_exploration (persisted to tool_calls as ephemeral=0).
-        written to transcript.thinking_level for self._uid so future turns
-        can read it as prev_level.
+        Never raises. On failure → self._thinking_level = 'low', EMA untouched.
         """
         if self.CHANNEL != 'user':
             return
 
         try:
-            from services.thinking_level_classifier_service import (
-                ThinkingLevelClassifierService,
-            )
+            from services.deliberation_score_service import DeliberationScoreService
+            from services.deliberation_ema_service import DeliberationEmaService
 
-            prev_level = self._read_prev_thinking_level()
-            result = ThinkingLevelClassifierService().classify(
-                self._raw_input, prev_level=prev_level,
+            scalar = DeliberationScoreService().classify(self._raw_input)
+            ema_svc = DeliberationEmaService()
+
+            if scalar is None:
+                self._thinking_level = 'low'
+                self._deliberation_scalar = None
+                self._deliberation_ema = ema_svc.peek()
+                logger.info(
+                    "[DELIBERATION] turn=%s scalar=None ema=%s bucket=low fallback=true",
+                    self._uid, self._deliberation_ema,
+                )
+                self._thinking_exploration = None
+                return
+
+            ema, bucket = ema_svc.update_and_bucket(scalar)
+            self._thinking_level = bucket
+            self._deliberation_scalar = scalar
+            self._deliberation_ema = ema
+            logger.info(
+                "[DELIBERATION] turn=%s scalar=%.4f ema=%.4f bucket=%s fallback=false",
+                self._uid, scalar, ema, bucket,
             )
-            # Capture RAW classifier output. Persisted to the input row so the
-            # next turn's sticky-fallback sees what the classifier said, not a
-            # downstream failure. Prevents silent cascades across turns.
-            raw_level = result.get('level', 'low')
-            self._thinking_level = raw_level
 
             if self._thinking_level == 'high':
                 try:
@@ -1092,58 +1102,23 @@ class MessageProcessor:
             else:
                 self._thinking_exploration = None
 
-            self._persist_thinking_level_on_input_row(raw_level)
+            if self._uid is not None:
+                from services.database_service import get_shared_db_service
+                try:
+                    db = get_shared_db_service()
+                    with db.connection() as conn:
+                        conn.execute(
+                            "UPDATE transcript SET deliberation_score = ? WHERE id = ?",
+                            (scalar, self._uid),
+                        )
+                except Exception as exc:
+                    logger.debug("[DELIBERATION] persist failed: %s", exc)
 
-        except Exception as exc:
-            # Gate failure MUST default to 'low' — a no-op — not 'medium'.
-            logger.info(
-                "[THINKING] gate failed (%s) — defaulting to low (no-op)", exc
-            )
+        except Exception:
+            logger.exception("[DELIBERATION] gate failed; defaulting to 'low'")
             self._thinking_level = 'low'
+            self._deliberation_scalar = None
             self._thinking_exploration = None
-
-    def _read_prev_thinking_level(self) -> str:
-        """Read the most recent user-row thinking_level for this channel.
-
-        Returns 'none' on first turn or when nothing classified yet.
-        """
-        from services.database_service import get_shared_db_service
-
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT thinking_level FROM transcript "
-                    "WHERE channel = ? AND role = 'user' "
-                    "AND thinking_level IS NOT NULL "
-                    "ORDER BY id DESC LIMIT 1",
-                    (self.CHANNEL,),
-                ).fetchone()
-            if row and row[0] in ('low', 'medium', 'high'):
-                return row[0]
-        except Exception as exc:
-            logger.debug("[THINKING] prev-level read failed: %s", exc)
-        return 'none'
-
-    def _persist_thinking_level_on_input_row(self, level: str) -> None:
-        """Update transcript row self._uid with the given classifier level.
-
-        ``level`` is the RAW classifier prediction. The caller passes it
-        explicitly so that next-turn sticky-fallback reads the classifier's
-        intent, not a runtime-degraded value.
-        """
-        if self._uid is None:
-            return
-        from services.database_service import get_shared_db_service
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                conn.execute(
-                    "UPDATE transcript SET thinking_level = ? WHERE id = ?",
-                    (level, self._uid),
-                )
-        except Exception as exc:
-            logger.debug("[THINKING] persist failed: %s", exc)
 
     def _run_thinking_exploration(self) -> 'str | None':
         """One same-job exploration pass for high-mode turns.

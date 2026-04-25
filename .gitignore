@@ -4,7 +4,10 @@
 *.session_secret
 backend/.env
 backend/.key
-backend/data/
+backend/data/*
+!backend/data/models/
+!backend/data/models/*
+!backend/data/models/**
 backend/*.db
 backend/*.db-journal
 backend/*.db-wal
