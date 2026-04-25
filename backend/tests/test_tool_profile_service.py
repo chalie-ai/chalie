@@ -36,40 +36,31 @@ def _seed_profile(db, tool_name="test_tool", **overrides):
         'tool_type': 'tool',
         'short_summary': f'A {tool_name} tool',
         'full_profile': f'This is the full profile for {tool_name}',
-        'usage_scenarios': '["scenario1", "scenario2"]',
         'anti_scenarios': '[]',
         'complementary_skills': '["recall"]',
         'manifest_hash': 'test_hash',
         'domain': 'Other',
-        'triage_triggers': '[]',
         'effort': 'moderate',
         'descriptor': tool_name,
-        'enrichment_episode_ids': '[]',
-        'enrichment_count': 0,
     }
     defaults.update(overrides)
     db.execute("""
         INSERT OR REPLACE INTO tool_capability_profiles
-            (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+            (tool_name, tool_type, short_summary, full_profile,
              anti_scenarios, complementary_skills, manifest_hash, domain,
-             triage_triggers, effort, descriptor, enrichment_episode_ids,
-             enrichment_count, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             effort, descriptor, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
         tool_name,
         defaults['tool_type'],
         defaults['short_summary'],
         defaults['full_profile'],
-        defaults['usage_scenarios'],
         defaults['anti_scenarios'],
         defaults['complementary_skills'],
         defaults['manifest_hash'],
         defaults['domain'],
-        defaults['triage_triggers'],
         defaults['effort'],
         defaults['descriptor'],
-        defaults['enrichment_episode_ids'],
-        defaults['enrichment_count'],
     ))
     db.commit()
 
@@ -111,18 +102,14 @@ class TestGetFullProfile:
         _seed_profile(db, "test_tool",
                       short_summary='A test tool',
                       full_profile='This is the full profile',
-                      usage_scenarios='["scenario1", "scenario2"]',
                       anti_scenarios='[]',
-                      complementary_skills='["recall"]',
-                      enrichment_episode_ids='[]',
-                      enrichment_count=0)
+                      complementary_skills='["recall"]')
 
         svc = ToolProfileService(get_shared_db_service())
         profile = svc.get_full_profile("test_tool")
         assert profile is not None
         assert profile['tool_name'] == 'test_tool'
-        assert isinstance(profile['usage_scenarios'], list)
-        assert 'scenario1' in profile['usage_scenarios']
+        assert isinstance(profile['anti_scenarios'], list)
 
 
 class TestGetTriageSummaries:
@@ -145,13 +132,11 @@ class TestGetTriageSummaries:
                       tool_type='tool',
                       short_summary='Search the web',
                       domain='Information Retrieval',
-                      triage_triggers='[]',
                       effort='moderate')
         _seed_profile(db, 'weather',
                       tool_type='tool',
                       short_summary='Check weather',
                       domain='Environment',
-                      triage_triggers='[]',
                       effort='moderate')
 
         svc = ToolProfileService(get_shared_db_service())
@@ -374,7 +359,7 @@ class TestSeedBuiltinProfiles:
             assert row is not None, f"{tool_name} has no vec entry"
 
     def test_seed_populates_rebuild_guard_fields(self, db):
-        """Seeded rows pass _profile_needs_rebuild — usage_scenarios, triage_triggers, descriptor non-empty."""
+        """Seeded rows pass _profile_needs_rebuild — domain, descriptor, keywords non-empty."""
         svc = ToolProfileService(get_shared_db_service())
 
         with patch.object(svc, '_get_embedding_service') as mock_get_emb, \
@@ -385,9 +370,7 @@ class TestSeedBuiltinProfiles:
         for tool_name in BUILTIN_TOOL_PROFILES:
             profile = svc.get_full_profile(tool_name)
             assert profile is not None
-            # _profile_needs_rebuild checks these four fields
-            assert profile.get('usage_scenarios'), f"{tool_name}: usage_scenarios empty"
-            assert profile.get('triage_triggers'), f"{tool_name}: triage_triggers empty"
+            # _profile_needs_rebuild checks domain, descriptor, keywords
             assert profile.get('descriptor'), f"{tool_name}: descriptor empty"
             assert not svc._profile_needs_rebuild(profile), (
                 f"{tool_name}: _profile_needs_rebuild returned True after seeding"
@@ -497,16 +480,6 @@ class TestProfileNeedsRebuild:
     def test_returns_true_when_descriptor_missing(self, db):
         svc = ToolProfileService(get_shared_db_service())
         profile = self._full_profile(descriptor='')
-        assert svc._profile_needs_rebuild(profile) is True
-
-    def test_returns_true_when_usage_scenarios_empty(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        profile = self._full_profile(usage_scenarios=[])
-        assert svc._profile_needs_rebuild(profile) is True
-
-    def test_returns_true_when_triage_triggers_empty(self, db):
-        svc = ToolProfileService(get_shared_db_service())
-        profile = self._full_profile(triage_triggers=[])
         assert svc._profile_needs_rebuild(profile) is True
 
 

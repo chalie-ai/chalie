@@ -2301,7 +2301,6 @@ document.getElementById('recordsLoadMore').addEventListener('click', () => {
 async function loadToolsObs() {
     const el = document.getElementById('toolsObsContent');
     el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(120);
-
     try {
         const res = await apiFetch('/system/observability/tools');
         if (!res.ok) throw new Error('Failed to load');
@@ -2312,41 +2311,16 @@ async function loadToolsObs() {
 
         const tools = data.tools || [];
         if (tools.length === 0) {
-            el.innerHTML = '<p class="obs-summary">No tools have been used yet.</p><div class="obs-empty">Tool performance data will appear here after tools are invoked.</div>';
+            el.innerHTML = '<p class="obs-summary">No tools have been used yet.</p>';
             return;
         }
-
-        let html = `<p class="obs-summary">Chalie has used ${tools.length} tool${tools.length === 1 ? '' : 's'} in the last 30 days.</p>`;
-
-        // Success rate bar chart
-        html += '<div class="obs-section-title">Success Rate</div>';
-        html += '<div class="obs-bar-chart">';
+        let html = `<p class="obs-summary">${tools.length} tool${tools.length === 1 ? '' : 's'} used.</p>`;
+        html += '<table class="obs-table"><thead><tr><th>Tool</th><th>Count</th><th>Last Used</th></tr></thead><tbody>';
         for (const t of tools) {
-            const pct = obsPct(t.success_rate);
-            const colorClass = pct >= 90 ? '--success' : pct >= 70 ? '--warning' : '--error';
-            html += `<div class="obs-bar-row">
-                <span class="obs-bar-row__label">${escapeHtml(t.tool_name)}</span>
-                <div class="obs-bar-row__track"><div class="obs-bar-row__fill ${colorClass}" style="width:${pct}%"></div></div>
-                <span class="obs-bar-row__value">${pct}%</span>
-            </div>`;
+            const lastUsed = t.last_used_at ? timeAgo(t.last_used_at) : 'never';
+            html += `<tr><td>${escapeHtml(t.tool_name)}</td><td>${t.count}</td><td>${escapeHtml(lastUsed)}</td></tr>`;
         }
-        html += '</div>';
-
-        // Per-tool detail cards
-        html += '<div class="obs-section-title">Details</div>';
-        for (const t of tools) {
-            const lastUsed = t.last_used_at ? timeAgo(t.last_used_at) : 'unknown';
-            html += `<div class="obs-task-card">
-                <div class="obs-task-card__header">
-                    <span class="obs-task-card__title">${escapeHtml(t.tool_name)}</span>
-                    <span class="obs-task-card__badge --active">${t.total} invocations</span>
-                </div>
-                <div class="obs-task-card__meta">
-                    Avg latency: ${t.avg_latency}ms · Last used: ${escapeHtml(lastUsed)}
-                </div>
-            </div>`;
-        }
-
+        html += '</tbody></table>';
         el.innerHTML = html;
     } catch (e) {
         el.innerHTML = '<div class="obs-empty">Could not load tool data.</div>';

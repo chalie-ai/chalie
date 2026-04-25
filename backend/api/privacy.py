@@ -4,7 +4,7 @@ Privacy blueprint — /privacy/data-summary, /privacy/export, /privacy/delete-al
 User data tables covered: episodes, transcript, tool_calls, compactions,
 goal_evidence, list_items, list_events, data_graph_edges, data_graph, goals,
 lists, scheduled_items, documents, watched_folders, place_fingerprints,
-user_tool_preferences, tool_performance_metrics, memory_recall_log, llm_call_log,
+user_tool_preferences, memory_recall_log, llm_call_log,
 concept_lut_misses, browser_snapshots, browser_credentials.
 """
 
@@ -43,7 +43,6 @@ _DELETE_ALL_TABLES = (
     "watched_folders",
     "place_fingerprints",
     "user_tool_preferences",
-    "tool_performance_metrics",
     "memory_recall_log",
     "llm_call_log",
     "concept_lut_misses",
@@ -257,7 +256,7 @@ def delete_all():
     compactions, goal_evidence, list_items, list_events, data_graph_edges,
     data_graph, goals, lists, scheduled_items, documents,
     watched_folders, place_fingerprints, user_tool_preferences,
-    tool_performance_metrics, memory_recall_log, llm_call_log,
+    memory_recall_log, llm_call_log,
     concept_lut_misses, browser_snapshots, browser_credentials)
     and clears MemoryStore working_memory keys.
 

@@ -8,7 +8,6 @@ context into LLM prompts for skill/tool discovery.
 Profiles are stored in tool_capability_profiles SQLite table with:
 - short_summary: one-sentence description for triage prompt injection
 - full_profile: detailed description for ACT prompt injection
-- usage_scenarios: up to 50 scenarios for semantic matching
 - embedding: stored in tool_capability_profiles_vec virtual table for cosine similarity
 
 Bootstrap: called on startup to build profiles for any missing tool/skill.
@@ -32,9 +31,6 @@ LOG_PREFIX = "[TOOL PROFILE]"
 # MemoryStore cache key and TTL
 TRIAGE_SUMMARIES_CACHE_KEY = "tool_triage_summaries"
 TRIAGE_SUMMARIES_TTL = 300  # 5 minutes
-
-MAX_SCENARIOS = 50
-MIN_SCENARIO_DISTANCE = 0.12  # cosine distance for deduplication
 
 # Bump to force all profile embeddings to regenerate.
 # v2: embed short_summary + keywords only (not full_profile).
@@ -276,115 +272,6 @@ class ToolProfileService:
 
     # -- Enrichment ------------------------------------------------------------
 
-    def enrich_from_episodes(self, tool_name: str, episode_ids: list) -> int:
-        """Enrich tool profile with new scenarios from episodes. Returns count of new scenarios added."""
-        profile = self.get_full_profile(tool_name)
-        if not profile:
-            logger.warning(f"{LOG_PREFIX} No profile found for {tool_name}, cannot enrich")
-            return 0
-
-        existing_scenarios = profile.get('usage_scenarios', [])
-
-        # Fetch episode content
-        episodes_text = self._get_episodes_by_ids(episode_ids)
-        if not episodes_text:
-            return 0
-
-        prompt_template = self._load_prompt('tool-enrichment')
-        prompt = (
-            prompt_template
-            .replace('{{tool_name}}', tool_name)
-            .replace('{{full_profile}}', profile.get('full_profile', ''))
-            .replace('{{existing_scenarios}}', json.dumps(existing_scenarios[:20], indent=2))
-            .replace('{{episodes}}', episodes_text)
-        )
-
-        try:
-            llm = self._get_llm()
-            response_text = llm.send_message("", prompt).text
-            result = json.loads(response_text)
-            new_scenarios = result.get('new_scenarios', [])
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Enrichment LLM call failed for {tool_name}: {e}")
-            return 0
-
-        if not new_scenarios:
-            return 0
-
-        # Quality filter: semantic distinctness
-        accepted = self._filter_distinct_scenarios(new_scenarios, existing_scenarios)
-        if not accepted:
-            return 0
-
-        # Merge and cap
-        merged = existing_scenarios + accepted
-        if len(merged) > MAX_SCENARIOS:
-            merged = merged[:MAX_SCENARIOS]
-
-        # Embedding is derived from short_summary + keywords, neither of which
-        # changes during scenario enrichment.  Skip regeneration.
-
-        db = self._get_db()
-        try:
-            current_ids = profile.get('enrichment_episode_ids', [])
-            new_ids = list(set(current_ids + episode_ids))
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE tool_capability_profiles
-                    SET usage_scenarios = ?,
-                        enrichment_episode_ids = ?,
-                        enrichment_count = enrichment_count + 1,
-                        last_enriched_at = datetime('now'),
-                        updated_at = datetime('now')
-                    WHERE tool_name = ?
-                    """,
-                    (json.dumps(merged), json.dumps(new_ids), tool_name)
-                )
-
-                cursor.close()
-
-            logger.info(f"{LOG_PREFIX} Enriched {tool_name} with {len(accepted)} new scenarios")
-        except Exception as e:
-            logger.error(f"{LOG_PREFIX} Enrichment DB update failed for {tool_name}: {e}")
-        finally:
-            if not self._db:
-                db.close_pool()
-
-        self._invalidate_cache()
-        return len(accepted)
-
-    def add_usage_scenarios(self, tool_name: str, scenarios: list) -> int:
-        """Add scenarios directly to a tool profile. Returns count added."""
-        profile = self.get_full_profile(tool_name)
-        if not profile:
-            return 0
-        existing = profile.get('usage_scenarios', [])
-        accepted = self._filter_distinct_scenarios(scenarios, existing)
-        if not accepted:
-            return 0
-        merged = existing + accepted
-        if len(merged) > MAX_SCENARIOS:
-            merged = merged[:MAX_SCENARIOS]
-        db = self._get_db()
-        try:
-            db.execute(
-                """UPDATE tool_capability_profiles
-                   SET usage_scenarios = ?, updated_at = datetime('now')
-                   WHERE tool_name = ?""",
-                (json.dumps(merged), tool_name)
-            )
-            self._invalidate_cache()
-            return len(accepted)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} add_usage_scenarios failed for {tool_name}: {e}")
-            return 0
-        finally:
-            if not self._db:
-                db.close_pool()
-
     # -- Query -----------------------------------------------------------------
 
     def get_triage_summaries(self) -> str:
@@ -420,7 +307,7 @@ class ToolProfileService:
         rows = None
         try:
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, triage_triggers, domain, effort "
+                "SELECT tool_name, tool_type, short_summary, domain, effort "
                 "FROM tool_capability_profiles ORDER BY domain, tool_name"
             )
         except Exception as e:
@@ -436,11 +323,6 @@ class ToolProfileService:
                 if r['tool_type'] == 'tool':
                     domain = r.get('domain') or 'Other'
                     summary = r['short_summary']
-                    triggers = r.get('triage_triggers') or []
-                    if isinstance(triggers, str):
-                        triggers = json.loads(triggers)
-                    if triggers:
-                        summary += f" [{', '.join(triggers[:10])}]"
                     effort = r.get('effort') or 'moderate'
                     summary += f" (effort: {effort})"
                     by_domain[domain].append(f"- {r['tool_name']}: {summary}")
@@ -489,7 +371,7 @@ class ToolProfileService:
             if rows:
                 row = dict(rows[0])
                 # Parse JSON fields
-                for field in ('usage_scenarios', 'anti_scenarios', 'complementary_skills', 'enrichment_episode_ids', 'triage_triggers'):
+                for field in ('anti_scenarios', 'complementary_skills'):
                     if isinstance(row.get(field), str):
                         row[field] = json.loads(row[field])
                 return row
@@ -588,8 +470,6 @@ class ToolProfileService:
                 effort = profile.get("effort", "moderate")
                 domain = profile.get("domain", "Other")
                 descriptor = profile.get("descriptor", tool_name)
-                usage_scenarios = profile.get("usage_scenarios", ["see full_profile"])
-                triage_triggers = profile.get("triage_triggers", ["see full_profile"])
                 keywords = _truncate_keywords(profile.get("keywords", ""))
 
                 # Build embedding from short_summary + keywords
@@ -610,20 +490,18 @@ class ToolProfileService:
                         cursor.execute(
                             """
                             INSERT INTO tool_capability_profiles
-                                (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                                (tool_name, tool_type, short_summary, full_profile,
                                  anti_scenarios, complementary_skills, manifest_hash, domain,
-                                 triage_triggers, effort, descriptor, keywords, updated_at)
-                            VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                 effort, descriptor, keywords, updated_at)
+                            VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                             ON CONFLICT (tool_name) DO UPDATE SET
                                 tool_type = 'tool',
                                 short_summary = EXCLUDED.short_summary,
                                 full_profile = EXCLUDED.full_profile,
-                                usage_scenarios = EXCLUDED.usage_scenarios,
                                 anti_scenarios = EXCLUDED.anti_scenarios,
                                 complementary_skills = EXCLUDED.complementary_skills,
                                 manifest_hash = EXCLUDED.manifest_hash,
                                 domain = EXCLUDED.domain,
-                                triage_triggers = EXCLUDED.triage_triggers,
                                 effort = EXCLUDED.effort,
                                 descriptor = EXCLUDED.descriptor,
                                 keywords = EXCLUDED.keywords,
@@ -633,12 +511,10 @@ class ToolProfileService:
                                 tool_name,
                                 short_summary[:200],
                                 full_profile,
-                                json.dumps(usage_scenarios),
                                 json.dumps([]),
                                 json.dumps([]),
                                 manifest_hash,
                                 domain,
-                                json.dumps(triage_triggers),
                                 effort,
                                 descriptor,
                                 keywords,
@@ -848,65 +724,18 @@ class ToolProfileService:
             if not self._db:
                 db.close_pool()
 
-    def _filter_distinct_scenarios(self, new_scenarios: list, existing_scenarios: list) -> list:
-        """Filter new scenarios to only those semantically distinct from existing ones."""
-        if not existing_scenarios:
-            return new_scenarios
-
-        try:
-            emb_service = self._get_embedding_service()
-            existing_vecs = [emb_service.generate_embedding(s) for s in existing_scenarios[:20]]
-
-            import numpy as np
-            accepted = []
-            for scenario in new_scenarios:
-                vec = emb_service.generate_embedding(scenario)
-                vec_np = np.array(vec)
-                norm = np.linalg.norm(vec_np)
-                if norm > 0:
-                    vec_np = vec_np / norm
-
-                is_distinct = True
-                for existing_vec in existing_vecs:
-                    ex_np = np.array(existing_vec)
-                    ex_norm = np.linalg.norm(ex_np)
-                    if ex_norm > 0:
-                        ex_np = ex_np / ex_norm
-                    similarity = float(np.dot(vec_np, ex_np))
-                    distance = 1.0 - similarity
-                    if distance < MIN_SCENARIO_DISTANCE:
-                        is_distinct = False
-                        break
-
-                if is_distinct:
-                    accepted.append(scenario)
-                    existing_vecs.append(vec)  # Add to existing to avoid near-duplicates within batch
-
-            return accepted
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Scenario filtering failed: {e}")
-            return new_scenarios  # Accept all if filtering fails
-
     def _fallback_profile(self, tool_name: str, manifest: dict) -> dict:
         """Simple fallback profile when LLM is unavailable.
 
-        Extracts triage triggers deterministically from single-quoted phrases
-        in the documentation field (e.g., 'latest news on...' -> 'latest news on').
         Sets domain from the manifest's category field.
         """
         desc = manifest.get('documentation') or manifest.get('description', tool_name)
-        # Extract single-quoted trigger phrases from documentation
-        triggers = re.findall(r"'([^']{4,60})'", desc) if desc else []
-        # Clean trailing ellipsis and whitespace
-        triggers = [t.rstrip('.').strip() for t in triggers][:10]
         domain = (manifest.get('category') or 'Other').replace('_', ' ').title()
         return {
             'short_summary': desc[:100],
             'full_profile': desc,
-            'usage_scenarios': [ex.get('description', '') for ex in manifest.get('examples', [])[:10] if ex.get('description')],
             'anti_scenarios': [],
             'complementary_skills': [],
-            'triage_triggers': triggers,
             'domain': domain,
         }
 
@@ -936,11 +765,7 @@ class ToolProfileService:
             manifest = tool_data['manifest']
             fallback = self._fallback_profile(tool_name, manifest)
             domain = fallback.get('domain', 'Other')
-            summary = fallback['short_summary']
-            triggers = fallback.get('triage_triggers', [])
-            if triggers:
-                summary += f" [{', '.join(triggers[:10])}]"
-            summary += " (effort: moderate)"  # default for unanalyzed tools
+            summary = fallback['short_summary'] + " (effort: moderate)"
             by_domain[domain].append(f"- {tool_name}: {summary}")
 
         if not by_domain:
@@ -961,12 +786,6 @@ class ToolProfileService:
         """Check if a profile is missing fields added after initial build."""
         domain = profile.get('domain')
         if not domain or (domain == 'Other' and profile.get('tool_type') == 'tool'):
-            return True
-        triggers = profile.get('triage_triggers')
-        if not triggers or triggers == []:
-            return True
-        scenarios = profile.get('usage_scenarios')
-        if not scenarios or scenarios == []:
             return True
         if not profile.get('descriptor'):
             return True
