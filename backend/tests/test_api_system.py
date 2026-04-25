@@ -354,14 +354,13 @@ class TestSystemAPI:
     # GET /system/observability/tasks
     # ────────────────────────────────────────────
 
-    def test_observability_tasks_returns_goal_ecology_stats(self, client):
-        """GET /system/observability/tasks returns goal_ecology_stats."""
+    def test_observability_tasks_returns_generated_at(self, client):
+        """GET /system/observability/tasks returns generated_at."""
         resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'generated_at' in data
-        assert 'goal_ecology_stats' in data
 
     def test_observability_tasks_handles_store_failures(self, client):
         """GET /system/observability/tasks returns 200 even if store query fails."""

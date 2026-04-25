@@ -146,26 +146,23 @@ def _slice_situation() -> dict:
 def _slice_relevance(query: str) -> dict:
     """Score relevance of a text snippet against the current cognitive context.
 
-    Uses episodic_retrieval_service for semantic similarity and the cached
-    world model for goal/task matching.
+    Uses episodic_retrieval_service for semantic similarity.
 
     Args:
         query: Text to score relevance for.
 
     Returns:
-        dict with keys ``relevance``, ``related_goals``, ``related_traits``,
+        dict with keys ``relevance``, ``related_traits``,
         ``recommendation``.  Falls back to neutral defaults on any error.
     """
     if not query or not query.strip():
         return {
             "relevance": 0.0,
-            "related_goals": [],
             "related_traits": [],
             "recommendation": "no_query",
         }
 
     relevance = 0.0
-    related_goals: list = []
     related_traits: list = []
 
     # Semantic similarity via episodic retrieval
@@ -182,20 +179,6 @@ def _slice_relevance(query: str) -> dict:
     except Exception as e:
         logger.debug("[Query API] relevance episodic lookup failed: %s", e)
 
-    # Goal matching via goals table
-    try:
-        db = _get_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT description FROM goals WHERE status = 'active' LIMIT 20"
-            )
-            for (description,) in cursor.fetchall():
-                if description and query.lower() in description.lower():
-                    related_goals.append(description[:120])
-    except Exception as e:
-        logger.debug("[Query API] relevance goals lookup failed: %s", e)
-
     # Derive recommendation
     if relevance >= 0.7:
         recommendation = "surface_now"
@@ -206,7 +189,6 @@ def _slice_relevance(query: str) -> dict:
 
     return {
         "relevance": round(relevance, 3),
-        "related_goals": related_goals[:5],
         "related_traits": related_traits,
         "recommendation": recommendation,
     }

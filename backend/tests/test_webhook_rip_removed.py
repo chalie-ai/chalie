@@ -445,18 +445,6 @@ class TestSystemStatusNoPromptQueue:
 
 class TestGoalProactiveServiceCallersGone:
 
-    def test_goal_ecology_service_has_no_goal_proactive_import(self):
-        """goal_ecology_service.py must not import GoalProactiveService."""
-        source = (_BACKEND_ROOT / "services" / "goal_ecology_service.py").read_text()
-        assert "GoalProactiveService" not in source, (
-            "'GoalProactiveService' still referenced in goal_ecology_service.py — "
-            "all callers must be removed"
-        )
-        assert "goal_proactive_service" not in source, (
-            "'goal_proactive_service' import still in goal_ecology_service.py — "
-            "the service was deleted"
-        )
-
     def test_no_production_file_imports_goal_proactive_service(self):
         """No production .py file under backend/ may import goal_proactive_service.
 

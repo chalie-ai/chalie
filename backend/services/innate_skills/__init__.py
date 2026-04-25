@@ -23,7 +23,6 @@ from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 from services.innate_skills.find_tools_skill import handle_find_tools
-from services.innate_skills.goals_skill import handle_goals
 from services.innate_skills.rich_render_skill import handle_rich_render
 from services.innate_skills.review_tool_calls_skill import handle_review_tool_calls
 
@@ -43,7 +42,6 @@ _SKILL_HANDLERS = {
     'document': handle_document,
     'read': handle_read,
     'find_tools': handle_find_tools,
-    'goals': handle_goals,
     'rich_render': handle_rich_render,
     'review_tool_calls': handle_review_tool_calls,
 }
@@ -70,7 +68,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["document"] = lambda channel, action: handle_document(channel, action)
     dispatcher.handlers["read"] = lambda channel, action: handle_read(channel, action)
     dispatcher.handlers["find_tools"] = lambda channel, action: handle_find_tools(channel, action)
-    dispatcher.handlers["goals"] = lambda channel, action: handle_goals(channel, action)
     dispatcher.handlers["rich_render"] = lambda channel, action: handle_rich_render(channel, action)
     dispatcher.handlers["review_tool_calls"] = lambda channel, action: handle_review_tool_calls(channel, action)
 

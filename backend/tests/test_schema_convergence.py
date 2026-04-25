@@ -81,7 +81,6 @@ class TestSchemaConvergence:
             "episodes",
             "knowledge",
             "transcript",
-            "goals",
             "settings",
             "schema_version",
             "documents",
@@ -137,7 +136,6 @@ class TestSchemaConvergence:
         assert "idx_episodes_channel" in indexes
         assert "idx_knowledge_kind" in indexes
         assert "idx_transcript_channel" in indexes
-        assert "idx_goals_status" in indexes
 
     # ── 2. Idempotency ────────────────────────────────────────────────────────
 
@@ -188,31 +186,30 @@ class TestSchemaConvergence:
         # SQLite cannot DROP COLUMN directly in older versions; we recreate the
         # table without the target column to simulate a missing column situation.
         with db.connection() as conn:
-            conn.execute("ALTER TABLE goals RENAME TO goals_old")
+            conn.execute("ALTER TABLE episodes RENAME TO episodes_old")
             conn.execute(
                 """
-                CREATE TABLE goals (
+                CREATE TABLE episodes (
                     id TEXT PRIMARY KEY,
-                    description TEXT NOT NULL,
-                    type TEXT NOT NULL DEFAULT 'emergent',
-                    status TEXT NOT NULL DEFAULT 'candidate'
+                    gist TEXT NOT NULL,
+                    channel TEXT NOT NULL
                     -- salience intentionally omitted
                 )
                 """
             )
-            conn.execute("INSERT INTO goals SELECT id, description, type, status FROM goals_old")
-            conn.execute("DROP TABLE goals_old")
+            conn.execute("INSERT INTO episodes SELECT id, gist, channel FROM episodes_old")
+            conn.execute("DROP TABLE episodes_old")
 
         # Verify column is missing before re-convergence
         with db.connection() as conn:
-            cols_before = _column_names(conn, "goals")
+            cols_before = _column_names(conn, "episodes")
         assert "salience" not in cols_before
 
         # Re-converge — should add the missing column
         _converge(db)
 
         with db.connection() as conn:
-            cols_after = _column_names(conn, "goals")
+            cols_after = _column_names(conn, "episodes")
         assert "salience" in cols_after
 
     # ── 4. Missing table detection ────────────────────────────────────────────
@@ -273,7 +270,7 @@ class TestSchemaConvergence:
         db = _make_db(tmp_path)
         _converge(db)
 
-        dropped = ["idx_knowledge_kind", "idx_goals_salience", "idx_transcript_channel"]
+        dropped = ["idx_knowledge_kind", "idx_episodes_channel", "idx_transcript_channel"]
         with db.connection() as conn:
             for idx in dropped:
                 conn.execute(f"DROP INDEX IF EXISTS {idx}")

@@ -73,7 +73,6 @@ class TestDecayEngineService:
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
              patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
@@ -83,7 +82,6 @@ class TestDecayEngineService:
         # Essential cycles ran
         assert 'episodic'  in call_log
         assert 'knowledge' in call_log
-        assert 'goals'     in call_log
         # Non-essential cycles were skipped
         assert 'external' not in call_log
 
@@ -106,7 +104,6 @@ class TestDecayEngineService:
         with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
              patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
              patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
              patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
              patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
              patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
@@ -114,7 +111,7 @@ class TestDecayEngineService:
             svc.run_decay_cycle(richness=1.0)  # above 0.3 gate
 
         # All cycles must have run
-        for name in ('episodic', 'knowledge', 'goals', 'external'):
+        for name in ('episodic', 'knowledge', 'external'):
             assert name in call_log, f"Expected '{name}' to run at full richness"
 
     # ── Individual decay targets ──────────────────────────────────────
