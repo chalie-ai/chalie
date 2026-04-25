@@ -23,7 +23,7 @@
 | Document | Contents |
 |---|---|
 | [03-WEB-INTERFACE.md](03-WEB-INTERFACE.md) | Radiant design system and the four SPAs |
-| [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) | Deterministic context inference |
+| [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) | WorldState Signal contract — typed snapshot of last user message, heartbeat, device, local time |
 | [18-SIGNAL-CONTRACT.md](18-SIGNAL-CONTRACT.md) | Signal-driven reasoning spine |
 
 ## Quick Reference
