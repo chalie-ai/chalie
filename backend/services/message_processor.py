@@ -570,7 +570,7 @@ class MessageProcessor:
             # Single dispatcher for the entire turn. Tools discovered
             # mid-turn via find_tools are registered as handlers on this
             # instance so all tools dispatch through the same path.
-            self._dispatcher = ActDispatcherService(execution_gate=False)
+            self._dispatcher = ActDispatcherService()
 
             self._run_memory_seed()
             self._run_thinking_gate()   # CHANNEL='user' only, guarded internally

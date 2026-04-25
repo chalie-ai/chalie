@@ -74,18 +74,13 @@ def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) ->
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
-    def __init__(self, timeout: float = 10.0, execution_gate: bool = True):
-        """
-        Initialize dispatcher with innate skills.
+    def __init__(self, timeout: float = 10.0):
+        """Initialize dispatcher with innate skills.
 
         Args:
             timeout: Maximum execution time per action (seconds)
-            execution_gate: Whether to apply the autonomous execution gate.
-                Set to False for user-initiated ACT loops (the user already
-                asked for this), True for autonomous/background execution.
         """
         self.timeout = timeout
-        self.execution_gate = execution_gate
         self.handlers = {}
 
         # Register innate skills (new system + backward-compat aliases)
@@ -108,8 +103,6 @@ class ActDispatcherService:
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
 
-        _commit_warning = ''
-
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
@@ -127,38 +120,6 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
-
-        from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
-        if self.execution_gate and action_type not in _SAFE_ACTIONS:
-            try:
-                from services.autonomous_execution_gate import get_autonomous_execution_gate
-                gate = get_autonomous_execution_gate()
-                action_description = action.get('description', action.get('params', {}).get('query', action_type))
-                gate_result = gate.evaluate(
-                    str(action_description),
-                    domain=channel or 'general',
-                )
-                if not gate_result['auto_execute']:
-                    execution_time = time.time() - start_time
-                    logging.info(
-                        f"[ACT DISPATCH] Blocked by execution gate: "
-                        f"tier={gate_result['consequence_tier']}, "
-                        f"action={action_description!r:.100}"
-                    )
-                    return {
-                        'action_type': action_type,
-                        'status': 'requires_confirmation',
-                        'result': (
-                            f"This action requires user confirmation. "
-                            f"{gate_result['reasoning']}"
-                        ),
-                        'execution_time': execution_time,
-                        'confidence': 0.0,
-                        'notes': gate_result['reasoning'],
-                        'gate_decision': gate_result,
-                    }
-            except Exception:
-                pass
 
         # Determine effective timeout: tool metadata can override the default.
         # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
@@ -222,9 +183,6 @@ class ActDispatcherService:
 
             confidence = _estimate_confidence(action_type, raw_result)
             notes = _extract_notes(action_type, action, raw_result)
-            # Append COMMIT-tier warning to notes so the ACT loop prompt sees it
-            if _commit_warning:
-                notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
 
             dispatch_result = {
                 'action_type': action_type,

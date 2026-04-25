@@ -2,28 +2,11 @@
 
 import time
 import pytest
-from unittest.mock import patch, MagicMock
 
 from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
 
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def _auto_execute_gate():
-    """Mock the execution gate to always allow auto-execution in tests."""
-    mock_gate = MagicMock()
-    mock_gate.evaluate.return_value = {
-        'auto_execute': True,
-        'consequence_tier': 0,
-        'consequence_name': 'observe',
-        'domain': 'test',
-        'reasoning': 'test override',
-    }
-    with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-               return_value=mock_gate):
-        yield mock_gate
 
 
 @pytest.fixture
@@ -112,7 +95,7 @@ class TestHandlerException:
 
 class TestTimeout:
 
-    def test_slow_handler_returns_timeout(self, _auto_execute_gate):
+    def test_slow_handler_returns_timeout(self):
         """A handler that exceeds the timeout produces status=timeout."""
         svc = ActDispatcherService(timeout=0.1)
 
@@ -177,72 +160,14 @@ class TestConfidenceEstimation:
 
     def test_default_confidence_for_unknown_action_type(self, service):
         """An action type not in deterministic or read sets gets 0.50 confidence."""
-        # This action is not in SAFE_ACTIONS, so it will be blocked by the gate
-        # unless we mock the gate or provide a description that bypasses it.
-        # For a pure confidence test, we'll mock the gate for this specific call.
         service.handlers['custom_thing'] = lambda topic, action: 'result'
 
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate') as mock_gate:
-            mock_gate.return_value.evaluate.return_value = {'auto_execute': True, 'consequence_tier': 0}
-            result = service.dispatch_action('topic', {'type': 'custom_thing'})
+        result = service.dispatch_action('topic', {'type': 'custom_thing'})
 
         assert result['confidence'] == pytest.approx(0.50)
 
 
 # ── _estimate_confidence unit tests (direct) ──────────────────
-
-
-# ── Execution Gate ────────────────────────────────────────────
-
-
-class TestExecutionGate:
-
-    def test_gate_blocks_tier3_action(self):
-        """Tier 3 (COMMIT) actions return requires_confirmation, not success."""
-        mock_gate = MagicMock()
-        mock_gate.evaluate.return_value = {
-            'auto_execute': False,
-            'consequence_tier': 3,
-            'consequence_name': 'commit',
-            'domain': 'general',
-            'reasoning': 'Tier 3 (commit) — irreversible; always requires explicit user approval.',
-        }
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-                   return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'):
-            svc = ActDispatcherService(timeout=2.0)
-            svc.handlers['document'] = lambda topic, action: 'deleted'
-
-            result = svc.dispatch_action('topic', {
-                'type': 'document',
-                'description': 'delete all my documents permanently',
-            })
-
-        assert result['status'] == 'requires_confirmation'
-        assert result['confidence'] == 0.0
-        assert 'gate_decision' in result
-        assert result['gate_decision']['consequence_tier'] == 3
-
-    def test_safe_actions_bypass_gate(self):
-        """Safe innate skills (recall, memorize, etc.) bypass the gate entirely."""
-        mock_gate = MagicMock()
-        mock_gate.evaluate.return_value = {
-            'auto_execute': False,  # Would block if called
-            'consequence_tier': 2,
-            'consequence_name': 'act',
-            'domain': 'general',
-            'reasoning': 'Would block.',
-        }
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-                   return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'):
-            svc = ActDispatcherService(timeout=2.0)
-            svc.handlers['recall'] = lambda topic, action: 'memory result'
-
-            result = svc.dispatch_action('topic', {'type': 'recall'})
-
-        assert result['status'] == 'success'
-        mock_gate.evaluate.assert_not_called()
 
 
 class TestEstimateConfidenceDirectly:
