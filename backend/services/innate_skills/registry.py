@@ -94,7 +94,7 @@ SKILL_MODES: dict[str, list[str]] = {
     'schedule':     ['plan', 'brainstorm'],
     'goal_pursuit': ['plan', 'research'],
     'document':     ['research', 'analyze', 'write', 'brainstorm'],
-    'read':         ['research', 'analyze', 'write'],
+    'read':         ['research', 'analyze', 'write', 'converse'],
     'rich_render':  ['analyze', 'plan', 'write', 'brainstorm'],
 }
 
