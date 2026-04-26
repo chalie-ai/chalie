@@ -4,12 +4,11 @@ Verifies input validation, thread spawning, and OutputService
 surface behaviour on both success and failure.
 """
 
-import json
-
 import pytest
 from unittest.mock import MagicMock, patch
 
 from services.innate_skills.goal_pursuit_skill import handle_goal_pursuit, TOOL_SCHEMA
+from tests._tag_helpers import assert_both_markers, extract_json, has_error_arg
 
 pytestmark = pytest.mark.unit
 
@@ -36,22 +35,23 @@ class TestToolSchemaDescription:
 
 class TestHandleGoalPursuitValidation:
     def test_empty_goal_returns_error_json(self):
-        """Empty string goal returns a JSON error without spawning a thread."""
-        result = json.loads(handle_goal_pursuit('user', {'goal': ''}))
-        assert result['success'] is False
-        assert 'error' in result
+        """Empty string goal returns an error tag without spawning a thread."""
+        result = handle_goal_pursuit('user', {'goal': ''})
+        # New format: [goal_pursuit(error=no-goal-specified)]\n[end:goal_pursuit]
+        assert_both_markers('goal_pursuit', result)
+        assert has_error_arg(result)
 
     def test_whitespace_only_goal_returns_error_json(self):
         """Whitespace-only goal is treated as empty and returns an error."""
-        result = json.loads(handle_goal_pursuit('user', {'goal': '   \t\n  '}))
-        assert result['success'] is False
-        assert 'error' in result
+        result = handle_goal_pursuit('user', {'goal': '   \t\n  '})
+        assert_both_markers('goal_pursuit', result)
+        assert has_error_arg(result)
 
     def test_missing_goal_key_returns_error_json(self):
-        """Missing 'goal' key in params returns a JSON error."""
-        result = json.loads(handle_goal_pursuit('user', {}))
-        assert result['success'] is False
-        assert 'error' in result
+        """Missing 'goal' key in params returns an error tag."""
+        result = handle_goal_pursuit('user', {})
+        assert_both_markers('goal_pursuit', result)
+        assert has_error_arg(result)
 
     def test_empty_goal_does_not_start_thread(self):
         """No thread must be spawned when the goal is invalid."""
@@ -64,42 +64,49 @@ class TestHandleGoalPursuitValidation:
 
 class TestHandleGoalPursuitSuccess:
     def _call_with_patched_thread(self, goal='Summarise the latest news'):
-        """Call handle_goal_pursuit with threading.Thread patched."""
+        """Call handle_goal_pursuit with threading.Thread patched.
+
+        Returns the JSON-parsed body from inside the tag wrapper, plus
+        the tag-wrapped string for marker assertions.
+        """
         with patch('threading.Thread') as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
             raw = handle_goal_pursuit('user', {'goal': goal})
-            parsed = json.loads(raw)
+            # New format: [goal_pursuit(pursuit_id=...)]\n<json>\n[end:goal_pursuit]
+            assert_both_markers('goal_pursuit', raw)
+            parsed = extract_json('goal_pursuit', raw)
             return parsed, mock_thread_cls, mock_thread
 
     def test_valid_goal_returns_success_true(self):
-        """A well-formed goal must return success=True."""
+        """A well-formed goal must return success=True in the tag body."""
         result, _, _ = self._call_with_patched_thread()
         assert result['success'] is True
 
     def test_valid_goal_returns_pursuit_id(self):
-        """Return JSON must include a non-empty 'pursuit_id'."""
+        """Tag body JSON must include a non-empty 'pursuit_id'."""
         result, _, _ = self._call_with_patched_thread()
         assert 'pursuit_id' in result
         assert result['pursuit_id']  # non-empty string
 
     def test_valid_goal_response_contains_working_on_it(self):
-        """The 'response' field must communicate that work is in progress."""
+        """The 'response' field in the tag body must communicate work is in progress."""
         result, _, _ = self._call_with_patched_thread()
         assert 'response' in result
         assert 'Working on it' in result['response']
 
-    def test_valid_goal_returns_json_string(self):
-        """handle_goal_pursuit must return a JSON-parseable string."""
+    def test_valid_goal_returns_tagged_string(self):
+        """handle_goal_pursuit must return a tag-wrapped string with JSON body."""
         with patch('threading.Thread') as mock_thread_cls:
             mock_thread_cls.return_value = MagicMock()
             raw = handle_goal_pursuit('user', {'goal': 'do something'})
         assert isinstance(raw, str)
-        # Must not raise
-        json.loads(raw)
+        assert_both_markers('goal_pursuit', raw)
+        # JSON body inside the tag must be parseable
+        extract_json('goal_pursuit', raw)
 
     def test_pursuit_id_is_hex_string(self):
-        """pursuit_id must be the hex representation of a UUID (32 hex chars)."""
+        """pursuit_id in JSON body must be the full UUID hex (32 hex chars)."""
         result, _, _ = self._call_with_patched_thread()
         pid = result['pursuit_id']
         assert len(pid) == 32

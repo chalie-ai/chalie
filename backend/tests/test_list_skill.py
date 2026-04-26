@@ -4,11 +4,10 @@ Uses the real ListService against a fully-migrated SQLite database so
 persistence behaviour is verified end-to-end, not mocked.
 """
 
-import json
-
 import pytest
 
 from services.innate_skills.list_skill import handle_list
+from tests._tag_helpers import assert_both_markers, extract_body
 
 
 # ---------------------------------------------------------------------------
@@ -16,12 +15,20 @@ from services.innate_skills.list_skill import handle_list
 # ---------------------------------------------------------------------------
 
 def _call(params: dict) -> dict | str:
-    """Call handle_list and parse JSON where applicable."""
+    """Call handle_list and return the JSON-parsed body.
+
+    Result format (new): [list(action=X)]\\n<json_body>\\n[end:list]
+    Both markers are always asserted. For string-only bodies (list_all,
+    clear, rename), the raw body string is returned instead of a dict.
+    """
     result = handle_list("test-topic", params)
+    assert_both_markers("list", result)
+    body = extract_body("list", result)
     try:
-        return json.loads(result)
-    except (json.JSONDecodeError, TypeError):
-        return result
+        import json
+        return json.loads(body)
+    except Exception:
+        return body
 
 
 def _items(result: dict) -> list[str]:

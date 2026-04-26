@@ -107,12 +107,14 @@ class TestDispatch:
         assert "'query' is required" in result
 
     def test_db_error_returns_error_string(self):
-        """Database errors produce a clean error message."""
+        """Database errors produce a clean error tag."""
         with patch(_P_DB, side_effect=Exception("DB down")):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "list"})
-        assert "[DOCUMENT] Error:" in result
-        assert "DB down" in result
+        # New format: [document(action=list, error=DB down)]\n[end:document]
+        assert "[document(" in result
+        assert "error=DB down" in result
+        assert "[end:document]" in result
 
 
 @pytest.mark.unit

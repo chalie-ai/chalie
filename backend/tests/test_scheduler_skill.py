@@ -4,15 +4,17 @@ Tests for backend/services/innate_skills/scheduler_skill.py
 Covers the _create() grace-window behaviour: past-due timestamps within
 _PAST_DUE_GRACE_SECONDS are bumped forward to now+5s; timestamps older
 than the grace window are still hard-rejected.
+
+Result format (new): [schedule(action=create)]\\n<json_body>\\n[end:schedule]
 """
 
-import json
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from services.innate_skills.scheduler_skill import handle_scheduler
 from services.time_utils import utc_now
+from tests._tag_helpers import assert_both_markers, extract_json
 
 pytestmark = pytest.mark.unit
 
@@ -32,7 +34,8 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "success", f"Expected success, got: {result}"
         assert result["action_performed"] == "create"
 
@@ -56,7 +59,8 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "success", f"Expected success, got: {result}"
         assert result["action_performed"] == "create"
 
@@ -70,6 +74,7 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "error", f"Expected error, got: {result}"
         assert "due_at must be in the future" in result["error"]
