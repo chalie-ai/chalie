@@ -80,21 +80,6 @@ SKILL_EFFORT: dict = {
     'memorize': 'trivial',
 }
 
-# ── Mode gate index: which cognitive modes each non-primitive skill serves ─────
-# Used by ModeGateService to resolve which tools to promote for active modes.
-# Primitives (memory, find_tools, review_tool_calls) are ALWAYS injected —
-# they must NOT appear here. Every non-primitive innate skill MUST be listed
-# (boot validation enforces this). Empty list [] is legal: "never promote,
-# find_tools only". See backend/services/mode_gate_service.py and spec §5.3.
-SKILL_MODES: dict[str, list[str]] = {
-    'list':         ['plan', 'write', 'research', 'brainstorm'],
-    'schedule':     ['plan', 'brainstorm'],
-    'goal_pursuit': ['plan', 'research'],
-    'document':     ['research', 'analyze', 'write', 'brainstorm'],
-    'read':         ['research', 'analyze', 'write'],
-    'rich_render':  ['analyze', 'plan', 'write', 'brainstorm'],
-}
-
 # ── Skill categories ───────────────────────────────────────────────────────────
 SKILL_CATEGORIES: dict = {
     'memory': 'memory',

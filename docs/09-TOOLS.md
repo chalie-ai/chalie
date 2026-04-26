@@ -2,7 +2,7 @@
 
 Three capability tiers exist in Chalie, each with a different scope and lifecycle.
 
-**Innate skills** are core cognitive capabilities — memory, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory. Three of them (`memory`, `find_tools`, `review_tool_calls`) are **cognitive primitives** and are always loaded on every user turn. The remaining seven are **mode-gated** (see below) and only appear in context when the user turn activates a cognitive mode they serve.
+**Innate skills** are core cognitive capabilities — memory, schedule, list, goal_pursuit, document, read, find_tools, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory. **All innate skills are always loaded on every user turn** — there is no mode-gated tool tier.
 
 **First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
 
@@ -10,17 +10,14 @@ Three capability tiers exist in Chalie, each with a different scope and lifecycl
 
 ## How tools are loaded on a user turn
 
-Three loading tiers stack on each ACT iteration and are de-duplicated first-seen:
+Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
 
-1. **Unconditional** — the three cognitive primitives. Always present.
-2. **Conditional (mode-gated)** — tools whose declared `modes` overlap with the user turn's active cognitive intents. Resolved once per turn by `ModeGateService` and cached on the processor instance; subsequent ACT iterations reuse the cached set. Only the `user` channel opts in — DMN, scheduled prompts, goal pursuit, and encoder processors never run the gate.
-3. **Dynamic (discoverable)** — tools surfaced this turn via the `find_tools` innate skill's semantic search. External tools that never declare `modes` stay reachable exclusively through this path.
+1. **Unconditional** — every innate skill. Always present.
+2. **Dynamic (discoverable)** — tools surfaced this turn via the `find_tools` innate skill's semantic search. All external (first-party + interface) tools are reachable exclusively through this path.
 
-The gate classifies each user turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head. Per-mode state follows an asymmetric EMA: a fire snaps state up to the classifier probability, a miss decays by 0.75 per turn (a mode stays "warm" for roughly four subsequent turns before dropping below the activation threshold). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`.
+`ModeGateService` runs once per user turn but **does not gate tool availability**. It classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`. The active mode set powers prompt-steering directives in `UserMessageProcessor` (long-summary swap on `converse`, brainstorm/research/analyze suffixes appended to the system prompt) and is reserved for future mode-driven features.
 
-Which innate skills serve which modes is declared at the top of `backend/services/innate_skills/registry.py` (`SKILL_MODES`). External tools declare the same field on their `TOOL_METADATA` entry — the field is stripped before any schema is handed to the LLM. Tools without a `modes` declaration are zero-regression: they behave exactly as they always did (find-tools-only for externals).
-
-Observability: every user turn emits one `[MODE-GATE]` INFO log line with the full probability vector, state before/after, active modes, and the promoted tool list, plus one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line per promoted tool. These are grep-friendly anchors for nightly scenarios.
+Observability: every user turn emits one `[MODE-GATE]` INFO log line with the full probability vector, state before/after, and the active mode set. This is the grep-friendly anchor for nightly scenarios.
 
 ## Tool status
 

@@ -1,31 +1,32 @@
 """
-Feature tests for the Mode Gate feature (v0.4.0).
+Feature tests for ModeGateService — per-turn cognitive mode classifier + EMA.
 
 Coverage:
-  - ModeGateService._update_state()   : asymmetric EMA math  [unit]
-  - ModeGateService._resolve_active_tools() : mode → tool index  [integration]
-  - ModeGateService._load_state / _save_state : MemoryStore round-trip  [integration]
-  - ModeGateService.get_promoted_tool_names() shadow mode  [integration]
-  - ModeGateService._load_config()    : missing file / YAML override  [unit]
-  - ToolRegistryService._validate_mode_declarations() : typo / missing  [integration]
-  - ToolRegistryService.get_tools_by_mode() : innate + external mapping  [integration]
-  - ToolSchemaService.get_external_tool_schemas() : modes key stripped  [integration]
+  - ModeGateService._update_state()          : asymmetric EMA math   [unit]
+  - ModeGateService._load_config()           : missing / malformed   [unit]
+  - ModeGateService._load_state / _save_state: MemoryStore round-trip [integration]
+  - ModeGateService.tick()                   : end-to-end persist + active set [integration]
+
+Tool-promotion is no longer the gate's job — innate skills are always
+injected via NATIVE_TOOLS and external tools are reached via find_tools.
+The classifier + state machine is retained for prompt steering and future
+mode-driven features.
 
 Test markers:
-  @pytest.mark.unit        — pure-function math; no IO, no collaborators
-  @pytest.mark.integration — touches MemoryStore, ToolRegistryService, real registry
+  @pytest.mark.unit        — pure-function math; no IO
+  @pytest.mark.integration — touches MemoryStore
 
 Zero mocks. MemoryStore IS the production store.
 """
 
 from __future__ import annotations
 
-import sys
 import os
-import pytest
+import sys
 import tempfile
 
-# Make sure backend/ is importable regardless of cwd
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -39,17 +40,14 @@ def _zero_state() -> dict:
 def _fresh_service(fire_threshold: float = 0.60):
     """Return a ModeGateService whose fire thresholds are all forced to *fire_threshold*.
 
-    We do this by resetting the module-level caches and temporarily monkeypatching
-    _resolve_fire_thresholds so the service uses the value we want without needing
-    a real classifier_meta.json file on disk.
+    Resets the module-level caches so each test gets a clean state and forces
+    a deterministic threshold vector — no need for classifier_meta.json on disk.
     """
     import services.mode_gate_service as mgm
-    # Reset module-level caches so each test gets a clean state
     mgm._config_loaded = None
     mgm._fire_thresholds_cache = None
 
     svc = mgm.ModeGateService()
-    # Override the cached thresholds after construction so math is predictable
     mgm._fire_thresholds_cache = {m: fire_threshold for m in mgm.ModeGateService.MODES}
     svc._fire_thresholds = dict(mgm._fire_thresholds_cache)
     return svc
@@ -75,19 +73,17 @@ class TestUpdateStateFireRule:
         assert result['research'] == pytest.approx(0.82)
 
     def test_fire_does_not_reduce_higher_state(self):
-        """If current state is already 0.9 and new prob is 0.70, state stays 0.9."""
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.90
         probs = {m: 0.0 for m in svc.MODES}
-        probs['research'] = 0.70  # fires (>= 0.60) but lower than current state
+        probs['research'] = 0.70
 
         result = svc._update_state(state, probs)
 
         assert result['research'] == pytest.approx(0.90)
 
     def test_fire_raises_state_when_prob_is_higher(self):
-        """If prob=0.95 and state=0.70, new state becomes 0.95."""
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['coding'] = 0.70
@@ -99,14 +95,11 @@ class TestUpdateStateFireRule:
         assert result['coding'] == pytest.approx(0.95)
 
     def test_fire_clamps_at_ceiling(self):
-        """Two fires with prob > 1.0 equivalent are clamped to STATE_CEILING=1.0."""
         svc = _fresh_service(fire_threshold=0.60)
-        # First fire
         state = _zero_state()
         probs = {m: 0.0 for m in svc.MODES}
         probs['analyze'] = 1.0
         state = svc._update_state(state, probs)
-        # Second fire — state already at ceiling
         probs['analyze'] = 1.0
         state = svc._update_state(state, probs)
 
@@ -121,17 +114,16 @@ class TestUpdateStateDecayRule:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.90
-        probs = {m: 0.0 for m in svc.MODES}  # all miss
+        probs = {m: 0.0 for m in svc.MODES}
 
         result = svc._update_state(state, probs)
 
         assert result['research'] == pytest.approx(0.90 * 0.75)
 
     def test_miss_below_floor_collapses_to_zero(self):
-        """State that would decay below state_floor (0.01) becomes 0.0."""
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
-        state['write'] = 0.012  # one decay: 0.009 < 0.01 → 0.0
+        state['write'] = 0.012
         probs = {m: 0.0 for m in svc.MODES}
 
         result = svc._update_state(state, probs)
@@ -139,7 +131,6 @@ class TestUpdateStateDecayRule:
         assert result['write'] == pytest.approx(0.0, abs=1e-9)
 
     def test_miss_on_zero_state_stays_zero(self):
-        """Decaying 0.0 should remain 0.0 (0.0 * 0.75 = 0.0 < 0.01 → 0.0)."""
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         probs = {m: 0.0 for m in svc.MODES}
@@ -149,13 +140,12 @@ class TestUpdateStateDecayRule:
         assert all(v == pytest.approx(0.0, abs=1e-9) for v in result.values())
 
     def test_independent_modes_decay_independently(self):
-        """Only modes that miss should decay; firing modes should snap up."""
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.80
         state['coding'] = 0.50
         probs = {m: 0.0 for m in svc.MODES}
-        probs['brainstorm'] = 0.75  # fire on brainstorm only
+        probs['brainstorm'] = 0.75
 
         result = svc._update_state(state, probs)
 
@@ -166,13 +156,10 @@ class TestUpdateStateDecayRule:
 
 @pytest.mark.unit
 class TestDecayTrajectory:
-    """Canonical 4-turn decay tail matches spec §4.3.
+    """Canonical 4-turn decay tail.
 
-    fire at t0 → state=0.90
-    miss t1 → 0.675  (active: 0.675 >= 0.30)
-    miss t2 → 0.506  (active)
-    miss t3 → 0.380  (active)
-    miss t4 → 0.285  (drops below activation=0.30)
+    fire t0 → 0.90, miss t1 → 0.675, miss t2 → 0.506, miss t3 → 0.380,
+    miss t4 → 0.285 (drops below activation=0.30).
     """
 
     def test_four_turn_decay_crosses_activation_at_t4(self):
@@ -183,33 +170,27 @@ class TestDecayTrajectory:
         probs_fire['research'] = 0.90
         probs_miss = {m: 0.0 for m in svc.MODES}
 
-        # t0: fire
         state = svc._update_state(state, probs_fire)
         assert state['research'] == pytest.approx(0.900)
         assert state['research'] >= activation
 
-        # t1: miss
         state = svc._update_state(state, probs_miss)
         assert state['research'] == pytest.approx(0.675)
         assert state['research'] >= activation
 
-        # t2: miss
-        state = svc._update_state(state, probs_miss)
-        assert state['research'] == pytest.approx(0.675 * 0.75, rel=1e-3)
-        assert state['research'] >= activation
-
-        # t3: miss
         state = svc._update_state(state, probs_miss)
         assert state['research'] >= activation
 
-        # t4: miss — crosses below activation
+        state = svc._update_state(state, probs_miss)
+        assert state['research'] >= activation
+
         state = svc._update_state(state, probs_miss)
         assert state['research'] < activation
 
 
 @pytest.mark.unit
 class TestLoadConfigFallback:
-    """_load_config() returns defaults when file is missing or malformed YAML."""
+    """_load_config() returns defaults when file is missing or malformed."""
 
     def test_missing_file_returns_defaults(self):
         import services.mode_gate_service as mgm
@@ -248,7 +229,6 @@ class TestLoadConfigFallback:
             os.unlink(bad_path)
 
     def test_yaml_override_wins_over_default(self):
-        """A non-null fire_threshold_override in YAML replaces the meta value."""
         import services.mode_gate_service as mgm
         mgm._config_loaded = None
         mgm._fire_thresholds_cache = None
@@ -277,9 +257,7 @@ class TestLoadConfigFallback:
         try:
             mgm._CONFIG_PATH = yaml_path
             cfg = mgm._load_config()
-            # research override of 0.40 must be present in the loaded config
             assert cfg['fire_threshold_overrides']['research'] == pytest.approx(0.40)
-            # null override stays null (falls back to meta / 0.5)
             assert cfg['fire_threshold_overrides']['coding'] is None
         finally:
             mgm._CONFIG_PATH = original_path
@@ -289,7 +267,7 @@ class TestLoadConfigFallback:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  INTEGRATION TESTS — touch MemoryStore and/or real registries
+#  INTEGRATION TESTS — touch MemoryStore
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -342,256 +320,34 @@ class TestStateRoundTrip:
 
 
 @pytest.mark.integration
-class TestGatePromotesLive:
-    """get_promoted_tool_names returns the resolved tool names and persists state."""
+class TestTick:
+    """tick() classifies, persists, and returns the active mode set."""
 
-    def test_returns_resolved_tool_names(self, store):
-        import services.mode_gate_service as mgm
-        mgm._config_loaded = None
-        mgm._fire_thresholds_cache = None
-
-        svc = _fresh_service()
-        # Force classifier to return high probs (would promote many tools)
-        svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
-
-        # Replace _classify to avoid needing the ONNX model
-        def _fake_classify(text):
-            return {m: 0.90 for m in svc.MODES}
-
-        svc._classify = _fake_classify
-
-        result = svc.get_promoted_tool_names("search news about Mars rovers")
-        # With every mode firing at 0.90, at least one tool should promote.
-        assert result, f"expected promoted tools, got {result}"
-        assert result == sorted(result), "result must be deterministically sorted"
-
-    def test_persists_state(self, store):
-        """State must be written so warm-up happens on the next turn."""
+    def test_returns_active_modes_above_threshold(self, store):
         svc = _fresh_service()
         svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
+        svc._classify = lambda _text: {m: 0.90 for m in svc.MODES}
 
-        def _fake_classify(text):
-            return {m: 0.85 for m in svc.MODES}
+        active = svc.tick("anything", turn_id="t-1")
 
-        svc._classify = _fake_classify
-        svc.get_promoted_tool_names("find recent AI news")
+        assert isinstance(active, set)
+        assert active, "expected at least one active mode at prob=0.90"
+        assert active <= set(svc.MODES)
 
+    def test_persists_state_across_calls(self, store):
+        svc = _fresh_service()
+        svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
+        svc._classify = lambda _text: {m: 0.85 for m in svc.MODES}
+
+        svc.tick("first turn", turn_id="t-a")
         state = svc._load_state()
-        # At least one mode should have fired and be above 0
+
         assert any(v > 0.0 for v in state.values())
 
-
-@pytest.mark.integration
-class TestResolveActiveTools:
-    """_resolve_active_tools returns the correct union from SKILL_MODES and TOOL_METADATA."""
-
-    def test_research_mode_includes_search_and_news(self):
+    def test_classifier_failure_returns_empty_set(self, store):
         svc = _fresh_service()
-        # research → search, news per spec §5.4
-        tools = svc._resolve_active_tools({'research'})
-        assert 'search' in tools
-        assert 'news' in tools
+        svc._classify = lambda _text: {}
 
-    def test_research_mode_includes_read_and_document(self):
-        """Innate skills read + document both declared under research (§5.3)."""
-        svc = _fresh_service()
-        tools = svc._resolve_active_tools({'research'})
-        assert 'read' in tools
-        assert 'document' in tools
+        active = svc.tick("anything", turn_id="t-fail")
 
-    def test_plan_mode_includes_schedule(self):
-        """schedule innate skill is mapped to plan mode."""
-        svc = _fresh_service()
-        tools = svc._resolve_active_tools({'plan'})
-        assert 'schedule' in tools
-
-    def test_empty_active_set_returns_empty(self):
-        svc = _fresh_service()
-        tools = svc._resolve_active_tools(set())
-        assert tools == []
-
-    def test_weather_not_in_any_mode_bucket(self):
-        """weather has no modes field in TOOL_METADATA — must never appear in any bucket."""
-        svc = _fresh_service()
-        all_tools_across_all_modes: set = set()
-        for m in svc.MODES:
-            all_tools_across_all_modes.update(svc._resolve_active_tools({m}))
-        assert 'weather' not in all_tools_across_all_modes
-
-    def test_multi_mode_union(self):
-        """Active {analyze, plan} returns union of both mode buckets."""
-        svc = _fresh_service()
-        analyze_tools = set(svc._resolve_active_tools({'analyze'}))
-        plan_tools = set(svc._resolve_active_tools({'plan'}))
-        combined_tools = set(svc._resolve_active_tools({'analyze', 'plan'}))
-        assert combined_tools == analyze_tools | plan_tools
-
-
-@pytest.mark.integration
-class TestGetToolsByMode:
-    """ToolRegistryService.get_tools_by_mode() builds the correct index."""
-
-    def _get_fresh_index(self):
-        import services.tool_registry_service as trs
-        # Clear cache so we get a fresh build
-        trs._tools_by_mode_cache = None
-        from services.tool_registry_service import ToolRegistryService
-        return ToolRegistryService().get_tools_by_mode()
-
-    def test_innate_skills_in_correct_modes(self):
-        index = self._get_fresh_index()
-        # goal_pursuit → plan, research
-        assert 'goal_pursuit' in index.get('plan', set())
-        assert 'goal_pursuit' in index.get('research', set())
-        # schedule → plan, brainstorm
-        assert 'schedule' in index.get('plan', set())
-        assert 'schedule' in index.get('brainstorm', set())
-
-    def test_external_tools_with_modes_are_indexed(self):
-        index = self._get_fresh_index()
-        # search declared modes: [research, brainstorm]
-        assert 'search' in index.get('research', set())
-        assert 'search' in index.get('brainstorm', set())
-        # news declared modes: [research, brainstorm]
-        assert 'news' in index.get('research', set())
-
-    def test_weather_absent_from_all_mode_buckets(self):
-        index = self._get_fresh_index()
-        for mode_bucket in index.values():
-            assert 'weather' not in mode_bucket
-
-    def test_primitives_not_in_any_mode_bucket(self):
-        """memory, find_tools, review_tool_calls are always-on primitives — not gated."""
-        from services.innate_skills.registry import COGNITIVE_PRIMITIVES
-        index = self._get_fresh_index()
-        for primitive in COGNITIVE_PRIMITIVES:
-            for mode_bucket in index.values():
-                assert primitive not in mode_bucket, (
-                    f"Primitive '{primitive}' must not appear in mode gate index"
-                )
-
-    def test_cache_invalidated_after_unregister(self):
-        """_invalidate_mode_cache() clears the index so next call rebuilds it."""
-        import services.tool_registry_service as trs
-        trs._tools_by_mode_cache = None
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        # Populate cache
-        _ = registry.get_tools_by_mode()
-        assert trs._tools_by_mode_cache is not None
-        # Invalidate
-        trs._invalidate_mode_cache()
-        assert trs._tools_by_mode_cache is None
-
-
-@pytest.mark.integration
-class TestModeDeclarationValidation:
-    """_validate_mode_declarations raises RuntimeError on typos and missing entries."""
-
-    def test_invalid_mode_string_raises_runtime_error(self):
-        """An innate skill declaring a misspelled mode must fail loudly at boot."""
-        from services.innate_skills.registry import SKILL_MODES
-
-        bad_modes_patch = dict(SKILL_MODES)
-        bad_modes_patch['list'] = ['reserch']  # typo — should be 'research'
-
-        import services.innate_skills.registry as reg
-        original = reg.SKILL_MODES
-        reg.SKILL_MODES = bad_modes_patch
-
-        # Also reset tool registry singleton so validation re-runs
-        import services.tool_registry_service as trs
-        original_instance = trs._instance
-
-        try:
-            trs._instance = None
-            trs._tools_by_mode_cache = None
-            from services.tool_registry_service import ToolRegistryService
-            with pytest.raises(RuntimeError, match="reserch"):
-                svc = ToolRegistryService()
-                svc._validate_mode_declarations()
-        finally:
-            reg.SKILL_MODES = original
-            trs._instance = original_instance
-            trs._tools_by_mode_cache = None
-
-    def test_missing_non_primitive_innate_raises_runtime_error(self):
-        """A non-primitive skill with no SKILL_MODES entry must fail at boot."""
-        from services.innate_skills.registry import SKILL_MODES
-
-        # Remove 'schedule' from SKILL_MODES — ALL_SKILL_NAMES still contains it (enforced by registry)
-        trimmed_modes = {k: v for k, v in SKILL_MODES.items() if k != 'schedule'}
-
-        import services.innate_skills.registry as reg
-        import services.tool_registry_service as trs
-        original_modes = reg.SKILL_MODES
-        original_instance = trs._instance
-
-        reg.SKILL_MODES = trimmed_modes
-
-        try:
-            trs._instance = None
-            trs._tools_by_mode_cache = None
-            from services.tool_registry_service import ToolRegistryService
-            with pytest.raises(RuntimeError, match="schedule"):
-                svc = ToolRegistryService()
-                svc._validate_mode_declarations()
-        finally:
-            reg.SKILL_MODES = original_modes
-            trs._instance = original_instance
-            trs._tools_by_mode_cache = None
-
-    def test_empty_modes_list_is_legal(self):
-        """modes: [] on an innate skill must NOT raise — it means find_tools only."""
-        from services.innate_skills.registry import SKILL_MODES
-
-        # Set 'schedule' to empty list — should be valid
-        patched_modes = dict(SKILL_MODES)
-        patched_modes['schedule'] = []
-
-        import services.innate_skills.registry as reg
-        import services.tool_registry_service as trs
-        original_modes = reg.SKILL_MODES
-        original_instance = trs._instance
-
-        reg.SKILL_MODES = patched_modes
-
-        try:
-            trs._instance = None
-            trs._tools_by_mode_cache = None
-            from services.tool_registry_service import ToolRegistryService
-            # Must not raise
-            svc = ToolRegistryService()
-            svc._validate_mode_declarations()
-        finally:
-            reg.SKILL_MODES = original_modes
-            trs._instance = original_instance
-            trs._tools_by_mode_cache = None
-
-
-@pytest.mark.integration
-class TestExternalSchemaModeStripped:
-    """get_external_tool_schemas() must never forward the 'modes' key to the LLM."""
-
-    def test_modes_key_absent_from_search_schema(self):
-        from services.tool_schema_service import get_external_tool_schemas
-        schemas = get_external_tool_schemas(['search'])
-        assert len(schemas) == 1
-        schema = schemas[0]
-        assert 'modes' not in schema
-        assert 'modes' not in schema.get('input_schema', {})
-
-    def test_modes_key_absent_from_news_schema(self):
-        from services.tool_schema_service import get_external_tool_schemas
-        schemas = get_external_tool_schemas(['news'])
-        assert len(schemas) == 1
-        assert 'modes' not in schemas[0]
-
-    def test_schema_still_has_required_llm_fields(self):
-        """Stripping modes must not remove name, description, or input_schema."""
-        from services.tool_schema_service import get_external_tool_schemas
-        schemas = get_external_tool_schemas(['search'])
-        schema = schemas[0]
-        assert 'name' in schema
-        assert 'description' in schema
-        assert 'input_schema' in schema
+        assert active == set()

@@ -1,9 +1,9 @@
 """
-ModeGateService — per-turn tool promotion via the mode_detector classifier.
+ModeGateService — per-turn cognitive mode classification + state machine.
 
 State machine:
   load → (cold: bootstrap) → classify → update (snap-up/decay) → persist →
-  resolve active tools → return promoted names
+  return active mode set
 
 State is persisted in MemoryStore under ``mode_gate:state`` as a JSON string.
 No database writes — pure MemoryStore, cleared by /privacy/delete-all.
@@ -16,16 +16,13 @@ Config (backend/configs/mode_gate.yaml):
   bootstrap_on_cold_start: true — classify last transcript row on cold start
   fire_threshold_overrides     — per-mode YAML override for fire thresholds
 
-Fire threshold precedence (per spec §6.3):
+Fire threshold precedence:
   1. classifier_meta.json::per_mode_thresholds (baked by training)
   2. fire_threshold_overrides[m] (non-null YAML value wins)
   3. Flat 0.5 per head if meta file is missing or per_mode_thresholds absent
 
-Observability (spec §6.5):
-  ONE [MODE-GATE] log line per turn containing all required fields.
-  ONE [MODE-GATE-PROMOTE] log line per tool in would_promote.
-
-North star: /Volumes/llm/chalie-plans/v0.4.0/2026-04-23-mode-gate-design.md
+Observability:
+  ONE [MODE-GATE] log line per tick containing probs/fires/state/active.
 """
 
 from __future__ import annotations
@@ -40,6 +37,25 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[MODE-GATE]"
+
+# ── Prompt-steering thresholds + directives ──────────────────────────────────
+# Distinct from ``activation_threshold`` (0.30, marks a mode as merely active);
+# this higher bar gates *prompt-shape* mutations (long-summary swap upstream,
+# system-prompt directive append below).
+STEER_THRESHOLD = 0.6
+
+_DIRECTIVE_BRAINSTORM_RESEARCH = (
+    "Proactively provide suggestions, feedback and opinions. Ensure your "
+    "response is grounded in current truth, use the search and other tools "
+    "to confirm the information you've received and feedback you propose "
+    "before responding"
+)
+
+_DIRECTIVE_ANALYZE = (
+    "Read through the user message and ensure thorough understanding. Do "
+    "not assume anything, whatever is not crystal clear either ask or use "
+    "tools to verify"
+)
 
 # ── Module-level config (loaded once) ─────────────────────────────────────────
 
@@ -114,7 +130,7 @@ _fire_thresholds_cache: Optional[Dict[str, float]] = None
 
 
 def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, float]:
-    """Build per-mode fire threshold dict using precedence rules (spec §6.3).
+    """Build per-mode fire threshold dict using precedence rules.
 
     Priority:
     1. classifier_meta.json::per_mode_thresholds (baked by training)
@@ -174,11 +190,10 @@ def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, 
 
 
 class ModeGateService:
-    """Per-turn tool promotion via the mode_detector classifier.
+    """Per-turn cognitive mode classifier with EMA state machine.
 
-    One instance per UMP turn — stateless across instances (state lives in
-    MemoryStore). A fresh ``ModeGateService()`` per turn is the intended usage
-    pattern (see spec §7.5 Thread Safety).
+    One instance per call site — stateless across instances (state lives in
+    MemoryStore).
     """
 
     # ── Constants ────────────────────────────────────────────────────────────
@@ -200,26 +215,25 @@ class ModeGateService:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def get_promoted_tool_names(
+    def tick(
         self, user_turn: str, turn_id: Optional[object] = None
-    ) -> List[str]:
-        """Entry point. Classify, update state, resolve promoted tools.
+    ) -> Set[str]:
+        """Classify the current turn, advance state, persist, return active modes.
 
-        Steps (spec §3.2):
+        Steps:
           1. _load_state() — cold start → zero vector
           2. bootstrap if cold + enabled
           3. _classify(user_turn) → probs dict
           4. _update_state(state, probs)
           5. _save_state(state_after)
-          6. resolve active modes → promoted names
-          7. Emit [MODE-GATE] + [MODE-GATE-PROMOTE] logs
-          8. Return promoted names
+          6. Emit [MODE-GATE] log line
+          7. Return set of modes whose post-update state >= activation_threshold
 
-        All exceptions are trapped. Returns [] on any failure.
+        All exceptions are trapped. Returns empty set on any failure.
 
         Args:
             user_turn: Raw user input text for this turn.
-            turn_id:   Turn identifier for log correlation (UMP self._uid).
+            turn_id:   Identifier for log correlation (caller-supplied).
         """
         t_start = time.perf_counter()
 
@@ -229,10 +243,6 @@ class ModeGateService:
 
             # Cold-start bootstrap: if state is all zeros, classify the
             # previous user turn to warm up state before classifying current.
-            # bootstrapped reflects whether bootstrap actually produced any
-            # warmed state — a no-history cold DB should log bootstrap=false
-            # (spec §4.4 / §6.5). Compare before/after so we don't mark the
-            # flag true on every cold start when there's nothing to classify.
             if not any(v > 0 for v in state_before.values()):
                 if self._bootstrap_on_cold_start:
                     state_before = self._bootstrap_from_last_turn(state_before)
@@ -241,16 +251,15 @@ class ModeGateService:
             probs = self._classify(user_turn)
 
             # Classifier failure — emit the same single-line [MODE-GATE]
-            # record the happy path emits so per-turn grep assertions in
-            # scenario 107 still find a line (spec §6.5 "ONE [MODE-GATE]
-            # log line per user turn"). Use the loaded state as both
-            # before/after since we do NOT mutate state on degradation.
+            # record the happy path emits so per-tick grep assertions still
+            # find a line. Use the loaded state as both before/after since
+            # we do NOT mutate state on degradation.
             if not probs:
                 elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                 logger.info(
                     "%s bootstrap=%s turn_id=%s "
                     "probs=%s fires=%s state_before=%s state_after=%s "
-                    "active=%s promoted=%s "
+                    "active=%s "
                     "classifier=unavailable elapsed_ms=%d",
                     LOG_PREFIX,
                     str(bootstrapped).lower(),
@@ -260,30 +269,23 @@ class ModeGateService:
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                     json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                     json.dumps([]),
-                    json.dumps([]),
                     elapsed_ms,
                 )
-                return []
+                return set()
 
             state_after = self._update_state(dict(state_before), probs)
             self._save_state(state_after)
 
             active = {m for m in self.MODES if state_after.get(m, 0.0) >= self._activation_threshold}
-            # Sort defensively so the emitted JSON is deterministic even if
-            # _resolve_active_tools ever returns an unsorted structure.
-            promoted = sorted(self._resolve_active_tools(active))
 
             fires = [m for m in self.MODES if probs.get(m, 0.0) >= self._fire_thresholds.get(m, 0.5)]
 
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
-            # Emit ONE structured [MODE-GATE] line (spec §6.5).
-            # Boolean is lowercased so log greps use the JSON-canonical form
-            # ("bootstrap=false") rather than Python's title-case.
             logger.info(
                 "%s bootstrap=%s turn_id=%s "
                 "probs=%s fires=%s state_before=%s state_after=%s "
-                "active=%s promoted=%s elapsed_ms=%d",
+                "active=%s elapsed_ms=%d",
                 LOG_PREFIX,
                 str(bootstrapped).lower(),
                 turn_id or "?",
@@ -292,25 +294,17 @@ class ModeGateService:
                 json.dumps({m: round(state_before.get(m, 0.0), 4) for m in self.MODES}),
                 json.dumps({m: round(state_after.get(m, 0.0), 4) for m in self.MODES}),
                 json.dumps(sorted(active)),
-                json.dumps(promoted),
                 elapsed_ms,
             )
 
-            # Emit ONE [MODE-GATE-PROMOTE] line per promoted tool
-            for tool_name in promoted:
-                logger.info(
-                    "[MODE-GATE-PROMOTE] turn=%s tool=%s",
-                    turn_id or "?", tool_name,
-                )
-
-            return promoted
+            return active
 
         except Exception as exc:
             logger.warning(
-                "%s get_promoted_tool_names failed (%s) — returning []",
+                "%s tick failed (%s) — returning empty set",
                 LOG_PREFIX, exc,
             )
-            return []
+            return set()
 
     def get_active_modes(self) -> Set[str]:
         """Return the set of modes whose current state >= activation_threshold."""
@@ -319,7 +313,46 @@ class ModeGateService:
             return {m for m in self.MODES if state.get(m, 0.0) >= self._activation_threshold}
         except Exception as exc:
             logger.warning("%s get_active_modes failed: %s", LOG_PREFIX, exc)
-            return set()  # type: ignore[return-value]
+            return set()
+
+    def get_state(self) -> Dict[str, float]:
+        """Return the current per-mode activation state as a fresh dict.
+
+        Reads from MemoryStore. Callers should fire ``tick()`` first within a
+        turn to ensure the state reflects the current user input; otherwise
+        this returns the prior turn's persisted state.
+        """
+        try:
+            return self._load_state()
+        except Exception as exc:
+            logger.warning("%s get_state failed: %s", LOG_PREFIX, exc)
+            return dict.fromkeys(self.MODES, 0.0)
+
+    def get_system_prompt_additions(self) -> str:
+        """Return the system-prompt suffix dictated by current mode state.
+
+        Reads persisted state from MemoryStore. Callers should fire ``tick()``
+        first within a turn so the result reflects the current user input.
+
+        Behaviour (state >= STEER_THRESHOLD per mode):
+          * brainstorm OR research → proactive suggestion + verification block
+          * analyze                → assumption-check block
+        Both may fire in the same turn — blocks stack in declaration order
+        (brainstorm/research first, analyze second), separated by blank lines.
+
+        Returns the empty string when no mode is strongly active so callers
+        can append unconditionally without conditional join logic.
+        """
+        state = self.get_state()
+        parts: List[str] = []
+        if (
+            state.get('brainstorm', 0.0) >= STEER_THRESHOLD
+            or state.get('research', 0.0) >= STEER_THRESHOLD
+        ):
+            parts.append(_DIRECTIVE_BRAINSTORM_RESEARCH)
+        if state.get('analyze', 0.0) >= STEER_THRESHOLD:
+            parts.append(_DIRECTIVE_ANALYZE)
+        return "\n\n".join(parts)
 
     def reset_state(self) -> None:
         """Delete the mode state key from MemoryStore.
@@ -368,7 +401,7 @@ class ModeGateService:
             logger.warning("%s _save_state failed: %s", LOG_PREFIX, exc)
 
     def _bootstrap_from_last_turn(self, state: Dict[str, float]) -> Dict[str, float]:
-        """Warm up state from the previous user transcript row (spec §4.4).
+        """Warm up state from the previous user transcript row.
 
         Only runs once — when the current state vector is all zeros (cold start).
         Classifies the last user turn and applies one extra decay step to
@@ -427,7 +460,7 @@ class ModeGateService:
     def _update_state(
         self, state: Dict[str, float], probs: Dict[str, float]
     ) -> Dict[str, float]:
-        """Apply asymmetric EMA update rule (spec §4.2).
+        """Apply asymmetric EMA update rule.
 
         For each mode:
           - If prob >= fire_threshold:  snap-up: state = min(max(state, prob), ceiling)
@@ -444,18 +477,3 @@ class ModeGateService:
                 decayed = state.get(m, 0.0) * self._decay_factor
                 state[m] = 0.0 if decayed < self._state_floor else decayed
         return state
-
-    def _resolve_active_tools(self, active: Set[str]) -> List[str]:
-        """Resolve active modes to promoted tool names (spec §4.6)."""
-        if not active:
-            return []
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            tool_index = ToolRegistryService().get_tools_by_mode()
-            promoted: Set[str] = set()
-            for m in active:
-                promoted.update(tool_index.get(m, set()))
-            return sorted(promoted)
-        except Exception as exc:
-            logger.warning("%s _resolve_active_tools failed: %s", LOG_PREFIX, exc)
-            return []
