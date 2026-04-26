@@ -71,11 +71,18 @@ def assert_both_markers(tag_name: str, output: str) -> None:
     )
 
 
-def has_error_arg(output: str, keyword: str | None = None) -> bool:
-    """Return True when the opener contains 'error=...' (optionally matching keyword)."""
-    opener_match = re.search(r"\[[^\]]+\([^)]*error=([^,)]+)[^)]*\)\]", output)
-    if not opener_match:
-        return False
-    if keyword is None:
-        return True
-    return keyword in opener_match.group(1)
+_OPENER_RE = re.compile(r"\[[^\]()]+\(([^)]*)\)\]")
+
+
+def has_error_arg(output: str) -> bool:
+    """Return True when any opener contains an 'error=...' arg.
+
+    Two-stage match avoids the polynomial-backtracking risk Sonar flags
+    on a single nested-quantifier regex (S5852). The outer pattern uses
+    disjoint character classes (`[^\\]()]+` then `[^)]*`), and the inner
+    `error=` lookup is run only on the captured arg list.
+    """
+    for opener in _OPENER_RE.finditer(output):
+        if "error=" in opener.group(1):
+            return True
+    return False
