@@ -42,7 +42,7 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 
 `MessageProcessor` is the abstract base for every LLM turn in the system. The architectural rules are simple:
 
-- **One class per channel.** User messages, DMN thoughts, goal pursuit, scheduled prompts, and internal encoders each have their own subclass. There is no shared dispatcher or central router.
+- **One class per channel.** User messages, DMN thoughts, goal pursuit, scheduled prompts, compaction calls, and internal encoders each have their own subclass. There is no shared dispatcher or central router.
 - **One instance per turn.** All turn state lives on the instance. No singletons, no shared instances.
 - **Subclasses hardcode their channel and role.** A processor knows what it is. Context scoping flows from that identity.
 - **Atomic store at the end.** `store()` commits everything in one transaction when the ACT loop finishes.
@@ -51,7 +51,9 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 
 History reaches the LLM as a literal `## Previous Messages` text block inside the user message body. The provider always receives a single-element `messages[]` array — not a multi-turn array. This is an intentional design choice: it gives the system full control over what context the model sees on each turn.
 
-Internal processors (episode encoders, the user summary synthesiser) set a flag that suppresses transcript writes — they run the ACT loop without polluting the conversation record.
+Compaction also dispatches through the `MessageProcessor` hierarchy. `FullCompactionProcessor` handles full channel checkpoint summarisation; `TrailCompactionProcessor` handles mid-ACT tool-trail summarisation. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, and `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. Pure SQL helpers for the `compactions` table (`get_compaction`, `get_entries_since`) live in `compaction_persistence.py`.
+
+Internal processors (episode encoders, the user summary synthesiser, and compaction processors) set a flag that suppresses transcript writes — they run the ACT loop without polluting the conversation record.
 
 ---
 

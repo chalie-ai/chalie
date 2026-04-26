@@ -455,8 +455,8 @@ class SelfModelService:
             with db.connection() as conn:
                 # 1. Compaction stale: topic with uncompacted content exceeding
                 # the fallback token threshold (chars/4 ≈ tokens, 36K token fallback).
-                # Uses the same fallback threshold as compaction_service so this
-                # warning fires iff compaction would actually trigger.
+                # Uses the same fallback threshold as MessageProcessor compaction
+                # so this warning fires iff compaction would actually trigger.
                 _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
                     SELECT tt.channel,

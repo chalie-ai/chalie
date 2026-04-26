@@ -26,6 +26,7 @@ import contextlib
 import contextvars
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from services.metrics_accumulator import MetricsAccumulator
@@ -102,44 +103,6 @@ class MessageProcessor:
     MAX_ITERATIONS: int = 30
     MAX_TIMEOUT: int = 900    # seconds — ACT loop only
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
-    COMPACTION_PROMPT: str = (
-        "Summarize the following conversation context into a compact, actionable summary.\n"
-        "\n"
-        "Preserve:\n"
-        "- Decisions made and their reasoning\n"
-        "- Facts established (names, dates, numbers, specifics)\n"
-        "- User preferences expressed\n"
-        "- Key information gathered from tools or research\n"
-        "- Action items and their current status\n"
-        "- Any unresolved questions or pending items\n"
-        "\n"
-        "Do NOT preserve:\n"
-        "- Conversation flow (\"then we discussed...\", \"the user asked...\")\n"
-        "- Social pleasantries or greetings\n"
-        "- Redundant confirmations (\"yes\", \"ok\", \"got it\")\n"
-        "- Raw tool output — summarize the findings instead\n"
-        "- Reasoning that led to discarded options\n"
-        "\n"
-        "Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."
-    )
-
-    TOOL_COMPACTION_PROMPT: str = (
-        "You are compressing a tool-use trail from an in-progress task.\n"
-        "\n"
-        "Preserve:\n"
-        "- Key findings surfaced by each tool call (data, names, IDs, URLs, results)\n"
-        "- Decisions the assistant has made based on those findings\n"
-        "- Outstanding questions or next steps implied by the trail\n"
-        "\n"
-        "Do NOT preserve:\n"
-        "- Literal tool argument JSON\n"
-        "- Redundant reasoning (\"I will now call X to find Y\")\n"
-        "- Errors the assistant already recovered from\n"
-        "\n"
-        "Write a single dense paragraph. This summary replaces the raw tool output in the "
-        "ongoing context — be accurate, be specific."
-    )
-
     # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
     # want compaction to kick in, not an unbounded fetch.
@@ -166,6 +129,13 @@ class MessageProcessor:
         # (which is the formatted tag block) so recall_episodes() can embed
         # the original query for drift computation rather than the block string.
         self._memory_seed_query: str | None = None
+        # Tracks the current ACT loop iteration so handleTool() can include
+        # it in emitted tool events without thread-local indirection.
+        self._current_iteration: int = 0
+        # Callback for per-tool start/end events. Base default is None;
+        # UserMessageProcessor overrides in its own __init__ (same pattern
+        # as _on_narration).
+        self._on_tool_event: Callable[[dict], None] | None = None
         # Per-turn log of memory recall queries (seed + llm_recall).
         # Populated by the memory skill recall path; consumed by the next
         # recall call for redundancy-narrow and drift-expand computation.
@@ -328,11 +298,11 @@ class MessageProcessor:
         Returns '' when the channel has no transcript rows and no compaction.
         """
         del token_budget  # forward-compat placeholder; see docstring above
-        from services import compaction_service, transcript_service
+        from services import compaction_persistence, transcript_service
         from services.tool_call_service import ToolCallService
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
-        compaction = compaction_service.get_compaction(self.CHANNEL)
+        compaction = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = compaction['compacted_up_to_id'] if compaction else 0
 
         entries = transcript_service.get_recent(
@@ -398,6 +368,8 @@ class MessageProcessor:
 
         Never re-raises — errors become strings the LLM sees next iteration.
         """
+        import time as _time
+        from uuid import uuid4
         from services.tool_render_and_record_service import ToolRenderAndRecordService
         from services.tool_schema_service import get_external_tool_schemas
 
@@ -408,6 +380,17 @@ class MessageProcessor:
 
         self._metrics.record_tool(tool_name)
 
+        # Stable call_id: prefer the id field from the LLM; mint one if absent.
+        call_id = (tc.get('id') if isinstance(tc, dict) else None) or uuid4().hex[:12]
+        t_start = _time.monotonic()
+        self._emit_tool_event({
+            'type': 'act_tool_start',
+            'call_id': call_id,
+            'name': tool_name,
+            'iter': self._current_iteration,
+        })
+
+        ok = True
         result_text = ''
         try:
             # 1. Dispatch via the per-turn dispatcher
@@ -440,11 +423,19 @@ class MessageProcessor:
                     self._register_discovered_tools(discovered)
 
         except Exception as exc:
+            ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
             logger.error(
                 "[MessageProcessor.handleTool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
             )
+        finally:
+            self._emit_tool_event({
+                'type': 'act_tool_end',
+                'call_id': call_id,
+                'ms': int((_time.monotonic() - t_start) * 1000),
+                'ok': ok,
+            })
 
         # 2. Render + Record
         try:
@@ -585,12 +576,12 @@ class MessageProcessor:
                 else 32_000
             )
 
-            iteration = 0
+            self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
 
             while (
-                iteration < self.MAX_ITERATIONS
+                self._current_iteration < self.MAX_ITERATIONS
                 and time.time() - loop_start < self.MAX_TIMEOUT
             ):
                 user_body = self.getUserPrompt()
@@ -624,7 +615,7 @@ class MessageProcessor:
                             self.CHANNEL,
                         )
                         if self._run_stage2_act_restart():
-                            iteration = 0
+                            self._current_iteration = 0
                             continue
                         # Stage 2 failed (compaction LLM error). Retrying the
                         # main provider call against an over-threshold body
@@ -675,7 +666,7 @@ class MessageProcessor:
                     ).renderAndRecord()
                     self._act_trail.append(rendered)
                     try:
-                        self._emit_narration(llm_response.text, iteration)
+                        self._emit_narration(llm_response.text, self._current_iteration)
                     except Exception as exc:
                         logger.error(
                             "[MessageProcessor.send] _emit_narration raised: %s",
@@ -695,7 +686,7 @@ class MessageProcessor:
                     ).renderAndRecord()
                     self._act_trail.append(rendered)
 
-                iteration += 1
+                self._current_iteration += 1
 
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
@@ -708,7 +699,7 @@ class MessageProcessor:
                     "(iteration=%d, elapsed=%.1fs, max_iter=%d, max_timeout=%d) — "
                     "final_text set to '' to avoid persisting mid-loop narration "
                     "as assistant response",
-                    iteration,
+                    self._current_iteration,
                     time.time() - loop_start,
                     self.MAX_ITERATIONS,
                     self.MAX_TIMEOUT,
@@ -727,6 +718,11 @@ class MessageProcessor:
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Base no-op. UserMessageProcessor overrides in Commit 8 to push
         mid-loop text to the websocket via the on_narration callback."""
+        pass
+
+    def _emit_tool_event(self, event: dict) -> None:
+        """Base no-op. UserMessageProcessor overrides to push per-tool
+        start/end events to the websocket via the on_tool_event callback."""
         pass
 
     def _drain_steering(self, request_id: str | None) -> list[str]:
@@ -757,19 +753,25 @@ class MessageProcessor:
     def _run_full_compaction(self) -> 'str | None':
         """Run a full checkpoint compaction for this channel.
 
+        Orchestrator: reads prior compaction + entries since watermark,
+        formats the LLM input, dispatches to ``FullCompactionProcessor``,
+        then writes the ``compactions`` row + ``tool_calls`` audit row from
+        the returned text.
+
         Returns the compacted text on success, None on failure.
         Records via ToolRenderAndRecordService (ephemeral=False).
         """
-        from services import compaction_service
+        from services import compaction_persistence
+        from services.compaction_message_processor import FullCompactionProcessor
         from services.database_service import get_shared_db_service
         from services.llm_service import estimate_tokens
         from services.providers import Providers
 
-        prior = compaction_service.get_compaction(self.CHANNEL)
+        prior = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = prior['compacted_up_to_id'] if prior else 0
         prev_text = (prior.get('compacted_text') or '').strip() if prior else ''
 
-        entries = list(compaction_service.get_entries_since(self.CHANNEL, watermark))
+        entries = list(compaction_persistence.get_entries_since(self.CHANNEL, watermark))
 
         # Nothing to compact — bail before hitting the LLM. Without this guard
         # we would send a bare "## New Conversation Turns" header to the
@@ -784,8 +786,10 @@ class MessageProcessor:
             return None
 
         # Refresh the context limit — Stage 2 is a rare path and the provider
-        # may have been reconfigured since send() cached the value.
-        raw_limit = Providers.instance().get_context_limit(job=self.JOB)
+        # may have been reconfigured since send() cached the value. Use the
+        # compaction processor's JOB (not self.JOB) so the cap matches the LLM
+        # that will actually service the call.
+        raw_limit = Providers.instance().get_context_limit(job=FullCompactionProcessor.JOB)
         context_limit = (
             int(raw_limit)
             if isinstance(raw_limit, (int, float)) and raw_limit > 0
@@ -840,15 +844,9 @@ class MessageProcessor:
             )
             return None
 
+        proc = FullCompactionProcessor(raw_input=compaction_input)
         try:
-            response = Providers.instance().send_messages(
-                self.COMPACTION_PROMPT,
-                [{'role': 'user', 'content': compaction_input}],
-                job=self.JOB,
-                tools=None,
-            )
-            self._metrics.accumulate(response)
-            compacted_text = (response.text or '').strip()
+            compacted_text = (proc.send() or '').strip()
         except Exception as exc:
             logger.error(
                 "[COMPACTION] %s: LLM call failed during _run_full_compaction: %s",
@@ -856,6 +854,8 @@ class MessageProcessor:
                 exc_info=True,
             )
             return None
+        finally:
+            self._metrics.merge(proc._metrics)
 
         if not compacted_text:
             logger.warning(
@@ -926,30 +926,27 @@ class MessageProcessor:
     def _run_stage1_tool_compaction(self) -> None:
         """Stage 1 mid-ACT compaction: compress the tool-use trail via LLM.
 
-        Resets _act_trail to a single summary line and records via
-        ToolRenderAndRecordService. On failure, returns without mutating state.
+        Orchestrator: dispatches to ``TrailCompactionProcessor``, then
+        replaces ``self._act_trail`` with the returned summary. On failure,
+        returns without mutating state.
         """
-        from services.providers import Providers
+        from services.compaction_message_processor import TrailCompactionProcessor
 
         trail_text = '\n'.join(self._act_trail)
         if not trail_text.strip():
             return
 
+        proc = TrailCompactionProcessor(raw_input=trail_text)
         try:
-            response = Providers.instance().send_messages(
-                self.TOOL_COMPACTION_PROMPT,
-                [{'role': 'user', 'content': trail_text}],
-                job=self.JOB,
-                tools=None,
-            )
-            self._metrics.accumulate(response)
-            summary_text = (response.text or '').strip()
+            summary_text = (proc.send() or '').strip()
         except Exception as exc:
             logger.warning(
                 "[COMPACTION] %s: Stage 1 tool compaction LLM call failed: %s",
                 self.CHANNEL, exc,
             )
             return
+        finally:
+            self._metrics.merge(proc._metrics)
 
         if not summary_text:
             logger.warning(
@@ -1264,9 +1261,9 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     Called by ``send()`` on every ACT iteration, immediately after
     ``getUserPrompt()`` returns.
     """
-    from services import compaction_service
+    from services import compaction_persistence
 
-    row = compaction_service.get_compaction(channel)
+    row = compaction_persistence.get_compaction(channel)
     if not row:
         return user_body
     compacted = (row.get('compacted_text') or '').strip()

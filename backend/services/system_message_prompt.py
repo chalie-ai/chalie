@@ -262,3 +262,55 @@ Output a single JSON object with exactly two keys:
 
 Return ONLY the JSON object. No code fences.\
 """
+
+
+class CompactionFullSystemPrompt(SystemMessagePrompt):
+    """System-message body for full channel compaction.
+
+    Wired to: ``FullCompactionProcessor`` (replaces mid-ACT Stage 2 +
+    deleted post-turn backstop).
+    """
+
+    _SYSTEM_PROMPT = """\
+Summarize the following conversation context into a compact, actionable summary.
+
+Preserve:
+- Decisions made and their reasoning
+- Facts established (names, dates, numbers, specifics)
+- User preferences expressed
+- Key information gathered from tools or research
+- Action items and their current status
+- Any unresolved questions or pending items
+
+Do NOT preserve:
+- Conversation flow ("then we discussed...", "the user asked...")
+- Social pleasantries or greetings
+- Redundant confirmations ("yes", "ok", "got it")
+- Raw tool output — summarize the findings instead
+- Reasoning that led to discarded options
+
+Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts.\
+"""
+
+
+class CompactionTrailSystemPrompt(SystemMessagePrompt):
+    """System-message body for mid-ACT tool-trail summarisation.
+
+    Wired to: ``TrailCompactionProcessor`` (replaces mid-ACT Stage 1).
+    """
+
+    _SYSTEM_PROMPT = """\
+You are compressing a tool-use trail from an in-progress task.
+
+Preserve:
+- Key findings surfaced by each tool call (data, names, IDs, URLs, results)
+- Decisions the assistant has made based on those findings
+- Outstanding questions or next steps implied by the trail
+
+Do NOT preserve:
+- Literal tool argument JSON
+- Redundant reasoning ("I will now call X to find Y")
+- Errors the assistant already recovered from
+
+Write a single dense paragraph. This summary replaces the raw tool output in the ongoing context — be accurate, be specific.\
+"""

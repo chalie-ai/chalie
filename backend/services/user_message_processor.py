@@ -97,9 +97,11 @@ class UserMessageProcessor(MessageProcessor):
         raw_input: str,
         metadata: dict | None = None,
         on_narration: Callable[[str, int], None] | None = None,
+        on_tool_event: Callable[[dict], None] | None = None,
     ):
         super().__init__(raw_input, metadata)
         self._on_narration = on_narration
+        self._on_tool_event = on_tool_event
         # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
         # Set by store() — the final LLM response text, needed by postTurn()
@@ -362,6 +364,19 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Narration callback failed: {e}")
 
+    def _emit_tool_event(self, event: dict) -> None:
+        """Push tool start/end events to the per-request SSE channel.
+
+        Mirrors _emit_narration: fires self._on_tool_event if set, swallows
+        callback exceptions, never kills the ACT loop.
+        """
+        if not self._on_tool_event or not event:
+            return
+        try:
+            self._on_tool_event(event)
+        except Exception as e:
+            logger.debug(f"[USER MSG] Tool event callback failed: {e}")
+
     def _drain_steering(self, request_id: str | None) -> list[str]:
         """Drain mid-loop user steering messages from MemoryStore.
 
@@ -399,13 +414,18 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Four-step fan-out, each individually error-isolated.
+        """Three-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
           2. DMNService.on_turn() — R10 critical
           3. MetricsService — last ("turn closed" signal)
-          4. compaction_service.check_and_compact — end-turn backstop
+
+        Compaction is intentionally NOT here: per the north star
+        (message-processing.md § "What does NOT go in postTurn()"),
+        compaction is a send()-loop responsibility driven by context
+        pressure, not a post-turn consequence. Mid-ACT Stage 1/2 in
+        send() owns it.
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
@@ -445,30 +465,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 4. End-turn compaction backstop (safety net; mid-loop compaction in send()
-        # should handle most cases).
-        # WARNING level — silent compaction failure leads to context overflow
-        # (Commit 8 critic P1-2).
-        try:
-            from services import compaction_service
-            compaction_service.check_and_compact(channel, self._context_budget())
-        except Exception as e:
-            logger.warning(f"[POSTTURN] End-turn compaction failed: {e}", exc_info=True)
-
     # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _context_budget(self) -> int:
-        """Estimate the context budget for end-turn compaction check.
-
-        Reads the context limit from the provider for JOB, caps at 60% of that
-        limit or 150,000 tokens, falls back to 32,000 on error.
-        """
-        try:
-            from services.providers import Providers
-            ctx_limit = Providers.instance().get_context_limit(job=self.JOB)
-            return min(int(ctx_limit * 0.6), 150_000)
-        except Exception:
-            return 32_000
 
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.

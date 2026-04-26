@@ -39,6 +39,26 @@ class MetricsAccumulator:
             return
         self.tool_counts[tool_name] = self.tool_counts.get(tool_name, 0) + 1
 
+    def merge(self, other: 'MetricsAccumulator') -> None:
+        """Fold another accumulator's counts into this one.
+
+        Used when a sub-processor (e.g. FullCompactionProcessor) runs its own
+        send() inside the parent turn — the parent absorbs the sub-processor's
+        token + tool counts so per-turn metrics reflect the full cost.
+
+        start_time stays the parent's. tokens_total_complete falls to False
+        if either side is incomplete (preserves the existing semantic).
+        """
+        if other is None:
+            return
+        for attr in ('tokens_input', 'tokens_output', 'tokens_thinking',
+                     'tokens_cache_read', 'tokens_cache_create'):
+            setattr(self, attr, getattr(self, attr) + getattr(other, attr))
+        for tool_name, count in other.tool_counts.items():
+            self.tool_counts[tool_name] = self.tool_counts.get(tool_name, 0) + count
+        if not other.tokens_total_complete:
+            self.tokens_total_complete = False
+
     def snapshot(self, end_time: float = None) -> dict:
         end = end_time if end_time is not None else time.time()
         total = (self.tokens_input + self.tokens_output + self.tokens_thinking

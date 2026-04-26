@@ -17,12 +17,6 @@
       "name": "Tool Synthesis",
       "desc": "Evaluates recent tool call results for novel knowledge worth storing in memory. Runs every 60 minutes.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "compaction",
-      "name": "Compaction",
-      "desc": "Compresses older conversation turns into dense summaries preserving facts, decisions, and preferences.",
-      "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "none", "vision": "none" }
     }
   ]
 }
