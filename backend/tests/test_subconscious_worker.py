@@ -2,7 +2,7 @@
 Unit tests for SubconsciousWorker — gates, step exception isolation, persistence.
 
 Per Dylan's directive: lean test surface for the worker shell. Sub-services
-(SuperEpisodeEncoderProcessor, DecayEngineService, PatternExtractor,
+(SuperEpisodeEncoderProcessor, DecayEngineService, PatternMatchProcessor,
 UserSummaryProcessor) own their own behavioural tests; this file only verifies
 the worker's gate logic, exception isolation, persistence, and backpressure.
 
@@ -61,9 +61,9 @@ def stub_worker(monkeypatch):
         fired.append("decay")
         return "ok"
 
-    def _patterns(_self):
-        fired.append("patterns")
-        return "candidates_added=0 promotions=0"
+    def _pattern_match(_self):
+        fired.append("pattern_match")
+        return "skip cursor=0 latest=0 delta=0"
 
     def _synthesis(_self):
         fired.append("synthesis")
@@ -71,7 +71,7 @@ def stub_worker(monkeypatch):
 
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", _consolidate)
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", _decay)
-    monkeypatch.setattr(SubconsciousWorker, "_step_patterns", _patterns)
+    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", _pattern_match)
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", _synthesis)
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired",
                         lambda _self, when: _persist(when))
@@ -93,7 +93,7 @@ def test_cold_boot_passes_both_gates(isolated_world_state, stub_worker):
     """No user message, no prior fire → run all four steps."""
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "patterns", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
     assert all(step["status"] == "ok" for step in result["steps"].values())
     assert result["last_fired_at"] is not None
 
@@ -121,7 +121,7 @@ def test_idle_window_passed_runs(isolated_world_state, stub_worker):
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "patterns", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
 
 
 def test_already_fired_gate_skips(isolated_world_state, stub_worker):
@@ -153,7 +153,26 @@ def test_fresh_message_resets_already_fired_gate(isolated_world_state, stub_work
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "patterns", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
+
+
+# ── Force bypass ─────────────────────────────────────────────────────────────
+
+
+def test_run_once_force_bypasses_gates(isolated_world_state, stub_worker):
+    """force=True bypasses both idle-gate and already-fired gate; tick body runs."""
+    # Simulate a very recent user message — would normally trip the user_active gate.
+    isolated_world_state.absorb(Signal(
+        source="ws",
+        kind="user_message",
+        payload={},
+        received_at=utc_now() - timedelta(seconds=10),
+    ))
+    result = stub_worker.run_once(force=True)
+    assert "skipped" not in result
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
+    assert result["steps"]
+    assert all(step["status"] == "ok" for step in result["steps"].values())
 
 
 # ── Step exception isolation ────────────────────────────────────────────────
@@ -169,7 +188,7 @@ def test_step_exception_does_not_block_others(isolated_world_state, monkeypatch)
 
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", _ok("consolidate"))
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", _boom)
-    monkeypatch.setattr(SubconsciousWorker, "_step_patterns", _ok("patterns"))
+    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", _ok("pattern_match"))
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", _ok("synthesis"))
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
@@ -181,7 +200,7 @@ def test_step_exception_does_not_block_others(isolated_world_state, monkeypatch)
     assert result["steps"]["consolidate"]["status"] == "ok"
     assert result["steps"]["decay"]["status"] == "error"
     assert "decay blew up" in result["steps"]["decay"]["error"]
-    assert result["steps"]["patterns"]["status"] == "ok"
+    assert result["steps"]["pattern_match"]["status"] == "ok"
     assert result["steps"]["synthesis"]["status"] == "ok"
 
 
@@ -195,8 +214,8 @@ def test_backpressure_skips_steps_3_and_4(isolated_world_state, monkeypatch):
                         lambda _self: fired.append("consolidate") or "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_decay",
                         lambda _self: fired.append("decay") or "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_patterns",
-                        lambda _self: fired.append("patterns") or "ok")
+    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match",
+                        lambda _self: fired.append("pattern_match") or "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis",
                         lambda _self: fired.append("synthesis") or "ok")
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
@@ -207,8 +226,8 @@ def test_backpressure_skips_steps_3_and_4(isolated_world_state, monkeypatch):
     result = worker.run_once()
 
     assert fired == ["consolidate", "decay"]
-    assert result["steps"]["patterns"]["status"] == "skipped"
-    assert result["steps"]["patterns"]["detail"] == "bg_llm_saturated"
+    assert result["steps"]["pattern_match"]["status"] == "skipped"
+    assert result["steps"]["pattern_match"]["detail"] == "bg_llm_saturated"
     assert result["steps"]["synthesis"]["status"] == "skipped"
     assert result["steps"]["synthesis"]["detail"] == "bg_llm_saturated"
 
@@ -228,7 +247,7 @@ def test_concurrent_tick_returns_skipped_re_entrant(isolated_world_state, monkey
 
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", _slow_consolidate)
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", lambda _self: "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_patterns", lambda _self: "ok")
+    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
@@ -332,8 +351,8 @@ def test_synthesis_skipped_result_propagates_to_step_detail(isolated_world_state
     """
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", lambda _self: "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_patterns",
-                        lambda _self: "candidates_added=0 promotions=0")
+    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match",
+                        lambda _self: "skip cursor=0 latest=0 delta=0")
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
     monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: False)

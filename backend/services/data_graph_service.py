@@ -48,9 +48,10 @@ _KIND_POLICY = {
     KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
     KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
-    # behavioral_pattern: ttl_days=None disables the generic power-law decay loop.
-    # DecayEngineService._decay_behavioral_patterns() owns the active->stale
-    # transition based on per-vertical decay_days encoded in the row's content JSON.
+    # behavioral_pattern: written exclusively by tools.pattern_match.save_pattern.execute()
+    # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
+    # soft-delete at 0) is handled by PatternMatchProcessor.postTurn() — DecayEngine
+    # does NOT touch this kind.
     KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
 }
 

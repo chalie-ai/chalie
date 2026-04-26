@@ -10,7 +10,7 @@ Spec: ``/Volumes/llm/chalie-plans/v0.5.0/2026-04-24-subconscious-worker-design.m
 Tick body (sequential, per §5.3):
     1. Consolidate episodes → super-episodes  (per channel with unconsolidated rows).
     2. Run decay engine.
-    3. Run pattern extraction.
+    3. Run pattern match.
     4. Run user synthesis.
 
 Gates (both must pass — §5.2):
@@ -103,22 +103,33 @@ class SubconsciousWorker:
 
     # ── Public entry ─────────────────────────────────────────────────────────
 
-    def run_once(self) -> dict:
+    def run_once(self, force: bool = False) -> dict:
         """Run one full tick. Returns a structured summary.
 
         Summary keys:
             - ``skipped``: gate name when both-gates check rejects the tick
-              (``user_active`` | ``already_fired``); absent when steps run.
+              (``user_active`` | ``already_fired`` | ``re_entrant``); absent
+              when steps run.
             - ``steps``: dict per step with ``status`` (``ok`` | ``skipped`` |
               ``error``) and optional ``detail`` / ``error`` fields.
             - ``last_fired_at``: ISO string when state was bumped, else ``None``.
+
+        Args:
+            force: When ``True``, bypass the idle-gate and already-fired gate.
+                   The re-entrancy lock still applies — concurrent forced ticks
+                   return ``{"skipped": "re_entrant"}``.
         """
         if not self._lock.acquire(blocking=False):
             logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
             return {"skipped": "re_entrant", "steps": {}, "last_fired_at": None}
 
         try:
-            return self._tick()
+            if not force:
+                gate_skip = self._check_gates()
+                if gate_skip is not None:
+                    logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
+                    return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
+            return self._tick(force=force)
         finally:
             self._lock.release()
 
@@ -129,13 +140,13 @@ class SubconsciousWorker:
 
     # ── Tick orchestration ───────────────────────────────────────────────────
 
-    def _tick(self) -> dict:
-        """Body of one tick after the re-entry guard fires."""
-        gate_skip = self._check_gates()
-        if gate_skip is not None:
-            logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
-            return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
+    def _tick(self, force: bool = False) -> dict:
+        """Body of one tick after gates have been cleared (or bypassed).
 
+        ``force`` is only used to label the completion log line so a
+        gate-bypassed run is distinguishable from a normal idle-window tick
+        when grepping operator logs.
+        """
         steps: dict = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["decay"] = self._safe_step("decay", self._step_decay)
@@ -143,11 +154,11 @@ class SubconsciousWorker:
         # Backpressure check — skip LLM-heavy steps 3 + 4 when queue is saturated.
         bg_saturated = self._is_bg_llm_saturated()
         if bg_saturated:
-            steps["patterns"] = {"status": "skipped", "detail": "bg_llm_saturated"}
+            steps["pattern_match"] = {"status": "skipped", "detail": "bg_llm_saturated"}
             steps["synthesis"] = {"status": "skipped", "detail": "bg_llm_saturated"}
             logger.info(f"{LOG_PREFIX} bg LLM queue saturated — skipping pattern + synthesis")
         else:
-            steps["patterns"] = self._safe_step("patterns", self._step_patterns)
+            steps["pattern_match"] = self._safe_step("pattern_match", self._step_pattern_match)
             steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
 
         now = utc_now()
@@ -159,11 +170,12 @@ class SubconsciousWorker:
             logger.warning(f"{LOG_PREFIX} persist last_fired_at failed: {exc}")
             last_iso = None
 
+        prefix = "tick complete (forced)" if force else "tick complete"
         logger.info(
-            f"{LOG_PREFIX} tick complete: "
+            f"{LOG_PREFIX} {prefix}: "
             f"consolidate={steps['consolidate']['status']} "
             f"decay={steps['decay']['status']} "
-            f"patterns={steps['patterns']['status']} "
+            f"pattern_match={steps['pattern_match']['status']} "
             f"synthesis={steps['synthesis']['status']}"
         )
         return {"steps": steps, "last_fired_at": last_iso}
@@ -270,27 +282,82 @@ class SubconsciousWorker:
         self._decay_engine.run_once()
         return "ok"
 
-    def _step_patterns(self) -> str:
-        """Step 3 — extract behavioural patterns from new super-episodes.
+    def _step_pattern_match(self) -> str:
+        """Step 3 — single-pass LLM pattern matcher over a transcript-id window.
 
-        Iterates the six verticals; one LLM call per vertical when there are
-        new super-episodes since the last watermark. The extractor itself
-        isolates per-vertical exceptions.
+        Reads a cursor row from data_graph (kind='system'
+        key='pattern_match_cursor'). If MAX(transcripts.id) - cursor < 50,
+        skip. Else fire PatternMatchProcessor over the (cursor, latest] window
+        and advance the cursor on success.
         """
-        from services.pattern_extractor import get_pattern_extractor
+        from services.data_graph_service import get_data_graph_service
+        from services.database_service import get_shared_db_service
+        from services.pattern_match_processor import PatternMatchProcessor
 
-        summary = get_pattern_extractor().run_once()
-        promoted = sum(
-            (v.get("promotions") or 0)
-            for v in summary.values()
-            if isinstance(v, dict)
-        )
-        added = sum(
-            (v.get("candidates_added") or 0)
-            for v in summary.values()
-            if isinstance(v, dict)
-        )
-        return f"candidates_added={added} promotions={promoted}"
+        _DG_KEY_CURSOR = "pattern_match_cursor"
+        _MIN_DELTA = 50
+
+        db = get_shared_db_service()
+
+        # 1. Read cursor — newest active row wins. The deterministic
+        # ORDER BY id DESC defends against historical / concurrent writes
+        # leaving more than one active row (UPSERT collisions in
+        # data_graph_service.store path); SQLite's default ordering is
+        # implementation-defined and would silently pick the wrong row.
+        cursor = 0
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM data_graph "
+                "WHERE kind='system' AND key=? "
+                "AND active=1 AND deleted_at IS NULL "
+                "ORDER BY id DESC LIMIT 1",
+                (_DG_KEY_CURSOR,),
+            ).fetchone()
+            if row and row[0]:
+                try:
+                    cursor = int(row[0])
+                except (TypeError, ValueError):
+                    cursor = 0
+
+        # 2. Read latest transcript id
+        with db.connection() as conn:
+            latest_row = conn.execute("SELECT MAX(id) FROM transcript").fetchone()
+        latest = (latest_row[0] if latest_row else None) or 0
+
+        delta = latest - cursor
+        if delta < _MIN_DELTA:
+            logger.info(
+                f"{LOG_PREFIX} pattern_match_skip cursor={cursor} "
+                f"latest={latest} delta={delta}"
+            )
+            return f"skip cursor={cursor} latest={latest} delta={delta}"
+
+        # 3. Fire processor
+        PatternMatchProcessor(window_start=cursor, window_end=latest).send()
+
+        # 4. Advance cursor on success.
+        # Cursor write race / known risk: a crash here leaves the cursor
+        # pinned to its previous value while the processor has already
+        # decayed every untouched pattern. The next tick re-fires the same
+        # window and re-decays — visible in tests as confidence drifting
+        # below the "−0.005 per cycle" expectation. Spec accepts this as a
+        # minor double-fire risk; logging at WARNING so an unexpected
+        # cursor-stuck pattern is observable in operator logs.
+        try:
+            get_data_graph_service().store(
+                kind="system",
+                key=_DG_KEY_CURSOR,
+                value=str(latest),
+                source="subconscious_worker",
+            )
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} pattern_match cursor write failed "
+                f"cursor={cursor}->{latest} — next tick will re-fire same "
+                f"window and re-decay untouched patterns: {exc}"
+            )
+            raise
+        return f"fired cursor={cursor}->{latest} delta={delta}"
 
     def _step_synthesis(self) -> str:
         """Step 4 — refresh the user synopsis (short + long).

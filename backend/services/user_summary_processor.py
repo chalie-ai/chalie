@@ -26,70 +26,18 @@ _MAX_PATTERN_ROWS = 25
 
 
 def _format_pattern_line(content: dict) -> str:
-    """Render a single behavioral_pattern content dict as a compact one-liner.
-
-    Format varies by pattern class so the synthesiser sees the most relevant
-    slots without having to parse raw JSON.
-
-    Examples::
-
-        meal_times / time_routine: dinner fri 18:30-20:00 (recurrence=7, last 2026-04-22)
-        cuisine_pref / preference: italian (weight=0.85, last 2026-04-20)
-        restaurant_pref / recurring_entity: Pizza Hut [restaurant] (recurrence=4, last 2026-04-18)
-        meetings / event_cadence: meeting every 7d next 2026-04-29 (recurrence=3, last 2026-04-18)
-    """
-    vertical = content.get('vertical', 'unknown')
-    cls = content.get('class', 'unknown')
-    slots = content.get('slots') or {}
-    recurrence = content.get('recurrence', 0)
-    last_seen = content.get('last_seen', '')
-    # Trim to date-only portion for brevity.
-    last_seen_short = last_seen[:10] if last_seen else '?'
-
-    if cls == 'time_routine':
-        label = slots.get('event_label', '')
-        day = slots.get('day_bucket', '')
-        window = slots.get('hour_window', '')
-        slot_str = f"{label} {day} {window}".strip()
-        return (
-            f"{vertical} / {cls}: {slot_str} "
-            f"(recurrence={recurrence}, last {last_seen_short})"
-        )
-
-    if cls == 'preference':
-        category = slots.get('category', '')
-        choice = slots.get('choice', '')
-        weight = slots.get('weight', '')
-        slot_str = f"{category} {choice}".strip() if category else choice
-        weight_part = f", weight={weight}" if weight != '' else ''
-        return (
-            f"{vertical} / {cls}: {slot_str} "
-            f"(recurrence={recurrence}{weight_part}, last {last_seen_short})"
-        )
-
-    if cls == 'recurring_entity':
-        kind = slots.get('kind', '')
-        name = slots.get('name', '')
-        bracket = f" [{kind}]" if kind else ''
-        return (
-            f"{vertical} / {cls}: {name}{bracket} "
-            f"(recurrence={recurrence}, last {last_seen_short})"
-        )
-
-    if cls == 'event_cadence':
-        event_type = slots.get('event_type', vertical)
-        cadence = slots.get('cadence_days', '')
-        next_exp = slots.get('next_expected', '')
-        next_exp_short = next_exp[:10] if next_exp else ''
-        cadence_part = f" every {cadence}d" if cadence != '' else ''
-        next_part = f" next {next_exp_short}" if next_exp_short else ''
-        return (
-            f"{vertical} / {cls}: {event_type}{cadence_part}{next_part} "
-            f"(recurrence={recurrence}, last {last_seen_short})"
-        )
-
-    # Fallback for unknown classes: dump vertical/class + recurrence.
-    return f"{vertical} / {cls}: (recurrence={recurrence}, last {last_seen_short})"
+    """Render a single behavioral_pattern content dict as a compact one-liner."""
+    name = content.get("name", "unknown")
+    freq = content.get("frequency", "?")
+    anchor = content.get("time_anchor") or ""
+    summary = content.get("summary", "")
+    confidence = content.get("confidence", 0)
+    last_seen = (content.get("last_seen_at") or "")[:10] or "?"
+    anchor_part = f" @ {anchor}" if anchor else ""
+    return (
+        f"{name} ({freq}{anchor_part}): {summary} "
+        f"[confidence={confidence}, last {last_seen}]"
+    )
 
 
 class UserSummaryProcessor(MessageProcessor):
@@ -263,7 +211,7 @@ class UserSummaryProcessor(MessageProcessor):
             for (value_json,) in pattern_rows:
                 try:
                     content = _json.loads(value_json)
-                    if content.get('status') == 'active':
+                    if content:
                         active_patterns.append(content)
                 except Exception:
                     continue
@@ -275,7 +223,7 @@ class UserSummaryProcessor(MessageProcessor):
 
         pattern_lines = [_format_pattern_line(p) for p in active_patterns]
         patterns_section = (
-            "## Behavioural patterns (recurrence, last seen)\n"
+            "## Behavioural patterns (frequency, last seen)\n"
             + "\n".join(f"- {line}" for line in pattern_lines)
         )
 

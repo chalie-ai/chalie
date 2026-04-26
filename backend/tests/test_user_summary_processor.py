@@ -445,95 +445,51 @@ class TestShouldSynthesiseBehavioralPattern:
 
 
 # ── TestFormatPatternLine ──────────────────────────────────────────────────────
+# The old extractor had 4-class × 6-vertical logic. PatternMatchProcessor
+# (v0.5.0 §6 rewrite) uses a flat content shape: name, frequency, time_anchor,
+# summary, confidence, last_seen_at. The four old tests tested extinct concepts
+# and are replaced with two that verify the new flat format.
 
 @pytest.mark.unit
 class TestFormatPatternLine:
 
-    def test_time_routine_renders_all_slots(self):
-        """time_routine: vertical, class, event_label, day_bucket, hour_window, recurrence, last_seen."""
+    def test_format_pattern_line_with_time_anchor(self):
+        """content with time_anchor includes '@ <anchor>' in the formatted line."""
         from services.user_summary_processor import _format_pattern_line
 
         content = {
-            'vertical': 'meal_times',
-            'class': 'time_routine',
-            'slots': {'event_label': 'dinner', 'day_bucket': 'fri', 'hour_window': '18:30-20:00'},
-            'recurrence': 7,
-            'last_seen': '2026-04-22T19:00:00+00:00',
+            'name': 'morning_run',
+            'frequency': 'weekday',
+            'time_anchor': '07:00',
+            'summary': 'goes for a run in the morning',
+            'confidence': 7.0,
+            'last_seen_at': '2026-04-22T07:15:00+00:00',
         }
         line = _format_pattern_line(content)
 
-        assert 'meal_times' in line
-        assert 'time_routine' in line
-        assert 'dinner' in line
-        assert 'fri' in line
-        assert '18:30-20:00' in line
-        assert 'recurrence=7' in line
-        assert '2026-04-22' in line
+        assert 'morning_run' in line
+        assert 'weekday' in line
+        assert '@ 07:00' in line
+        assert 'goes for a run in the morning' in line
 
-    def test_preference_renders_weight_and_choice(self):
-        """preference: vertical, class, category, choice, weight, recurrence, last_seen."""
+    def test_format_pattern_line_without_time_anchor(self):
+        """content with empty time_anchor must not include '@' in the formatted line."""
         from services.user_summary_processor import _format_pattern_line
 
         content = {
-            'vertical': 'cuisine_pref',
-            'class': 'preference',
-            'slots': {'category': 'cuisine', 'choice': 'italian', 'weight': 0.85},
-            'recurrence': 5,
-            'last_seen': '2026-04-20T12:00:00+00:00',
+            'name': 'weekend_reading',
+            'frequency': 'weekend',
+            'time_anchor': '',
+            'summary': 'reads books on weekends',
+            'confidence': 5.0,
+            'last_seen_at': '2026-04-20T14:00:00+00:00',
         }
         line = _format_pattern_line(content)
 
-        assert 'cuisine_pref' in line
-        assert 'preference' in line
-        assert 'italian' in line
-        assert 'weight=0.85' in line
-        assert 'recurrence=5' in line
-        assert '2026-04-20' in line
-
-    def test_recurring_entity_renders_kind_bracket(self):
-        """recurring_entity: vertical, class, name, [kind] bracket, recurrence, last_seen."""
-        from services.user_summary_processor import _format_pattern_line
-
-        content = {
-            'vertical': 'restaurant_pref',
-            'class': 'recurring_entity',
-            'slots': {'kind': 'restaurant', 'name': 'Pizza Hut'},
-            'recurrence': 4,
-            'last_seen': '2026-04-18T20:00:00+00:00',
-        }
-        line = _format_pattern_line(content)
-
-        assert 'restaurant_pref' in line
-        assert 'recurring_entity' in line
-        assert 'Pizza Hut' in line
-        assert '[restaurant]' in line
-        assert 'recurrence=4' in line
-        assert '2026-04-18' in line
-
-    def test_event_cadence_renders_cadence_and_next(self):
-        """event_cadence: vertical, class, event_type, cadence_days, next_expected, recurrence, last_seen."""
-        from services.user_summary_processor import _format_pattern_line
-
-        content = {
-            'vertical': 'meetings',
-            'class': 'event_cadence',
-            'slots': {
-                'event_type': 'meeting',
-                'cadence_days': 7,
-                'next_expected': '2026-04-29T09:00:00+00:00',
-            },
-            'recurrence': 3,
-            'last_seen': '2026-04-18T09:00:00+00:00',
-        }
-        line = _format_pattern_line(content)
-
-        assert 'meetings' in line
-        assert 'event_cadence' in line
-        assert 'meeting' in line
-        assert 'every 7d' in line
-        assert '2026-04-29' in line
-        assert 'recurrence=3' in line
-        assert '2026-04-18' in line
+        assert 'weekend_reading' in line
+        assert '@' not in line, (
+            "No '@' expected when time_anchor is empty, but '@' found in: " + line
+        )
 
 
 # ── Integration tests (require live provider) ──────────────────────────────────
