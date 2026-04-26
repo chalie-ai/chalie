@@ -349,10 +349,10 @@ def _handle_history(service, params: dict) -> str:
         target = f"'{name}'" if name else "any list"
         return f"[LIST] No history found for {target}."
 
+    from services.time_formatter_service import TimeFormatterService
     lines = ["[LIST] History:"]
     for ev in events:
-        ts = ev['created_at']
-        ts_str = ts.strftime('%Y-%m-%d %H:%M') if hasattr(ts, 'strftime') else str(ts)
+        ts_str = TimeFormatterService.local(ev['created_at']) or str(ev['created_at'])
         content_part = f" — {ev['item_content']}" if ev['item_content'] else ""
         lines.append(f"  [{ts_str}] {ev['event_type']}{content_part}")
 

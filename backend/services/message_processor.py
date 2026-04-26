@@ -30,7 +30,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
-from services.time_utils import parse_utc, utc_now
+from services.time_utils import utc_now
+from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
@@ -807,11 +808,7 @@ class MessageProcessor:
             role = entry.get('role', 'unknown')
             content = entry.get('content', '')
             raw_ts = entry.get('created_at') or ''
-            try:
-                dt = parse_utc(raw_ts) if raw_ts else None
-                ts_label = dt.strftime('%Y-%m-%d %H:%M') if dt else _MISSING_TS_PLACEHOLDER
-            except Exception:
-                ts_label = _MISSING_TS_PLACEHOLDER
+            ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
             return f"[{ts_label}] {role}: {content}"
 
         def _build_input(rendered_entries: list[str]) -> str:
@@ -1362,7 +1359,12 @@ def _format_ts(
     row_kind: str = 'row',
     row_id: int | None = None,
 ) -> str:
-    """Format a raw SQLite/ISO timestamp into ``YYYY-MM-DD HH:MM`` (UTC, 24h).
+    """Format a raw SQLite/ISO timestamp into ``YYYY-MM-DD HH:MM`` in the user's
+    local timezone.
+
+    Storage is UTC (``utc_now().isoformat()``); the LLM only ever sees local
+    wall-clock time. Conversion runs through
+    :meth:`TimeFormatterService.local`, which handles tz lookup.
 
     If ``raw`` is ``None``, empty, or unparseable, return
     ``_MISSING_TS_PLACEHOLDER`` and emit a single warning log so the problem
@@ -1381,14 +1383,12 @@ def _format_ts(
         )
         return _MISSING_TS_PLACEHOLDER
 
-    dt = parse_utc(raw)
-    # parse_utc returns datetime.min on unparseable input. Treat that as
-    # missing too — the LLM must never see a 0001-01-01 timestamp.
-    if dt.year <= 1:
+    formatted = TimeFormatterService.local(raw)
+    if formatted is None:
         logger.warning(
             "[MessageProcessor._format_ts] unparseable created_at=%r on %s "
             "id=%s — rendering placeholder", raw, row_kind, row_id,
         )
         return _MISSING_TS_PLACEHOLDER
 
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return formatted

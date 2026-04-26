@@ -68,7 +68,9 @@ def handle_review_tool_calls(channel: str, params: dict) -> dict:
         params_str = rec.get('params', '{}')
         result = str(rec.get('result') or '')
         status_hint = 'error' if result.lower().startswith('error') else 'ok'
-        created = str(rec.get('created_at', ''))[:19]
+        from services.time_formatter_service import TimeFormatterService
+        created = TimeFormatterService.local(rec.get('created_at'), fmt='%Y-%m-%d %H:%M:%S') \
+            or str(rec.get('created_at', ''))[:19]
         # Truncate long results for readability
         if len(result) > 300:
             result = result[:300] + '...'

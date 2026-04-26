@@ -212,10 +212,10 @@ def _handle_list(service) -> str:
         created = doc.get('created_at')
         date_str = ''
         if created:
-            try:
-                date_str = f", uploaded {created.strftime('%b %d')}"
-            except Exception:
-                pass
+            from services.time_formatter_service import TimeFormatterService
+            local = TimeFormatterService.local(created, fmt='%b %d')
+            if local:
+                date_str = f", uploaded {local}"
 
         lines.append(
             f"  · {doc['original_name']}{type_str}"

@@ -6,7 +6,9 @@ All boundaries and tiers are covered as specified in the world-state-rebuild pla
 """
 
 import pytest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from services.time_formatter_service import TimeFormatterService as T
 from services.time_utils import utc_now
@@ -143,3 +145,54 @@ class TestAgoWithSeconds:
 
     def test_hours_seconds(self):
         assert T.ago(7200) == "2h 0m ago"
+
+
+@pytest.mark.unit
+class TestLocalConvertsUtcToUserTimezone:
+    """local() must render UTC inputs in the user's tz, never raw UTC."""
+
+    def _patch_tz(self, tz_name: str):
+        return patch(
+            "services.time_formatter_service.get_user_tz",
+            return_value=ZoneInfo(tz_name),
+        )
+
+    def test_aware_datetime_converted_to_local(self):
+        dt = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        with self._patch_tz("Europe/Malta"):  # UTC+2 (DST)
+            assert T.local(dt) == "2026-06-01 14:00"
+
+    def test_naive_datetime_assumed_utc(self):
+        dt = datetime(2026, 6, 1, 12, 0, 0)
+        with self._patch_tz("Europe/Malta"):
+            assert T.local(dt) == "2026-06-01 14:00"
+
+    def test_iso_string_with_offset(self):
+        with self._patch_tz("America/New_York"):  # UTC-4 (DST)
+            assert T.local("2026-06-01T12:00:00+00:00") == "2026-06-01 08:00"
+
+    def test_sqlite_naive_string(self):
+        with self._patch_tz("Asia/Tokyo"):  # UTC+9
+            assert T.local("2026-01-01 00:00:00") == "2026-01-01 09:00"
+
+    def test_custom_format(self):
+        dt = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        with self._patch_tz("Europe/Malta"):
+            assert T.local(dt, fmt="%b %d %H:%M") == "Jun 01 14:00"
+
+    def test_utc_fallback_returns_unconverted(self):
+        with self._patch_tz("UTC"):
+            assert T.local("2026-06-01T12:00:00+00:00") == "2026-06-01 12:00"
+
+    def test_none_returns_none(self):
+        assert T.local(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert T.local("") is None
+        assert T.local("   ") is None
+
+    def test_unparseable_returns_none(self):
+        assert T.local("not-a-date") is None
+
+    def test_year_one_sentinel_returns_none(self):
+        assert T.local("0001-01-01T00:00:00+00:00") is None

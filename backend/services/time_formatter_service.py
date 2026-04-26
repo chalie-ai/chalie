@@ -2,12 +2,16 @@
 TimeFormatterService — shared chokepoint for compact elapsed-time formatting.
 
 Replaces open-coded ``_relative_time()`` helpers scattered across the codebase.
-All duration values in WorldState, news, and introspect output pass through here.
+All duration values in WorldState and news output pass through here, and every
+absolute timestamp surfaced to the LLM (Previous Messages, compaction entries,
+tool results) goes through :meth:`local` so the model only ever sees the
+user's local wall-clock time, never raw UTC.
 """
 
 import logging
+from datetime import datetime
 
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now, parse_utc, get_user_tz
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +85,37 @@ class TimeFormatterService:
                 logger.debug("[TimeFormatter] unparseable input %r → '0s ago': %s", past, e)
                 secs = 0.0
         return f"{TimeFormatterService.duration(secs)} ago"
+
+    @staticmethod
+    def local(value, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
+        """Format *value* in the user's local timezone.
+
+        Single chokepoint for any absolute timestamp the LLM will see — Previous
+        Messages, compaction entries, tool results, scheduler confirmations, etc.
+        Storing UTC and rendering local is the rule; surfacing raw UTC to the
+        model is the bug this method exists to prevent.
+
+        Args:
+            value: A datetime (naive or aware), an ISO-8601 string, or a SQLite
+                ``YYYY-MM-DD HH:MM:SS`` string. Naive inputs are treated as UTC
+                (matches ``parse_utc``). ``None`` and unparseable strings return
+                ``None`` so callers can decide their own placeholder.
+            fmt: ``strftime`` format string, default ``'%Y-%m-%d %H:%M'``.
+
+        Returns:
+            Formatted local-time string, or ``None`` if *value* is missing or
+            unparseable.
+        """
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        try:
+            dt = value if isinstance(value, datetime) else parse_utc(value)
+            dt = parse_utc(dt)  # normalise tz to UTC
+            if dt.year <= 1:
+                return None
+            return dt.astimezone(get_user_tz()).strftime(fmt)
+        except Exception as e:
+            logger.debug("[TimeFormatter] local() unparseable %r: %s", value, e)
+            return None
