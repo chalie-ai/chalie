@@ -166,10 +166,10 @@ class TestEstimateConfidenceDirectly:
 
     def test_deterministic_ignores_result_content(self):
         """Deterministic confidence is fixed regardless of result."""
-        assert _estimate_confidence('memorize', '') == 0.92
-        assert _estimate_confidence('memorize', None) == 0.92
+        assert _estimate_confidence('memorize', '') == pytest.approx(0.92)
+        assert _estimate_confidence('memorize', None) == pytest.approx(0.92)
 
     def test_read_with_none_result(self):
         """Read action with None result gets the lowest read confidence."""
-        assert _estimate_confidence('recall', None) == 0.40
+        assert _estimate_confidence('recall', None) == pytest.approx(0.40)
 
