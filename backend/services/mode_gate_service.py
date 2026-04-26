@@ -57,6 +57,11 @@ _DIRECTIVE_ANALYZE = (
     "tools to verify"
 )
 
+_DIRECTIVE_MATH_CODING = (
+    "For math or coding, always use the `code_eval` tool to check your "
+    "response before answering the user"
+)
+
 # ── Module-level config (loaded once) ─────────────────────────────────────────
 
 _CONFIG_PATH = os.path.join(
@@ -337,8 +342,10 @@ class ModeGateService:
         Behaviour (state >= STEER_THRESHOLD per mode):
           * brainstorm OR research → proactive suggestion + verification block
           * analyze                → assumption-check block
-        Both may fire in the same turn — blocks stack in declaration order
-        (brainstorm/research first, analyze second), separated by blank lines.
+          * math OR coding         → mandatory code_eval verification block
+        Multiple may fire in the same turn — blocks stack in declaration
+        order (brainstorm/research, analyze, math/coding), separated by
+        blank lines.
 
         Returns the empty string when no mode is strongly active so callers
         can append unconditionally without conditional join logic.
@@ -352,6 +359,11 @@ class ModeGateService:
             parts.append(_DIRECTIVE_BRAINSTORM_RESEARCH)
         if state.get('analyze', 0.0) >= STEER_THRESHOLD:
             parts.append(_DIRECTIVE_ANALYZE)
+        if (
+            state.get('math', 0.0) >= STEER_THRESHOLD
+            or state.get('coding', 0.0) >= STEER_THRESHOLD
+        ):
+            parts.append(_DIRECTIVE_MATH_CODING)
         return "\n\n".join(parts)
 
     def reset_state(self) -> None:
