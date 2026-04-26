@@ -4,7 +4,6 @@ import time
 import pytest
 
 from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
-from services.innate_skills._tag import tag as _tag
 
 
 pytestmark = pytest.mark.unit
