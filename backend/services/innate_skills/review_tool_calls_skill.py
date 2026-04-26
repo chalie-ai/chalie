@@ -9,6 +9,8 @@ timestamp.
 
 import logging
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 
 TOOL_SCHEMA = {
@@ -50,19 +52,25 @@ def handle_review_tool_calls(channel: str, params: dict) -> dict:
     """
     date_time = (params.get('date_time') or '').strip()
     if not date_time:
-        return {'text': "[REVIEW TOOL CALLS] Error: 'date_time' parameter is required."}
+        return {'text': _skill_tag("review_tool_calls", error="date-time-required")}
 
     try:
         from services.tool_call_service import ToolCallService
         records = ToolCallService().get_by_timerange(date_time, buffer_minutes=5)
     except Exception as e:
         logger.error(f"[REVIEW TOOL CALLS] Query failed for date_time={date_time!r}: {e}", exc_info=True)
-        return {'text': f"[REVIEW TOOL CALLS] Error retrieving records: {str(e)[:200]}"}
+        return {'text': _skill_tag("review_tool_calls", error=f"query-failed:{str(e)[:150]}")}
 
     if not records:
-        return {'text': f"No tool calls found within ±5 minutes of {date_time}"}
+        return {
+            'text': _skill_tag(
+                "review_tool_calls",
+                f"No tool calls found within ±5 minutes of {date_time}",
+                anchor=date_time,
+            )
+        }
 
-    lines = [f"[REVIEW TOOL CALLS] {len(records)} record(s) within ±5 min of {date_time}:\n"]
+    lines = [f"{len(records)} record(s) within ±5 min of {date_time}:\n"]
     for rec in records:
         tool_name = rec.get('tool_name', 'unknown')
         params_str = rec.get('params', '{}')
@@ -71,9 +79,9 @@ def handle_review_tool_calls(channel: str, params: dict) -> dict:
         from services.time_formatter_service import TimeFormatterService
         created = TimeFormatterService.local(rec.get('created_at'), fmt='%Y-%m-%d %H:%M:%S') \
             or str(rec.get('created_at', ''))[:19]
-        # Truncate long results for readability
         if len(result) > 300:
             result = result[:300] + '...'
         lines.append(f"  [{created}] {tool_name} params={params_str} → {result} ({status_hint})")
 
-    return {'text': '\n'.join(lines)}
+    body = '\n'.join(lines)
+    return {'text': _skill_tag("review_tool_calls", body, anchor=date_time, count=len(records))}

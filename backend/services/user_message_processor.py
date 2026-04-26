@@ -100,8 +100,7 @@ class UserMessageProcessor(MessageProcessor):
     ):
         super().__init__(raw_input, metadata)
         self._on_narration = on_narration
-        # Set by _run_memory_seed() — stores the numeric radius used so
-        # getUserPrompt() can render `[memory(radius=X)] ...` correctly.
+        # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
         # Set by store() — the final LLM response text, needed by postTurn()
         # for interaction logging and phase updates (call AFTER store()).
@@ -199,7 +198,7 @@ class UserMessageProcessor(MessageProcessor):
           3. System Awareness block
           4. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
-          5. Memory seed line: [memory(radius=X)] ...
+          5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
           6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
           7. ACT loop trail (empty string on iteration 1)
 
@@ -235,9 +234,9 @@ class UserMessageProcessor(MessageProcessor):
         # Blank separator before current turn content
         parts.append('')
 
-        # 4. Memory seed (set by _run_memory_seed at turn start)
-        if self._memory_seed and self._memory_seed_radius is not None:
-            parts.append(f"[memory(radius={self._memory_seed_radius})] {self._memory_seed}")
+        # 4. Memory seed (set by pre_act() — canonical tag block, injected verbatim)
+        if self._memory_seed:
+            parts.append(self._memory_seed)
 
         # 5. Current turn line with optional file tags and nudge
         turn_line = f"user: {self._raw_input}"
@@ -299,40 +298,50 @@ class UserMessageProcessor(MessageProcessor):
             prompt = f"{prompt}\n\n{additions}"
         return prompt
 
-    def _run_memory_seed(self) -> None:
-        """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
-        from services.innate_skills.memory_skill import (
-            recall_episodes, SEED_RADIUS_BASELINE, _format_results,
-        )
+    def pre_act(self) -> None:
+        """Memory auto-seed via canonical tool dispatch path.
+
+        Runs once at turn start (after self._uid is populated by write_input_row).
+        Calls handle_memory directly so the result is a canonical tag block,
+        records the row via ToolRenderAndRecordService (ephemeral=False) — same
+        storage path as any other durable tool call — and stores the block on
+        self._memory_seed for getUserPrompt() to inject verbatim.
+        """
+        from services.innate_skills.memory_skill import handle_memory, SEED_RADIUS_BASELINE
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
         radius = SEED_RADIUS_BASELINE
+        query = self._raw_input
+
+        # Expose query separately so recall_episodes() can embed the raw text
+        # for drift calculation without embedding the tag block string.
+        self._memory_seed_query = query
+        self._memory_seed_radius = radius
 
         try:
-            hits, _status = recall_episodes(
-                channel=self.CHANNEL,
-                query=self._raw_input,
-                caller='seed',
-                baseline_radius=radius,
-                return_raw=False,
-            )
-            seed_text = _format_results(hits) if hits else ''
+            block = handle_memory(self.CHANNEL, {
+                'action': 'recall',
+                'query': query,
+            })
         except Exception as exc:
-            logger.warning(f"[USER MSG] Memory auto-seed failed: {exc}")
-            seed_text = ''
+            logger.warning(f"[USER MSG] Memory pre-act seed failed: {exc}")
+            return
 
-        if seed_text:
-            self._memory_seed = seed_text
-            self._memory_seed_radius = radius
-            ToolRenderAndRecordService(
-                tool_name='memory',
-                params={'action': 'recall', 'radius': radius},
-                result=seed_text,
-                ephemeral=False,
-                transcript_id=self._uid,
-            ).renderAndRecord()
-        else:
-            logger.debug("[USER MSG] Memory auto-seed: no result returned")
+        # Only store and inject when the seed returned real results — an empty
+        # tag block (`[memory(query=..., results=0)]\n[end:memory]`) adds noise
+        # without value.
+        if not block or "results=0" in block:
+            logger.debug("[USER MSG] Memory pre-act seed: no results")
+            return
+
+        self._memory_seed = block
+        ToolRenderAndRecordService(
+            tool_name='memory',
+            params={'action': 'recall', 'query': query, 'radius': radius},
+            result=block,
+            ephemeral=False,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.

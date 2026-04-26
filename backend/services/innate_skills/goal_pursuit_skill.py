@@ -11,6 +11,8 @@ import logging
 import threading
 import uuid
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOAL PURSUIT SKILL]"
 
@@ -54,7 +56,7 @@ def handle_goal_pursuit(channel: str, params: dict) -> str:
     """
     goal = params.get("goal", "").strip()
     if not goal:
-        return json.dumps({"success": False, "error": "No goal specified."})
+        return _skill_tag("goal_pursuit", error="no-goal-specified")
 
     pursuit_id = uuid.uuid4().hex
 
@@ -92,8 +94,9 @@ def handle_goal_pursuit(channel: str, params: dict) -> str:
     t = threading.Thread(target=_run, daemon=True, name=f"goal-pursuit-{pursuit_id[:8]}")
     t.start()
 
-    return json.dumps({
+    body = json.dumps({
         "success": True,
         "pursuit_id": pursuit_id,
         "response": "Working on it. I'll notify you when done.",
     })
+    return _skill_tag("goal_pursuit", body, pursuit_id=pursuit_id[:8])

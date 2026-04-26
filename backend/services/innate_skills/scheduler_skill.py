@@ -10,6 +10,8 @@ import uuid
 import logging
 from datetime import datetime, timezone, timedelta
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 
 _PAST_DUE_GRACE_SECONDS = 120
@@ -101,13 +103,7 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 
 
 def handle_scheduler(channel: str, params: dict) -> str:
-    """
-    Dispatch scheduler actions based on params['action'].
-
-    Returns a JSON string:
-      success: {"status": "success", "action_performed": "create"|"delete"|"list", "record": {...}}
-      error:   {"status": "error", "error": "<reason>"}
-    """
+    """Dispatch scheduler actions based on params['action']."""
     action = params.get("action", "list").lower()
 
     if action == "create":
@@ -119,7 +115,8 @@ def handle_scheduler(channel: str, params: dict) -> str:
     else:
         result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
 
-    return json.dumps(result)
+    body = json.dumps(result)
+    return _skill_tag("schedule", body, action=action)
 
 
 def _create(channel: str, params: dict) -> dict:

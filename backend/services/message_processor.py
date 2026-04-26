@@ -162,6 +162,10 @@ class MessageProcessor:
         self._raw_input = raw_input
         self._metadata = metadata or {}
         self._memory_seed: str | None = None
+        # Raw recall query used by pre_act(); kept separate from _memory_seed
+        # (which is the formatted tag block) so recall_episodes() can embed
+        # the original query for drift computation rather than the block string.
+        self._memory_seed_query: str | None = None
         # Per-turn log of memory recall queries (seed + llm_recall).
         # Populated by the memory skill recall path; consumed by the next
         # recall call for redundancy-narrow and drift-expand computation.
@@ -558,7 +562,7 @@ class MessageProcessor:
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService()
 
-            self._run_memory_seed()
+            self.pre_act()
             self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
             # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
@@ -1009,12 +1013,13 @@ class MessageProcessor:
 
     # ── Overridable hooks ────────────────────────────────────────────────────
 
-    def _run_memory_seed(self) -> None:
-        """Pre-ACT-loop memory auto-seed hook. Base is a no-op.
+    def pre_act(self) -> None:
+        """Pre-ACT-loop hook. Default is a no-op.
 
-        UserMessageProcessor overrides to dispatch the memory skill once at
-        turn start, populate self._memory_seed, and record via
-        ToolRenderAndRecordService (ephemeral=False).
+        Called from send() after the input transcript row is written
+        (self._uid is populated) but before the ACT loop starts.
+        UserMessageProcessor overrides to run the memory seed via the
+        canonical tool dispatch path.
         """
         pass
 

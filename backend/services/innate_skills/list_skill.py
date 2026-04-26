@@ -8,6 +8,8 @@ import json
 import logging
 from typing import Optional
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 
 TOOL_SCHEMA = {
@@ -97,11 +99,12 @@ def handle_list(channel: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = ListService(db)
-        return _dispatch(service, action, params)
-
+        body = _dispatch(service, action, params)
     except Exception as e:
         logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
-        return _fail(str(e))
+        body = _fail(str(e))
+
+    return _skill_tag("list", body, action=action)
 
 
 def _dispatch(service, action: str, params: dict) -> str:

@@ -19,6 +19,8 @@ import socket
 import urllib3
 from urllib.parse import urlparse
 
+from services.innate_skills._tag import tag as _skill_tag
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
@@ -98,13 +100,6 @@ _BLOCKED_PATH_PREFIXES = ('/etc', '/proc', '/dev', '/sys', '/var/run')
 
 # ─── Public handler ───────────────────────────────────────────────────────────
 
-def _tag(source: str, max_chars: int, **extra) -> str:
-    """Build the canonical [read(...)] tag — mirrors [memory(radius=X)] form."""
-    parts = [f"source={source}", f"max_chars={max_chars}"]
-    parts.extend(f"{k}={v}" for k, v in extra.items())
-    return f"[read({', '.join(parts)})]"
-
-
 def handle_read(channel: str, params: dict) -> str:
     """
     Read and extract clean text from a URL or local file.
@@ -122,7 +117,7 @@ def handle_read(channel: str, params: dict) -> str:
     """
     source = params.get('source', '').strip()
     if not source:
-        return "[read(error=source-required)]"
+        return _skill_tag("read", error="source-required")
 
     max_chars = params.get('max_chars', 20000)
     try:
@@ -139,7 +134,7 @@ def handle_read(channel: str, params: dict) -> str:
             return _read_file(source, max_chars)
     except Exception as e:
         logger.error(f'[READ SKILL] Unexpected error for source={source!r}: {e}', exc_info=True)
-        return f"[read(source={source}, error={str(e)[:200]})]"
+        return _skill_tag("read", source=source, error=str(e)[:200])
 
 
 # ─── Source classification ────────────────────────────────────────────────────
@@ -190,7 +185,7 @@ def _read_url(url: str, max_chars: int) -> str:
     import requests
 
     if _is_private_url(url):
-        return f"[read(source={url}, error=private-or-internal-url-blocked)]"
+        return _skill_tag("read", source=url, error="private-or-internal-url-blocked")
 
     try:
         with requests.Session() as session:
@@ -204,20 +199,22 @@ def _read_url(url: str, max_chars: int) -> str:
             response.raise_for_status()
             html = response.text
     except requests.RequestException as e:
-        return f"[read(source={url}, error=fetch-failed: {str(e)[:150]})]"
+        return _skill_tag("read", source=url, error=f"fetch-failed:{str(e)[:150]}")
 
     from services.text_extractor import extract_html
     content = extract_html(html, url=url)
 
     if not content:
-        return f"[read(source={url}, error=no-readable-content)]"
+        return _skill_tag("read", source=url, error="no-readable-content")
 
     truncated = len(content) > max_chars
     if truncated:
         content = content[:max_chars]
 
-    extras = {'truncated': 'true'} if truncated else {}
-    return f"{_tag(url, max_chars, **extras)} {content}"
+    kwargs: dict = {"source": url, "max_chars": max_chars}
+    if truncated:
+        kwargs["truncated"] = "true"
+    return _skill_tag("read", content, **kwargs)
 
 
 # ─── File reading ─────────────────────────────────────────────────────────────
@@ -233,16 +230,16 @@ def _read_file(file_path: str, max_chars: int) -> str:
         return any(path == p or path.startswith(p + '/') for p in _BLOCKED_PATH_PREFIXES)
 
     if _is_blocked(expanded) or _is_blocked(resolved):
-        return f"[read(source={file_path}, error=system-path-blocked)]"
+        return _skill_tag("read", source=file_path, error="system-path-blocked")
 
     if not os.path.exists(resolved):
-        return f"[read(source={file_path}, error=file-not-found)]"
+        return _skill_tag("read", source=file_path, error="file-not-found")
 
     if not os.path.isfile(resolved):
-        return f"[read(source={file_path}, error=not-a-file)]"
+        return _skill_tag("read", source=file_path, error="not-a-file")
 
     if not os.access(resolved, os.R_OK):
-        return f"[read(source={file_path}, error=no-read-permission)]"
+        return _skill_tag("read", source=file_path, error="no-read-permission")
 
     from services.text_extractor import detect_mime_type, extract_text, normalize_text
 
@@ -250,7 +247,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     content = extract_text(resolved, mime_type)
 
     if not content or not content.strip():
-        return f"[read(source={file_path}, error=no-text-content)]"
+        return _skill_tag("read", source=file_path, error="no-text-content")
 
     content = normalize_text(content)
 
@@ -258,7 +255,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     if truncated:
         content = content[:max_chars]
 
-    extras = {'mime': mime_type}
+    kwargs: dict = {"source": file_path, "max_chars": max_chars, "mime": mime_type}
     if truncated:
-        extras['truncated'] = 'true'
-    return f"{_tag(file_path, max_chars, **extras)} {content}"
+        kwargs["truncated"] = "true"
+    return _skill_tag("read", content, **kwargs)
