@@ -45,6 +45,37 @@ Alongside the module, declare the tool's metadata: a description that the semant
 
 Tools that require API keys or custom endpoints declare their required config keys in their metadata. Configure them through the Brain UI (Settings > Tools) or via the REST API — see the API reference for endpoints. Stored secrets are masked in all API responses.
 
+## Innate skill output format
+
+Every innate skill returns its result as a canonical tag block defined in `backend/services/innate_skills/_tag.py`. `_tag.py` is the single source of truth — no skill constructs its own format string.
+
+```
+[<skill_name>(k1=v1, k2=v2)]
+<body>
+[end:<skill_name>]
+```
+
+If the body is empty (error path with no content), the body line is omitted:
+
+```
+[memory(action=recall, error=no-query)]
+[end:memory]
+```
+
+Errors are just arguments — `error=<slug>` in the opener, not a separate response format. Multi-line bodies (e.g. memory recall results, rich render reference) appear verbatim between opener and terminator.
+
+The `memory` skill preserves its inner per-row marker format inside the body so downstream services that parse `[id:X,relevance:Y]` continue to work:
+
+```
+[memory(query=Malta, results=3)]
+[id:residence,relevance:high] Valletta
+[id:partner,relevance:medium] Sarah
+[id:food_and_drink,relevance:low] pastizzi
+[end:memory]
+```
+
+`find_tools` and `review_tool_calls` return dicts (the orchestrator reads `_discovered_tools` as a side channel). Their `text` field is wrapped in a tag block; side-channel keys are untouched.
+
 ## Safety constraints
 
 - Tool invocations time out. Exceeded timeouts are logged as failures.

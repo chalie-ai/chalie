@@ -144,7 +144,19 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 
 `ModeGateService` runs once per user turn (via `UserMessageProcessor._get_mode_state()`) but **does not gate tool availability**. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) emits per-mode probabilities. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. The mode set powers prompt-steering directives (long-summary swap on `converse`, brainstorm/research/analyze suffixes) and is reserved for future mode-driven features. A single `[MODE-GATE]` log line per turn records probabilities, state transition, and the active mode set.
 
-Tool results flow through a single render-and-record path that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
+Tool results flow through a single render-and-record path (`ToolRenderAndRecordService`) that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure.
+
+Every innate skill result uses the canonical tag block format from `backend/services/innate_skills/_tag.py`:
+
+```
+[<skill_name>(k1=v1, k2=v2)]
+<body>
+[end:<skill_name>]
+```
+
+This is the single source of truth — no skill constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
+
+**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
 
 ---
 

@@ -30,9 +30,11 @@ User (WebSocket)
        │
        ▼
   ┌─────────────────────────────┐
-  │  Pre-loop                   │
-  │  · seed memory from         │
-  │    past episodes            │
+  │  pre_act()                  │
+  │  · memory recall via        │
+  │    handle_memory() —        │
+  │    canonical tool dispatch, │
+  │    stored ephemeral=0       │
   │  · deliberation-score gate  │
   │    (exploration pass)       │
   └────────────┬────────────────┘
