@@ -11,15 +11,6 @@ stubs_bp = Blueprint('stubs', __name__)
 _NOT_IMPLEMENTED = ({"error": "Not implemented", "planned": True}, 501)
 
 
-def _stub_route(rule, **options):
-    """Register a stub route that returns 501 for all listed methods."""
-    methods = options.pop('methods', ['GET'])
-
-    def decorator(f):
-        return stubs_bp.route(rule, methods=methods, **options)(f)
-    return decorator
-
-
 @stubs_bp.route('/calendar', methods=['GET'])
 @stubs_bp.route('/calendar/<path:subpath>', methods=['GET'])
 @require_session

@@ -166,6 +166,3 @@ def _manifest_to_schema(manifest: dict) -> dict | None:
     }
 
 
-def clear_cache():
-    """Clear the schema cache (for testing)."""
-    _schema_cache.clear()

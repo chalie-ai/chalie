@@ -519,17 +519,11 @@ def _user_agent() -> str:
 def _run_ocr(img_bytes: bytes) -> str:
     """Run RapidOCR on screenshot bytes.  Returns extracted text."""
     try:
-        from services.ocr_service import get_ocr_engine
         import io
         from PIL import Image
+        from services.ocr_service import _extract_text
         image = Image.open(io.BytesIO(img_bytes))
-        engine = get_ocr_engine()
-        if engine is None:
-            return ""
-        result, _ = engine(image)
-        if result:
-            return "\n".join(line[1] for line in result if line[1])
-        return ""
+        return _extract_text(image)
     except Exception as e:
         logger.warning("[BROWSER] OCR failed: %s", e)
         return ""

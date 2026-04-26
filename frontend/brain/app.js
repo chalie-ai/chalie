@@ -2166,14 +2166,6 @@ function loadCognitionSubtab(subtab) {
 
 // ── Shared helpers ──
 
-function obsStatCard(label, value, sub) {
-    return `<div class="obs-stat-card">
-        <span class="obs-stat-card__label">${escapeHtml(label)}</span>
-        <span class="obs-stat-card__value">${escapeHtml(String(value))}</span>
-        ${sub ? `<span class="obs-stat-card__sub">${escapeHtml(sub)}</span>` : ''}
-    </div>`;
-}
-
 function obsSkeletonBlock(height) {
     return `<div class="obs-skeleton" style="height:${height}px;margin-bottom:14px"></div>`;
 }
@@ -2185,10 +2177,6 @@ function obsSetTimestamp(isoStr) {
         const d = new Date(isoStr);
         el.textContent = 'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } catch { el.textContent = ''; }
-}
-
-function obsPct(n) {
-    return Math.round((n || 0) * 100);
 }
 
 // ── Memory Records ──

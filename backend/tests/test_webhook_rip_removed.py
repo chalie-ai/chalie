@@ -229,33 +229,15 @@ class TestToolConfigServiceWebhookRemoval:
         )
 
 
-# ── Part G: post_exchange_hooks — dead hooks deleted ───────────────────────────
+# ── Part G: post_exchange_hooks module fully deleted ──────────────────────────
 
-class TestPostExchangeHooksDeadFunctionsRemoved:
+class TestPostExchangeHooksModuleDeleted:
 
-    def test_run_iip_hook_removed(self):
-        """_run_iip_hook must not exist in post_exchange_hooks — wired only via digest_worker."""
-        import workers.post_exchange_hooks as mod
-        assert not hasattr(mod, "_run_iip_hook"), (
-            "_run_iip_hook still in post_exchange_hooks — "
-            "it was only called by the deleted digest_worker Phase A pipeline"
-        )
-
-    def test_run_belief_correction_hook_removed(self):
-        """_run_belief_correction_hook must not exist in post_exchange_hooks."""
-        import workers.post_exchange_hooks as mod
-        assert not hasattr(mod, "_run_belief_correction_hook"), (
-            "_run_belief_correction_hook still in post_exchange_hooks — "
-            "it was only called by the deleted digest_worker pipeline"
-        )
-
-    def test_classify_engagement_removed(self):
-        """_classify_engagement must not exist in post_exchange_hooks."""
-        import workers.post_exchange_hooks as mod
-        assert not hasattr(mod, "_classify_engagement"), (
-            "_classify_engagement still in post_exchange_hooks — "
-            "it was only called by the deleted digest_worker pipeline"
-        )
+    def test_post_exchange_hooks_cannot_be_imported(self):
+        """workers.post_exchange_hooks must not exist — shell kept after v0.5.0 §4.3 rip is now removed."""
+        sys.modules.pop("workers.post_exchange_hooks", None)
+        with pytest.raises(ModuleNotFoundError):
+            __import__("workers.post_exchange_hooks")
 
 
 # ── Part H: Webhook endpoints return 404 ──────────────────────────────────────

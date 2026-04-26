@@ -583,20 +583,6 @@ if _BROWSER_AVAILABLE:
     }
 
 
-def get_metadata(name: str) -> dict | None:
-    """Return the metadata dict for a named tool, or ``None``.
-
-    Args:
-        name: The registered tool name (e.g. ``"weather"``).
-
-    Returns:
-        The metadata ``dict`` for the tool, or ``None`` if the tool is not
-        registered or has no metadata entry.
-    """
-    with _registry_lock:
-        return TOOL_METADATA.get(name)
-
-
 # ---------------------------------------------------------------------------
 # Dynamic registration API
 # ---------------------------------------------------------------------------

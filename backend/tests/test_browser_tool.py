@@ -270,33 +270,17 @@ class TestToolRegistration:
         assert "browser" in ALL_TOOL_NAMES
 
     @pytest.mark.unit
-    def test_browser_metadata_exists(self):
-        from services.tool_library_service import get_metadata
-        meta = get_metadata("browser")
-        assert meta is not None
-        assert meta["name"] == "browser"
-
-    @pytest.mark.unit
-    def test_browser_metadata_has_required_fields(self):
-        from services.tool_library_service import get_metadata
-        meta = get_metadata("browser")
-        assert "description" in meta
-        assert "documentation" in meta
-        assert "input_schema" in meta
-        assert "returns" in meta
-        assert "output" in meta
-        assert "tips" in meta
-
-    @pytest.mark.unit
     def test_browser_handler_callable(self):
         from services.tool_library_service import get_handler
         handler = get_handler("browser")
         assert callable(handler)
 
     @pytest.mark.unit
-    def test_browser_metadata_action_param(self):
-        from services.tool_library_service import get_metadata
-        meta = get_metadata("browser")
+    def test_browser_metadata_required_fields(self):
+        from services.tool_library_service import TOOL_METADATA
+        meta = TOOL_METADATA["browser"]
+        for field in ("description", "documentation", "input_schema", "returns", "output", "tips"):
+            assert field in meta
         assert "action" in meta["input_schema"]["properties"]
         assert "action" in meta["input_schema"]["required"]
 

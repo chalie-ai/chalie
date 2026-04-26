@@ -1016,15 +1016,6 @@ body::before {
     gap: 14px; margin-bottom: 28px;
 }
 
-.obs-stat-card {
-    background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 16px 18px;
-    display: flex; flex-direction: column; gap: 4px;
-}
-.obs-stat-card__label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-secondary); }
-.obs-stat-card__value { font-size: 24px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
-.obs-stat-card__sub   { font-size: 11px; color: var(--text-secondary); }
-
 .obs-bar-chart { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
 .obs-bar-row   { display: flex; align-items: center; gap: 12px; }
 .obs-bar-row__label  { font-size: 12px; font-weight: 500; color: var(--text-primary); width: 110px; flex-shrink: 0; text-align: right; }
