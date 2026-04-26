@@ -218,18 +218,42 @@ def _create(channel: str, params: dict) -> dict:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Dedup: reject if same message was scheduled within the last 60s
+            # Atomic dedup: INSERT only when no pending row with the same message
+            # was created in the last 60 seconds.  A single statement eliminates
+            # the SELECT-then-INSERT race window that caused duplicate rows when
+            # the model invoked schedule(...) twice in the same turn.
             cursor.execute("""
-                SELECT id FROM scheduled_items
-                WHERE status = 'pending'
-                  AND message = ?
-                  AND created_at > datetime('now', '-60 seconds')
-                LIMIT 1
-            """, (message,))
-            existing = cursor.fetchone()
-            if existing:
-                conn.commit()
-                existing_id = existing[0]
+                INSERT INTO scheduled_items
+                  (id, item_type, message, due_at, recurrence, window_start, window_end,
+                   status, channel, created_by_session, created_at, group_id, is_prompt)
+                SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM scheduled_items
+                    WHERE status = 'pending'
+                      AND message = ?
+                      AND created_at > datetime('now', '-60 seconds')
+                )
+            """, (
+                item_id, item_type, message, due_at,
+                recurrence, window_start, window_end,
+                channel, None,
+                item_id,  # group_id = own id (root of new series)
+                is_prompt,
+                message,  # WHERE NOT EXISTS param
+            ))
+            conn.commit()
+
+            if cursor.rowcount == 0:
+                # Duplicate detected — fetch the existing row's id
+                cursor.execute("""
+                    SELECT id FROM scheduled_items
+                    WHERE status = 'pending'
+                      AND message = ?
+                      AND created_at > datetime('now', '-60 seconds')
+                    LIMIT 1
+                """, (message,))
+                existing_row = cursor.fetchone()
+                existing_id = existing_row[0] if existing_row else item_id
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
                 from services.time_formatter_service import TimeFormatterService
                 local_due = TimeFormatterService.local(due_at, fmt='%Y-%m-%dT%H:%M:%S%z') or due_at.isoformat()
@@ -239,20 +263,6 @@ def _create(channel: str, params: dict) -> dict:
                     "record": {"id": existing_id, "message": message, "due_at": local_due},
                     "note": "already_existed",
                 }
-
-            cursor.execute("""
-                INSERT INTO scheduled_items
-                  (id, item_type, message, due_at, recurrence, window_start, window_end,
-                   status, channel, created_by_session, created_at, group_id, is_prompt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?)
-            """, (
-                item_id, item_type, message, due_at,
-                recurrence, window_start, window_end,
-                channel, None,
-                item_id,  # group_id = own id (root of new series)
-                is_prompt,
-            ))
-            conn.commit()
 
         # Embed the scheduled item message for semantic world state retrieval (non-fatal)
         try:

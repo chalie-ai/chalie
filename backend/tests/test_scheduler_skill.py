@@ -5,10 +5,14 @@ Covers the _create() grace-window behaviour: past-due timestamps within
 _PAST_DUE_GRACE_SECONDS are bumped forward to now+5s; timestamps older
 than the grace window are still hard-rejected.
 
+Also covers the atomic dedup guarantee: back-to-back _create() calls with
+the same message must result in exactly one row in scheduled_items.
+
 Result format (new): [schedule(action=create)]\\n<json_body>\\n[end:schedule]
 """
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -78,3 +82,90 @@ class TestCreatePastDueGrace:
         result = extract_json("schedule", raw)
         assert result["status"] == "error", f"Expected error, got: {result}"
         assert "due_at must be in the future" in result["error"]
+
+
+# ── Atomic dedup guarantee ────────────────────────────────────────────────────
+
+class TestCreateDedup:
+    """Rapid back-to-back _create() calls with identical message → one row only."""
+
+    def test_sequential_same_message_produces_one_row(self, db):
+        """Two sequential calls with identical message produce exactly one DB row.
+
+        Both calls must return status=success.  The second call returns
+        note='already_existed' and the same record id as the first.
+        """
+        due_at = (utc_now() + timedelta(hours=1)).isoformat()
+        params = {
+            "action": "create",
+            "message": "Call the dentist",
+            "due_at": due_at,
+        }
+
+        with patch("services.scheduler_service.embed_scheduled_item", return_value=None):
+            raw1 = handle_scheduler("user", params)
+            raw2 = handle_scheduler("user", params)
+
+        assert_both_markers("schedule", raw1)
+        assert_both_markers("schedule", raw2)
+        r1 = extract_json("schedule", raw1)
+        r2 = extract_json("schedule", raw2)
+
+        assert r1["status"] == "success", f"First call failed: {r1}"
+        assert r2["status"] == "success", f"Second call failed: {r2}"
+
+        # Second call must be identified as a dedup hit
+        assert r2.get("note") == "already_existed", (
+            f"Expected note='already_existed' on second call, got: {r2}"
+        )
+
+        # Both calls must return the same record id
+        assert r1["record"]["id"] == r2["record"]["id"], (
+            f"Different ids returned: {r1['record']['id']} vs {r2['record']['id']}"
+        )
+
+        # Exactly one row must exist in the database
+        row_count = db.execute(
+            "SELECT COUNT(*) FROM scheduled_items WHERE message = 'Call the dentist' AND status = 'pending'"
+        ).fetchone()[0]
+        assert row_count == 1, f"Expected 1 row, found {row_count}"
+
+    def test_concurrent_same_message_produces_one_row(self, db):
+        """Two threads calling _create() simultaneously produce exactly one DB row.
+
+        Uses a ThreadPoolExecutor to maximise the chance of hitting the race
+        window.  Both futures must succeed; exactly one must have no 'note' key
+        (the winner) and exactly one must carry note='already_existed' (the loser).
+        """
+        due_at = (utc_now() + timedelta(hours=2)).isoformat()
+        params = {
+            "action": "create",
+            "message": "Call the dentist concurrent",
+            "due_at": due_at,
+        }
+
+        results = []
+        with patch("services.scheduler_service.embed_scheduled_item", return_value=None):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(handle_scheduler, "user", params) for _ in range(2)]
+                for f in as_completed(futures):
+                    raw = f.result()
+                    assert_both_markers("schedule", raw)
+                    results.append(extract_json("schedule", raw))
+
+        assert all(r["status"] == "success" for r in results), (
+            f"One or more calls failed: {results}"
+        )
+
+        dedup_hits = [r for r in results if r.get("note") == "already_existed"]
+        assert len(dedup_hits) >= 1, (
+            "Expected at least one dedup hit across concurrent calls, "
+            f"but got: {[r.get('note') for r in results]}"
+        )
+
+        # Exactly one row must exist in the database
+        row_count = db.execute(
+            "SELECT COUNT(*) FROM scheduled_items "
+            "WHERE message = 'Call the dentist concurrent' AND status = 'pending'"
+        ).fetchone()[0]
+        assert row_count == 1, f"Expected 1 row, found {row_count}"
