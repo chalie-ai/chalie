@@ -28,6 +28,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+from services.innate_skills._tag import tag as _tag
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import utc_now
@@ -440,7 +441,7 @@ class MessageProcessor:
                     self._register_discovered_tools(discovered)
 
         except Exception as exc:
-            result_text = f"ERROR: {tool_name} failed: {exc}"
+            result_text = _tag(tool_name, error=f"dispatch-failed:{str(exc)[:200]}")
             logger.error(
                 "[MessageProcessor.handleTool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
@@ -456,7 +457,7 @@ class MessageProcessor:
                 transcript_id=self._uid,
             ).renderAndRecord()
         except Exception as exc:
-            rendered = f"[{tool_name}()] {result_text}"
+            rendered = result_text
             logger.error(
                 "[MessageProcessor.handleTool] renderAndRecord failed tool=%s: %s",
                 tool_name, exc, exc_info=True,

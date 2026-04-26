@@ -14,6 +14,7 @@ from threading import Thread
 import logging
 
 from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
+from services.innate_skills._tag import tag as _tag
 
 
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
@@ -115,7 +116,7 @@ class ActDispatcherService:
             return {
                 'action_type': action_type,
                 'status': 'error',
-                'result': f"Unknown action type: {action_type}",
+                'result': _tag(action_type, error=f"unknown-action-type:{action_type}"),
                 'execution_time': 0.0,
                 'confidence': 0.0,
                 'notes': '',
@@ -155,7 +156,7 @@ class ActDispatcherService:
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
-                    'result': f"Action exceeded {effective_timeout}s timeout",
+                    'result': _tag(action_type, error=f"timeout:{effective_timeout}s"),
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',
@@ -165,7 +166,7 @@ class ActDispatcherService:
                 return {
                     'action_type': action_type,
                     'status': 'error',
-                    'result': f"Error: {result_container['error']}",
+                    'result': _tag(action_type, error=f"handler-exception:{str(result_container['error'])[:200]}"),
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',
@@ -204,7 +205,7 @@ class ActDispatcherService:
             return {
                 'action_type': action_type,
                 'status': 'error',
-                'result': f"Unexpected error: {str(e)}",
+                'result': _tag(action_type, error=f"dispatcher-exception:{str(e)[:200]}"),
                 'execution_time': execution_time,
                 'confidence': 0.0,
                 'notes': '',

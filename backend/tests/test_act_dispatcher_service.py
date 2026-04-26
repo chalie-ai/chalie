@@ -4,6 +4,7 @@ import time
 import pytest
 
 from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
+from services.innate_skills._tag import tag as _tag
 
 
 pytestmark = pytest.mark.unit
@@ -33,7 +34,7 @@ class TestUnknownHandler:
 
         assert result['status'] == 'error'
         assert result['confidence'] == 0.0
-        assert 'Unknown action type' in result['result']
+        assert 'unknown-action-type' in result['result']
         assert result['action_type'] == 'nonexistent_action'
 
     def test_missing_type_defaults_to_unknown(self, service):
@@ -173,3 +174,43 @@ class TestEstimateConfidenceDirectly:
         """Read action with None result gets the lowest read confidence."""
         assert _estimate_confidence('recall', None) == pytest.approx(0.40)
 
+
+# ── Untagged result paths are now canonical blocks ─────────────
+
+
+class TestUntaggedPathsAreTagged:
+
+    def test_unknown_action_returns_tagged_error(self, service):
+        """Unknown action type result is wrapped in canonical [<name>(...)] block."""
+        result = service.dispatch_action('user', {'type': 'no_such_action'})
+
+        assert result['result'].startswith('[no_such_action(')
+        assert result['result'].endswith('[end:no_such_action]')
+        assert 'unknown-action-type' in result['result']
+
+    def test_handler_exception_returns_tagged_error(self, service):
+        """Handler that raises is wrapped in canonical [<name>(...)] block."""
+        service.handlers['boom'] = lambda c, a: (_ for _ in ()).throw(RuntimeError('kaboom'))
+
+        result = service.dispatch_action('user', {'type': 'boom'})
+
+        assert result['result'].startswith('[boom(')
+        assert result['result'].endswith('[end:boom]')
+        assert 'handler-exception' in result['result']
+        assert 'kaboom' in result['result']
+
+    def test_timeout_returns_tagged_error(self):
+        """Handler that exceeds timeout is wrapped in canonical [<name>(...)] block."""
+        svc = ActDispatcherService(timeout=0.05)
+
+        def slow_handler(c, a):
+            time.sleep(0.5)
+            return 'too late'
+
+        svc.handlers['recall'] = slow_handler
+
+        result = svc.dispatch_action('user', {'type': 'recall'})
+
+        assert result['result'].startswith('[recall(')
+        assert result['result'].endswith('[end:recall]')
+        assert 'timeout' in result['result']
