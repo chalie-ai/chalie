@@ -549,10 +549,32 @@ def _handle_chat(ws, store, msg, active_request=None):
                 except Exception as e:
                     logger.debug(f"[WS] Narration publish failed: {e}")
 
+            def _on_tool_event(event):
+                """Publish per-tool start/end events to the per-request SSE channel.
+
+                event = {type: 'act_tool_start'|'act_tool_end', call_id, name?, iter?, ms?, ok?}
+                Mirrors _on_narration: stores blob to output:{evt_id}, publishes evt_id
+                on sse:{request_id}.
+                """
+                if not request_id or not isinstance(event, dict):
+                    return
+                evt_type = event.get('type')
+                if evt_type not in ('act_tool_start', 'act_tool_end'):
+                    return
+                try:
+                    from uuid import uuid4
+                    import json as _json
+                    evt_id = f"tool_{uuid4().hex[:12]}"
+                    store.set(f"output:{evt_id}", _json.dumps(event), ex=300)
+                    store.publish(f"sse:{request_id}", evt_id)
+                except Exception as e:
+                    logger.debug(f"[WS] Tool event publish failed: {e}")
+
             proc = UserMessageProcessor(
                 raw_input=text,
                 metadata=metadata,
                 on_narration=_on_narration,
+                on_tool_event=_on_tool_event,
             )
             proc.set_turn_start(turn_start)
             response = proc.send(request_id=request_id)
@@ -670,6 +692,14 @@ def _handle_chat(ws, store, msg, active_request=None):
                     _buffer_event(narr_evt)
                     _send_json(ws, narr_evt)
                     continue  # Keep listening — this isn't the final response
+
+                # Act tool events: forward pill start/end events to client
+                if output.get('type') in ('act_tool_start', 'act_tool_end'):
+                    seq = _next_seq()
+                    pill_evt = {**output, 'seq': seq}
+                    _buffer_event(pill_evt)
+                    _send_json(ws, pill_evt)
+                    continue
 
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})

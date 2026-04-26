@@ -26,7 +26,6 @@ import contextlib
 import contextvars
 import logging
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from services.metrics_accumulator import MetricsAccumulator
@@ -132,10 +131,6 @@ class MessageProcessor:
         # Tracks the current ACT loop iteration so handleTool() can include
         # it in emitted tool events without thread-local indirection.
         self._current_iteration: int = 0
-        # Callback for per-tool start/end events. Base default is None;
-        # UserMessageProcessor overrides in its own __init__ (same pattern
-        # as _on_narration).
-        self._on_tool_event: Callable[[dict], None] | None = None
         # Per-turn log of memory recall queries (seed + llm_recall).
         # Populated by the memory skill recall path; consumed by the next
         # recall call for redundancy-narrow and drift-expand computation.
@@ -721,8 +716,9 @@ class MessageProcessor:
         pass
 
     def _emit_tool_event(self, event: dict) -> None:
-        """Base no-op. UserMessageProcessor overrides to push per-tool
-        start/end events to the websocket via the on_tool_event callback."""
+        """Subclasses MUST override BOTH this method AND the
+        ``_on_tool_event`` attribute. The base no-op never reads any
+        attribute."""
         pass
 
     def _drain_steering(self, request_id: str | None) -> list[str]:

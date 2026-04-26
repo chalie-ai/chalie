@@ -16,6 +16,7 @@ export class Chat {
     // Send state
     this._isSending = false;
     this._pendingForm = null;
+    this._lastNarrationBubble = null;
 
     // Scroll-up pagination state
     this._historyOffset = 0;
@@ -144,7 +145,20 @@ export class Chat {
         // Remove the pending form entirely — narration bubbles replace it
         if (pendingForm.isConnected) pendingForm.remove();
         this._presence.setState('narrating');
-        this._renderer.appendNarrationBubble(data.text, data.step);
+        this._lastNarrationBubble = this._renderer.appendNarrationBubble(data.text, data.step);
+      },
+      onToolStart: (msg) => {
+        // Prefer the most recent narration bubble; fall back to pending form
+        // (single-iteration turns where no narration arrived yet).
+        let host = this._lastNarrationBubble;
+        if (!host || !host.isConnected) {
+          host = pendingForm;
+        }
+        if (!host) return;
+        this._renderer.appendToolPill(host, msg.call_id, msg.name);
+      },
+      onToolEnd: (msg) => {
+        this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
       },
       onSteerSent: (steerText) => {
         // User sent a redirect while ACT is running — show inline
@@ -175,6 +189,8 @@ export class Chat {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
           if (pendingForm.isConnected) {
+            // resolvePendingForm() does form.innerHTML = '', so any
+            // orphan pills from single-iteration turns are wiped here.
             this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
           } else {
             // pendingForm was removed by narration — append fresh
@@ -194,6 +210,7 @@ export class Chat {
           pendingForm.remove();
           this._pendingForm = null;
         }
+        this._lastNarrationBubble = null;
         this._presence.setState('resting');
         this._isSending = false;
         this._onSendCompleteCb?.();

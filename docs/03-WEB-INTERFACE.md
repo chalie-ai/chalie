@@ -34,6 +34,20 @@ The chat interface uses three fixed regions:
 - **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
 - **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
 
+## Tool Pills
+
+Inline progress indicators that appear during the ACT loop whenever a tool is dispatched. Each pill shows the tool name and a status slot:
+
+- **Active** (`tool-pill--active`) — cyan-glowing spinner while the tool runs.
+- **Done** (`tool-pill--done`) — dim grey elapsed duration in seconds once dispatch completes.
+- **Error** (`tool-pill--error`) — magenta-glowing "error" label when dispatch raises.
+
+Pills nest inside the current narration bubble when one exists; otherwise they attach to the "thinking…" pending form. Sub-100ms tools enforce a 150ms minimum visible duration so the spinner-to-done transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips. On multi-iteration turns, pills collapse with their parent narration bubble (`.narration-group--collapsed .tool-pill-row { display: none }`). On single-iteration turns, `resolvePendingForm` wipes the pending form entirely and pills disappear with it.
+
+**CSS classes:** `tool-pill-row` (host row wrapping all pills for one turn), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`.
+
+**Frontend wiring:** `renderer.js` exposes `appendToolPill(parentEl, callId, name)` and `resolveToolPill(callId, ms, ok)`. `chat.js` routes `act_tool_start` events to `appendToolPill` and `act_tool_end` events to `resolveToolPill`, using `_lastNarrationBubble` (set on each `appendNarrationBubble` call, cleared on `onDone`) to locate the correct host element.
+
 ## Presence Dot
 
 A small dot beneath the chat input communicates what Chalie is doing:

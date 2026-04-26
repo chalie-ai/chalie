@@ -1086,6 +1086,94 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   max-width: 70%;
 }
 
+.tool-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* Inside the pending chalie bubble (thinking dots), the divider rule clashes
+   with the dotted indicator. Flatten the separator there. */
+.speech-form--chalie > .tool-pill-row {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 6px;
+}
+
+.tool-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.65);
+  transition: background 200ms ease, border-color 200ms ease,
+              color 200ms ease, box-shadow 200ms ease;
+}
+
+.tool-pill__name {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.tool-pill__status {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.5);
+  min-width: 28px;
+  text-align: right;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.tool-pill--active {
+  background: rgba(34, 211, 238, 0.06);          /* cyan tint */
+  border-color: rgba(34, 211, 238, 0.35);
+  color: rgba(165, 243, 252, 0.95);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.18);
+}
+
+.tool-pill--done {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.45);
+  box-shadow: none;
+}
+
+.tool-pill--error {
+  background: rgba(236, 72, 153, 0.08);          /* magenta tint */
+  border-color: rgba(236, 72, 153, 0.45);
+  color: rgba(251, 207, 232, 0.95);
+  box-shadow: 0 0 12px rgba(236, 72, 153, 0.22);
+}
+
+.tool-pill__spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(165, 243, 252, 0.35);
+  border-top-color: rgba(165, 243, 252, 0.95);
+  animation: tool-pill-spin 700ms linear infinite;
+  display: inline-block;
+}
+
+@keyframes tool-pill-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Hide pills inside collapsed narration groups along with their bubble. */
+.narration-group--collapsed .tool-pill-row {
+  display: none;
+}
+
 .narration-group {
   display: flex;
   flex-direction: column;

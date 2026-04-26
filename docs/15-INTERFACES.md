@@ -198,6 +198,8 @@ All server messages include a `seq` (monotonic sequence number) for deduplicatio
 | `status` | `stage`, `seq` | Processing stage (`"processing"`, `"thinking"`, `"retrieving_memory"`, `"responding"`) |
 | `message` | `blocks`, `topic`, `mode`, `confidence`, `exchange_id`, `seq` | Final response. `blocks` is a block array — no raw text/HTML over the wire |
 | `act_narration` | `text`, `step`, `seq` | Live ACT loop progress (tool invocation or reasoning step) |
+| `act_tool_start` | `call_id`, `name`, `iter`, `seq` | Emitted before a tool is dispatched. `call_id` is stable across the paired `act_tool_end`. `iter` is the current ACT iteration number. |
+| `act_tool_end` | `call_id`, `ms`, `ok`, `seq` | Emitted in `finally` after dispatch — always paired with `act_tool_start`. `ms` is wall-clock dispatch time (int, monotonic-derived). `ok=false` only when dispatch raises; `ToolRenderAndRecordService` failures are `ok=true`. |
 | `card` | `html`, `css`, `scope_id`, `tool_name`, `title`, `accent_color`, `output_id`, `topic`, `seq` | Tool result card |
 | `done` | `duration_ms`, `seq` | Response complete |
 | `error` | `message`, `recoverable`, `seq` | Error. `recoverable` signals whether the client should retry |

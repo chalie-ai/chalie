@@ -178,6 +178,78 @@ export class Renderer {
   }
 
   /**
+   * Append a tool pill — inline progress indicator for a single tool call.
+   * Pills nest inside narration bubbles (when present) or pending-form
+   * (single-iteration turns). Pills auto-collapse with their parent
+   * narration bubble via `.narration-group--collapsed .tool-pill-row`.
+   *
+   * @param {HTMLElement} parentEl — narration-bubble or pending-form element
+   * @param {string} callId — server-assigned id for resolveToolPill lookup
+   * @param {string} name — tool name to display
+   * @returns {HTMLElement|null} the pill element (null if parentEl falsy)
+   */
+  appendToolPill(parentEl, callId, name) {
+    if (!parentEl || !callId) return null;
+
+    let host = parentEl.querySelector(':scope > .tool-pill-row');
+    if (!host) {
+      host = this._createEl('div', 'tool-pill-row');
+      parentEl.appendChild(host);
+    }
+
+    const pill = this._createEl('span', 'tool-pill tool-pill--active');
+    pill.dataset.callId = callId;
+    pill.dataset.startedAt = String(Date.now());
+
+    const nameEl = this._createEl('span', 'tool-pill__name');
+    nameEl.textContent = name || 'tool';
+
+    const statusEl = this._createEl('span', 'tool-pill__status');
+    const spinner = this._createEl('span', 'tool-pill__spinner');
+    statusEl.appendChild(spinner);
+
+    pill.appendChild(nameEl);
+    pill.appendChild(statusEl);
+    host.appendChild(pill);
+    return pill;
+  }
+
+  /**
+   * Resolve a tool pill — transitions spinner → duration (ok) or "error" (!ok).
+   * Enforces a 150ms minimum visible duration so sub-100ms tools still flash
+   * the spinner before settling.
+   *
+   * @param {string} callId
+   * @param {number} ms — server-reported elapsed ms (>= 0)
+   * @param {boolean} ok
+   */
+  resolveToolPill(callId, ms, ok) {
+    if (!callId) return;
+    const pill = this._spine.querySelector(
+      `.tool-pill[data-call-id="${CSS.escape(callId)}"]`
+    );
+    if (!pill) return;
+
+    const startedAt = parseInt(pill.dataset.startedAt || '0', 10);
+    const elapsed = startedAt ? Date.now() - startedAt : 200;
+    const wait = Math.max(0, 150 - elapsed);
+
+    setTimeout(() => {
+      pill.classList.remove('tool-pill--active');
+      pill.classList.add(ok ? 'tool-pill--done' : 'tool-pill--error');
+      const statusEl = pill.querySelector('.tool-pill__status');
+      if (!statusEl) return;
+      statusEl.innerHTML = '';
+      if (ok) {
+        const seconds = (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
+        statusEl.textContent = `${seconds}s`;
+      } else {
+        statusEl.textContent = 'error';
+      }
+    }, wait);
+  }
+
+  /**
    * Append a steer bubble — user's redirect shown inline with narration.
    * @param {string} text — the user's steering message
    */
