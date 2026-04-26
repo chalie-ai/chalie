@@ -89,18 +89,38 @@ class TestFilterAvailable:
         return (name, tool_type, summary, profile, domain, effort, distance, keywords)
 
     @patch(_REGISTRY)
-    def test_filters_out_skills(self, mock_registry_cls):
-        """Innate skills should be excluded from results."""
+    def test_filters_out_cognitive_primitives(self, mock_registry_cls):
+        """Cognitive primitives are always present and must be excluded from results."""
         mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
         mock_registry_cls.return_value = mock_reg
 
         rows = [
-            self._make_row('recall', 'skill'),
+            self._make_row('memory', 'skill'),
             self._make_row('weather', 'tool'),
         ]
         result = _filter_available(rows, query='weather')
         assert len(result) == 1
         assert result[0]['tool_name'] == 'weather'
+
+    @patch(_REGISTRY)
+    def test_passes_through_non_primitive_skills(self, mock_registry_cls):
+        """Non-primitive innate skills surface without a registry readiness check."""
+        # Only 'weather' is in the registry — 'schedule' is NOT.
+        mock_reg = _mock_registry(tools={'weather': {'manifest': {}}})
+        mock_registry_cls.return_value = mock_reg
+
+        rows = [
+            self._make_row('schedule', 'skill'),
+            self._make_row('weather', 'tool'),
+        ]
+        result = _filter_available(rows, query='remind me')
+        assert len(result) == 2
+        names = {t['tool_name'] for t in result}
+        assert 'schedule' in names
+        assert 'weather' in names
+        # schedule must appear even though it is absent from mock_reg.tools
+        schedule_entry = next(t for t in result if t['tool_name'] == 'schedule')
+        assert 'score' in schedule_entry
 
     @patch(_REGISTRY)
     def test_filters_unready_tools(self, mock_registry_cls):
@@ -278,13 +298,13 @@ class TestEdgeCases:
 
     @patch(_REGISTRY)
     @patch(_EMB)
-    def test_only_skills_match(self, mock_emb_cls, mock_registry_cls, db):
-        """When only innate skills match, should inform the user."""
+    def test_only_primitive_match(self, mock_emb_cls, mock_registry_cls, db):
+        """When only a cognitive primitive matches, it is filtered → INFO message."""
         embedding = [0.1] * 256
         mock_emb_cls.return_value.generate_embedding.return_value = embedding
 
         _seed_tool_profile(
-            db, 'recall', tool_type='skill', summary='Memory retrieval',
+            db, 'memory', tool_type='skill', summary='Memory retrieval',
             profile='Full profile', domain='Memory', effort='trivial',
             embedding=embedding,
         )
@@ -293,9 +313,32 @@ class TestEdgeCases:
 
         result = handle_find_tools("topic", {"query": "remember something"})
         assert isinstance(result, dict)
-        # Skills are filtered out → no tools added → INFO message
+        # Cognitive primitive is filtered out → no tools added → INFO message
         assert 'already available' in result['text']
         assert result['_discovered_tools'] == []
+
+    @patch(_REGISTRY)
+    @patch(_EMB)
+    def test_skill_match_surfaces_skill(self, mock_emb_cls, mock_registry_cls, db):
+        """When a non-primitive innate skill matches, it surfaces in the result."""
+        import json
+        embedding = [0.1] * 256
+        mock_emb_cls.return_value.generate_embedding.return_value = embedding
+
+        _seed_tool_profile(
+            db, 'schedule', tool_type='skill', summary='Set reminders and schedule tasks',
+            profile='Full profile', domain='Productivity', effort='light',
+            embedding=embedding,
+        )
+
+        # schedule is NOT in the registry — should still surface
+        mock_registry_cls.return_value = _mock_registry()
+
+        result = handle_find_tools("topic", {"query": "remind me about something"})
+        assert isinstance(result, dict)
+        parsed = json.loads(result['text'])
+        assert any(t['name'] == 'schedule' for t in parsed['added_tools'])
+        assert 'schedule' in result['_discovered_tools']
 
 
 class TestKeywordScoring:
