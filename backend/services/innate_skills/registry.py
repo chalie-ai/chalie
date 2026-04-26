@@ -5,12 +5,12 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 11 skills + backward-compat aliases).
+register_innate_skills() in __init__.py (currently 9 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
-    'memory', 'introspect',
+    'memory',
     'schedule', 'list',
     'goal_pursuit', 'document',
     'read', 'find_tools',
@@ -51,7 +51,6 @@ COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'find_tools', 'review_tool_calls
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
     'memory': 'Store, recall, or update knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
-    'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
     'goal_pursuit': 'Use this tool to launch a separate instance of yourself with unconstrained limits to research or perform long running tasks. Only use this if you expect a request to take longer than 2 minutes to complete. If not, use other tools to resolve the request.',
@@ -68,7 +67,6 @@ SKILL_DESCRIPTIONS: dict = {
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
 SKILL_EFFORT: dict = {
     'memory': 'trivial',
-    'introspect': 'trivial',
     'list': 'trivial',
     'schedule': 'light',
     'goal_pursuit': 'deep',
@@ -89,7 +87,6 @@ SKILL_EFFORT: dict = {
 # (boot validation enforces this). Empty list [] is legal: "never promote,
 # find_tools only". See backend/services/mode_gate_service.py and spec §5.3.
 SKILL_MODES: dict[str, list[str]] = {
-    'introspect':   ['converse', 'analyze'],
     'list':         ['plan', 'write', 'research', 'brainstorm'],
     'schedule':     ['plan', 'brainstorm'],
     'goal_pursuit': ['plan', 'research'],
@@ -101,7 +98,6 @@ SKILL_MODES: dict[str, list[str]] = {
 # ── Skill categories ───────────────────────────────────────────────────────────
 SKILL_CATEGORIES: dict = {
     'memory': 'memory',
-    'introspect': 'cognition',
     'list': 'productivity',
     'schedule': 'productivity',
     'goal_pursuit': 'task_management',

@@ -126,14 +126,6 @@ class TestConfidenceEstimation:
 
         assert result['confidence'] == pytest.approx(0.92)
 
-    def test_introspect_confidence_is_deterministic(self, service):
-        """Deterministic actions like 'introspect' get 0.92 confidence."""
-        service.handlers['introspect'] = lambda topic, action: 'reflected'
-
-        result = service.dispatch_action('topic', {'type': 'introspect'})
-
-        assert result['confidence'] == pytest.approx(0.92)
-
     def test_recall_long_result_confidence(self, service):
         """Recall with a result longer than 100 chars gets 0.75 confidence."""
         service.handlers['recall'] = lambda topic, action: 'x' * 101
@@ -175,7 +167,7 @@ class TestEstimateConfidenceDirectly:
     def test_deterministic_ignores_result_content(self):
         """Deterministic confidence is fixed regardless of result."""
         assert _estimate_confidence('memorize', '') == 0.92
-        assert _estimate_confidence('introspect', None) == 0.92
+        assert _estimate_confidence('memorize', None) == 0.92
 
     def test_read_with_none_result(self):
         """Read action with None result gets the lowest read confidence."""

@@ -699,7 +699,7 @@ class ToolRegistryService:
         return "\n".join(lines)
 
     def get_tool_full_description(self, tool_name: str) -> Optional[dict]:
-        """Get full manifest details for a tool (used by introspect)."""
+        """Get full manifest details for a tool."""
         tool = self.tools.get(tool_name)
         return tool["manifest"] if tool else None
 

@@ -440,9 +440,6 @@ class TestGetToolsByMode:
 
     def test_innate_skills_in_correct_modes(self):
         index = self._get_fresh_index()
-        # introspect → converse, analyze (spec §5.3)
-        assert 'introspect' in index.get('converse', set())
-        assert 'introspect' in index.get('analyze', set())
         # goal_pursuit → plan, research
         assert 'goal_pursuit' in index.get('plan', set())
         assert 'goal_pursuit' in index.get('research', set())
@@ -496,7 +493,7 @@ class TestModeDeclarationValidation:
         from services.innate_skills.registry import SKILL_MODES
 
         bad_modes_patch = dict(SKILL_MODES)
-        bad_modes_patch['introspect'] = ['reserch']  # typo — should be 'research'
+        bad_modes_patch['list'] = ['reserch']  # typo — should be 'research'
 
         import services.innate_skills.registry as reg
         original = reg.SKILL_MODES

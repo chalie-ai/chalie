@@ -68,24 +68,6 @@ class TestToolRegistryServiceCronRemoval:
         )
 
 
-# ── Part A: introspect_skill source scan ─────────────────────────────────────
-
-class TestIntrospectSkillCronRemoval:
-
-    def test_introspect_skill_source_has_no_cron_tool_executed(self):
-        """introspect_skill.py must contain no reference to 'cron_tool_executed'.
-
-        RELEVANT_TYPES inside _reasoning_recent_actions is function-local,
-        so we inspect the source file directly rather than importing the tuple.
-        """
-        import services.innate_skills.introspect_skill as mod
-        source = Path(mod.__file__).read_text()
-        assert "cron_tool_executed" not in source, (
-            "'cron_tool_executed' still appears in introspect_skill.py — "
-            "this string should have been removed with cron-tool support"
-        )
-
-
 # ── Part A: dmn_service source scan ──────────────────────────────────────────
 
 class TestDmnServiceCronRemoval:
