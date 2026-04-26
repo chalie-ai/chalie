@@ -21,8 +21,10 @@ TOOL_SCHEMA = {
         "consolidation recency), reasoning state (active focus, upcoming reminders, "
         "recent autonomous actions), and identity (relationship depth, communication style, "
         "personality). All deterministic — no LLM calls. "
-        "Use when the user asks about system state, capabilities, or what you have been doing, "
-        "or when you need to gauge how much context you have before deciding what to do."
+        "Use when the user asks how you are doing, requests a status report, asks what you "
+        "have been up to, asks about your wellbeing, your capabilities, or your current "
+        "internal state — any self-referential or 'how are you' style question. Also fire "
+        "when you need to gauge how much context you have before deciding what to do."
     ),
     "input_schema": {
         "type": "object",
