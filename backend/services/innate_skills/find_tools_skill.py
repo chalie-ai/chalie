@@ -144,6 +144,35 @@ def handle_find_tools(channel: str, params: dict) -> dict:
 # -- Search helpers --------------------------------------------------------
 
 
+def _score_and_pack(
+    tool_name: str,
+    short_summary,
+    full_profile,
+    domain,
+    effort,
+    distance: float,
+    keywords: str,
+    query_words: set,
+    query_lower: str,
+) -> Dict:
+    """Build a scored result dict for a single tool candidate."""
+    kw_list = [k.strip().lower() for k in (keywords or '').split(',') if k.strip()]
+    kw_match_count = sum(
+        1 for kw in kw_list
+        if (' ' not in kw and kw in query_words) or (' ' in kw and kw in query_lower)
+    )
+    score = (distance * 10) - kw_match_count
+    return {
+        'tool_name': tool_name,
+        'short_summary': short_summary,
+        'full_profile': full_profile,
+        'domain': domain,
+        'effort': effort,
+        'score': score,
+        'distance': distance,
+    }
+
+
 def _filter_available(rows: list, query: str = "") -> List[Dict]:
     """Filter vec search results to available, ready tools. Score by distance + keyword match."""
     try:
@@ -153,6 +182,7 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
         registry = None
 
     query_lower = query.lower()
+    query_words = set(query_lower.split())
     results = []
     for row in rows:
         tool_name = row[0] if not isinstance(row, dict) else row['tool_name']
@@ -171,22 +201,10 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
         # For non-primitive innate skills, include directly without registry check
         # (innate skills have no manifest in ToolRegistryService — external-only).
         if tool_type == 'skill':
-            kw_list = [k.strip().lower() for k in (keywords or '').split(',') if k.strip()]
-            query_words = set(query_lower.split())
-            kw_match_count = sum(
-                1 for kw in kw_list
-                if (' ' not in kw and kw in query_words) or (' ' in kw and kw in query_lower)
-            )
-            score = (distance * 10) - kw_match_count
-            results.append({
-                'tool_name': tool_name,
-                'short_summary': short_summary,
-                'full_profile': full_profile,
-                'domain': domain,
-                'effort': effort,
-                'score': score,
-                'distance': distance,
-            })
+            results.append(_score_and_pack(
+                tool_name, short_summary, full_profile, domain, effort,
+                distance, keywords, query_words, query_lower,
+            ))
             continue
 
         # Check tool is registered and ready
@@ -200,23 +218,10 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
                 continue
 
         # 2-axis scoring: semantic distance + keyword match bonus
-        kw_list = [k.strip().lower() for k in (keywords or '').split(',') if k.strip()]
-        query_words = set(query_lower.split())
-        kw_match_count = sum(
-            1 for kw in kw_list
-            if (' ' not in kw and kw in query_words) or (' ' in kw and kw in query_lower)
-        )
-        score = (distance * 10) - kw_match_count
-
-        results.append({
-            'tool_name': tool_name,
-            'short_summary': short_summary,
-            'full_profile': full_profile,
-            'domain': domain,
-            'effort': effort,
-            'score': score,
-            'distance': distance,
-        })
+        results.append(_score_and_pack(
+            tool_name, short_summary, full_profile, domain, effort,
+            distance, keywords, query_words, query_lower,
+        ))
 
     # Lower score = better (closer semantically + more keyword matches)
     results.sort(key=lambda t: t['score'])
