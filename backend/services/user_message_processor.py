@@ -325,10 +325,20 @@ class UserMessageProcessor(MessageProcessor):
 
         # Row is recorded every turn — the seed dispatch is part of the ACT
         # trail whether or not it returned matches. Inject into the prompt
-        # only when there's actual recall content; an empty `results=0` block
-        # adds noise to the user message without value.
-        if block and "results=0" not in block:
+        # only when the recall produced real content; empty (`results=0`) and
+        # error (`error=...`) header args yield blocks that add noise without
+        # value. Inspect only the opener line so a body containing the literal
+        # substring `results=0` or `error=` cannot suppress a valid seed.
+        header = block.split('\n', 1)[0] if block else ''
+        if block and 'results=0' not in header and 'error=' not in header:
             self._memory_seed = block
+
+        if self._uid is None:
+            logger.warning(
+                "[UMP] pre_act skipped seed-row write: _uid is None "
+                "(SKIP_TRANSCRIPT_WRITE subclass?)"
+            )
+            return
 
         ToolRenderAndRecordService(
             tool_name='memory',
