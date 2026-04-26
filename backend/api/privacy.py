@@ -101,6 +101,7 @@ def data_summary():
                 "scheduled_items",
                 "lists", "list_items",
                 "documents",
+                "data_graph",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -140,6 +141,7 @@ def export_data():
         "list_events",
         "user_tool_preferences",
         "documents", "watched_folders",
+        "data_graph",
     ]
 
     store_patterns = [
