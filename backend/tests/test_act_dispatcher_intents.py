@@ -145,7 +145,9 @@ class TestNoCapableWrapper:
             result = service.dispatch_action("topic", {"type": "no_such_action"})
 
         assert result["status"] == "error"
-        assert "Unknown action type" in result["result"]
+        assert "unknown-action-type" in result["result"]
+        assert result["result"].startswith("[no_such_action(")
+        assert result["result"].endswith("[end:no_such_action]")
 
     def test_wrapper_without_matching_capability_falls_through(self, service, db):
         """A wrapper with different capabilities doesn't intercept unrelated actions."""
