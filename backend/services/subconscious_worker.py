@@ -205,17 +205,14 @@ class SubconsciousWorker:
         last_msg = snapshot.get("last_user_message_at")
         now = utc_now()
 
-        if last_msg is not None:
-            if now - last_msg < self.idle_window:
-                return "user_active"
+        if last_msg is not None and now - last_msg < self.idle_window:
+            return "user_active"
 
         last_fired = self._cached_last_fired
         if last_fired is not None:
-            if last_msg is None:
-                # Hydrated last_fired with no user activity since boot — the
-                # tick has nothing new to consolidate. Wait for a real signal.
-                return "already_fired"
-            if last_fired > last_msg:
+            # Hydrated last_fired with no user activity since boot — the tick
+            # has nothing new to consolidate. Wait for a real signal.
+            if last_msg is None or last_fired > last_msg:
                 return "already_fired"
 
         return None

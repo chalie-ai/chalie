@@ -241,7 +241,6 @@ def merge_event_cadence(existing: dict, observation: dict, now_iso: str) -> dict
     else:
         slots['cadence_days'] = new_cadence
 
-    # next_expected = last_seen + cadence_days
     try:
         last_dt = parse_utc(now_iso)
         slots['next_expected'] = (last_dt + timedelta(days=slots['cadence_days'])).isoformat()
