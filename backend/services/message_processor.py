@@ -409,7 +409,7 @@ class MessageProcessor:
         Never re-raises — errors become strings the LLM sees next iteration.
         """
         from services.tool_render_and_record_service import ToolRenderAndRecordService
-        from services.tool_schema_service import get_external_tool_schemas
+        from services.tool_schema_service import get_external_tool_schemas, get_skill_schemas
 
         tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
@@ -435,7 +435,22 @@ class MessageProcessor:
             ):
                 discovered = dispatch.get('_discovered_tools', [])
                 if discovered:
-                    new_schemas = get_external_tool_schemas(discovered)
+                    from services.innate_skills.registry import (
+                        ALL_SKILL_NAMES, COGNITIVE_PRIMITIVES,
+                    )
+                    innate_discovered = [
+                        n for n in discovered
+                        if n in ALL_SKILL_NAMES and n not in COGNITIVE_PRIMITIVES
+                    ]
+                    external_discovered = [
+                        n for n in discovered
+                        if n not in ALL_SKILL_NAMES
+                    ]
+
+                    new_schemas = (
+                        get_skill_schemas(innate_discovered)
+                        + get_external_tool_schemas(external_discovered)
+                    )
                     existing_names = {
                         t.get('name') for t in self._discovered_tools
                     }
@@ -445,9 +460,10 @@ class MessageProcessor:
                             self._discovered_tools.append(s)
                             existing_names.add(name)
 
-                    # Register as dispatcher handlers so they dispatch
-                    # through the standard handler path (no fallback needed).
-                    self._register_discovered_tools(discovered)
+                    # Register external tools as dispatcher handlers so they
+                    # dispatch through the standard handler path.
+                    # Innate skills are already registered at boot — skip.
+                    self._register_discovered_tools(external_discovered)
 
         except Exception as exc:
             result_text = f"ERROR: {tool_name} failed: {exc}"

@@ -17,6 +17,7 @@ import logging
 from typing import List, Dict
 
 from services.embedding_utils import pack_embedding
+from services.innate_skills.registry import COGNITIVE_PRIMITIVES
 
 logger = logging.getLogger(__name__)
 
@@ -163,8 +164,29 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
         distance = row[6] if not isinstance(row, dict) else row['distance']
         keywords = row[7] if not isinstance(row, dict) else row.get('keywords', '')
 
-        # Skip innate skills — they're already injected
+        # Skip cognitive primitives — they're always present in every ACT turn
+        if tool_type == 'skill' and tool_name in COGNITIVE_PRIMITIVES:
+            continue
+
+        # For non-primitive innate skills, include directly without registry check
+        # (innate skills have no manifest in ToolRegistryService — external-only).
         if tool_type == 'skill':
+            kw_list = [k.strip().lower() for k in (keywords or '').split(',') if k.strip()]
+            query_words = set(query_lower.split())
+            kw_match_count = sum(
+                1 for kw in kw_list
+                if (' ' not in kw and kw in query_words) or (' ' in kw and kw in query_lower)
+            )
+            score = (distance * 10) - kw_match_count
+            results.append({
+                'tool_name': tool_name,
+                'short_summary': short_summary,
+                'full_profile': full_profile,
+                'domain': domain,
+                'effort': effort,
+                'score': score,
+                'distance': distance,
+            })
             continue
 
         # Check tool is registered and ready
