@@ -318,23 +318,18 @@ class UserMessageProcessor(MessageProcessor):
         self._memory_seed_query = query
         self._memory_seed_radius = radius
 
-        try:
-            block = handle_memory(self.CHANNEL, {
-                'action': 'recall',
-                'query': query,
-            })
-        except Exception as exc:
-            logger.warning(f"[USER MSG] Memory pre-act seed failed: {exc}")
-            return
+        block = handle_memory(self.CHANNEL, {
+            'action': 'recall',
+            'query': query,
+        })
 
-        # Only store and inject when the seed returned real results — an empty
-        # tag block (`[memory(query=..., results=0)]\n[end:memory]`) adds noise
-        # without value.
-        if not block or "results=0" in block:
-            logger.debug("[USER MSG] Memory pre-act seed: no results")
-            return
+        # Row is recorded every turn — the seed dispatch is part of the ACT
+        # trail whether or not it returned matches. Inject into the prompt
+        # only when there's actual recall content; an empty `results=0` block
+        # adds noise to the user message without value.
+        if block and "results=0" not in block:
+            self._memory_seed = block
 
-        self._memory_seed = block
         ToolRenderAndRecordService(
             tool_name='memory',
             params={'action': 'recall', 'query': query, 'radius': radius},
