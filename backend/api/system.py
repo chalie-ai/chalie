@@ -562,31 +562,6 @@ def reset_thread():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
-# ──────────────────────────────────────────────
-# Subconscious worker control (test harness support)
-# ──────────────────────────────────────────────
-
-@system_bp.route('/system/subconscious/tick', methods=['POST'])
-@require_session
-def subconscious_tick():
-    """Force one subconscious worker tick, bypassing both idle-gate and already-fired gate.
-
-    Used by nightly-test scenarios to drive the worker on-demand. Returns the
-    structured tick summary (same shape as ``SubconsciousWorker.run_once()``).
-
-    Note: the re-entrancy lock still applies — concurrent forced ticks return
-    ``{"skipped": "re_entrant"}``.
-    """
-    try:
-        from services.subconscious_worker import get_subconscious_worker
-        worker = get_subconscious_worker()
-        result = worker.run_once(force=True)
-        return jsonify(result), 200
-    except Exception as e:
-        logger.exception("subconscious tick failed")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 # Settings endpoints
 # ──────────────────────────────────────────────
 

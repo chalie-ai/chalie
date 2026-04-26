@@ -156,25 +156,6 @@ def test_fresh_message_resets_already_fired_gate(isolated_world_state, stub_work
     assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
 
 
-# ── Force bypass ─────────────────────────────────────────────────────────────
-
-
-def test_run_once_force_bypasses_gates(isolated_world_state, stub_worker):
-    """force=True bypasses both idle-gate and already-fired gate; tick body runs."""
-    # Simulate a very recent user message — would normally trip the user_active gate.
-    isolated_world_state.absorb(Signal(
-        source="ws",
-        kind="user_message",
-        payload={},
-        received_at=utc_now() - timedelta(seconds=10),
-    ))
-    result = stub_worker.run_once(force=True)
-    assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
-    assert result["steps"]
-    assert all(step["status"] == "ok" for step in result["steps"].values())
-
-
 # ── Step exception isolation ────────────────────────────────────────────────
 
 

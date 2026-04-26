@@ -103,7 +103,7 @@ class SubconsciousWorker:
 
     # ── Public entry ─────────────────────────────────────────────────────────
 
-    def run_once(self, force: bool = False) -> dict:
+    def run_once(self) -> dict:
         """Run one full tick. Returns a structured summary.
 
         Summary keys:
@@ -113,23 +113,17 @@ class SubconsciousWorker:
             - ``steps``: dict per step with ``status`` (``ok`` | ``skipped`` |
               ``error``) and optional ``detail`` / ``error`` fields.
             - ``last_fired_at``: ISO string when state was bumped, else ``None``.
-
-        Args:
-            force: When ``True``, bypass the idle-gate and already-fired gate.
-                   The re-entrancy lock still applies — concurrent forced ticks
-                   return ``{"skipped": "re_entrant"}``.
         """
         if not self._lock.acquire(blocking=False):
             logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
             return {"skipped": "re_entrant", "steps": {}, "last_fired_at": None}
 
         try:
-            if not force:
-                gate_skip = self._check_gates()
-                if gate_skip is not None:
-                    logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
-                    return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
-            return self._tick(force=force)
+            gate_skip = self._check_gates()
+            if gate_skip is not None:
+                logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
+                return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
+            return self._tick()
         finally:
             self._lock.release()
 
@@ -140,13 +134,8 @@ class SubconsciousWorker:
 
     # ── Tick orchestration ───────────────────────────────────────────────────
 
-    def _tick(self, force: bool = False) -> dict:
-        """Body of one tick after gates have been cleared (or bypassed).
-
-        ``force`` is only used to label the completion log line so a
-        gate-bypassed run is distinguishable from a normal idle-window tick
-        when grepping operator logs.
-        """
+    def _tick(self) -> dict:
+        """Body of one tick after gates have been cleared."""
         steps: dict = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["decay"] = self._safe_step("decay", self._step_decay)
@@ -170,9 +159,8 @@ class SubconsciousWorker:
             logger.warning(f"{LOG_PREFIX} persist last_fired_at failed: {exc}")
             last_iso = None
 
-        prefix = "tick complete (forced)" if force else "tick complete"
         logger.info(
-            f"{LOG_PREFIX} {prefix}: "
+            f"{LOG_PREFIX} tick complete: "
             f"consolidate={steps['consolidate']['status']} "
             f"decay={steps['decay']['status']} "
             f"pattern_match={steps['pattern_match']['status']} "

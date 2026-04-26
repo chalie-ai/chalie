@@ -12,8 +12,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ### Changed
 - Compaction unified into `CompactionMessageProcessor` family — mid-ACT Stage 1 and Stage 2 compaction now dispatch through `TrailCompactionProcessor` and `FullCompactionProcessor` (subclasses of `_CompactionProcessorBase` → `MessageProcessor`) instead of inline `Providers.send_messages()` calls. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard. System-prompt bodies live as `CompactionFullSystemPrompt` / `CompactionTrailSystemPrompt` constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` (new method) folds sub-processor token + tool counts into the parent turn's metrics. Pure SQL helpers extracted to `compaction_persistence.py`.
 - Pattern matcher rewrite — `pattern_extractor.py` (694 LOC, 6-vertical × 4-class flow) replaced by `PatternMatchProcessor`, a single-pass LLM matcher that runs every ≥50 new transcripts. The model emits `save_pattern` / `save_graph` tool calls in parallel (`MAX_ITERATIONS=30`). Decay (−0.005 per pass, soft-delete at 0) moved from `DecayEngine` to `PatternMatchProcessor.postTurn()`.
-- New API endpoint `POST /system/subconscious/tick` — forces one subconscious worker tick bypassing both gates. Used by nightly tests; auth required.
-- `SubconsciousWorker.run_once(force: bool = False)` — gate check moved to `run_once`; pass `force=True` to bypass the idle and already-fired gates.
+- `SubconsciousWorker.run_once()` — gate check moved into `run_once` (was previously inside `_tick`). No-arg signature; idle-gate and already-fired gate are always honoured.
 - `ToolRenderAndRecordService._record()` — short-circuits with DEBUG log when `transcript_id is None` (prevents IntegrityError for `SKIP_TRANSCRIPT_WRITE=True` processors that dispatch tools).
 
 ### Removed
