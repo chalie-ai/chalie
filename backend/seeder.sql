@@ -34,9 +34,7 @@ FROM (
     UNION ALL SELECT 'autonomous-ambient-tool'
     UNION ALL SELECT 'frontal-cortex-scheduled-tool'
     UNION ALL SELECT 'moment-enrichment'
-    UNION ALL SELECT 'document-synthesis'
     UNION ALL SELECT 'compaction'
     UNION ALL SELECT 'reflect-skill'
-    UNION ALL SELECT 'failure-analysis'
 )
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;

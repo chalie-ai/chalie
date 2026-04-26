@@ -19,22 +19,10 @@
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "document-synthesis",
-      "name": "Document Synthesis",
-      "desc": "Generates summaries for uploaded documents during processing.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none", "vision": "none" }
-    },
-    {
       "id": "compaction",
       "name": "Compaction",
       "desc": "Compresses older conversation turns into dense summaries preserving facts, decisions, and preferences.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "low", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "failure-analysis",
-      "name": "Failure Analysis",
-      "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",
-      "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     }
   ]
 }

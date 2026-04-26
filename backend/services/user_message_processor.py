@@ -18,7 +18,7 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-Implements the full postTurn() seven-service fan-out, memory seeding, narration
+Implements the full postTurn() four-step fan-out, memory seeding, narration
 callback, and getSystemPrompt() override.
 """
 
@@ -80,7 +80,7 @@ class UserMessageProcessor(MessageProcessor):
 
     Hardcodes CHANNEL='user', ROLE='user', uses UnifiedSystemMessagePrompt.
     Adds on_narration callback for real-time ACT narration streaming.
-    Overrides postTurn() with the eight-service fan-out.
+    Overrides postTurn() with the four-step fan-out.
     """
 
     CHANNEL = 'user'
@@ -394,19 +394,17 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Five-service fan-out, each individually error-isolated.
+        """Four-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
-          2. SaveSuggestionService — user-side trigger THEN response-side detect
-          3. DMNService.on_turn() — R10 critical
-          4. MetricsService — last ("turn closed" signal)
-          5. compaction_service.check_and_compact — end-turn backstop
+          2. DMNService.on_turn() — R10 critical
+          3. MetricsService — last ("turn closed" signal)
+          4. compaction_service.check_and_compact — end-turn backstop
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
         response = self._last_response
-        metadata = self._metadata
 
         # 1. Conversation phase — TWO calls (user text + assistant response).
         # Skip the assistant-side update on empty response (cap-exit turns):
@@ -421,38 +419,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 2. Save suggestion scan — TWO paths in correct order:
-        #    2a: user-side trigger must fire BEFORE 2b detect (ordering constraint)
-        try:
-            from services.save_suggestion_service import SaveSuggestionService
-            save_svc = SaveSuggestionService()
-
-            # 2a: User-side completion/deferral trigger — clears existing flag
-            save_flag = save_svc.get_saveable_flag()
-            if save_flag:
-                trigger = save_svc.detect_save_trigger(text)
-                if trigger:
-                    save_svc.emit_save_card(save_flag['content_type'])
-                    save_svc.clear_flag()
-
-            # 2b: Response-side saveable content detection — sets new flag.
-            # NOTE: flag_saveable expects exchange_id (UUID string) for window
-            # correlation, not the integer transcript row id (self._uid). Prefer
-            # the UUID from metadata; fall back to a stringified row id if absent.
-            saveable = save_svc.detect_saveable_content(response, channel)
-            if saveable:
-                exchange_id_for_flag = (
-                    metadata.get('exchange_id')
-                    or metadata.get('uuid')
-                    or str(self._uid)
-                )
-                save_svc.flag_saveable(
-                    channel, saveable['content_type'], exchange_id_for_flag
-                )
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
-
-        # 3. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 2. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -462,7 +429,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 4. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 3. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -473,7 +440,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 5. End-turn compaction backstop (safety net; mid-loop compaction in send()
+        # 4. End-turn compaction backstop (safety net; mid-loop compaction in send()
         # should handle most cases).
         # WARNING level — silent compaction failure leads to context overflow
         # (Commit 8 critic P1-2).

@@ -610,52 +610,6 @@ def augment_document(doc_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@documents_bp.route("/documents/create-from-conversation", methods=["POST"])
-@require_session
-def create_from_conversation():
-    """Create a document from conversation content (save suggestion accept)."""
-    data = request.get_json(silent=True) or {}
-    topic = (data.get('topic') or '').strip()
-    content_type = (data.get('content_type') or '').strip()
-
-    try:
-        from services.save_suggestion_service import SaveSuggestionService
-
-        save_svc = SaveSuggestionService()
-        doc_id = save_svc.create_document_from_conversation(
-            topic, content_type,
-        )
-        if not doc_id:
-            return jsonify({"error": "Failed to create document"}), 500
-
-        return jsonify({"id": doc_id, "status": "processing"}), 201
-
-    except Exception as e:
-        logger.error(f"[DOCS API] create_from_conversation error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to create document"}), 500
-
-
-@documents_bp.route("/documents/dismiss-save", methods=["POST"])
-@require_session
-def dismiss_save():
-    """Track save suggestion rejection for rate limiting."""
-    data = request.get_json(silent=True) or {}
-    topic = (data.get('topic') or '').strip()
-
-    try:
-        from services.save_suggestion_service import SaveSuggestionService
-
-        save_svc = SaveSuggestionService()
-        save_svc.clear_flag()
-        save_svc.record_rejection(topic)
-
-        return jsonify({"status": "dismissed"}), 200
-
-    except Exception as e:
-        logger.error(f"[DOCS API] dismiss_save error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
-
-
 @documents_bp.route("/documents/<doc_id>/supersede", methods=["POST"])
 @require_session
 def supersede_document(doc_id):
