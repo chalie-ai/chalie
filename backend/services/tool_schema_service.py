@@ -110,10 +110,6 @@ def _manifest_to_schema(manifest: dict) -> dict | None:
     ``parameters`` conversion path is kept for backwards compatibility with
     interface tools that still use the legacy format.
 
-    The ``modes`` key is a mode-gate metadata field — it is stripped before
-    returning so LLM providers never see it (unknown fields may cause rejections
-    from strict schema validators).
-
     Args:
         manifest: Tool manifest dict with name, description, and either
                   ``input_schema`` (preferred) or ``parameters`` (legacy).
@@ -133,7 +129,6 @@ def _manifest_to_schema(manifest: dict) -> dict | None:
             "name": name,
             "description": description,
             "input_schema": manifest['input_schema'],
-            # Note: 'modes' is intentionally NOT forwarded to the LLM.
         }
 
     # Legacy path: convert parameters dict for interface tools

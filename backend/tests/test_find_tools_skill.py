@@ -73,12 +73,17 @@ class TestHandleFindTools:
 
     def test_empty_query_returns_error(self):
         result = handle_find_tools("topic", {"query": ""})
-        assert "ERROR" in result['text']
+        # New format: text = '[find_tools(error=query-required)]\n[end:find_tools]'
+        assert 'error=query-required' in result['text']
+        assert '[find_tools(' in result['text']
+        assert '[end:find_tools]' in result['text']
         assert result['_discovered_tools'] == []
 
     def test_missing_query_returns_error(self):
         result = handle_find_tools("topic", {})
-        assert "ERROR" in result['text']
+        assert 'error=query-required' in result['text']
+        assert '[find_tools(' in result['text']
+        assert '[end:find_tools]' in result['text']
         assert result['_discovered_tools'] == []
 
 
@@ -189,9 +194,10 @@ class TestSearchIntegration:
 
         result = handle_find_tools("topic", {"query": "search online"})
         assert isinstance(result, dict)
-        # Output is JSON: {"added_tools": [{"name": "search", "relevance": ...}]}
-        import json
-        parsed = json.loads(result['text'])
+        # New format: text = '[find_tools(query=..., found=N)]\n<json>\n[end:find_tools]'
+        from tests._tag_helpers import assert_both_markers, extract_json as _ej
+        assert_both_markers('find_tools', result['text'])
+        parsed = _ej('find_tools', result['text'])
         assert any(t['name'] == 'search' for t in parsed['added_tools'])
         assert 'search' in result['_discovered_tools']
 

@@ -8,6 +8,8 @@ import json as _json
 import logging
 from typing import Optional
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 
 TOOL_SCHEMA = {
@@ -97,11 +99,13 @@ def handle_document(channel: str, params: dict) -> str:
 
         db = get_shared_db_service()
         service = DocumentService(db)
-        return _dispatch(service, action, params)
-
+        body = _dispatch(service, action, params)
     except Exception as e:
         logger.error(f"[DOCUMENT SKILL] Error: {e}", exc_info=True)
-        return f"[DOCUMENT] Error: {e}"
+        body = str(e)
+        return _skill_tag("document", action=action, error=body[:200])
+
+    return _skill_tag("document", body, action=action)
 
 
 def _dispatch(service, action: str, params: dict) -> str:

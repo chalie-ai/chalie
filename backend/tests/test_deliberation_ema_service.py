@@ -113,7 +113,7 @@ class TestDeliberationEmaBucketTransition:
         # Closed-form convergence: after N steps, ema_N = alpha^N * 0.10 + (1-alpha^N) * 0.90
         # We just run the real loop and assert it converges within 10 turns.
         bucket = "low"
-        for i in range(10):
+        for _ in range(10):
             ema, bucket = svc.update_and_bucket(0.90)
             if bucket == "high":
                 break

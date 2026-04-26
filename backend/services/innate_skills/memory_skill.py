@@ -4,6 +4,8 @@ import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
+from services.innate_skills._tag import tag as _tag
+
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
 
@@ -140,13 +142,14 @@ def handle_memory(channel: str, params: dict) -> str:
         elif action == "forget":
             return _handle_forget(params)
         else:
-            return (
-                f"{LOG_PREFIX} Unknown action: {action}. "
-                f"Valid: store, recall, reflect, forget"
+            return _tag(
+                "memory",
+                error=f"unknown-action:{action}",
+                valid="store,recall,reflect,forget",
             )
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
-        return f"{LOG_PREFIX} Error: {e}"
+        return _tag("memory", action=action, error=str(e)[:200])
 
 
 # ── Store ────────────────────────────────────────────────────────────
@@ -158,9 +161,9 @@ def _handle_store(channel: str, params: dict) -> str:
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return f"{LOG_PREFIX} Error: 'key' is required for store."
+        return _tag("memory", action="store", error="key-required")
     if value is None:
-        return f"{LOG_PREFIX} Error: 'value' is required for store."
+        return _tag("memory", action="store", error="value-required")
 
     from services.data_graph_service import get_data_graph_service
 
@@ -168,9 +171,10 @@ def _handle_store(channel: str, params: dict) -> str:
     result = dgs.store(kind=kind, key=key, value=str(value), source=f"skill:memory:store:{channel}")
 
     if result is None:
-        return f"{LOG_PREFIX} Store failed — invalid kind '{kind}' or internal error."
+        return _tag("memory", action="store", key=key, error=f"store-failed-invalid-kind:{kind}")
 
-    return _format_store_response(result)
+    body = _format_store_response(result)
+    return _tag("memory", body, action="store", key=key)
 
 
 def _format_store_response(result: dict) -> str:
@@ -233,7 +237,7 @@ def _handle_forget(params: dict) -> str:
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return f"{LOG_PREFIX} Error: 'key' is required for forget."
+        return _tag("memory", action="forget", error="key-required")
 
     from services.data_graph_service import get_data_graph_service
 
@@ -241,9 +245,10 @@ def _handle_forget(params: dict) -> str:
     result = dgs.forget(kind=kind, key=key, value=value)
 
     if result is None:
-        return f"{LOG_PREFIX} Forget failed — invalid kind or internal error."
+        return _tag("memory", action="forget", key=key, error="forget-failed-invalid-kind")
 
-    return _format_forget_response(result)
+    body = _format_forget_response(result)
+    return _tag("memory", body, action="forget", key=key)
 
 
 def _format_forget_response(result: dict) -> str:
@@ -294,7 +299,7 @@ def _format_forget_response(result: dict) -> str:
 def _handle_recall(channel: str, params: dict) -> str:
     query = params.get("query", "")
     if not query:
-        return f"{LOG_PREFIX} Error: no query specified for recall."
+        return _tag("memory", action="recall", error="no-query")
 
     limit = 10
 
@@ -313,9 +318,10 @@ def _handle_recall(channel: str, params: dict) -> str:
     _store_fok_signal(channel, partial)
 
     if not results:
-        return f'No memories found for the query "{query}"'
+        return _tag("memory", query=query, results=0)
 
-    return _format_results(results)
+    body = _format_results(results)
+    return _tag("memory", body, query=query, results=len(results))
 
 
 # ── Reflect ──────────────────────────────────────────────────────────
@@ -324,7 +330,7 @@ def _handle_recall(channel: str, params: dict) -> str:
 def _handle_reflect(channel: str, params: dict) -> str:
     query = params.get("query", "")
     if not query:
-        return f"{LOG_PREFIX} Error: no query specified for reflect."
+        return _tag("memory", action="reflect", error="no-query")
 
     # 1. Top episode (raw dict with transcript_ids / consolidated_from)
     raw_episodes, _ = recall_episodes(
@@ -339,8 +345,9 @@ def _handle_reflect(channel: str, params: dict) -> str:
         # Fall back to data_graph only
         dg_hits, _ = _search_data_graph(query, 2)
         if not dg_hits:
-            return f'No memories found for the query "{query}"'
-        return _format_reflect(query, None, [], dg_hits)
+            return _tag("memory", action="reflect", query=query, results=0)
+        body = _format_reflect(query, None, [], dg_hits)
+        return _tag("memory", body, action="reflect", query=query)
 
     top = raw_episodes[0]
 
@@ -350,7 +357,8 @@ def _handle_reflect(channel: str, params: dict) -> str:
     # 3. Data graph (limit 2)
     dg_hits, _ = _search_data_graph(query, 2)
 
-    return _format_reflect(query, top, supporting, dg_hits)
+    body = _format_reflect(query, top, supporting, dg_hits)
+    return _tag("memory", body, action="reflect", query=query)
 
 
 def _expand_episode_layers(episode: Dict) -> List[Dict]:
@@ -750,15 +758,18 @@ def recall_episodes(
         transcript_id = None
         if proc is not None:
             history = list(proc._memory_query_history or [])
-            if proc._memory_seed and not any(
+            # Use _memory_seed_query (the raw query string) for drift embedding,
+            # not _memory_seed (which is now the full formatted tag block).
+            seed_query = getattr(proc, "_memory_seed_query", None) or None
+            if seed_query and not any(
                 h.get("caller") == "seed" for h in history
             ):
                 try:
-                    seed_emb = emb_svc.generate_embedding(proc._memory_seed)
+                    seed_emb = emb_svc.generate_embedding(seed_query)
                     history.insert(
                         0,
                         {
-                            "query": proc._memory_seed,
+                            "query": seed_query,
                             "embedding": seed_emb,
                             "caller": "seed",
                             "effective_radius": SEED_RADIUS_BASELINE,

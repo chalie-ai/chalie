@@ -343,9 +343,6 @@ def test_synthesis_skipped_result_propagates_to_step_detail(isolated_world_state
     fake_usp_mod = _types.ModuleType("services.user_summary_processor")
 
     class _SkippingProcessor:
-        def __init__(self):
-            pass
-
         def send(self):
             return ""  # falsy → synthesis self-gated
 

@@ -235,13 +235,15 @@ class TestHandleMemoryStore:
 
     def test_store_missing_key_returns_error(self):
         result = handle_memory('topic', {'action': 'store', 'value': 'something'})
-        assert 'Error' in result
-        assert 'key' in result
+        assert 'error=key-required' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_store_missing_value_returns_error(self):
         result = handle_memory('topic', {'action': 'store', 'key': 'my_key'})
-        assert 'Error' in result
-        assert 'value' in result
+        assert 'error=value-required' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_store_dgs_returns_none_gives_error(self):
         mock_dgs = self._mock_dgs(None)
@@ -342,7 +344,9 @@ class TestHandleMemoryRecall:
 
     def test_recall_missing_query_returns_error(self):
         result = handle_memory('topic', {'action': 'recall', 'query': ''})
-        assert 'Error' in result
+        assert 'error=no-query' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_recall_calls_dgs_recall(self):
         mock_dgs = MagicMock()
@@ -410,8 +414,11 @@ class TestHandleMemoryRecall:
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {'action': 'recall', 'query': 'ghost'})
 
-        assert 'No memories found' in result
-        assert 'ghost' in result
+        # New format: [memory(query=ghost, results=0)]\n[end:memory]
+        assert 'results=0' in result
+        assert 'query=ghost' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_recall_output_format_id_relevance_value(self):
         """Output must match: [id:{key},relevance:{level}] {value}"""
@@ -435,8 +442,10 @@ class TestHandleMemoryInvalid:
 
     def test_unknown_action_returns_error(self):
         result = handle_memory('topic', {'action': 'explode'})
-        assert 'Unknown action' in result
-        assert 'explode' in result
+        # New format: [memory(error=unknown-action:explode, valid=store,recall,reflect,forget)]
+        assert 'error=unknown-action:explode' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_unknown_action_error_lists_valid_actions(self):
         result = handle_memory('topic', {'action': 'explode'})
@@ -447,11 +456,14 @@ class TestHandleMemoryInvalid:
 
     def test_update_action_rejected_as_unknown(self):
         result = handle_memory('topic', {'action': 'update', 'key': 'k', 'value': 'v'})
-        assert 'Unknown action' in result
+        assert 'error=unknown-action:update' in result
 
     def test_missing_action_defaults_to_recall_then_errors_no_query(self):
         result = handle_memory('topic', {})
-        assert 'Error' in result  # "no query specified for recall"
+        # Missing action defaults to 'recall'; empty query yields error=no-query
+        assert 'error=no-query' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_no_knowledge_service_imports(self):
         """memory_skill must not import KnowledgeService anywhere."""
@@ -550,7 +562,9 @@ class TestHandleMemoryReflect:
 
     def test_reflect_missing_query_returns_error(self):
         result = handle_memory('topic', {'action': 'reflect', 'query': ''})
-        assert 'Error' in result
+        assert 'error=no-query' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_reflect_no_episodes_no_dg_returns_no_memories(self):
         mock_dgs = MagicMock()
@@ -560,8 +574,11 @@ class TestHandleMemoryReflect:
              patch('services.data_graph_service.get_data_graph_service', return_value=mock_dgs):
             result = handle_memory('topic', {'action': 'reflect', 'query': 'cats'})
 
-        assert 'No memories found' in result
+        # New format: [memory(action=reflect, query=cats, results=0)]\n[end:memory]
+        assert 'results=0' in result
         assert 'cats' in result
+        assert '[memory(' in result
+        assert '[end:memory]' in result
 
     def test_reflect_with_episode_shows_main_memory(self):
         fake_ep = {

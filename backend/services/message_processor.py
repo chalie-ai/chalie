@@ -162,6 +162,10 @@ class MessageProcessor:
         self._raw_input = raw_input
         self._metadata = metadata or {}
         self._memory_seed: str | None = None
+        # Raw recall query used by pre_act(); kept separate from _memory_seed
+        # (which is the formatted tag block) so recall_episodes() can embed
+        # the original query for drift computation rather than the block string.
+        self._memory_seed_query: str | None = None
         # Per-turn log of memory recall queries (seed + llm_recall).
         # Populated by the memory skill recall path; consumed by the next
         # recall call for redundancy-narrow and drift-expand computation.
@@ -210,18 +214,6 @@ class MessageProcessor:
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
-    def getConditionalTools(self) -> list[dict]:  # NOSONAR — MessageProcessor hooks use camelCase (getTools, getSystemPrompt, …)
-        """Mode-gated tools for channels that opt in. Base no-op returns [].
-
-        UserMessageProcessor overrides this to consult ModeGateService and
-        return schemas for mode-promoted tools (cached per-turn on the instance).
-
-        Non-user channels (DMN, GoalPursuit, Scheduled, encoders, …) inherit
-        this base implementation and always get [], so their tool lists are
-        completely unchanged by the mode gate feature.
-        """
-        return []
-
     def getDynamicTools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
@@ -267,13 +259,11 @@ class MessageProcessor:
 
         Resolution order (first-seen wins on duplicates):
         1. NATIVE_TOOLS — unconditional tier (resolved via get_skill_schemas).
-           Base is []; UserMessageProcessor narrows to COGNITIVE_PRIMITIVES_ORDERED.
-        2. getConditionalTools() — mode-gated tier. Base always returns [].
-           UserMessageProcessor overrides to consult ModeGateService.
-        3. getDynamicTools() — tools discovered this turn via find_tools.
+           Base is []; UserMessageProcessor sets the full innate skill set.
+        2. getDynamicTools() — tools discovered this turn via find_tools.
 
         Deduplication preserves first-seen order so the unconditional tier
-        cannot be shadowed by a conditional or dynamic entry of the same name.
+        cannot be shadowed by a dynamic entry of the same name.
         """
         from services.tool_schema_service import get_skill_schemas
 
@@ -281,12 +271,11 @@ class MessageProcessor:
         if self.NATIVE_TOOLS:
             native = get_skill_schemas(self.NATIVE_TOOLS)
 
-        conditional = self.getConditionalTools()
         dynamic = self.getDynamicTools()
 
         seen: set[str] = set()
         result: list[dict] = []
-        for schema in native + conditional + dynamic:
+        for schema in native + dynamic:
             name = schema.get('name')
             if name and name not in seen:
                 seen.add(name)
@@ -573,7 +562,7 @@ class MessageProcessor:
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService()
 
-            self._run_memory_seed()
+            self.pre_act()
             self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
             # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
@@ -1024,12 +1013,13 @@ class MessageProcessor:
 
     # ── Overridable hooks ────────────────────────────────────────────────────
 
-    def _run_memory_seed(self) -> None:
-        """Pre-ACT-loop memory auto-seed hook. Base is a no-op.
+    def pre_act(self) -> None:
+        """Pre-ACT-loop hook. Default is a no-op.
 
-        UserMessageProcessor overrides to dispatch the memory skill once at
-        turn start, populate self._memory_seed, and record via
-        ToolRenderAndRecordService (ephemeral=False).
+        Called from send() after the input transcript row is written
+        (self._uid is populated) but before the ACT loop starts.
+        UserMessageProcessor overrides to run the memory seed via the
+        canonical tool dispatch path.
         """
         pass
 

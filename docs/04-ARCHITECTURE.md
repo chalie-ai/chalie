@@ -136,17 +136,27 @@ The pre-shipped `<task>-classifier_meta.json` is the authoritative calibration s
 
 ## Tools and Skills
 
-Three loading tiers stack on every user turn and are merged first-seen, so the unconditional tier can never be shadowed by a later entry of the same name:
+Two loading tiers stack on every user turn and are merged first-seen, so the unconditional tier can never be shadowed by a dynamic entry of the same name:
 
-**Cognitive primitives (unconditional)** are the three innate skills the LLM must always have: `memory`, `find_tools`, and `review_tool_calls`. They cover recall, discovery, and audit — the foundational operations no turn can proceed without.
+**Innate skills (unconditional)** are the core cognitive capabilities the user-channel LLM always has on hand: `memory`, `schedule`, `list`, `goal_pursuit`, `document`, `read`, `find_tools`, `rich_render`, and `review_tool_calls`. They cover recall, discovery, audit, scheduling, lists, long-running pursuit, document retrieval, web reading, and rich rendering — the foundational operations every turn may need.
 
-**Mode-gated innate + first-party tools (conditional)** are loaded based on what cognitive intents the current user turn activates. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) runs once per turn. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. Each tool's declared `modes` list decides which intents promote it. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. This tier is user-channel only; DMN, scheduled prompts, goal pursuit, and encoder processors never run the gate.
+**Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. All external (first-party + interface) tools are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
-**Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. External tools without a `modes` declaration are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
+`ModeGateService` runs once per user turn (via `UserMessageProcessor._get_mode_state()`) but **does not gate tool availability**. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) emits per-mode probabilities. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. The mode set powers prompt-steering directives (long-summary swap on `converse`, brainstorm/research/analyze suffixes) and is reserved for future mode-driven features. A single `[MODE-GATE]` log line per turn records probabilities, state transition, and the active mode set.
 
-A single per-turn `[MODE-GATE]` log line records the probability vector, state transition, active modes, and promoted tool list; one `[MODE-GATE-PROMOTE] turn=<uid> tool=<name>` line fires per promoted tool.
+Tool results flow through a single render-and-record path (`ToolRenderAndRecordService`) that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure.
 
-Tool results flow through a single render-and-record path that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
+Every innate skill result uses the canonical tag block format from `backend/services/innate_skills/_tag.py`:
+
+```
+[<skill_name>(k1=v1, k2=v2)]
+<body>
+[end:<skill_name>]
+```
+
+This is the single source of truth — no skill constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
+
+**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
 
 ---
 

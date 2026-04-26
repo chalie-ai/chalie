@@ -6,7 +6,6 @@ Fetches and extracts clean text from any source:
   - PDFs, DOCX, PPTX, HTML files, Markdown, plain text (filesystem path)
 
 Text extraction delegates to services.text_extractor (shared with DocumentProcessingService).
-URL link extraction is inlined here — it is URL-specific and not useful for file reads.
 
 Security:
   - SSRF guard: blocks requests to private/internal IP ranges (resolved, not string-matched)
@@ -16,10 +15,11 @@ Security:
 import ipaddress
 import logging
 import os
-import re
 import socket
 import urllib3
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
+
+from services.innate_skills._tag import tag as _skill_tag
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -32,7 +32,7 @@ TOOL_SCHEMA = {
         "PDF, DOCX, PPTX, HTML, Markdown, and plain text. Use when user asks to read, "
         "open, fetch, or summarize a URL/webpage/article/file, or when a search returns "
         "a promising URL and the snippet is insufficient. Do NOT use for documents already "
-        "in the library (use 'document' skill instead). Returns page links for follow-up browsing."
+        "in the library (use 'document' skill instead)."
     ),
     "input_schema": {
         "type": "object",
@@ -41,13 +41,9 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "description": "URL (e.g. 'https://example.com/article') or filesystem path (e.g. '/home/user/doc.pdf').",
             },
-            "url": {
-                "type": "string",
-                "description": "Alias for 'source' (backward compat). Use 'source' preferred.",
-            },
             "max_chars": {
                 "type": "integer",
-                "description": "Max characters to return (default 4000, max 8000).",
+                "description": "Max characters to return (default 20000).",
             },
         },
         "required": ["source"],
@@ -56,7 +52,36 @@ TOOL_SCHEMA = {
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-_URL_FETCH_TIMEOUT = 8  # seconds
+_URL_FETCH_TIMEOUT = 15  # seconds — real pages take time; humans don't bail at 8s
+
+# Modern browser fingerprint. Chrome 131 / macOS Sonoma — high baseline UA share,
+# Sec-Ch-Ua-* + Sec-Fetch-* values match what Chromium actually emits on a top-level
+# navigation. Bot-detection vendors (Cloudflare, Akamai, PerimeterX, DataDome) score
+# requests on UA/Sec-Ch-Ua/Accept-Language coherence — drift between these fields
+# is a strong bot signal, so keep them in sync if you change one.
+_BROWSER_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/131.0.0.0 Safari/537.36'
+    ),
+    'Accept': (
+        'text/html,application/xhtml+xml,application/xml;q=0.9,'
+        'image/avif,image/webp,image/apng,*/*;q=0.8,'
+        'application/signed-exchange;v=b3;q=0.7'
+    ),
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"macOS"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+}
 
 # Private/internal IP ranges to block (SSRF guard)
 _BLOCKED_NETS = [
@@ -72,23 +97,6 @@ _BLOCKED_NETS = [
 # System directories never contain user documents
 _BLOCKED_PATH_PREFIXES = ('/etc', '/proc', '/dev', '/sys', '/var/run')
 
-# Link extraction filters
-_SKIP_DOMAINS = frozenset((
-    'facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com',
-    'pinterest.com', 'tiktok.com', 'youtube.com', 'reddit.com',
-))
-_SKIP_PATH_RE = re.compile(
-    r'/(login|signin|signup|register|logout|privacy|terms|cookie|legal|contact'
-    r'|about-us|careers|advertise|press|help/?)(\b|$)',
-    re.IGNORECASE,
-)
-_ANCHOR_RE = re.compile(
-    r'<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-    re.DOTALL | re.IGNORECASE,
-)
-_TAG_RE = re.compile(r'<[^>]+>')
-_MAX_LINKS = 15
-
 
 # ─── Public handler ───────────────────────────────────────────────────────────
 
@@ -100,22 +108,22 @@ def handle_read(channel: str, params: dict) -> str:
         channel: Current conversation channel (unused but required by skill contract)
         params: {
             source (str, required): URL or filesystem path
-            url    (str, alias):    Accepted as alias for 'source' (backward compat)
-            max_chars (int, opt):   Default 4000, max 8000
+            max_chars (int, opt):   Default 20000
         }
 
     Returns:
-        Formatted string with [READ] prefix, or [READ] Error on failure.
+        `[read source=..., max_chars=...]\\n<content>` on success,
+        `[read error=...]` on failure.
     """
-    source = (params.get('source') or params.get('url') or '').strip()
+    source = params.get('source', '').strip()
     if not source:
-        return "[READ] Error: 'source' parameter is required (URL or file path)."
+        return _skill_tag("read", error="source-required")
 
-    max_chars = params.get('max_chars', 4000)
+    max_chars = params.get('max_chars', 20000)
     try:
-        max_chars = max(100, min(8000, int(max_chars)))
+        max_chars = max(100, int(max_chars))
     except (TypeError, ValueError):
-        max_chars = 4000
+        max_chars = 20000
 
     source_type = _classify_source(source)
 
@@ -126,7 +134,7 @@ def handle_read(channel: str, params: dict) -> str:
             return _read_file(source, max_chars)
     except Exception as e:
         logger.error(f'[READ SKILL] Unexpected error for source={source!r}: {e}', exc_info=True)
-        return f"[READ] Error reading '{source}': {str(e)[:200]}"
+        return _skill_tag("read", source=source, error=str(e)[:200])
 
 
 # ─── Source classification ────────────────────────────────────────────────────
@@ -167,46 +175,46 @@ def _is_private_url(url: str) -> bool:
 
 
 def _read_url(url: str, max_chars: int) -> str:
-    """Fetch a URL and return extracted text with navigable links."""
+    """Fetch a URL and return extracted text.
+
+    Uses a per-call requests.Session so cookies set by the origin (anti-bot
+    challenge cookies, CDN session tokens, consent banners) persist across the
+    redirect chain. Without a Session, each redirect hop drops Set-Cookie and
+    many sites then bounce the next hop back to a challenge page.
+    """
     import requests
 
     if _is_private_url(url):
-        return f"[READ] Error: access denied — private/internal URL '{url}'."
+        return _skill_tag("read", source=url, error="private-or-internal-url-blocked")
 
     try:
-        response = requests.get(
-            url,
-            timeout=_URL_FETCH_TIMEOUT,
-            headers={'User-Agent': 'Mozilla/5.0 (compatible; Chalie/1.0; cognitive-agent)'},
-            allow_redirects=True,
-            verify=False,
-        )
-        response.raise_for_status()
-        html = response.text
+        with requests.Session() as session:
+            session.headers.update(_BROWSER_HEADERS)
+            response = session.get(
+                url,
+                timeout=_URL_FETCH_TIMEOUT,
+                allow_redirects=True,
+                verify=False,
+            )
+            response.raise_for_status()
+            html = response.text
     except requests.RequestException as e:
-        return f"[READ] Fetch failed for {url}: {str(e)[:150]}"
+        return _skill_tag("read", source=url, error=f"fetch-failed:{str(e)[:150]}")
 
     from services.text_extractor import extract_html
     content = extract_html(html, url=url)
-    links = _extract_links(html, url)
 
     if not content:
-        links_str = _format_links(links)
-        return f"[READ] No readable content extracted from {url}.{links_str}"
+        return _skill_tag("read", source=url, error="no-readable-content")
 
     truncated = len(content) > max_chars
     if truncated:
         content = content[:max_chars]
 
-    parts = [
-        f"[READ] {url} ({len(content)} chars{', truncated' if truncated else ''}):",
-        content,
-    ]
-    links_str = _format_links(links)
-    if links_str:
-        parts.append(links_str)
-
-    return '\n'.join(parts)
+    kwargs: dict = {"source": url, "max_chars": max_chars}
+    if truncated:
+        kwargs["truncated"] = "true"
+    return _skill_tag("read", content, **kwargs)
 
 
 # ─── File reading ─────────────────────────────────────────────────────────────
@@ -222,16 +230,16 @@ def _read_file(file_path: str, max_chars: int) -> str:
         return any(path == p or path.startswith(p + '/') for p in _BLOCKED_PATH_PREFIXES)
 
     if _is_blocked(expanded) or _is_blocked(resolved):
-        return f"[READ] Error: access denied — system path '{file_path}'."
+        return _skill_tag("read", source=file_path, error="system-path-blocked")
 
     if not os.path.exists(resolved):
-        return f"[READ] Error: file not found: '{file_path}'."
+        return _skill_tag("read", source=file_path, error="file-not-found")
 
     if not os.path.isfile(resolved):
-        return f"[READ] Error: '{file_path}' is not a file (directory or special file)."
+        return _skill_tag("read", source=file_path, error="not-a-file")
 
     if not os.access(resolved, os.R_OK):
-        return f"[READ] Error: no read permission for '{file_path}'."
+        return _skill_tag("read", source=file_path, error="no-read-permission")
 
     from services.text_extractor import detect_mime_type, extract_text, normalize_text
 
@@ -239,7 +247,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     content = extract_text(resolved, mime_type)
 
     if not content or not content.strip():
-        return f"[READ] No text content found in '{os.path.basename(file_path)}'."
+        return _skill_tag("read", source=file_path, error="no-text-content")
 
     content = normalize_text(content)
 
@@ -247,70 +255,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     if truncated:
         content = content[:max_chars]
 
-    filename = os.path.basename(file_path)
-    return (
-        f"[READ] {filename} ({mime_type}, {len(content)} chars"
-        f"{', truncated' if truncated else ''}):\n{content}"
-    )
-
-
-# ─── Link extraction (URL-only) ───────────────────────────────────────────────
-
-def _extract_links(html: str, base_url: str) -> list:
-    """
-    Extract navigable page links from raw HTML.
-
-    Returns up to 15 deduplicated links as [{"text": str, "url": str}, ...].
-    Filters social media domains, common non-content paths, fragment-only anchors,
-    and non-http(s) schemes.
-    """
-    try:
-        links = []
-        seen = set()
-
-        for href, raw_text in _ANCHOR_RE.findall(html):
-            href = href.strip()
-            if not href or href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
-                continue
-
-            absolute = urljoin(base_url, href)
-            parsed = urlparse(absolute)
-
-            if parsed.scheme not in ('http', 'https'):
-                continue
-
-            clean_url = parsed._replace(fragment='').geturl()
-            if clean_url in seen or clean_url.rstrip('/') == base_url.rstrip('/'):
-                continue
-
-            domain = parsed.netloc.lower()
-            if any(domain == d or domain.endswith('.' + d) for d in _SKIP_DOMAINS):
-                continue
-
-            if _SKIP_PATH_RE.search(parsed.path):
-                continue
-
-            seen.add(clean_url)
-            text = _TAG_RE.sub('', raw_text).strip()
-            text = re.sub(r'\s+', ' ', text)
-            if not text or len(text) > 120:
-                text = text[:120].strip() if text else parsed.path.rstrip('/').split('/')[-1]
-
-            links.append({'text': text, 'url': clean_url})
-            if len(links) >= _MAX_LINKS:
-                break
-
-        return links
-    except Exception as e:
-        logger.debug(f'[READ SKILL] Link extraction failed: {e}')
-        return []
-
-
-def _format_links(links: list) -> str:
-    """Format extracted links as a markdown list for ACT loop consumption."""
-    if not links:
-        return ''
-    lines = ['\nPage links:']
-    for link in links:
-        lines.append(f"  - [{link['text']}]({link['url']})")
-    return '\n'.join(lines)
+    kwargs: dict = {"source": file_path, "max_chars": max_chars, "mime": mime_type}
+    if truncated:
+        kwargs["truncated"] = "true"
+    return _skill_tag("read", content, **kwargs)

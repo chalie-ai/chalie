@@ -12,6 +12,8 @@ generation pass, avoiding any multi-LLM coordination.
 
 import logging
 
+from services.innate_skills._tag import tag as _skill_tag
+
 logger = logging.getLogger(__name__)
 
 TOOL_SCHEMA = {
@@ -85,4 +87,4 @@ def handle_rich_render(channel: str, params: dict) -> str:
     Returns:
         Block reference documentation string.
     """
-    return _BLOCK_REFERENCE
+    return _skill_tag("rich_render", _BLOCK_REFERENCE)

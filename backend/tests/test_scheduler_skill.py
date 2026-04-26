@@ -7,9 +7,10 @@ than the grace window are still hard-rejected.
 
 Also covers the atomic dedup guarantee: back-to-back _create() calls with
 the same message must result in exactly one row in scheduled_items.
+
+Result format (new): [schedule(action=create)]\\n<json_body>\\n[end:schedule]
 """
 
-import json
 import pytest
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ from unittest.mock import patch
 
 from services.innate_skills.scheduler_skill import handle_scheduler
 from services.time_utils import utc_now
+from tests._tag_helpers import assert_both_markers, extract_json
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +38,8 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "success", f"Expected success, got: {result}"
         assert result["action_performed"] == "create"
 
@@ -60,7 +63,8 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "success", f"Expected success, got: {result}"
         assert result["action_performed"] == "create"
 
@@ -74,7 +78,8 @@ class TestCreatePastDueGrace:
                 "due_at": due_at,
             })
 
-        result = json.loads(raw)
+        assert_both_markers("schedule", raw)
+        result = extract_json("schedule", raw)
         assert result["status"] == "error", f"Expected error, got: {result}"
         assert "due_at must be in the future" in result["error"]
 
@@ -101,8 +106,10 @@ class TestCreateDedup:
             raw1 = handle_scheduler("user", params)
             raw2 = handle_scheduler("user", params)
 
-        r1 = json.loads(raw1)
-        r2 = json.loads(raw2)
+        assert_both_markers("schedule", raw1)
+        assert_both_markers("schedule", raw2)
+        r1 = extract_json("schedule", raw1)
+        r2 = extract_json("schedule", raw2)
 
         assert r1["status"] == "success", f"First call failed: {r1}"
         assert r2["status"] == "success", f"Second call failed: {r2}"
@@ -142,7 +149,9 @@ class TestCreateDedup:
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [pool.submit(handle_scheduler, "user", params) for _ in range(2)]
                 for f in as_completed(futures):
-                    results.append(json.loads(f.result()))
+                    raw = f.result()
+                    assert_both_markers("schedule", raw)
+                    results.append(extract_json("schedule", raw))
 
         assert all(r["status"] == "success" for r in results), (
             f"One or more calls failed: {results}"

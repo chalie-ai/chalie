@@ -48,37 +48,33 @@ class TestHandleRead:
     def test_empty_source_returns_error(self):
         from services.innate_skills.read_skill import handle_read
         result = handle_read('topic', {})
-        assert '[READ] Error' in result
-        assert 'source' in result.lower()
+        assert '[read(' in result
+        assert 'error=source-required' in result
+        assert '[end:read]' in result
 
-    def test_url_alias_accepted(self):
-        with patch('services.innate_skills.read_skill._read_url', return_value='[READ] ok'):
-            from services.innate_skills.read_skill import handle_read
-            result = handle_read('topic', {'url': 'https://example.com'})
-        assert 'ok' in result
-
-    def test_max_chars_clamped_to_ceiling(self):
+    def test_max_chars_uncapped(self):
         with patch('services.innate_skills.read_skill._read_url') as mock_read:
-            mock_read.return_value = '[READ] ok'
+            mock_read.return_value = '[read(source=x, max_chars=4000)] ok'
             from services.innate_skills.read_skill import handle_read
-            handle_read('topic', {'source': 'https://ex.com', 'max_chars': 999999})
+            handle_read('topic', {'source': 'https://ex.com', 'max_chars': 100_000_000})
         _, called_max = mock_read.call_args[0]
-        assert called_max == 8000
+        assert called_max == 100_000_000
 
     def test_max_chars_clamped_to_floor(self):
         with patch('services.innate_skills.read_skill._read_url') as mock_read:
-            mock_read.return_value = '[READ] ok'
+            mock_read.return_value = '[read(source=x, max_chars=4000)] ok'
             from services.innate_skills.read_skill import handle_read
             handle_read('topic', {'source': 'https://ex.com', 'max_chars': 0})
         _, called_max = mock_read.call_args[0]
         assert called_max == 100
 
     def test_invalid_max_chars_uses_default(self):
-        with patch('services.innate_skills.read_skill._read_url', return_value='[READ] ok'):
+        with patch('services.innate_skills.read_skill._read_url', return_value='[read(source=x, max_chars=4000)] ok\n[end:read]'):
             from services.innate_skills.read_skill import handle_read
             # Should not raise
             result = handle_read('topic', {'source': 'https://ex.com', 'max_chars': 'banana'})
-        assert '[READ]' in result
+        assert '[read(' in result
+        assert '[end:read]' in result
 
 
 # ─── SSRF guard ───────────────────────────────────────────────────────────────
@@ -133,17 +129,30 @@ class TestUrlSSRF:
 @pytest.mark.unit
 class TestUrlReading:
     def _make_mock_requests(self, response_text=None, side_effect=None):
-        """Build a mock requests module for sys.modules patching."""
+        """Build a mock requests module for sys.modules patching.
+
+        Wires Session() context-manager .get() to the same response/side_effect,
+        matching the real implementation which uses `with requests.Session() as s`.
+        """
         import requests as real_requests
         mock_req = MagicMock()
         mock_req.RequestException = real_requests.RequestException
+
+        mock_session = MagicMock()
+        mock_session.headers = {}
         if side_effect:
-            mock_req.get.side_effect = side_effect
+            mock_session.get.side_effect = side_effect
         else:
             mock_response = MagicMock()
             mock_response.text = response_text or ''
             mock_response.raise_for_status = MagicMock()
-            mock_req.get.return_value = mock_response
+            mock_session.get.return_value = mock_response
+
+        # `with requests.Session() as session:` — __enter__ returns the session,
+        # __exit__ is a no-op.
+        mock_session.__enter__.return_value = mock_session
+        mock_session.__exit__.return_value = False
+        mock_req.Session.return_value = mock_session
         return mock_req
 
     def test_successful_fetch_returns_content(self):
@@ -153,14 +162,16 @@ class TestUrlReading:
              patch('services.text_extractor.extract_html', return_value='Article content.'):
             from services.innate_skills.read_skill import _read_url
             result = _read_url('https://example.com', 4000)
-        assert '[READ]' in result
+        assert '[read(source=https://example.com' in result
         assert 'Article content' in result
+        assert '[end:read]' in result
 
     def test_private_url_blocked_before_fetch(self):
         from services.innate_skills.read_skill import _read_url
         with patch('services.innate_skills.read_skill._is_private_url', return_value=True):
             result = _read_url('http://localhost', 4000)
-        assert 'access denied' in result.lower()
+        assert 'blocked' in result.lower()
+        assert '[end:read]' in result
 
     def test_fetch_network_error_returns_error_string(self):
         import requests as real_requests
@@ -169,7 +180,8 @@ class TestUrlReading:
              patch('services.innate_skills.read_skill._is_private_url', return_value=False):
             from services.innate_skills.read_skill import _read_url
             result = _read_url('https://unreachable.example.com', 4000)
-        assert '[READ] Fetch failed' in result
+        assert 'error=fetch-failed' in result
+        assert '[end:read]' in result
 
     def test_empty_content_returns_informative_message(self):
         mock_req = self._make_mock_requests('<html></html>')
@@ -178,7 +190,8 @@ class TestUrlReading:
              patch('services.text_extractor.extract_html', return_value=''):
             from services.innate_skills.read_skill import _read_url
             result = _read_url('https://example.com', 4000)
-        assert 'No readable content' in result
+        assert 'no-readable-content' in result
+        assert '[end:read]' in result
 
 
 # ─── File reading ─────────────────────────────────────────────────────────────
@@ -188,14 +201,16 @@ class TestFileReading:
     def test_file_not_found_returns_error(self):
         from services.innate_skills.read_skill import _read_file
         result = _read_file('/nonexistent/path/to/file.txt', 4000)
-        assert 'not found' in result.lower()
+        assert 'file-not-found' in result
+        assert '[end:read]' in result
 
     def test_directory_rejected(self):
         from services.innate_skills.read_skill import _read_file
         with patch('os.path.exists', return_value=True), \
              patch('os.path.isfile', return_value=False):
             result = _read_file('/tmp/some_directory', 4000)
-        assert 'not a file' in result.lower()
+        assert 'not-a-file' in result
+        assert '[end:read]' in result
 
     def test_no_read_permission_returns_error(self):
         from services.innate_skills.read_skill import _read_file
@@ -203,7 +218,8 @@ class TestFileReading:
              patch('os.path.isfile', return_value=True), \
              patch('os.access', return_value=False):
             result = _read_file('/tmp/locked.txt', 4000)
-        assert 'permission' in result.lower()
+        assert 'no-read-permission' in result
+        assert '[end:read]' in result
 
     def test_successful_extraction_returns_content(self):
         with patch('os.path.exists', return_value=True), \
@@ -215,8 +231,10 @@ class TestFileReading:
              patch('services.text_extractor.normalize_text', return_value='PDF content here.'):
             from services.innate_skills.read_skill import _read_file
             result = _read_file('/tmp/doc.pdf', 4000)
-        assert '[READ]' in result
+        assert '[read(source=/tmp/doc.pdf' in result
+        assert 'mime=application/pdf' in result
         assert 'PDF content' in result
+        assert '[end:read]' in result
 
     def test_empty_extraction_returns_informative_message(self):
         with patch('os.path.exists', return_value=True), \
@@ -228,7 +246,8 @@ class TestFileReading:
              patch('services.text_extractor.normalize_text', return_value=''):
             from services.innate_skills.read_skill import _read_file
             result = _read_file('/tmp/empty.txt', 4000)
-        assert 'No text content' in result
+        assert 'no-text-content' in result
+        assert '[end:read]' in result
 
     def test_content_truncated_at_max_chars(self):
         long_content = 'x' * 10000
@@ -242,6 +261,7 @@ class TestFileReading:
             from services.innate_skills.read_skill import _read_file
             result = _read_file('/tmp/big.txt', 500)
         assert 'truncated' in result
+        assert '[end:read]' in result
 
 
 # ─── File read security ───────────────────────────────────────────────────────
@@ -254,65 +274,29 @@ class TestFileReadSecurity:
 
     def test_etc_passwd_blocked(self):
         result = self._read('/etc/passwd')
-        assert 'access denied' in result.lower()
+        assert 'blocked' in result.lower()
+        assert '[end:read]' in result
 
     def test_proc_blocked(self):
         result = self._read('/proc/self/environ')
-        assert 'access denied' in result.lower()
+        assert 'blocked' in result.lower()
+        assert '[end:read]' in result
 
     def test_dev_blocked(self):
         result = self._read('/dev/urandom')
-        assert 'access denied' in result.lower()
+        assert 'blocked' in result.lower()
+        assert '[end:read]' in result
 
     def test_sys_blocked(self):
         result = self._read('/sys/kernel/hostname')
-        assert 'access denied' in result.lower()
+        assert 'blocked' in result.lower()
+        assert '[end:read]' in result
 
     def test_normal_path_not_blocked(self):
         # A non-system path with a nonexistent file → "not found", NOT "access denied"
         result = self._read('/tmp/nonexistent_file_xyz.txt')
         assert 'access denied' not in result.lower()
-        assert 'not found' in result.lower()
+        assert 'file-not-found' in result
+        assert '[end:read]' in result
 
 
-# ─── Link extraction ──────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestLinkExtraction:
-    def test_extracts_basic_links(self):
-        html = '<a href="/page2">Page Two</a><a href="https://example.com/page3">Three</a>'
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        assert len(links) >= 1
-
-    def test_skips_social_media_domains(self):
-        html = '<a href="https://facebook.com/post">FB</a><a href="/real">Real</a>'
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        assert all('facebook' not in link['url'] for link in links)
-
-    def test_skips_navigation_paths(self):
-        html = '<a href="/login">Login</a><a href="/signup">Sign up</a><a href="/article">Article</a>'
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        assert all('/login' not in link['url'] for link in links)
-        assert all('/signup' not in link['url'] for link in links)
-
-    def test_skips_fragment_only_anchors(self):
-        html = '<a href="#section">Jump</a><a href="/page">Page</a>'
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        assert all('#' not in link['url'].split('/')[-1] for link in links)
-
-    def test_deduplicates_links(self):
-        html = '<a href="/page">One</a><a href="/page">Two</a>'
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        urls = [link['url'] for link in links]
-        assert len(urls) == len(set(urls))
-
-    def test_max_15_links(self):
-        html = ''.join(f'<a href="/page{i}">Page {i}</a>' for i in range(30))
-        from services.innate_skills.read_skill import _extract_links
-        links = _extract_links(html, 'https://example.com')
-        assert len(links) <= 15

@@ -28,7 +28,7 @@ from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES, COGNITIVE_PRIMITIVES_ORDERED
+from services.innate_skills.registry import ALL_SKILL_NAMES
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 # failed, or raised — re-arms the guard cleanly.
 _lazy_fire_lock = threading.Lock()
 _lazy_fire_in_flight = False
-
 
 def _fire_lazy_synthesis() -> None:
     """Spawn a one-shot daemon thread to synthesise the user_summary row.
@@ -88,12 +87,8 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # Narrowed to cognitive primitives only — the unconditional tier.
-    # Non-primitive innate skills are promoted via getConditionalTools()
-    # (mode gate) rather than injected on every turn. This reduces prompt
-    # bloat on conversational / chit-chat turns where only primitives are needed.
-    # COGNITIVE_PRIMITIVES_ORDERED preserves insertion order for determinism.
-    NATIVE_TOOLS: list[str] = list(COGNITIVE_PRIMITIVES_ORDERED)
+    # All innate skills are always injected into the user-channel tool list.
+    NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
 
     # ── Constructor ───────────────────────────────────────────────────────────
 
@@ -105,8 +100,7 @@ class UserMessageProcessor(MessageProcessor):
     ):
         super().__init__(raw_input, metadata)
         self._on_narration = on_narration
-        # Set by _run_memory_seed() — stores the numeric radius used so
-        # getUserPrompt() can render `[memory(radius=X)] ...` correctly.
+        # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
         # Set by store() — the final LLM response text, needed by postTurn()
         # for interaction logging and phase updates (call AFTER store()).
@@ -115,11 +109,15 @@ class UserMessageProcessor(MessageProcessor):
         # without this cache each iteration would re-read user_summary from data_graph.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
-        # Per-turn cache for getConditionalTools(). Set on first call and reused
-        # on every subsequent ACT iteration — the mode gate runs once per turn.
-        # Stage 2 ACT restart clears _discovered_tools but NOT this cache —
-        # the mode classification was correct for this turn (spec §3.2).
-        self._conditional_tools_cached: list[dict] | None = None
+        # Per-turn ModeGate instance + cached state vector. Populated by
+        # _get_mode_gate() on first access; the gate is ticked exactly once
+        # per turn (classify + state update + persist), and the resulting
+        # state dict is cached so converse-driven branching in
+        # getUserDefinition() does not re-read MemoryStore on every ACT
+        # iteration. The instance is reused for get_system_prompt_additions()
+        # in getSystemPrompt().
+        self._mode_gate_cached = None  # ModeGateService | None — lazy import
+        self._mode_state_cached: dict[str, float] | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -149,12 +147,29 @@ class UserMessageProcessor(MessageProcessor):
 
         if self._user_definition_cached is not None:
             return self._user_definition_cached
+
+        # Pick which row to read: when the converse mode is strongly active
+        # (state >= ModeGateService.STEER_THRESHOLD) prefer
+        # ``user_summary_long`` for a richer identity anchor; otherwise stay
+        # on the short ``user_summary``. If the long row is missing fall back
+        # to the short one before the static peer-to-peer fallback.
+        from services.mode_gate_service import STEER_THRESHOLD
+        prefer_long = (
+            self._get_mode_state().get('converse', 0.0) >= STEER_THRESHOLD
+        )
+
         try:
             from services.data_graph_service import get_data_graph_service
 
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=['system'], order_by='retrieval_weight DESC')
-            entry = next((r for r in rows if r.get('key') == 'user_summary'), None)
+            by_key = {r.get('key'): r for r in rows if r.get('key')}
+
+            preferred_key = 'user_summary_long' if prefer_long else 'user_summary'
+            entry = by_key.get(preferred_key)
+            if (not entry or not entry.get('value')) and prefer_long:
+                # Long row missing — fall back to short before the static fallback.
+                entry = by_key.get('user_summary')
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
                 return self._user_definition_cached
@@ -171,41 +186,6 @@ class UserMessageProcessor(MessageProcessor):
         self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
 
-    def getConditionalTools(self) -> list[dict]:  # NOSONAR — overrides MessageProcessor hook (camelCase by contract)
-        """Return mode-gated tool schemas for this turn (cached after first call).
-
-        Consults ModeGateService once per turn. The gate returns names for tools
-        whose modes are active, which are resolved to schemas here.
-
-        Exceptions are caught: any failure logs at WARN and caches [] so
-        subsequent ACT iterations also get the empty list (consistent state).
-        """
-        if self._conditional_tools_cached is not None:
-            return self._conditional_tools_cached
-
-        from services.mode_gate_service import ModeGateService
-        from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
-
-        try:
-            gate = ModeGateService()
-            names = gate.get_promoted_tool_names(self._raw_input, turn_id=self._uid)
-        except Exception as exc:
-            logger.warning("[MODE-GATE] get_promoted_tool_names failed, returning []: %s", exc)
-            self._conditional_tools_cached = []
-            return []
-
-        innate_names = [n for n in names if n in ALL_SKILL_NAMES]
-        external_names = [n for n in names if n not in ALL_SKILL_NAMES]
-
-        schemas: list[dict] = []
-        if innate_names:
-            schemas.extend(get_skill_schemas(innate_names))
-        if external_names:
-            schemas.extend(get_external_tool_schemas(external_names))
-
-        self._conditional_tools_cached = schemas
-        return schemas
-
     def getUserPrompt(self) -> str:
         """Build the user-message body for one ACT iteration.
 
@@ -218,7 +198,7 @@ class UserMessageProcessor(MessageProcessor):
           3. System Awareness block
           4. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
-          5. Memory seed line: [memory(radius=X)] ...
+          5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
           6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
           7. ACT loop trail (empty string on iteration 1)
 
@@ -254,9 +234,9 @@ class UserMessageProcessor(MessageProcessor):
         # Blank separator before current turn content
         parts.append('')
 
-        # 4. Memory seed (set by _run_memory_seed at turn start)
-        if self._memory_seed and self._memory_seed_radius is not None:
-            parts.append(f"[memory(radius={self._memory_seed_radius})] {self._memory_seed}")
+        # 4. Memory seed (set by pre_act() — canonical tag block, injected verbatim)
+        if self._memory_seed:
+            parts.append(self._memory_seed)
 
         # 5. Current turn line with optional file tags and nudge
         turn_line = f"user: {self._raw_input}"
@@ -306,42 +286,67 @@ class UserMessageProcessor(MessageProcessor):
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
 
         voice_line = f"When responding; {get_current_voice()}"
-        return f"{voice_line}\n\n{template}"
+        prompt = f"{voice_line}\n\n{template}"
 
-    def _run_memory_seed(self) -> None:
-        """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
-        from services.innate_skills.memory_skill import (
-            recall_episodes, SEED_RADIUS_BASELINE, _format_results,
-        )
+        # Mode-state-driven steering directives. The mode gate owns the
+        # mapping from active modes → directive text — UMP just appends the
+        # rendered string. ``_get_mode_state()`` ensures ``tick()`` has fired
+        # before the additions are read.
+        self._get_mode_state()
+        additions = self._get_mode_gate().get_system_prompt_additions()
+        if additions:
+            prompt = f"{prompt}\n\n{additions}"
+        return prompt
+
+    def pre_act(self) -> None:
+        """Memory auto-seed via canonical tool dispatch path.
+
+        Runs once at turn start (after self._uid is populated by write_input_row).
+        Calls handle_memory directly so the result is a canonical tag block,
+        records the row via ToolRenderAndRecordService (ephemeral=False) — same
+        storage path as any other durable tool call — and stores the block on
+        self._memory_seed for getUserPrompt() to inject verbatim.
+        """
+        from services.innate_skills.memory_skill import handle_memory, SEED_RADIUS_BASELINE
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
         radius = SEED_RADIUS_BASELINE
+        query = self._raw_input
 
-        try:
-            hits, _status = recall_episodes(
-                channel=self.CHANNEL,
-                query=self._raw_input,
-                caller='seed',
-                baseline_radius=radius,
-                return_raw=False,
+        # Expose query separately so recall_episodes() can embed the raw text
+        # for drift calculation without embedding the tag block string.
+        self._memory_seed_query = query
+        self._memory_seed_radius = radius
+
+        block = handle_memory(self.CHANNEL, {
+            'action': 'recall',
+            'query': query,
+        })
+
+        # Row is recorded every turn — the seed dispatch is part of the ACT
+        # trail whether or not it returned matches. Inject into the prompt
+        # only when the recall produced real content; empty (`results=0`) and
+        # error (`error=...`) header args yield blocks that add noise without
+        # value. Inspect only the opener line so a body containing the literal
+        # substring `results=0` or `error=` cannot suppress a valid seed.
+        header = block.split('\n', 1)[0] if block else ''
+        if block and 'results=0' not in header and 'error=' not in header:
+            self._memory_seed = block
+
+        if self._uid is None:
+            logger.warning(
+                "[UMP] pre_act skipped seed-row write: _uid is None "
+                "(SKIP_TRANSCRIPT_WRITE subclass?)"
             )
-            seed_text = _format_results(hits) if hits else ''
-        except Exception as exc:
-            logger.warning(f"[USER MSG] Memory auto-seed failed: {exc}")
-            seed_text = ''
+            return
 
-        if seed_text:
-            self._memory_seed = seed_text
-            self._memory_seed_radius = radius
-            ToolRenderAndRecordService(
-                tool_name='memory',
-                params={'action': 'recall', 'radius': radius},
-                result=seed_text,
-                ephemeral=False,
-                transcript_id=self._uid,
-            ).renderAndRecord()
-        else:
-            logger.debug("[USER MSG] Memory auto-seed: no result returned")
+        ToolRenderAndRecordService(
+            tool_name='memory',
+            params={'action': 'recall', 'query': query, 'radius': radius},
+            result=block,
+            ephemeral=False,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.
@@ -477,4 +482,41 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
+
+    def _get_mode_gate(self):
+        """Return a ticked ModeGateService instance, cached per turn.
+
+        First call constructs the service and fires ``tick()`` (classify +
+        state update + persist) against the current raw input. Subsequent
+        calls within the same turn return the same instance so consumers
+        share one classification result.
+        """
+        if self._mode_gate_cached is not None:
+            return self._mode_gate_cached
+
+        from services.mode_gate_service import ModeGateService
+        gate = ModeGateService()
+        try:
+            gate.tick(self._raw_input, turn_id=self._uid)
+        except Exception as exc:
+            logger.warning("[MODE-GATE] tick failed: %s", exc)
+        self._mode_gate_cached = gate
+        return gate
+
+    def _get_mode_state(self) -> dict[str, float]:
+        """Return the per-mode activation state for this turn (cached).
+
+        Wraps ``_get_mode_gate().get_state()`` with a per-turn cache so
+        getUserDefinition() does not re-read MemoryStore on every ACT
+        iteration. On any failure an empty dict is cached so callers see a
+        deterministic miss without retry storms.
+        """
+        if self._mode_state_cached is not None:
+            return self._mode_state_cached
+        try:
+            self._mode_state_cached = self._get_mode_gate().get_state()
+        except Exception as exc:
+            logger.warning("[MODE-GATE] get_state failed: %s", exc)
+            self._mode_state_cached = {}
+        return self._mode_state_cached
 
