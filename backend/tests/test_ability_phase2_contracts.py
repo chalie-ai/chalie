@@ -341,7 +341,6 @@ def test_programming_docs_search_contract():
     _assert_contract(
         ProgrammingDocsSearchAbility,
         name="programming_docs_search",
-        always_available=False,
         timeout=15,
     )
 
@@ -399,7 +398,6 @@ def test_review_tool_calls_contract():
     _assert_contract(
         ReviewToolCallsAbility,
         name="review_tool_calls",
-        always_available=True,
         timeout=10,
     )
 

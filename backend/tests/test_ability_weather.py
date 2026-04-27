@@ -149,9 +149,8 @@ def test_registry_get_returns_weather_ability():
     assert isinstance(instance, WeatherAbility)
 
 
-def test_weather_defaults():
-    """ALWAYS_AVAILABLE is False and TIMEOUT is 10."""
-    assert WeatherAbility.ALWAYS_AVAILABLE is False
+def test_weather_timeout_default():
+    """TIMEOUT defaults to 10."""
     assert WeatherAbility.TIMEOUT == 10
 
 

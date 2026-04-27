@@ -244,24 +244,6 @@ def test_valid_concrete_subclass_constructs_cleanly():
 # ---------------------------------------------------------------------------
 
 
-def test_always_available_defaults_to_false():
-    """ALWAYS_AVAILABLE defaults to False unless overridden."""
-
-    class _DefaultAbility(Ability):
-        NAME = "default_ability"
-        SUMMARY = "Default flags check"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    assert _DefaultAbility.ALWAYS_AVAILABLE is False
-
-    del _DefaultAbility
-    gc.collect()
-
-
 def test_timeout_defaults_to_ten():
     """TIMEOUT defaults to 10 unless overridden."""
 
@@ -277,25 +259,6 @@ def test_timeout_defaults_to_ten():
     assert _DefaultTimeout.TIMEOUT == 10
 
     del _DefaultTimeout
-    gc.collect()
-
-
-def test_always_available_overridable():
-    """Subclass can set ALWAYS_AVAILABLE=True."""
-
-    class _AlwaysOn(Ability):
-        NAME = "always_on"
-        SUMMARY = "Always on ability"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-        ALWAYS_AVAILABLE = True
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    assert _AlwaysOn.ALWAYS_AVAILABLE is True
-
-    del _AlwaysOn
     gc.collect()
 
 
