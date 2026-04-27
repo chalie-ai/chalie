@@ -92,12 +92,8 @@ def _dedup_entries(
     kept_entries: list[tuple[str, str]] = []
     kept_embs: list[np.ndarray] = []
 
-    for j, (entry, emb_j) in enumerate(zip(entries, embeddings)):
-        duplicate = False
-        for emb_i in kept_embs:
-            if float(np.dot(emb_i, emb_j)) > 0.95:
-                duplicate = True
-                break
+    for entry, emb_j in zip(entries, embeddings):
+        duplicate = any(float(np.dot(emb_i, emb_j)) > 0.95 for emb_i in kept_embs)
         if not duplicate:
             kept_entries.append(entry)
             kept_embs.append(emb_j)
