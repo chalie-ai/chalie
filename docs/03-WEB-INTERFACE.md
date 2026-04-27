@@ -36,15 +36,17 @@ The chat interface uses three fixed regions:
 
 ## Tool Pills
 
-Inline progress indicators that appear during the ACT loop whenever a tool is dispatched. Each pill shows the tool name and a status slot:
+Inline progress indicators that appear during the ACT loop whenever a tool is dispatched. Pills stack vertically as minimal monospace rows — name on the left, state on the right — with no chrome or fill. The defining visual is a thin iridescent gradient running along the bottom edge of each row (cyan → lavender, magenta on error), the same accent language as the rest of the Radiant surface.
 
-- **Active** (`tool-pill--active`) — cyan-glowing spinner while the tool runs.
-- **Done** (`tool-pill--done`) — dim grey elapsed duration in seconds once dispatch completes.
-- **Error** (`tool-pill--error`) — magenta-glowing "error" label when dispatch raises.
+- **Active** (`tool-pill--active`) — full-opacity gradient with a small lavender spinner.
+- **Done** (`tool-pill--done`) — gradient fades to ~28% opacity; status slot shows the elapsed duration in seconds (e.g. `0.7s`).
+- **Error** (`tool-pill--error`) — gradient swaps to a pure magenta band; status slot reads `error`.
 
-Pills nest inside the current narration bubble when one exists; otherwise they attach to the "thinking…" pending form. Sub-100ms tools enforce a 150ms minimum visible duration so the spinner-to-done transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips. On multi-iteration turns, pills collapse with their parent narration bubble (`.narration-group--collapsed .tool-pill-row { display: none }`). On single-iteration turns, `resolvePendingForm` wipes the pending form entirely and pills disappear with it.
+The first pill on a turn replaces the `thinking-indicator` dots inside the pending bubble — they are redundant with the pill spinner, and removing them also makes the 2-second `upgradePendingText` timer a no-op (its `if (!dots) return` guard short-circuits) so the pills survive. If the first pill arrives after the upgrade has already fired, the "On it…" placeholder text stays as a parent label and pills nest below it.
 
-**CSS classes:** `tool-pill-row` (host row wrapping all pills for one turn), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`.
+Pills nest inside the current narration bubble when one exists; otherwise they attach to the pending form. Sub-100ms tools enforce a 150ms minimum visible duration so the spinner-to-state transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips. On multi-iteration turns, pills collapse with their parent narration bubble (`.narration-group--collapsed .tool-pill-row { display: none }`). On single-iteration turns, `resolvePendingForm` wipes the pending form entirely and pills disappear with it.
+
+**CSS classes:** `tool-pill-row` (vertical flex column hosting the pill stack), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`. The gradient is rendered via `tool-pill::after` so the row itself stays unbordered.
 
 **Frontend wiring:** `renderer.js` exposes `appendToolPill(parentEl, callId, name)` and `resolveToolPill(callId, ms, ok)`. `chat.js` routes `act_tool_start` events to `appendToolPill` and `act_tool_end` events to `resolveToolPill`, using `_lastNarrationBubble` (set on each `appendNarrationBubble` call, cleared on `onDone`) to locate the correct host element.
 
