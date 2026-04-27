@@ -55,7 +55,6 @@ class ReadAbility(Ability):
         },
         "required": ["source"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15

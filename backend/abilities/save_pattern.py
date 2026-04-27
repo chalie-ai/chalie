@@ -1,25 +1,46 @@
-"""SavePattern — processor-internal helper for PatternMatchProcessor.
+"""SavePattern — record a repeating behavioural pattern in the data graph.
 
-Not an Ability subclass and not registered in AbilityRegistry. Lives in a
-subdirectory so the registry's shallow ``glob("*.py")`` walk skips it. Only
-PatternMatchProcessor imports this module.
+Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
+or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
+
+Budget + decay-tracking state lives on the calling processor (read via
+``current_processor()``).  PMP initialises ``_save_pattern_calls = 0`` and
+``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
+defaults so it remains usable from any processor that opts it in.
 """
 import json
+import logging
 import re
 
+from abilities._base import Ability
 from services.database_service import get_shared_db_service
+from services.message_processor import current_processor
 from services.time_utils import utc_now
 
-# Strict ASCII snake_case: leading lowercase letter, then lowercase letters,
-# digits, underscores. `str.isalnum()` accepts Unicode digits/letters which we
-# don't want — the LLM should only emit ASCII identifiers here.
-_NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
+logger = logging.getLogger(__name__)
 
+_NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
 
+_BUDGET_CAP = 20
 
-class SavePattern:
+
+class SavePattern(Ability):
     NAME = "save_pattern"
+    SUMMARY = (
+        "Record a repeating behavioural pattern observed in the user's "
+        "transcripts. Use snake_case names; reuse existing names exactly "
+        "when reinforcing (case-sensitive). Requires at least 2 evidence "
+        "transcript ids."
+    )
+    EXAMPLES = [
+        "user goes for a run every weekday morning",
+        "user reads before bed most nights",
+        "user checks email first thing each morning",
+        "user has coffee around 07:30 on workdays",
+        "user meditates on weekends",
+        "user takes a walk after lunch on weekdays",
+    ]
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
@@ -43,46 +64,31 @@ class SavePattern:
         },
         "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
     }
+    TIMEOUT = 10
 
-    TOOL_SCHEMA: dict = {
-        "name": NAME,
-        "description": (
-            "Record a repeating behavioural pattern observed in the user's "
-            "transcripts. Use snake_case names; reuse existing names exactly "
-            "when reinforcing (case-sensitive). Requires at least 2 evidence "
-            "transcript ids."
-        ),
-        "input_schema": INPUT_SCHEMA,
-    }
-
-    def execute(self, args: dict, processor: object) -> dict:
-        """Persist a behavioural pattern row.
-
-        processor must be a PatternMatchProcessor instance — reads/writes
-        _save_pattern_calls and _touched_pattern_ids.
-        """
-        if processor._save_pattern_calls >= 20:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+        proc = current_processor()
+        count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
+        if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_pattern"}
 
-        name = args.get("name", "")
+        name = params.get("name", "")
         if not name or not _NAME_PATTERN.fullmatch(name):
             return {"error": "invalid_name", "name": name}
-        frequency = args.get("frequency", "")
+        frequency = params.get("frequency", "")
         if frequency not in _VALID_FREQUENCIES:
             return {"error": "invalid_frequency", "frequency": frequency}
-        summary = (args.get("summary") or "").strip()
+        summary = (params.get("summary") or "").strip()
         if not summary:
             return {"error": "empty_summary"}
-        evidence = args.get("evidence_transcript_ids") or []
-        # Spec requires >=2 evidence rows per save_pattern call. The system
-        # prompt states the rule explicitly; this validator is the enforcement.
+        evidence = params.get("evidence_transcript_ids") or []
         if not isinstance(evidence, list) or len(evidence) < 2:
             return {
                 "error": "insufficient_evidence",
                 "required_min": 2,
                 "got": len(evidence) if isinstance(evidence, list) else 0,
             }
-        time_anchor = args.get("time_anchor", "") or ""
+        time_anchor = params.get("time_anchor", "") or ""
 
         now_iso = utc_now().isoformat()
         db = get_shared_db_service()
@@ -148,7 +154,10 @@ class SavePattern:
                 row_id = cur.lastrowid
                 confidence_out = 7.0
 
-        processor._touched_pattern_ids.add(row_id)
-        processor._save_pattern_calls += 1
+        if proc is not None:
+            proc._save_pattern_calls = count + 1
+            touched = getattr(proc, "_touched_pattern_ids", None)
+            if touched is not None:
+                touched.add(row_id)
 
         return {"ok": True, "name": name, "confidence": confidence_out, "row_id": row_id}

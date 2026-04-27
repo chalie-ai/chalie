@@ -1,5 +1,9 @@
 """Feature tests for AbilityRegistry (abilities/_registry.py).
 
+The registry exposes only ``get(name)`` and ``all()``.  Tool *scope*
+(always-available vs discoverable) lives on each MessageProcessor subclass
+— see test_phase4_invariants.py for those checks.
+
 Production state pins the abilities currently on disk (e.g. weather after
 Phase 1).  Singleton caching and thread-safety are verified without any
 mocks, stubs, or patches.
@@ -27,7 +31,6 @@ def clean_registry():
     defined in concurrently-collected test files (test_ability_base.py) are
     removed from Ability.__subclasses__() before the registry lazy-loads.
     """
-    import gc
     gc.collect()
     _reset_for_tests()
     yield
@@ -43,17 +46,6 @@ def clean_registry():
 def test_all_includes_registered_abilities():
     """AbilityRegistry.all() surfaces every concrete subclass on disk."""
     names = [a.NAME for a in AbilityRegistry.all()]
-    assert "weather" in names
-
-
-def test_always_available_names_excludes_discoverable_abilities():
-    """always_available_names() omits abilities with ALWAYS_AVAILABLE=False."""
-    assert "weather" not in AbilityRegistry.always_available_names()
-
-
-def test_discoverable_includes_non_always_available_abilities():
-    """discoverable() includes abilities marked ALWAYS_AVAILABLE=False."""
-    names = [a.NAME for a in AbilityRegistry.discoverable()]
     assert "weather" in names
 
 
@@ -103,7 +95,6 @@ def test_registry_reflects_concrete_subclass_after_reset():
         SUMMARY = "a freshly defined ability"
         EXAMPLES = ["do it", "run it", "start it", "go now", "begin", "execute"]
         INPUT_SCHEMA = {}
-        ALWAYS_AVAILABLE = True
 
         def execute(self, channel, params, telemetry):
             return {"text": "ok"}
@@ -113,48 +104,8 @@ def test_registry_reflects_concrete_subclass_after_reset():
     names = [a.NAME for a in AbilityRegistry.all()]
     assert "new_ability" in names
     assert AbilityRegistry.get("new_ability").NAME == "new_ability"
-    assert "new_ability" in AbilityRegistry.always_available_names()
-    discoverable_names = [a.NAME for a in AbilityRegistry.discoverable()]
-    assert "new_ability" not in discoverable_names
 
     del _NewAbility
-    gc.collect()
-
-
-def test_discoverable_excludes_always_available():
-    """Discoverable list excludes abilities with ALWAYS_AVAILABLE=True."""
-
-    class _AlwaysOn(Ability):
-        NAME = "always_on_disc"
-        SUMMARY = "always on ability"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-        ALWAYS_AVAILABLE = True
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    class _Discoverable(Ability):
-        NAME = "discoverable_disc"
-        SUMMARY = "discoverable ability"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-        ALWAYS_AVAILABLE = False
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    _reset_for_tests()
-
-    discoverable_names = [a.NAME for a in AbilityRegistry.discoverable()]
-    always_names = AbilityRegistry.always_available_names()
-
-    assert "always_on_disc" not in discoverable_names
-    assert "discoverable_disc" in discoverable_names
-    assert "always_on_disc" in always_names
-    assert "discoverable_disc" not in always_names
-
-    del _AlwaysOn, _Discoverable
     gc.collect()
 
 

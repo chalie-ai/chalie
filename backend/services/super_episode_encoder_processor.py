@@ -160,7 +160,8 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
     ROLE = 'super_episode_encoder'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = SuperEpisodeEncoderSystemPrompt
-    NATIVE_TOOLS: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
     MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True

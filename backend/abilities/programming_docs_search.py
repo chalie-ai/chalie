@@ -898,7 +898,6 @@ class ProgrammingDocsSearchAbility(Ability):
         },
         "required": ["language", "query"],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 15
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:

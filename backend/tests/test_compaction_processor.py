@@ -2,7 +2,7 @@
 
 Minimal — only asserts invariants that catch real regressions:
 1. Recursion guard: _check_threshold is hard-disabled on both subclasses.
-2. Class constants: JOB, NATIVE_TOOLS, SKIP_TRANSCRIPT_WRITE.
+2. Class constants: JOB, ALWAYS_AVAILABLE, DISCOVERABLE, SKIP_TRANSCRIPT_WRITE.
 3. compaction_service module is gone (ModuleNotFoundError on import).
 4. cognitive_jobs.json has no 'compaction' job entry.
 5. MetricsAccumulator.merge() sums token and tool counts correctly.
@@ -33,13 +33,21 @@ class TestCompactionProcessorConstants:
         from services.compaction_message_processor import TrailCompactionProcessor
         assert TrailCompactionProcessor.JOB == 'frontal-cortex-unified'
 
-    def test_full_native_tools_empty(self):
+    def test_full_always_available_empty(self):
         from services.compaction_message_processor import FullCompactionProcessor
-        assert FullCompactionProcessor.NATIVE_TOOLS == []
+        assert FullCompactionProcessor.ALWAYS_AVAILABLE == []
 
-    def test_trail_native_tools_empty(self):
+    def test_trail_always_available_empty(self):
         from services.compaction_message_processor import TrailCompactionProcessor
-        assert TrailCompactionProcessor.NATIVE_TOOLS == []
+        assert TrailCompactionProcessor.ALWAYS_AVAILABLE == []
+
+    def test_full_discoverable_empty(self):
+        from services.compaction_message_processor import FullCompactionProcessor
+        assert FullCompactionProcessor.DISCOVERABLE == []
+
+    def test_trail_discoverable_empty(self):
+        from services.compaction_message_processor import TrailCompactionProcessor
+        assert TrailCompactionProcessor.DISCOVERABLE == []
 
     def test_full_skip_transcript_write(self):
         from services.compaction_message_processor import FullCompactionProcessor

@@ -65,7 +65,6 @@ class WeatherAbility(Ability):
         },
         "required": [],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 10
 
     _cache: ClassVar[dict] = {}

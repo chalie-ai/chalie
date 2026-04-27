@@ -89,7 +89,10 @@ class MessageProcessor:
 
     Subclasses may:
     - Override `SYSTEM_PROMPT_CLASS` with a concrete `SystemMessagePrompt` subclass.
-    - Override `NATIVE_TOOLS` with a filtered list of innate skill names.
+    - Override `ALWAYS_AVAILABLE` with a list of ability names injected as
+      innate tools every iteration.
+    - Override `DISCOVERABLE` with a list of ability names that ``find_tools``
+      may surface for this processor at runtime.
     - Override `getDynamicTools()` to filter or augment discovered tools.
     - Override `postTurn()` to fan out per-channel post-turn services.
     """
@@ -98,7 +101,12 @@ class MessageProcessor:
 
     JOB: str = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
-    NATIVE_TOOLS: list[str] = []
+    # Ability names pre-injected as native tools on every ACT iteration.
+    ALWAYS_AVAILABLE: list[str] = []
+    # Ability names ``find_tools`` may surface for this processor at runtime.
+    # ``find_tools`` itself is gated to ``WHERE name IN DISCOVERABLE`` so a
+    # processor can never discover anything outside this list.
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS: int = 30
     MAX_TIMEOUT: int = 900    # seconds — ACT loop only
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
@@ -223,21 +231,23 @@ class MessageProcessor:
         """Return the full tool list for the current ACT iteration.
 
         Resolution order (first-seen wins on duplicates):
-        1. NATIVE_TOOLS — unconditional tier (resolved via AbilityRegistry).
-           Base is []; UserMessageProcessor sets the full ability name list.
-        2. getDynamicTools() — tools discovered this turn via find_tools.
+        1. ALWAYS_AVAILABLE — innate tier (resolved via AbilityRegistry).
+           Base is []; subclasses set the explicit list of ability names that
+           are pre-injected on every iteration.
+        2. getDynamicTools() — abilities discovered this turn via find_tools.
+           Gated by ``DISCOVERABLE`` inside ``find_tools`` itself.
 
         Schema shape: {name, description, input_schema} — pulled from each
         Ability's NAME, SUMMARY, and INPUT_SCHEMA ClassVars respectively.
 
-        Deduplication preserves first-seen order so the unconditional tier
-        cannot be shadowed by a dynamic entry of the same name.
+        Deduplication preserves first-seen order so the innate tier cannot
+        be shadowed by a dynamic entry of the same name.
         """
         from abilities._registry import AbilityRegistry
 
         native: list[dict] = []
-        if self.NATIVE_TOOLS:
-            for tool_name in self.NATIVE_TOOLS:
+        if self.ALWAYS_AVAILABLE:
+            for tool_name in self.ALWAYS_AVAILABLE:
                 try:
                     ability = AbilityRegistry.get(tool_name)
                     native.append({

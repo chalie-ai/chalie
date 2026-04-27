@@ -95,7 +95,6 @@ class MemoryAbility(Ability):
         },
         "required": ["action"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     RECALL_RADIUS_BASELINE: ClassVar[float] = 0.5

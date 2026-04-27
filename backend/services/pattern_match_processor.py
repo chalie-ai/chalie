@@ -12,8 +12,6 @@ this pass loses 0.005 confidence; rows at <=0 are soft-deleted (active=0).
 import json
 import logging
 
-from abilities.pattern_match.save_graph import SaveGraph
-from abilities.pattern_match.save_pattern import SavePattern
 from services.database_service import get_shared_db_service
 from services.message_processor import MessageProcessor
 from services.time_utils import utc_now
@@ -27,7 +25,13 @@ class PatternMatchProcessor(MessageProcessor):
     CHANNEL = "pattern_match"
     ROLE = "background"
     JOB = "frontal-cortex-unified"
-    NATIVE_TOOLS: list[str] = []
+    # save_pattern + save_graph are innate to PMP — pre-injected every
+    # iteration. No other processor includes them today; processors that
+    # need them in future must opt in by listing them in their own
+    # ALWAYS_AVAILABLE. DISCOVERABLE is empty: PMP never widens its scope
+    # via find_tools.
+    ALWAYS_AVAILABLE: list[str] = ["save_pattern", "save_graph"]
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 30
     SKIP_TRANSCRIPT_WRITE = True
 
@@ -40,6 +44,8 @@ class PatternMatchProcessor(MessageProcessor):
         super().__init__(raw_input="", metadata=metadata)
         self._window_start = window_start
         self._window_end = window_end
+        # Counters and decay-tracking state read by SavePattern / SaveGraph via
+        # current_processor() + getattr.
         self._save_pattern_calls: int = 0
         self._save_graph_calls: int = 0
         self._touched_pattern_ids: set[int] = set()
@@ -93,73 +99,6 @@ class PatternMatchProcessor(MessageProcessor):
         if trail:
             return f"{transcript_block}\n{trail}"
         return transcript_block
-
-    def getDynamicTools(self) -> list[dict]:
-        """Return the two processor-scoped tool schemas.
-
-        These tools are not registered with AbilityRegistry — they exist
-        only for this processor's ACT loop. Overriding getDynamicTools()
-        injects them via the base getTools() call without bypassing the
-        deduplication logic in the final getTools() method.
-        """
-        return [SavePattern.TOOL_SCHEMA, SaveGraph.TOOL_SCHEMA]
-
-    def handleTool(self, tc: dict) -> str:
-        """Dispatch save_pattern / save_graph via their execute() methods.
-
-        Overrides base handleTool() because these helpers are not registered
-        with AbilityRegistry or ActDispatcherService. They receive ``self`` so
-        they can read/write processor state directly.
-
-        Falls through to the base for any other tool name (e.g. find_tools
-        if the LLM somehow discovers it), letting the base handle dispatch
-        and trail recording normally.
-        """
-        tool_name = (tc.get("name") if isinstance(tc, dict) else None) or "unknown"
-        tc_input = tc.get("input", {}) if isinstance(tc, dict) else {}
-        if not isinstance(tc_input, dict):
-            tc_input = {}
-
-        if tool_name not in ("save_pattern", "save_graph"):
-            # Unexpected tool — delegate to base (handles dispatch + trail).
-            return super().handleTool(tc)
-
-        self._metrics.record_tool(tool_name)
-
-        try:
-            if tool_name == "save_pattern":
-                result = SavePattern().execute(tc_input, self)
-            else:
-                result = SaveGraph().execute(tc_input, self)
-            result_text = json.dumps(result)
-        except Exception as exc:
-            logger.exception(f"{LOG_PREFIX} tool {tool_name} raised")
-            result_text = json.dumps(
-                {"error": "tool_exception", "tool": tool_name, "message": str(exc)}
-            )
-
-        # Record to trail (mirrors base handleTool trail logic).
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-
-        try:
-            rendered = ToolRenderAndRecordService(
-                tool_name=tool_name,
-                params=tc_input,
-                result=result_text,
-                ephemeral=True,
-                transcript_id=self._uid,
-            ).renderAndRecord()
-        except Exception as exc:
-            rendered = f"[{tool_name}()] {result_text}"
-            logger.error(
-                "[PatternMatchProcessor.handleTool] renderAndRecord failed tool=%s: %s",
-                tool_name,
-                exc,
-                exc_info=True,
-            )
-
-        self._act_trail.append(rendered)
-        return result_text
 
     def postTurn(self) -> None:
         """Decay sweep: -0.005 confidence on untouched active rows; soft-

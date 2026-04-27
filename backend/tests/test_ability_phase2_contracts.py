@@ -9,19 +9,13 @@ HTTP boundaries are NOT mocked here because execute() is never called. The
 test suite is 100% class-introspection: import the class, inspect ClassVars,
 query the registry.
 
-DISCREPANCIES FROM SPEC TABLE (flagged, not papered over):
-
-  Ability                   | Spec ALWAYS_AVAILABLE | Actual | Spec TIMEOUT | Actual
-  --------------------------|-----------------------|--------|--------------|-------
-  document.DocumentAbility  | False                 | True   | 10           | 10
-  goal_pursuit.GoalPursuit  | False                 | True   | 10           | 10
-  read.ReadAbility          | False                 | True   | 15           | 10
-  schedule.ScheduleAbility  | False                 | True   | 10           | 10
+Tool *scope* (always-available vs discoverable) lives on the calling
+MessageProcessor, not on the Ability itself — see test_phase4_invariants.py
+for those checks. This file only verifies ABC structural contracts:
+NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA / TIMEOUT / execute().
 
   Note for read: _URL_FETCH_TIMEOUT ClassVar = 15 (the HTTP timeout), distinct
   from the ABC TIMEOUT attribute which controls overall ability dispatch.
-
-Tests use the actual production values so any regression is caught.
 """
 
 import gc
@@ -68,7 +62,7 @@ def _import(module_name: str):
     return importlib.import_module(full)
 
 
-def _assert_contract(cls, *, name, always_available, timeout):
+def _assert_contract(cls, *, name, timeout):
     """Assert the full ABC contract for *cls*."""
     # Required ClassVars exist and are non-empty
     assert isinstance(cls.NAME, str) and cls.NAME, f"{cls.__name__}.NAME is empty"
@@ -84,11 +78,6 @@ def _assert_contract(cls, *, name, always_available, timeout):
 
     # NAME matches expected
     assert cls.NAME == name, f"{cls.__name__}.NAME={cls.NAME!r}, expected {name!r}"
-
-    # ALWAYS_AVAILABLE matches expected
-    assert cls.ALWAYS_AVAILABLE is always_available, (
-        f"{cls.__name__}.ALWAYS_AVAILABLE={cls.ALWAYS_AVAILABLE}, expected {always_available}"
-    )
 
     # TIMEOUT matches expected
     assert cls.TIMEOUT == timeout, (
@@ -128,7 +117,7 @@ def test_browser_contract():
         pytest.skip("Playwright not installed — BrowserAbility guard active")
 
     cls = mod.BrowserAbility
-    _assert_contract(cls, name="browser", always_available=False, timeout=90)
+    _assert_contract(cls, name="browser", timeout=90)
 
 
 def test_browser_registered_when_playwright_available():
@@ -168,7 +157,7 @@ def test_browser_import_does_not_raise_without_playwright():
 def test_code_eval_contract():
     """CodeEvalAbility satisfies the ABC contract."""
     from abilities.code_eval import CodeEvalAbility
-    _assert_contract(CodeEvalAbility, name="code_eval", always_available=False, timeout=15)
+    _assert_contract(CodeEvalAbility, name="code_eval", timeout=15)
 
 
 def test_code_eval_registered():
@@ -188,18 +177,12 @@ def test_code_eval_restricted_globals_is_dict_with_builtins():
 # ===========================================================================
 # document
 # ===========================================================================
-# DISCREPANCY: spec table says ALWAYS_AVAILABLE=False, TIMEOUT=10.
-# Actual code has ALWAYS_AVAILABLE=True, TIMEOUT=10.
-# Tests assert the real production values.
 
 
 def test_document_contract():
-    """DocumentAbility satisfies the ABC contract.
-
-    NOTE: actual ALWAYS_AVAILABLE=True differs from spec table (False).
-    """
+    """DocumentAbility satisfies the ABC contract."""
     from abilities.document import DocumentAbility
-    _assert_contract(DocumentAbility, name="document", always_available=True, timeout=10)
+    _assert_contract(DocumentAbility, name="document", timeout=10)
 
 
 def test_document_registered():
@@ -224,7 +207,7 @@ def test_document_module_level_create_document_artifacts_callable():
 def test_find_tools_contract():
     """FindToolsAbility satisfies the ABC contract."""
     from abilities.find_tools import FindToolsAbility
-    _assert_contract(FindToolsAbility, name="find_tools", always_available=True, timeout=10)
+    _assert_contract(FindToolsAbility, name="find_tools", timeout=10)
 
 
 def test_find_tools_registered():
@@ -257,12 +240,9 @@ def test_find_tools_module_level_abilities_db_path():
 
 
 def test_goal_pursuit_contract():
-    """GoalPursuitAbility satisfies the ABC contract.
-
-    NOTE: actual ALWAYS_AVAILABLE=True differs from spec table (False).
-    """
+    """GoalPursuitAbility satisfies the ABC contract."""
     from abilities.goal_pursuit import GoalPursuitAbility
-    _assert_contract(GoalPursuitAbility, name="goal_pursuit", always_available=True, timeout=10)
+    _assert_contract(GoalPursuitAbility, name="goal_pursuit", timeout=10)
 
 
 def test_goal_pursuit_registered():
@@ -279,7 +259,7 @@ def test_goal_pursuit_registered():
 def test_list_contract():
     """ListAbility satisfies the ABC contract."""
     from abilities.list import ListAbility
-    _assert_contract(ListAbility, name="list", always_available=True, timeout=10)
+    _assert_contract(ListAbility, name="list", timeout=10)
 
 
 def test_list_registered():
@@ -296,7 +276,7 @@ def test_list_registered():
 def test_memory_contract():
     """MemoryAbility satisfies the ABC contract."""
     from abilities.memory import MemoryAbility
-    _assert_contract(MemoryAbility, name="memory", always_available=True, timeout=10)
+    _assert_contract(MemoryAbility, name="memory", timeout=10)
 
 
 def test_memory_registered():
@@ -341,7 +321,7 @@ def test_memory_module_level_recall_episodes_callable():
 def test_news_contract():
     """NewsAbility satisfies the ABC contract."""
     from abilities.news import NewsAbility
-    _assert_contract(NewsAbility, name="news", always_available=False, timeout=10)
+    _assert_contract(NewsAbility, name="news", timeout=10)
 
 
 def test_news_registered():
@@ -375,20 +355,14 @@ def test_programming_docs_search_registered():
 # ===========================================================================
 # read
 # ===========================================================================
-# DISCREPANCY: spec table says ALWAYS_AVAILABLE=False, TIMEOUT=15.
-# Actual code has ALWAYS_AVAILABLE=True, TIMEOUT=10.
-# _URL_FETCH_TIMEOUT ClassVar is 15 (separate from TIMEOUT).
-# Tests assert the real production values.
+# Note: ReadAbility.TIMEOUT is the dispatch timeout (10);
+# _URL_FETCH_TIMEOUT ClassVar (15) is a separate HTTP-fetch budget.
 
 
 def test_read_contract():
-    """ReadAbility satisfies the ABC contract.
-
-    NOTE: actual ALWAYS_AVAILABLE=True, TIMEOUT=10 differ from spec table
-    (False, 15). _URL_FETCH_TIMEOUT=15 is the HTTP fetch timeout ClassVar.
-    """
+    """ReadAbility satisfies the ABC contract."""
     from abilities.read import ReadAbility
-    _assert_contract(ReadAbility, name="read", always_available=True, timeout=10)
+    _assert_contract(ReadAbility, name="read", timeout=10)
 
 
 def test_read_registered():
@@ -444,7 +418,7 @@ def test_review_tool_calls_registered():
 def test_rich_render_contract():
     """RichRenderAbility satisfies the ABC contract."""
     from abilities.rich_render import RichRenderAbility
-    _assert_contract(RichRenderAbility, name="rich_render", always_available=True, timeout=10)
+    _assert_contract(RichRenderAbility, name="rich_render", timeout=10)
 
 
 def test_rich_render_registered():
@@ -459,12 +433,9 @@ def test_rich_render_registered():
 
 
 def test_schedule_contract():
-    """ScheduleAbility satisfies the ABC contract.
-
-    NOTE: actual ALWAYS_AVAILABLE=True differs from spec table (False).
-    """
+    """ScheduleAbility satisfies the ABC contract."""
     from abilities.schedule import ScheduleAbility
-    _assert_contract(ScheduleAbility, name="schedule", always_available=True, timeout=10)
+    _assert_contract(ScheduleAbility, name="schedule", timeout=10)
 
 
 def test_schedule_registered():
@@ -489,7 +460,7 @@ def test_schedule_past_due_grace_seconds_is_120():
 def test_search_contract():
     """SearchAbility satisfies the ABC contract."""
     from abilities.search import SearchAbility
-    _assert_contract(SearchAbility, name="search", always_available=False, timeout=20)
+    _assert_contract(SearchAbility, name="search", timeout=20)
 
 
 def test_search_registered():

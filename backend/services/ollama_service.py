@@ -166,12 +166,27 @@ class OllamaService:
         if status == 429:
             _raise_rate_limit(e)
         if status is not None and status >= 500:
+            body_snippet = ''
+            try:
+                if e.response is not None:
+                    body_snippet = e.response.text[:1000]
+            except Exception:
+                try:
+                    body_snippet = repr(e.response.content[:200]) if e.response is not None else ''
+                except Exception:
+                    pass
             if attempt < self.max_retries:
                 backoff = 1.5 * (2 ** attempt)
-                logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {status} — backoff {backoff}s")
+                logging.warning(
+                    "[OllamaService] Retry %d/%d after HTTP %s — body=%r backoff %.1fs",
+                    attempt + 1, self.max_retries, status, body_snippet, backoff,
+                )
                 time.sleep(backoff)
                 return
-            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed (HTTP {status})")
+            logging.error(
+                "[OllamaService] All %d attempts failed (HTTP %s) — body=%r",
+                1 + self.max_retries, status, body_snippet,
+            )
             raise e
         # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
         # can diagnose — raise_for_status() otherwise discards it.

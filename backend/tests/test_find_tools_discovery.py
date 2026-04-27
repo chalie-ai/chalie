@@ -8,11 +8,15 @@ Verifies:
 - RRF order matches formula when vec and FTS disagree on winner (stub embeddings)
 - Fallback keyword search queries ability_search_fts in abilities.sqlite
 - find_tools module has no reference to the old shared DB or tool_capability_profiles
+- DISCOVERABLE allowlist gates which abilities surface for a given processor
 
 Strategy: monkeypatch _ABILITIES_DB_PATH on FindToolsAbility to a tmp_path
 database populated with real embeddings. Real EmbeddingService is used.
-_query_abilities_db and _fallback_keyword_search are called directly with stub
-embeddings where RRF ordering must be verified by formula, not by semantic luck.
+``FindToolsAbility.execute()`` reads the calling MessageProcessor's
+``DISCOVERABLE`` list via ``current_processor()``; tests bind a stub
+processor for that lookup. Direct ``_query_abilities_db`` and
+``_fallback_keyword_search`` calls accept the allowlist as a positional arg
+so RRF ordering can be verified by formula, not by semantic luck.
 """
 
 import inspect
@@ -23,9 +27,42 @@ import numpy as np
 import pytest
 
 import abilities.find_tools as _ft_module
-from abilities.find_tools import FindToolsAbility, _fallback_keyword_search, _query_abilities_db, RRF_K
+from abilities.find_tools import (
+    FindToolsAbility,
+    RRF_K,
+    _fallback_keyword_search,
+    _query_abilities_db,
+)
+from services.message_processor import MessageProcessor, bind_current_processor
 
 pytestmark = pytest.mark.unit
+
+
+# ---------------------------------------------------------------------------
+# Stub processor — minimal MessageProcessor subclass that exposes a custom
+# DISCOVERABLE list for the find_tools query gate.
+# ---------------------------------------------------------------------------
+
+
+class _StubProcessor(MessageProcessor):
+    """Minimal MessageProcessor for binding DISCOVERABLE during tests."""
+
+    CHANNEL = "test"
+    ROLE = "user"
+    DISCOVERABLE: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+
+    def __init__(self, discoverable: list[str]):
+        # Bypass the parent __init__ — it pulls in the orchestrator stack.
+        # Set only the attrs the gate path reads.
+        self.DISCOVERABLE = discoverable
+        self.ALWAYS_AVAILABLE = []
+
+    def getUserDefinition(self) -> str:
+        return ""
+
+    def getUserPrompt(self) -> str:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +90,7 @@ def _real_embeddings():
 def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     """Build a minimal abilities.sqlite at path.
 
-    Each ability dict: {"name": str, "summary": str, "embedding": list[float],
-                        "always_available": int (default 0)}.
+    Each ability dict: {"name": str, "summary": str, "embedding": list[float]}.
     Populates vec + FTS5 (contentless FTS5 needs explicit INSERT).
     """
     from utils.build_ability_db import _rebuild_schema, _load_sqlite_vec
@@ -66,10 +102,9 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     _rebuild_schema(conn)
 
     for ab in abilities:
-        always_available = ab.get("always_available", 0)
         conn.execute(
-            "INSERT INTO abilities(name, summary, always_available) VALUES (?, ?, ?)",
-            (ab["name"], ab["summary"], always_available),
+            "INSERT INTO abilities(name, summary) VALUES (?, ?)",
+            (ab["name"], ab["summary"]),
         )
         ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
@@ -88,6 +123,19 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
 
     conn.commit()
     conn.close()
+
+
+def _execute_with_discoverable(ability: FindToolsAbility, query: str, discoverable: list[str], limit: int | None = None):
+    """Run ``ability.execute()`` inside a stub processor binding.
+
+    The DISCOVERABLE list controls which abilities the gate allows through.
+    """
+    proc = _StubProcessor(discoverable=discoverable)
+    params = {"query": query}
+    if limit is not None:
+        params["limit"] = limit
+    with bind_current_processor(proc):
+        return ability.execute("text", params, None)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +157,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = ability.execute("text", {"query": "weather forecast"}, None)
+        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
         assert isinstance(result, dict)
         assert "weather" in result["_discovered_tools"], (
@@ -140,7 +188,9 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = ability.execute("text", {"query": "sandbox python execution"}, None)
+        result = _execute_with_discoverable(
+            ability, "sandbox python execution", ["weather", "code_eval"]
+        )
 
         assert isinstance(result, dict)
         assert "code_eval" in result["_discovered_tools"], (
@@ -171,8 +221,8 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = ability.execute(
-            "text", {"query": "weather forecast sandbox", "limit": 2}, None
+        result = _execute_with_discoverable(
+            ability, "weather forecast sandbox", ["weather", "code_eval"], limit=2
         )
 
         assert isinstance(result, dict)
@@ -198,7 +248,9 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = ability.execute("text", {"query": "weather forecast", "limit": 5}, None)
+        result = _execute_with_discoverable(
+            ability, "weather forecast", ["weather"], limit=5
+        )
 
         assert isinstance(result, dict)
         discovered = result["_discovered_tools"]
@@ -212,39 +264,67 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
-        result = ability.execute("text", {"query": "weather forecast"}, None)
+        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
         assert isinstance(result, dict)
         assert result["_discovered_tools"] == []
 
-    def test_always_available_abilities_excluded_from_results(
+    def test_discoverable_allowlist_filters_results(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """always_available=1 abilities are excluded from discovery results."""
+        """Abilities outside the calling processor's DISCOVERABLE list never surface.
+
+        Indexes both 'memory' and 'weather' in abilities.sqlite. Calling processor
+        lists only ['weather']. Even when 'memory' would otherwise rank, the gate
+        excludes it because it is not in the allowlist.
+        """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
             {
                 "name": "memory",
                 "summary": "Store and recall information from long-term memory.",
                 "embedding": _real_embeddings["weather_summary"],
-                "always_available": 1,
             },
             {
                 "name": "weather",
                 "summary": _real_embeddings["weather_summary_text"],
                 "embedding": _real_embeddings["weather_summary"],
-                "always_available": 0,
             },
         ])
         monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = ability.execute("text", {"query": "weather forecast"}, None)
+        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
         assert isinstance(result, dict)
         assert "memory" not in result["_discovered_tools"], (
-            f"always_available 'memory' should not appear: {result['_discovered_tools']}"
+            f"'memory' should be filtered by DISCOVERABLE allowlist, got: "
+            f"{result['_discovered_tools']}"
         )
+        assert "weather" in result["_discovered_tools"]
+
+    def test_empty_discoverable_returns_empty_results(
+        self, tmp_path, monkeypatch, _real_embeddings
+    ):
+        """A processor with no DISCOVERABLE entries gets an empty result.
+
+        find_tools is a no-op outside a turn (current_processor() == None) and
+        also when the calling processor has no discoverable scope at all. The
+        SQL never executes when the allowlist is empty.
+        """
+        new_db_path = tmp_path / "abilities.sqlite"
+        _build_abilities_sqlite(new_db_path, [{
+            "name": "weather",
+            "summary": _real_embeddings["weather_summary_text"],
+            "embedding": _real_embeddings["weather_summary"],
+        }])
+        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+
+        ability = FindToolsAbility()
+        result = _execute_with_discoverable(ability, "weather forecast", [])
+
+        assert isinstance(result, dict)
+        assert result["_discovered_tools"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +335,7 @@ class TestFindToolsDiscovery:
 def _build_stub_db(path: Path, abilities: list) -> None:
     """Like _build_abilities_sqlite but accepts raw numpy float32 embeddings.
 
-    Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray, "always_available": int}.
+    Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}.
     """
     from utils.build_ability_db import _rebuild_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
@@ -265,8 +345,8 @@ def _build_stub_db(path: Path, abilities: list) -> None:
     _rebuild_schema(conn)
     for ab in abilities:
         conn.execute(
-            "INSERT INTO abilities(name, summary, always_available) VALUES (?, ?, ?)",
-            (ab["name"], ab["summary"], ab.get("always_available", 0)),
+            "INSERT INTO abilities(name, summary) VALUES (?, ?)",
+            (ab["name"], ab["summary"]),
         )
         ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
@@ -325,7 +405,9 @@ class TestFindToolsPhase3Gaps:
         ])
 
         blob = pack_embedding(q_vec.tolist())
-        rows = _query_abilities_db("zetakeyword", blob, 5, db_path)
+        rows = _query_abilities_db(
+            "zetakeyword", blob, 5, db_path, ["ability_a", "ability_b"]
+        )
 
         names = [r["tool_name"] for r in rows]
         assert len(names) >= 2, f"Expected both abilities in results, got: {names}"
@@ -353,11 +435,41 @@ class TestFindToolsPhase3Gaps:
              "embedding": q_vec},
         ])
 
-        result = _fallback_keyword_search("sandbox", 5, db_path)
+        result = _fallback_keyword_search("sandbox", 5, db_path, ["sandboxer"])
 
         assert result["_discovered_tools"] == ["sandboxer"], (
             f"Expected ['sandboxer'] from abilities.sqlite FTS fallback, "
             f"got: {result['_discovered_tools']}"
+        )
+
+    def test_query_abilities_db_filters_by_allowlist(self, tmp_path):
+        """_query_abilities_db ignores rows whose name is outside the allowlist.
+
+        Indexes two abilities; runs the query with only the second in `allow`.
+        The first MUST NOT appear regardless of vec or FTS rank.
+        """
+        from services.embedding_utils import pack_embedding
+
+        db_path = tmp_path / "allowlist.sqlite"
+
+        q_vec = np.zeros(768, dtype=np.float32)
+        q_vec[0] = 1.0
+        a_emb = np.zeros(768, dtype=np.float32)
+        a_emb[0] = 0.99
+        b_emb = np.zeros(768, dtype=np.float32)
+        b_emb[0] = 0.95
+
+        _build_stub_db(db_path, [
+            {"name": "blocked_ability", "summary": "alphajet engine design", "embedding": a_emb},
+            {"name": "allowed_ability", "summary": "alphajet engine design", "embedding": b_emb},
+        ])
+
+        blob = pack_embedding(q_vec.tolist())
+        rows = _query_abilities_db("alphajet", blob, 5, db_path, ["allowed_ability"])
+
+        names = {r["tool_name"] for r in rows}
+        assert names == {"allowed_ability"}, (
+            f"Expected only 'allowed_ability' through the allowlist, got: {names}"
         )
 
     def test_find_tools_module_has_no_old_db_references(self):

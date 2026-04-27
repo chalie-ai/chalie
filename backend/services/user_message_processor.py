@@ -28,7 +28,6 @@ from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
-from abilities._registry import AbilityRegistry
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
@@ -87,8 +86,28 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All registered abilities are always injected into the user-channel tool list.
-    NATIVE_TOOLS: list[str] = sorted(a.NAME for a in AbilityRegistry.all())
+    # 9 innate abilities — pre-injected on every ACT iteration. The 6 in
+    # DISCOVERABLE are surfaced at runtime via find_tools and never
+    # pre-injected.
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "goal_pursuit",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "rich_render",
+        "schedule",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "code_eval",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
 
     # ── Constructor ───────────────────────────────────────────────────────────
 

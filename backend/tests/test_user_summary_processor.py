@@ -368,10 +368,15 @@ class TestClassAttributes:
 
         assert UserSummaryProcessor.MAX_ITERATIONS == 1
 
-    def test_native_tools_is_empty(self):
+    def test_always_available_is_empty(self):
         from services.user_summary_processor import UserSummaryProcessor
 
-        assert UserSummaryProcessor.NATIVE_TOOLS == []
+        assert UserSummaryProcessor.ALWAYS_AVAILABLE == []
+
+    def test_discoverable_is_empty(self):
+        from services.user_summary_processor import UserSummaryProcessor
+
+        assert UserSummaryProcessor.DISCOVERABLE == []
 
     def test_job_is_frontal_cortex_unified(self):
         from services.user_summary_processor import UserSummaryProcessor

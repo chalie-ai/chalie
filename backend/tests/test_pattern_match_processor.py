@@ -387,16 +387,16 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
     """Test 8 — save_graph with kind='behavioral_pattern' returns invalid_kind error."""
 
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
-        from abilities.pattern_match.save_graph import SaveGraph
+        from abilities.save_graph import SaveGraph
 
-        # Build a minimal processor stub that has the required counter attribute.
-        class _StubProcessor:
-            _save_graph_calls = 0
-
-        processor = _StubProcessor()
-        result = SaveGraph().execute(
+        # SaveGraph reads its budget counter via current_processor() + getattr.
+        # No processor is bound here — getattr falls back to 0, validation
+        # short-circuits before any DB write.
+        instance = SaveGraph()
+        result = instance.execute(
+            "test",
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
-            processor,
+            None,
         )
 
         assert result.get("error") == "invalid_kind", (
@@ -461,20 +461,27 @@ class TestSaveGraphBudgetCapAt50:
     """Test 10 — 51 save_graph calls → 50 land, 51st returns budget_exceeded."""
 
     def test_save_graph_budget_cap_at_50(self, db, store):
-        from abilities.pattern_match.save_graph import SaveGraph
+        from abilities.save_graph import SaveGraph
+        from services.message_processor import bind_current_processor
 
+        # SaveGraph reads/writes its budget counter via current_processor()
+        # + getattr/setattr. Bind a stub as the current processor for the
+        # duration of the test so the counter persists across 51 calls.
         class _StubProcessor:
             _save_graph_calls = 0
 
-        processor = _StubProcessor()
+        stub_processor = _StubProcessor()
+        instance = SaveGraph()
 
-        results = []
-        for i in range(51):
-            result = SaveGraph().execute(
-                {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
-                processor,
-            )
-            results.append(result)
+        with bind_current_processor(stub_processor):
+            results = [
+                instance.execute(
+                    "test",
+                    {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
+                    None,
+                )
+                for i in range(51)
+            ]
 
         # First 50 must succeed.
         for i, r in enumerate(results[:50]):
@@ -487,8 +494,8 @@ class TestSaveGraphBudgetCapAt50:
         assert results[50].get("tool") == "save_graph"
 
         # Counter must be exactly 50.
-        assert processor._save_graph_calls == 50, (
-            f"Expected _save_graph_calls=50, got {processor._save_graph_calls}"
+        assert stub_processor._save_graph_calls == 50, (
+            f"Expected _save_graph_calls=50, got {stub_processor._save_graph_calls}"
         )
 
 

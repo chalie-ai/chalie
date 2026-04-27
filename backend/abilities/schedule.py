@@ -100,7 +100,6 @@ class ScheduleAbility(Ability):
         },
         "required": ["action"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120

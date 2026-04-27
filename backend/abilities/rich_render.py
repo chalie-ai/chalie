@@ -35,7 +35,6 @@ class RichRenderAbility(Ability):
         "properties": {},
         "required": [],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     _BLOCK_REFERENCE: ClassVar[str] = """\

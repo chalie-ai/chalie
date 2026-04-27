@@ -57,6 +57,13 @@ def _get_registry() -> dict[str, Ability]:
 
 
 class AbilityRegistry:
+    """Registry of every dispatchable Ability subclass.
+
+    Tool *scope* (always-available vs discoverable) is owned by each
+    MessageProcessor subclass — the registry just provides the dispatch
+    lookup and the full inventory.
+    """
+
     @staticmethod
     def get(name: str) -> Ability:
         """Return the Ability instance for *name*; raises KeyError on miss."""
@@ -66,16 +73,6 @@ class AbilityRegistry:
     def all() -> list[Ability]:
         """Return every registered Ability instance."""
         return list(_get_registry().values())
-
-    @staticmethod
-    def always_available_names() -> list[str]:
-        """Return canonical NAMEs of ALWAYS_AVAILABLE=True abilities."""
-        return [a.NAME for a in _get_registry().values() if a.ALWAYS_AVAILABLE]
-
-    @staticmethod
-    def discoverable() -> list[Ability]:
-        """Return abilities with ALWAYS_AVAILABLE=False."""
-        return [a for a in _get_registry().values() if not a.ALWAYS_AVAILABLE]
 
 
 def _reset_for_tests() -> None:

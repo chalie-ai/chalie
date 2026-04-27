@@ -8,7 +8,8 @@ Coverage:
   - ModeGateService.tick()                   : end-to-end persist + active set [integration]
 
 Tool-promotion is no longer the gate's job — innate skills are always
-injected via NATIVE_TOOLS and external tools are reached via find_tools.
+injected via each processor's ALWAYS_AVAILABLE list and external tools are
+reached via find_tools.
 The classifier + state machine is retained for prompt steering and future
 mode-driven features.
 

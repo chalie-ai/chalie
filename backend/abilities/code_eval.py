@@ -55,7 +55,6 @@ class CodeEvalAbility(Ability):
         },
         "required": ["code"],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 15
 
     # Pre-built restricted globals — assembled once at import time.

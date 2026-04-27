@@ -9,7 +9,7 @@ Two subclasses:
 
 Both share `_CompactionProcessorBase`:
   - JOB = 'frontal-cortex-unified' (same as parent message type per north star p.547)
-  - NATIVE_TOOLS = []              (compaction never calls tools)
+  - ALWAYS_AVAILABLE / DISCOVERABLE = [] (compaction never calls tools)
   - SKIP_TRANSCRIPT_WRITE = True   (no transcript pollution)
   - _check_threshold returns False (compaction never compacts itself — recursion guard)
   - getUserDefinition returns ''   (no human user)
@@ -29,7 +29,8 @@ from services.system_message_prompt import (
 
 class _CompactionProcessorBase(MessageProcessor):
     JOB = 'frontal-cortex-unified'
-    NATIVE_TOOLS: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+    DISCOVERABLE: list[str] = []
     SKIP_TRANSCRIPT_WRITE = True
 
     def getUserDefinition(self) -> str:

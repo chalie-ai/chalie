@@ -46,7 +46,6 @@ class GoalPursuitAbility(Ability):
         },
         "required": ["goal"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:

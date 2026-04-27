@@ -74,7 +74,6 @@ class ListAbility(Ability):
         },
         "required": ["action"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     _DEFAULT_LIST_NAME: ClassVar[str] = "Shopping List"

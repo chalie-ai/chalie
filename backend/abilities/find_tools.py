@@ -43,7 +43,6 @@ class FindToolsAbility(Ability):
         },
         "required": ["query"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     _ABILITIES_DB_PATH: ClassVar[Path] = (
@@ -56,6 +55,18 @@ class FindToolsAbility(Ability):
         if not query:
             return {"text": _skill_tag("find_tools", error="query-required"), "_discovered_tools": []}
 
+        # The calling processor's DISCOVERABLE list is the discovery allowlist.
+        # No processor → empty allowlist → no results (find_tools is a no-op
+        # outside a turn).
+        from services.message_processor import current_processor
+        proc = current_processor()
+        allow = list(getattr(proc, "DISCOVERABLE", []) or []) if proc is not None else []
+        if not allow:
+            return {
+                "text": _skill_tag("find_tools", _format_no_tools(query), query=query),
+                "_discovered_tools": [],
+            }
+
         limit = min(params.get("limit", 5), 10)
 
         try:
@@ -64,10 +75,10 @@ class FindToolsAbility(Ability):
             query_embedding = emb_service.generate_embedding(query)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding generation failed: {e}")
-            return _fallback_keyword_search(query, limit, self._ABILITIES_DB_PATH)
+            return _fallback_keyword_search(query, limit, self._ABILITIES_DB_PATH, allow)
 
         blob = pack_embedding(query_embedding)
-        rows = _query_abilities_db(query, blob, limit, self._ABILITIES_DB_PATH)
+        rows = _query_abilities_db(query, blob, limit, self._ABILITIES_DB_PATH, allow)
 
         if not rows:
             return {
@@ -97,40 +108,49 @@ def _load_vec(conn: sqlite3.Connection) -> None:
         conn.load_extension("vec0")
 
 
-def _query_abilities_db(query: str, blob: bytes, k: int, db_path: Path) -> List[Dict]:
+def _query_abilities_db(
+    query: str,
+    blob: bytes,
+    k: int,
+    db_path: Path,
+    allow: List[str],
+) -> List[Dict]:
     if not db_path.exists():
         logger.warning(f"{LOG_PREFIX} abilities.sqlite not found at {db_path}")
         return []
+    if not allow:
+        return []
+    placeholders = ",".join("?" * len(allow))
     try:
         conn = sqlite3.connect(str(db_path))
         try:
             _load_vec(conn)
 
             vec_rows = conn.execute(
-                """
+                f"""
                 SELECT a.name, a.summary, v.distance
                 FROM ability_search_vec v
                 JOIN ability_search_entries e ON e.id = v.rowid
                 JOIN abilities a ON a.id = e.ability_id
                 WHERE v.embedding MATCH ? AND k = ?
-                  AND a.always_available = 0
+                  AND a.name IN ({placeholders})
                 ORDER BY v.distance ASC
                 """,
-                (blob, KNN_DEPTH),
+                (blob, KNN_DEPTH, *allow),
             ).fetchall()
 
             try:
                 fts_rows = conn.execute(
-                    """
+                    f"""
                     SELECT a.name, a.summary, bm25(ability_search_fts) AS score
                     FROM ability_search_fts
                     JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
                     JOIN abilities a ON a.id = e.ability_id
                     WHERE ability_search_fts MATCH ?
-                      AND a.always_available = 0
+                      AND a.name IN ({placeholders})
                     ORDER BY score ASC
                     """,
-                    (query,),
+                    (query, *allow),
                 ).fetchall()
             except sqlite3.OperationalError as e:
                 logger.warning(f"{LOG_PREFIX} FTS5 query failed (special chars in query?): {e}")
@@ -195,29 +215,35 @@ def _format_no_tools(query: str) -> str:
     return f'INFO: The best tools for "{query}" are already available.'
 
 
-def _fallback_keyword_search(query: str, limit: int, db_path: Path) -> dict:
+def _fallback_keyword_search(query: str, limit: int, db_path: Path, allow: List[str]) -> dict:
     if not db_path.exists():
         logger.warning(f"{LOG_PREFIX} abilities.sqlite not found — cannot run keyword fallback")
         return {
             "text": _skill_tag("find_tools", error="tool-search-unavailable:db-missing"),
             "_discovered_tools": [],
         }
+    if not allow:
+        return {
+            "text": _skill_tag("find_tools", _format_no_tools(query), query=query),
+            "_discovered_tools": [],
+        }
+    placeholders = ",".join("?" * len(allow))
     try:
         conn = sqlite3.connect(str(db_path))
         try:
             rows = conn.execute(
-                """
+                f"""
                 SELECT a.name
                 FROM ability_search_fts
                 JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
                 JOIN abilities a ON a.id = e.ability_id
                 WHERE ability_search_fts MATCH ?
-                  AND a.always_available = 0
+                  AND a.name IN ({placeholders})
                 GROUP BY a.id
                 ORDER BY a.name
                 LIMIT ?
                 """,
-                (query, limit),
+                (query, *allow, limit),
             ).fetchall()
         finally:
             conn.close()

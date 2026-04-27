@@ -41,7 +41,6 @@ class NewsAbility(Ability):
         },
         "required": ["query"],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 10
 
     _service: ClassVar[Optional[NewsService]] = None

@@ -8,6 +8,7 @@ Returns structured results with confidence and notes for downstream
 critic evaluation.
 """
 
+import contextvars
 import time
 from typing import Dict, Any
 from threading import Thread
@@ -165,9 +166,16 @@ class ActDispatcherService:
         if ability_timeout and ability_timeout > effective_timeout:
             effective_timeout = float(ability_timeout)
 
-        # Execute with timeout
+        # Execute with timeout. We copy the calling thread's contextvars into
+        # the worker so abilities can resolve current_processor() (and any
+        # other ContextVar-backed state bound by MessageProcessor.send()).
+        # Without this copy the spawned Thread starts with a fresh context
+        # and current_processor() returns None — silently breaking budget
+        # counters and decay-tracking on processor-innate abilities like
+        # save_pattern / save_graph.
         try:
             result_container = {'result': None, 'error': None}
+            ctx = contextvars.copy_context()
 
             def target():
                 """Thread target: invoke the action handler and capture the result."""
@@ -176,7 +184,7 @@ class ActDispatcherService:
                 except Exception as e:
                     result_container['error'] = str(e)
 
-            thread = Thread(target=target)
+            thread = Thread(target=ctx.run, args=(target,))
             thread.daemon = True
             thread.start()
             thread.join(timeout=effective_timeout)

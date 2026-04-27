@@ -56,7 +56,8 @@ class UserSummaryProcessor(MessageProcessor):
     ROLE = 'user_summary'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UserSummarySystemPrompt
-    NATIVE_TOOLS: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
     MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True

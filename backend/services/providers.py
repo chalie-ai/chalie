@@ -139,16 +139,20 @@ class Providers:
         return create_llm_service(config)
 
     def _get_tools(self, job):
-        """Get native tool schemas for a job. Default: all registered abilities."""
-        from abilities._registry import AbilityRegistry
-        return [
-            {
-                "name": ability.NAME,
-                "description": ability.SUMMARY,
-                "input_schema": ability.INPUT_SCHEMA,
-            }
-            for ability in AbilityRegistry.all()
-        ]
+        """Get native tool schemas for the calling processor's ALWAYS_AVAILABLE scope.
+
+        Honours the lazy-load contract: DISCOVERABLE abilities are NEVER
+        pre-injected here.  Falls back to an empty list when no processor is
+        bound (e.g. compaction / episode-encoder paths whose own
+        ALWAYS_AVAILABLE is empty by design).  The hot path passes ``tools=``
+        explicitly via ``MessageProcessor.send()``; this method is the
+        safety-net default.
+        """
+        from services.message_processor import current_processor
+        proc = current_processor()
+        if proc is None:
+            return []
+        return proc.getTools()
 
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider."""

@@ -120,7 +120,6 @@ class BrowserAbility(Ability):
         },
         "required": ["action", "url"],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 90
 
     _WAIT_MAP: ClassVar[dict] = {

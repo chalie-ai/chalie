@@ -12,11 +12,8 @@ import logging
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import ScheduledSystemMessagePrompt
-from abilities._registry import AbilityRegistry
 
 logger = logging.getLogger(__name__)
-
-_EXCLUDED_SKILLS: frozenset = frozenset({'schedule', 'goal_pursuit'})
 
 
 class ScheduledMessageProcessor(MessageProcessor):
@@ -32,9 +29,23 @@ class ScheduledMessageProcessor(MessageProcessor):
     CHANNEL = 'scheduled'   # flat — collapsed from scheduled:{id}
     ROLE = 'scheduled'
     SYSTEM_PROMPT_CLASS = ScheduledSystemMessagePrompt
-    NATIVE_TOOLS: list[str] = sorted(
-        a.NAME for a in AbilityRegistry.all() if a.NAME not in _EXCLUDED_SKILLS
-    )
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "rich_render",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "code_eval",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
 
     def getUserDefinition(self) -> str:
         return (

@@ -3,11 +3,18 @@ from typing import ClassVar
 
 
 class Ability(ABC):
+    """Base class for every dispatchable tool.
+
+    Tool *scope* (always-available vs discoverable) lives on the calling
+    MessageProcessor — each subclass declares ``ALWAYS_AVAILABLE`` and
+    ``DISCOVERABLE`` lists of tool names. Abilities themselves only describe
+    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA / TIMEOUT).
+    """
+
     NAME: ClassVar[str]
     SUMMARY: ClassVar[str]
     EXAMPLES: ClassVar[list[str]]
     INPUT_SCHEMA: ClassVar[dict]
-    ALWAYS_AVAILABLE: ClassVar[bool] = False
     TIMEOUT: ClassVar[int] = 10
 
     def __init_subclass__(cls, **kwargs: object) -> None:

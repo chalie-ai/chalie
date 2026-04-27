@@ -49,10 +49,9 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
 
     conn.execute("""
         CREATE TABLE abilities (
-            id               INTEGER PRIMARY KEY,
-            name             TEXT    UNIQUE NOT NULL,
-            summary          TEXT    NOT NULL,
-            always_available INTEGER NOT NULL DEFAULT 0
+            id      INTEGER PRIMARY KEY,
+            name    TEXT    UNIQUE NOT NULL,
+            summary TEXT    NOT NULL
         )
     """)
     conn.execute("""
@@ -104,8 +103,8 @@ def _dedup_entries(
 def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
     """Insert one ability and its search entries; return count of entries inserted."""
     conn.execute(
-        "INSERT INTO abilities(name, summary, always_available) VALUES (?, ?, ?)",
-        (ability.NAME, ability.SUMMARY, 1 if ability.ALWAYS_AVAILABLE else 0),
+        "INSERT INTO abilities(name, summary) VALUES (?, ?)",
+        (ability.NAME, ability.SUMMARY),
     )
     ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -138,10 +137,15 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 
 def _build_sha_map() -> dict[str, str]:
+    """SHA map covers every ability indexed in the search DB."""
     return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all()}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
+    # Index every ability — the search DB is the single source of truth for
+    # find_tools. Per-processor scoping (which abilities a given processor
+    # may discover) is gated at find_tools query time via the calling
+    # processor's DISCOVERABLE list.
     abilities = AbilityRegistry.all()
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 

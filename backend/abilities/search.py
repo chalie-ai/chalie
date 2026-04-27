@@ -58,7 +58,6 @@ class SearchAbility(Ability):
         },
         "required": ["query"],
     }
-    ALWAYS_AVAILABLE = False
     TIMEOUT = 20
 
     # Path to the search providers SQLite — stays in tools/search/assets/ until Phase 4

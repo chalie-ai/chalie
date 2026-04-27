@@ -42,7 +42,6 @@ class ReviewToolCallsAbility(Ability):
         },
         "required": ["date_time"],
     }
-    ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
