@@ -191,13 +191,19 @@ export class Renderer {
   appendToolPill(parentEl, callId, name) {
     if (!parentEl || !callId) return null;
 
+    // First pill in a pending bubble replaces the thinking dots — they're
+    // redundant with the pill spinner and would otherwise be wiped by the
+    // 2s upgradePendingText timer (which would also wipe these pills).
+    const dots = parentEl.querySelector(':scope > .thinking-indicator');
+    if (dots) dots.remove();
+
     let host = parentEl.querySelector(':scope > .tool-pill-row');
     if (!host) {
       host = this._createEl('div', 'tool-pill-row');
       parentEl.appendChild(host);
     }
 
-    const pill = this._createEl('span', 'tool-pill tool-pill--active');
+    const pill = this._createEl('div', 'tool-pill tool-pill--active');
     pill.dataset.callId = callId;
     pill.dataset.startedAt = String(Date.now());
 
@@ -211,6 +217,7 @@ export class Renderer {
     pill.appendChild(nameEl);
     pill.appendChild(statusEl);
     host.appendChild(pill);
+    this._scrollToBottom();
     return pill;
   }
 
