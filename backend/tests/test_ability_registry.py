@@ -1,8 +1,8 @@
 """Feature tests for AbilityRegistry (abilities/_registry.py).
 
-Phase 0 production state is zero subclasses — the empty-set behaviour is the
-canonical passing state.  Singleton caching and thread-safety are verified
-without any mocks, stubs, or patches.
+Production state pins the abilities currently on disk (e.g. weather after
+Phase 1).  Singleton caching and thread-safety are verified without any
+mocks, stubs, or patches.
 
 Registry reset between tests: _reset_for_tests() clears the module-level
 _registry cache so each test starts with a clean lazy-load.
@@ -36,29 +36,31 @@ def clean_registry():
 
 
 # ---------------------------------------------------------------------------
-# Zero-subclass (Phase 0 production) state
+# Production-state assertions — reflect concrete abilities currently on disk
 # ---------------------------------------------------------------------------
 
 
-def test_all_returns_empty_list_when_no_subclasses():
-    """AbilityRegistry.all() returns [] when no concrete subclasses exist."""
-    assert AbilityRegistry.all() == []
+def test_all_includes_registered_abilities():
+    """AbilityRegistry.all() surfaces every concrete subclass on disk."""
+    names = [a.NAME for a in AbilityRegistry.all()]
+    assert "weather" in names
 
 
-def test_always_available_names_returns_empty_list_when_no_subclasses():
-    """AbilityRegistry.always_available_names() returns [] with no subclasses."""
-    assert AbilityRegistry.always_available_names() == []
+def test_always_available_names_excludes_discoverable_abilities():
+    """always_available_names() omits abilities with ALWAYS_AVAILABLE=False."""
+    assert "weather" not in AbilityRegistry.always_available_names()
 
 
-def test_discoverable_returns_empty_list_when_no_subclasses():
-    """AbilityRegistry.discoverable() returns [] with no subclasses."""
-    assert AbilityRegistry.discoverable() == []
+def test_discoverable_includes_non_always_available_abilities():
+    """discoverable() includes abilities marked ALWAYS_AVAILABLE=False."""
+    names = [a.NAME for a in AbilityRegistry.discoverable()]
+    assert "weather" in names
 
 
-def test_get_raises_key_error_when_no_subclasses():
-    """AbilityRegistry.get() raises KeyError for any name with no subclasses."""
+def test_get_raises_key_error_for_unregistered_name():
+    """AbilityRegistry.get() raises KeyError for a name no subclass owns."""
     with pytest.raises(KeyError):
-        AbilityRegistry.get("anything")
+        AbilityRegistry.get("anything_not_registered")
 
 
 def test_get_raises_key_error_for_unknown_name_with_subclass_present():
@@ -112,7 +114,8 @@ def test_registry_reflects_concrete_subclass_after_reset():
     assert "new_ability" in names
     assert AbilityRegistry.get("new_ability").NAME == "new_ability"
     assert "new_ability" in AbilityRegistry.always_available_names()
-    assert AbilityRegistry.discoverable() == []
+    discoverable_names = [a.NAME for a in AbilityRegistry.discoverable()]
+    assert "new_ability" not in discoverable_names
 
     del _NewAbility
     gc.collect()

@@ -1,14 +1,13 @@
-"""Feature tests for build_ability_db.py (Phase 0 scope).
+"""Feature tests for build_ability_db.py.
 
 All tests use tmp_path so they never touch the production
 abilities.sqlite or abilities_sha.json.
 
-EmbeddingService note: the empty-registry _build() path skips EmbeddingService
-construction entirely (guarded by `if abilities`), so the empty round-trip tests
-are fast and require no model files.  The sha-computation test for a synthetic
-subclass only calls _compute_sha() which is pure — no embedding service needed.
-The populated build round-trip (with real embeddings) is deferred to the Phase 1
-integration test when WeatherAbility is added.
+EmbeddingService note: from Phase 1 onward the registry contains concrete
+abilities (e.g. weather), so _build() instantiates the real EmbeddingService.
+That model is loaded once per process and cached, so per-test overhead stays
+low. The sha-computation tests for synthetic subclasses only call
+_compute_sha() which is pure — no embedding service needed.
 """
 
 import gc
@@ -46,12 +45,12 @@ def clean_registry():
 
 
 # ---------------------------------------------------------------------------
-# Empty-registry round-trip (Phase 0 canonical pass)
+# Round-trip — schema, rows, sidecar
 # ---------------------------------------------------------------------------
 
 
-def test_build_empty_registry_creates_all_five_schema_objects(tmp_path):
-    """_build() with zero abilities creates abilities.sqlite with all 5 expected schema objects."""
+def test_build_creates_all_five_schema_objects(tmp_path):
+    """_build() creates abilities.sqlite with all 5 expected schema objects."""
     db_path = tmp_path / "abilities.sqlite"
     sha_path = tmp_path / "abilities_sha.json"
 
@@ -81,8 +80,8 @@ def test_build_empty_registry_creates_all_five_schema_objects(tmp_path):
     assert "idx_search_entries_ability" in schema_names
 
 
-def test_build_empty_registry_has_zero_rows(tmp_path):
-    """_build() with zero abilities produces zero rows in abilities and ability_search_entries."""
+def test_build_writes_one_row_per_registered_ability(tmp_path):
+    """_build() writes one abilities row per registered subclass plus its entries."""
     db_path = tmp_path / "abilities.sqlite"
     sha_path = tmp_path / "abilities_sha.json"
 
@@ -91,14 +90,19 @@ def test_build_empty_registry_has_zero_rows(tmp_path):
     conn = sqlite3.connect(str(db_path))
     abilities_count = conn.execute("SELECT count(*) FROM abilities").fetchone()[0]
     entries_count = conn.execute("SELECT count(*) FROM ability_search_entries").fetchone()[0]
+    weather_present = conn.execute(
+        "SELECT 1 FROM abilities WHERE name = 'weather'"
+    ).fetchone() is not None
     conn.close()
 
-    assert abilities_count == 0
-    assert entries_count == 0
+    assert abilities_count >= 1
+    assert weather_present
+    # SUMMARY + minimum 6 EXAMPLES per ability; cosine dedup may trim some.
+    assert entries_count >= 6
 
 
-def test_build_empty_registry_writes_empty_sidecar(tmp_path):
-    """_build() with zero abilities writes sidecar JSON of exactly {}."""
+def test_build_writes_sidecar_with_ability_shas(tmp_path):
+    """_build() writes a sidecar mapping each ability NAME to a sha256 hex digest."""
     db_path = tmp_path / "abilities.sqlite"
     sha_path = tmp_path / "abilities_sha.json"
 
@@ -106,7 +110,8 @@ def test_build_empty_registry_writes_empty_sidecar(tmp_path):
 
     assert sha_path.exists()
     sidecar = json.loads(sha_path.read_text())
-    assert sidecar == {}
+    assert "weather" in sidecar
+    assert len(sidecar["weather"]) == 64  # sha256 hex length
 
 
 # ---------------------------------------------------------------------------
@@ -114,10 +119,13 @@ def test_build_empty_registry_writes_empty_sidecar(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_check_passes_when_sidecar_matches_empty_registry(tmp_path):
-    """_check() exits 0 when sidecar is {} and the registry has no subclasses."""
+def test_check_passes_when_sidecar_matches_registry(tmp_path):
+    """_check() exits 0 when the sidecar matches the registry's current sha map."""
+    from utils.build_ability_db import _build_sha_map
+
     sha_path = tmp_path / "abilities_sha.json"
-    sha_path.write_text("{}\n")
+    sha_map = _build_sha_map()
+    sha_path.write_text(json.dumps(sha_map, indent=2, sort_keys=True) + "\n")
 
     result = subprocess.run(
         [
