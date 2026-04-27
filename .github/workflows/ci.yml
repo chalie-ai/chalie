@@ -31,6 +31,10 @@ jobs:
       - name: Lint (ruff)
         run: ruff check backend/
 
+      - name: Ability DB drift check
+        working-directory: backend
+        run: python -m utils.build_ability_db --check
+
       - name: Unit tests
         run: |
           cd backend
