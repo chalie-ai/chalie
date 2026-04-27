@@ -15,6 +15,8 @@ import logging
 import time
 from typing import ClassVar
 
+import requests
+
 from abilities._base import Ability
 from services.time_utils import utc_now
 
@@ -153,7 +155,6 @@ class WeatherAbility(Ability):
 
 def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple:
     """Fetch current weather from Open-Meteo. Returns (result, error_str)."""
-    import requests
     try:
         url = (
             "https://api.open-meteo.com/v1/forecast"
@@ -229,7 +230,6 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
 
 def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
     """Fetch current weather from wttr.in j1. Returns (result, error_str)."""
-    import requests
     try:
         url = f"https://wttr.in/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
