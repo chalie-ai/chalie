@@ -25,6 +25,5 @@ SELECT job_name, (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT
 FROM (
     SELECT 'frontal-cortex-unified'
     UNION ALL SELECT 'cognitive-triage'
-    UNION ALL SELECT 'tool-synthesis'
 )
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;

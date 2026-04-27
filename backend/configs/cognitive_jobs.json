@@ -9,14 +9,8 @@
     {
       "id": "cognitive-triage",
       "name": "Cognitive Triage",
-      "desc": "Lightweight classifier for routing, critic, and classification tasks.",
+      "desc": "Structured-output LLM for tool-profile synthesis (ToolProfileService).",
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
-      "id": "tool-synthesis",
-      "name": "Tool Synthesis",
-      "desc": "Evaluates recent tool call results for novel knowledge worth storing in memory. Runs every 60 minutes.",
-      "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     }
   ]
 }
