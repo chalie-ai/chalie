@@ -120,7 +120,7 @@ After the turn is stored, the user processor triggers a set of services synchron
 
 Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter.
 
-Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory skill directly. Contradiction detection happens at storage time.
+Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
 ---
 
