@@ -9,11 +9,15 @@ schemas into the native tools list so the LLM can call them directly
 in subsequent iterations — no second discovery step needed.
 
 Search queries `tool_capability_profiles_vec` (same embeddings used by triage).
+Phase 1: also queries abilities.sqlite (new DB) with priority merge — new DB
+wins when an entry exists.
 
 Zero-tool-name references in infrastructure — fully tool-agnostic.
 """
 
 import logging
+import sqlite3
+from pathlib import Path
 from typing import List, Dict
 
 from services.embedding_utils import pack_embedding
@@ -101,6 +105,18 @@ def handle_find_tools(channel: str, params: dict) -> dict:
         logger.warning(f"{LOG_PREFIX} Vector search failed: {e}")
         return _fallback_keyword_search(query, limit)
 
+    # Phase 1 dual-read: query abilities.sqlite for nearest neighbors and
+    # merge with priority — new DB wins when an entry exists (§4.1).
+    new_db_rows = _query_abilities_db(blob, limit + 5)
+
+    if new_db_rows:
+        # Build set of names already covered by the new DB
+        new_db_names = {r['tool_name'] for r in new_db_rows}
+        # Drop old-DB rows whose name is already in new DB
+        old_rows_filtered = [r for r in rows if r[0] not in new_db_names]
+        # Concat: new DB first (lower/better distances from a fresh model)
+        rows = new_db_rows + old_rows_filtered
+
     if not rows:
         return {
             "text": _skill_tag("find_tools", _format_no_tools(query), query=query),
@@ -144,11 +160,86 @@ def handle_find_tools(channel: str, params: dict) -> dict:
     }
 
 
+# -- New-DB (abilities.sqlite) query ---------------------------------------
+
+_ABILITIES_DB_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "abilities" / "assets" / "abilities.sqlite"
+)
+
+
+def _query_abilities_db(blob: bytes, k: int) -> List[Dict]:
+    """Query abilities.sqlite for nearest neighbors.
+
+    Returns a list of result dicts in the same shape _filter_available produces,
+    with score = distance * 10 (no keyword bonus — Phase 3 enrichment).
+    Returns [] if the DB is missing, empty, or fails to open.
+    """
+    if not _ABILITIES_DB_PATH.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(_ABILITIES_DB_PATH))
+        try:
+            conn.enable_load_extension(True)
+            try:
+                import sqlite_vec
+                sqlite_vec.load(conn)
+            except Exception:
+                conn.load_extension("vec0")
+
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT a.name, a.summary, v.distance
+                FROM ability_search_vec v
+                JOIN ability_search_entries ase ON ase.id = v.rowid
+                JOIN abilities a ON a.id = ase.ability_id
+                WHERE v.embedding MATCH ? AND k = ?
+                ORDER BY v.distance
+                """,
+                (blob, k),
+            )
+            db_rows = cursor.fetchall()
+            cursor.close()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} abilities.sqlite query failed: {e}")
+        return []
+
+    if not db_rows:
+        return []
+
+    # Deduplicate by ability name — multiple entries (summary + examples) may match.
+    seen: set = set()
+    results: List[Dict] = []
+    for name, summary, distance in db_rows:
+        if name in seen:
+            continue
+        seen.add(name)
+        score = distance * 10
+        results.append({
+            'tool_name': name,
+            'short_summary': summary,
+            'full_profile': summary,
+            'domain': '',
+            'effort': 'low',
+            'score': score,
+            'distance': distance,
+        })
+
+    return results
+
+
 # -- Search helpers --------------------------------------------------------
 
 
 def _filter_available(rows: list, query: str = "") -> List[Dict]:
-    """Filter vec search results to available, ready tools. Score by distance + keyword match."""
+    """Filter vec search results to available, ready tools. Score by distance + keyword match.
+
+    Rows may be either:
+    - 8-tuples from tool_capability_profiles_vec (old DB)
+    - result dicts with 'score' already set (new abilities.sqlite DB — bypass registry checks)
+    """
     try:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
@@ -158,6 +249,11 @@ def _filter_available(rows: list, query: str = "") -> List[Dict]:
     query_lower = query.lower()
     results = []
     for row in rows:
+        # New-DB rows arrive as complete result dicts — pass through directly.
+        if isinstance(row, dict) and 'score' in row:
+            results.append(row)
+            continue
+
         tool_name = row[0] if not isinstance(row, dict) else row['tool_name']
         tool_type = row[1] if not isinstance(row, dict) else row['tool_type']
         short_summary = row[2] if not isinstance(row, dict) else row['short_summary']
