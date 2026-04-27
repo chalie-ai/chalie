@@ -192,6 +192,29 @@ Module-level helpers (`_fetch_open_meteo`, `_fetch_wttr`, `_degrees_to_compass`,
 
 **Dispatch path in Phase 1:** the legacy `tools/weather.py` still owns the ACT-loop dispatch path. `WeatherAbility` is exercised via `find_tools` dual-read and its own unit tests. The legacy tool will be ripped in Phase 4.
 
+### Phase 2 — Bulk ability ports (14 abilities, `backend/abilities/`)
+
+ADD-only, behaviour-preserving. Legacy dispatch paths in `services/innate_skills/` and `tools/` remain intact and own ACT-loop dispatch until Phase 4. The 14 new `Ability` subclasses are scaffolding for Phase 3+ cutover.
+
+| Ability file | NAME | Source |
+|---|---|---|
+| `abilities/browser.py` | `browser` | `tools/browser/browser.py` — guarded by `try/except ImportError` (Playwright optional); module exposes nothing if Playwright is absent so the registry walk never crashes. Companion files (`tools/browser/{security,pool,extraction,interaction,credentials}.py`) stay in `tools/browser/` and are imported from there. |
+| `abilities/code_eval.py` | `code_eval` | `services/innate_skills/code_eval_skill.py` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]` at class definition; a fresh `dict()` copy is taken per call so state never leaks between executions. |
+| `abilities/document.py` | `document` | `services/innate_skills/document_skill.py` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so existing callers (`api/documents.py`, `services/folder_watcher_service.py`) import it without modification. |
+| `abilities/find_tools.py` | `find_tools` | `services/innate_skills/find_tools_skill.py` — `_ABILITIES_DB_PATH` path corrected for new location (`Path(__file__).resolve().parent / "assets"`). |
+| `abilities/goal_pursuit.py` | `goal_pursuit` | `services/innate_skills/goal_pursuit_skill.py` — `threading.Thread(target=_run, daemon=True)` pattern preserved verbatim; `GoalPursuitProcessor` and `OutputService` are lazy-imported inside the `_run()` closure. |
+| `abilities/list.py` | `list` | `services/innate_skills/list_skill.py` — handler helpers extracted as module-level functions; `_DEFAULT_LIST_NAME` promoted to `ClassVar[str]`. |
+| `abilities/memory.py` | `memory` | `services/innate_skills/memory_skill.py` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path. |
+| `abilities/news.py` | `news` | `services/innate_skills/news_skill.py` — `_service` classvar lazily initialised via `_get_service()` classmethod. |
+| `abilities/programming_docs_search.py` | `programming_docs_search` | `tools/programming_docs_search/tool.py` — all 23 `_Source` subclasses and `_ALL_SOURCES`/`_ALIAS_MAP` live at module level. |
+| `abilities/read.py` | `read` | `tools/read/tool.py` — `requests` hoisted to module top; `_BLOCKED_NETS`, `_BROWSER_HEADERS`, `_BLOCKED_PATH_PREFIXES`, `_URL_FETCH_TIMEOUT` promoted to `ClassVar`. |
+| `abilities/review_tool_calls.py` | `review_tool_calls` | `services/innate_skills/review_tool_calls_skill.py` — already returned `dict`; ported directly. |
+| `abilities/rich_render.py` | `rich_render` | `services/innate_skills/rich_render_skill.py` — `_BLOCK_REFERENCE` as `ClassVar[str]`. |
+| `abilities/schedule.py` | `schedule` | `services/innate_skills/schedule_skill.py` — atomic dedup `INSERT...WHERE NOT EXISTS` (PR #1685) preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`. |
+| `abilities/search.py` | `search` | `tools/search/search.py` — `_DB` path computed as `parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"` (search assets stay in `tools/search/` until Phase 4). |
+
+After Phase 2, `abilities.sqlite` contains **15 abilities** (134 embedded entries). `abilities_sha.json` is regenerated to reflect all 15.
+
 ### Registry (`backend/abilities/_registry.py`)
 
 Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access and deduplicates by `NAME`. The registry is the source of truth for which abilities are active in the process.
