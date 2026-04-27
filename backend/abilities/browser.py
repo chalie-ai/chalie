@@ -19,7 +19,6 @@ import difflib
 import hashlib
 import logging
 import time
-from pathlib import Path
 from typing import ClassVar
 from urllib.parse import urlparse
 
@@ -31,14 +30,6 @@ try:
     # Playwright-dependent imports — kept lazy inside action helpers,
     # but we verify the package is importable here so the guard works.
     import playwright  # noqa: F401  (existence check only)
-
-    # Navigation wait strategies
-    _WAIT_MAP = {
-        "networkidle": "networkidle",
-        "domcontentloaded": "domcontentloaded",
-        "load": "load",
-        "commit": "commit",
-    }
 
     class BrowserAbility(Ability):
         NAME = "browser"

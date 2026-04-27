@@ -216,16 +216,6 @@ def test_document_module_level_create_document_artifacts_callable():
     )
 
 
-def test_document_classmethod_create_document_artifacts_callable():
-    """DocumentAbility.create_document_artifacts is a classmethod."""
-    from abilities.document import DocumentAbility
-    # Access via class — should not raise and must be callable
-    method = getattr(DocumentAbility, "create_document_artifacts", None)
-    assert callable(method), (
-        "DocumentAbility.create_document_artifacts must be a callable classmethod"
-    )
-
-
 # ===========================================================================
 # find_tools
 # ===========================================================================
@@ -417,7 +407,6 @@ def test_read_url_fetch_timeout_is_15():
 
 def test_read_blocked_nets_contains_loopback():
     """ReadAbility._BLOCKED_NETS contains the loopback network 127.0.0.0/8."""
-    import ipaddress
     from abilities.read import ReadAbility
     blocked_strs = [str(net) for net in ReadAbility._BLOCKED_NETS]
     assert "127.0.0.0/8" in blocked_strs, (

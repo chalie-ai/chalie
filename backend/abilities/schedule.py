@@ -13,6 +13,7 @@ from typing import ClassVar
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER SKILL]"
@@ -147,7 +148,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
         if due_at == _SENTINEL:
             return {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
 
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         if due_at <= now:
             past_seconds = (now - due_at).total_seconds()
             if past_seconds <= past_due_grace:
@@ -339,7 +340,7 @@ def _list(params: dict) -> dict:
 
 
 def _resolve_time_range(time_range: str):
-    now_utc = datetime.now(timezone.utc)
+    now_utc = utc_now()
 
     try:
         from services.client_context_service import ClientContextService

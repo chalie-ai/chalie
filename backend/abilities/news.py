@@ -3,10 +3,11 @@ NewsAbility — Search news articles across global sources.
 """
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from abilities._base import Ability
 from services import news_sources
+from services.news_service import NewsService
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class NewsAbility(Ability):
     ALWAYS_AVAILABLE = False
     TIMEOUT = 10
 
-    _service: ClassVar[None] = None
+    _service: ClassVar[Optional[NewsService]] = None
 
     _COUNTRY_CODE_MAP: ClassVar[dict] = {
         "united states": "US", "united kingdom": "GB", "malta": "MT",
@@ -91,7 +92,6 @@ class NewsAbility(Ability):
     @classmethod
     def _get_service(cls):
         if cls._service is None:
-            from services.news_service import NewsService
             cls._service = NewsService()
         return cls._service
 

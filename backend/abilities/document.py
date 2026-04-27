@@ -67,15 +67,6 @@ class DocumentAbility(Ability):
     ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
-    @classmethod
-    def create_document_artifacts(cls, doc_id: str, text_content: str) -> int:
-        """Split text into artifacts and store in data_graph. Returns artifact count.
-
-        Preserved as classmethod for Phase 4 callers (api/documents.py,
-        services/folder_watcher_service.py).
-        """
-        return create_document_artifacts(doc_id, text_content)
-
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "search")
 
@@ -280,7 +271,8 @@ def _handle_view(service, params: dict) -> str:
                     (f'document:{doc["id"]}',),
                 )
                 fragments = [row[0] for row in cursor.fetchall() if row[0]]
-        except Exception:
+        except Exception as exc:
+            logger.warning("[DOCUMENT SKILL] Fragment query failed: %s", exc, exc_info=True)
             fragments = []
 
         if fragments:

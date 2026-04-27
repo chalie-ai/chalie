@@ -13,7 +13,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
-from typing import ClassVar
 
 from abilities._base import Ability
 
@@ -906,7 +905,7 @@ class ProgrammingDocsSearchAbility(Ability):
         language = (params.get("language") or "").strip()
         query = (params.get("query") or "").strip()
         if not language:
-            return {"error": "Missing required parameter: language"}
+            return {"text": "", "error": "Missing required parameter: language"}
         if not query:
-            return {"error": "Missing required parameter: query"}
+            return {"text": "", "error": "Missing required parameter: query"}
         return lookup(language, query)
