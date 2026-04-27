@@ -1,19 +1,7 @@
-"""
-FindToolsAbility — On-demand tool discovery with dynamic injection.
-
-Cognitive primitive: always available in ACT mode. Lets Chalie search for
-external capabilities (tools and interface actions) by semantic query.
-
-After a successful search, the ACT orchestrator injects matching tool
-schemas into the native tools list so the LLM can call them directly
-in subsequent iterations — no second discovery step needed.
-
-Phase 1: queries abilities.sqlite (new DB) with priority merge — new DB
-wins when an entry exists. Also queries tool_capability_profiles_vec.
-"""
-
+import json
 import logging
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 from typing import ClassVar, List, Dict
 
@@ -23,6 +11,9 @@ from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[FIND_TOOLS]"
+
+RRF_K = 15
+KNN_DEPTH = 30
 
 
 class FindToolsAbility(Ability):
@@ -55,12 +46,9 @@ class FindToolsAbility(Ability):
     ALWAYS_AVAILABLE = True
     TIMEOUT = 10
 
-    # abilities.sqlite lives at abilities/assets/abilities.sqlite
-    # (one level up from abilities/ for the db, but assets/ is a sibling of this file)
     _ABILITIES_DB_PATH: ClassVar[Path] = (
         Path(__file__).resolve().parent / "assets" / "abilities.sqlite"
     )
-    _MIN_RELEVANCE: ClassVar[float] = 0.15
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         query = params.get("query", "").strip()
@@ -76,43 +64,10 @@ class FindToolsAbility(Ability):
             query_embedding = emb_service.generate_embedding(query)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding generation failed: {e}")
-            return _fallback_keyword_search(query, limit)
+            return _fallback_keyword_search(query, limit, self._ABILITIES_DB_PATH)
 
         blob = pack_embedding(query_embedding)
-
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT tcp.tool_name, tcp.tool_type, tcp.short_summary,
-                           tcp.full_profile, tcp.domain, tcp.effort,
-                           v.distance, tcp.keywords
-                    FROM tool_capability_profiles_vec v
-                    JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
-                    WHERE v.embedding MATCH ? AND k = ?
-                    ORDER BY v.distance
-                    """,
-                    (blob, limit + 5)
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Vector search failed: {e}")
-            return _fallback_keyword_search(query, limit)
-
-        # Phase 1 dual-read: query abilities.sqlite for nearest neighbors and
-        # merge with priority — new DB wins when an entry exists.
-        new_db_rows = _query_abilities_db(blob, limit + 5, self._ABILITIES_DB_PATH)
-
-        if new_db_rows:
-            new_db_names = {r["tool_name"] for r in new_db_rows}
-            old_rows_filtered = [r for r in rows if r[0] not in new_db_names]
-            rows = new_db_rows + old_rows_filtered
+        rows = _query_abilities_db(query, blob, limit, self._ABILITIES_DB_PATH)
 
         if not rows:
             return {
@@ -121,31 +76,10 @@ class FindToolsAbility(Ability):
             }
 
         for row in rows:
-            name = row[0] if not isinstance(row, dict) else row["tool_name"]
-            dist = row[6] if not isinstance(row, dict) else row["distance"]
-            logger.info(f"{LOG_PREFIX} k-NN: {name} distance={dist:.4f}")
+            logger.info(f"{LOG_PREFIX} RRF: {row['tool_name']} score={row['score']:.4f}")
 
-        available_tools = _filter_available(rows, query)
-
-        if not available_tools:
-            return {
-                "text": _skill_tag("find_tools", _format_no_tools(query), query=query),
-                "_discovered_tools": [],
-            }
-
-        available_tools = available_tools[:limit]
-
-        raw_text = _format_added_tools(available_tools, self._MIN_RELEVANCE)
-
-        import json
-        added = json.loads(raw_text).get("added_tools", [])
-        discovered_names = [t["name"] for t in added]
-
-        if not discovered_names:
-            return {
-                "text": _skill_tag("find_tools", _format_no_tools(query), query=query),
-                "_discovered_tools": [],
-            }
+        raw_text = _format_added_tools(rows)
+        discovered_names = [t["tool_name"] for t in rows]
 
         return {
             "text": _skill_tag("find_tools", raw_text, query=query, found=len(discovered_names)),
@@ -153,128 +87,107 @@ class FindToolsAbility(Ability):
         }
 
 
-def _query_abilities_db(blob: bytes, k: int, db_path: Path) -> List[Dict]:
+def _load_vec(conn: sqlite3.Connection) -> None:
+    conn.enable_load_extension(True)
+    try:
+        import sqlite_vec
+        sqlite_vec.load(conn)
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} sqlite_vec module load failed, trying vec0 extension: {e}")
+        conn.load_extension("vec0")
+
+
+def _query_abilities_db(query: str, blob: bytes, k: int, db_path: Path) -> List[Dict]:
     if not db_path.exists():
+        logger.warning(f"{LOG_PREFIX} abilities.sqlite not found at {db_path}")
         return []
     try:
         conn = sqlite3.connect(str(db_path))
         try:
-            conn.enable_load_extension(True)
-            try:
-                import sqlite_vec
-                sqlite_vec.load(conn)
-            except Exception:
-                conn.load_extension("vec0")
+            _load_vec(conn)
 
-            cursor = conn.cursor()
-            cursor.execute(
+            vec_rows = conn.execute(
                 """
                 SELECT a.name, a.summary, v.distance
                 FROM ability_search_vec v
-                JOIN ability_search_entries ase ON ase.id = v.rowid
-                JOIN abilities a ON a.id = ase.ability_id
+                JOIN ability_search_entries e ON e.id = v.rowid
+                JOIN abilities a ON a.id = e.ability_id
                 WHERE v.embedding MATCH ? AND k = ?
-                ORDER BY v.distance
+                  AND a.always_available = 0
+                ORDER BY v.distance ASC
                 """,
-                (blob, k),
-            )
-            db_rows = cursor.fetchall()
-            cursor.close()
+                (blob, KNN_DEPTH),
+            ).fetchall()
+
+            try:
+                fts_rows = conn.execute(
+                    """
+                    SELECT a.name, a.summary, bm25(ability_search_fts) AS score
+                    FROM ability_search_fts
+                    JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
+                    JOIN abilities a ON a.id = e.ability_id
+                    WHERE ability_search_fts MATCH ?
+                      AND a.always_available = 0
+                    ORDER BY score ASC
+                    """,
+                    (query,),
+                ).fetchall()
+            except sqlite3.OperationalError as e:
+                logger.warning(f"{LOG_PREFIX} FTS5 query failed (special chars in query?): {e}")
+                fts_rows = []
+
         finally:
             conn.close()
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} abilities.sqlite query failed: {e}")
         return []
 
-    if not db_rows:
+    summary_by_name: Dict[str, str] = {}
+    vec_best: Dict[str, float] = {}
+    for name, summary, distance in vec_rows:
+        summary_by_name[name] = summary
+        if name not in vec_best or distance < vec_best[name]:
+            vec_best[name] = distance
+
+    fts_best: Dict[str, float] = {}
+    for name, summary, score in fts_rows:
+        summary_by_name.setdefault(name, summary)
+        if name not in fts_best or score < fts_best[name]:
+            fts_best[name] = score
+
+    vec_ranked = sorted(vec_best.items(), key=lambda x: x[1])
+    fts_ranked = sorted(fts_best.items(), key=lambda x: x[1])
+
+    rrf_scores: Dict[str, float] = defaultdict(float)
+    for rank, (name, _) in enumerate(vec_ranked, start=1):
+        rrf_scores[name] += 1.0 / (RRF_K + rank)
+    for rank, (name, _) in enumerate(fts_ranked, start=1):
+        rrf_scores[name] += 1.0 / (RRF_K + rank)
+
+    if not rrf_scores:
         return []
 
-    seen: set = set()
+    merged = sorted(rrf_scores.items(), key=lambda x: -x[1])
+
     results: List[Dict] = []
-    for name, summary, distance in db_rows:
-        if name in seen:
-            continue
-        seen.add(name)
-        score = distance * 10
+    for name, rrf_score in merged[:k]:
         results.append({
             "tool_name": name,
-            "short_summary": summary,
-            "full_profile": summary,
-            "domain": "",
-            "effort": "low",
-            "score": score,
-            "distance": distance,
+            "summary": summary_by_name.get(name, ""),
+            "score": rrf_score,
         })
 
     return results
 
 
-def _filter_available(rows: list, query: str = "") -> List[Dict]:
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-    except Exception:
-        registry = None
-
-    query_lower = query.lower()
-    results = []
-    for row in rows:
-        if isinstance(row, dict) and "score" in row:
-            results.append(row)
-            continue
-
-        tool_name = row[0] if not isinstance(row, dict) else row["tool_name"]
-        tool_type = row[1] if not isinstance(row, dict) else row["tool_type"]
-        short_summary = row[2] if not isinstance(row, dict) else row["short_summary"]
-        full_profile = row[3] if not isinstance(row, dict) else row["full_profile"]
-        domain = row[4] if not isinstance(row, dict) else row["domain"]
-        effort = row[5] if not isinstance(row, dict) else row["effort"]
-        distance = row[6] if not isinstance(row, dict) else row["distance"]
-        keywords = row[7] if not isinstance(row, dict) else row.get("keywords", "")
-
-        if tool_type == "skill":
-            continue
-
-        if registry:
-            tool_data = registry.tools.get(tool_name)
-            if not tool_data:
-                continue
-            if not registry._is_ready(tool_name, tool_data):
-                continue
-            if not registry._is_interface_online(tool_data):
-                continue
-
-        kw_list = [k.strip().lower() for k in (keywords or "").split(",") if k.strip()]
-        query_words = set(query_lower.split())
-        kw_match_count = sum(
-            1 for kw in kw_list
-            if (" " not in kw and kw in query_words) or (" " in kw and kw in query_lower)
-        )
-        score = (distance * 10) - kw_match_count
-
-        results.append({
-            "tool_name": tool_name,
-            "short_summary": short_summary,
-            "full_profile": full_profile,
-            "domain": domain,
-            "effort": effort,
-            "score": score,
-            "distance": distance,
-        })
-
-    results.sort(key=lambda t: t["score"])
-    return results
-
-
-def _format_added_tools(tools: List[Dict], min_relevance: float) -> str:
-    import json
-    entries = []
-    for t in tools:
-        dist = t.get("distance", 2.0)
-        relevance = round(max(0.0, min(1.0, 1.0 - dist / 2.0)), 2)
-        if relevance < min_relevance:
-            continue
-        entries.append({"name": t["tool_name"], "relevance": relevance})
+def _format_added_tools(tools: List[Dict]) -> str:
+    entries = [
+        {
+            "name": t["tool_name"],
+            "relevance": round(min(1.0, t["score"] * 8.0), 2),
+        }
+        for t in tools
+    ]
     return json.dumps({"added_tools": entries})
 
 
@@ -282,27 +195,32 @@ def _format_no_tools(query: str) -> str:
     return f'INFO: The best tools for "{query}" are already available.'
 
 
-def _fallback_keyword_search(query: str, limit: int) -> dict:
+def _fallback_keyword_search(query: str, limit: int, db_path: Path) -> dict:
+    if not db_path.exists():
+        logger.warning(f"{LOG_PREFIX} abilities.sqlite not found — cannot run keyword fallback")
+        return {
+            "text": _skill_tag("find_tools", error="tool-search-unavailable:db-missing"),
+            "_discovered_tools": [],
+        }
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        query_pattern = f"%{query}%"
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+        conn = sqlite3.connect(str(db_path))
+        try:
+            rows = conn.execute(
                 """
-                SELECT tool_name, tool_type, short_summary, domain, effort
-                FROM tool_capability_profiles
-                WHERE tool_type = 'tool'
-                  AND (short_summary LIKE ? OR full_profile LIKE ? OR tool_name LIKE ?)
-                ORDER BY tool_name
+                SELECT a.name
+                FROM ability_search_fts
+                JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
+                JOIN abilities a ON a.id = e.ability_id
+                WHERE ability_search_fts MATCH ?
+                  AND a.always_available = 0
+                GROUP BY a.id
+                ORDER BY a.name
                 LIMIT ?
                 """,
-                (query_pattern, query_pattern, query_pattern, limit)
-            )
-            rows = cursor.fetchall()
-            cursor.close()
+                (query, limit),
+            ).fetchall()
+        finally:
+            conn.close()
 
         if not rows:
             return {
@@ -310,12 +228,7 @@ def _fallback_keyword_search(query: str, limit: int) -> dict:
                 "_discovered_tools": [],
             }
 
-        discovered = []
-        for row in rows:
-            name = row[0] if not isinstance(row, dict) else row["tool_name"]
-            discovered.append(name)
-
-        import json
+        discovered = [row[0] for row in rows]
         entries = [{"name": n, "relevance": 0.5} for n in discovered]
         raw_text = json.dumps({"added_tools": entries})
         return {
@@ -324,7 +237,7 @@ def _fallback_keyword_search(query: str, limit: int) -> dict:
         }
 
     except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Keyword fallback also failed: {e}")
+        logger.warning(f"{LOG_PREFIX} Keyword fallback failed: {e}")
         return {
             "text": _skill_tag("find_tools", error=f"tool-search-unavailable:{str(e)[:100]}"),
             "_discovered_tools": [],
