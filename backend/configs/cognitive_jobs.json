@@ -5,12 +5,6 @@
       "name": "Frontal Cortex (Unified)",
       "desc": "Unified generation path for user messages. Logs under this name; assign provider here.",
       "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none", "vision": "none" }
-    },
-    {
-      "id": "cognitive-triage",
-      "name": "Cognitive Triage",
-      "desc": "Structured-output LLM for tool-profile synthesis (ToolProfileService).",
-      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     }
   ]
 }

@@ -21,25 +21,26 @@ pytestmark = pytest.mark.unit
 
 class TestMemorySkillTraitContradictionLift:
 
-    def test_check_trait_contradiction_removed_from_memory_skill(self):
-        """_check_trait_contradiction must NOT exist in memory_skill.
+    def test_check_trait_contradiction_removed_from_memory_ability(self):
+        """_check_trait_contradiction must NOT exist in abilities/memory.py.
 
         After the data_graph refactor (Part 2), contradiction checking is handled
-        entirely inside DataGraphService.store() — the standalone helper in
-        memory_skill.py was dead code and was deleted.
+        entirely inside DataGraphService.store() — the standalone helper was dead
+        code and was deleted. The innate_skills/memory_skill.py module itself was
+        subsequently deleted and replaced by abilities/memory.py (Phase 4).
         """
-        import services.innate_skills.memory_skill as mod
+        import abilities.memory as mod
         assert not hasattr(mod, "_check_trait_contradiction"), (
-            "_check_trait_contradiction still present in memory_skill — "
+            "_check_trait_contradiction still present in abilities/memory — "
             "it should have been deleted as dead code in the data_graph refactor"
         )
 
-    def test_memory_skill_does_not_import_check_trait_contradiction_from_digest_worker(self):
-        """Explicit string check: the dead import line must not appear in memory_skill source."""
+    def test_memory_ability_does_not_import_check_trait_contradiction_from_digest_worker(self):
+        """Explicit string check: the dead import line must not appear in abilities/memory source."""
         from pathlib import Path
-        import services.innate_skills.memory_skill as mod
+        import abilities.memory as mod
         source = Path(mod.__file__).read_text()
         assert "from workers.digest_worker import _check_trait_contradiction" not in source, (
             "Dead import 'from workers.digest_worker import _check_trait_contradiction' "
-            "found in memory_skill.py — this line was supposed to be removed"
+            "found in abilities/memory.py — this line was supposed to be removed"
         )

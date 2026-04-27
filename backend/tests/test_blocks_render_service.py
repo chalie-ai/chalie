@@ -685,16 +685,18 @@ class TestValidateNewTypes:
 @pytest.mark.unit
 class TestRichRenderSkill:
     def test_returns_reference_string(self):
-        from services.innate_skills.rich_render_skill import handle_rich_render
-        result = handle_rich_render("test-topic", {})
-        assert isinstance(result, str)
-        assert "metric" in result
-        assert "card" in result
-        assert "chart" in result
-        assert "timeline" in result
-        assert "progress" in result
+        from abilities.rich_render import RichRenderAbility
+        ability = RichRenderAbility()
+        result = ability.execute("test", {}, None)
+        text = result["text"]
+        assert isinstance(text, str)
+        assert "metric" in text
+        assert "card" in text
+        assert "chart" in text
+        assert "timeline" in text
+        assert "progress" in text
 
     def test_tool_schema_present(self):
-        from services.innate_skills.rich_render_skill import TOOL_SCHEMA
-        assert TOOL_SCHEMA["name"] == "rich_render"
-        assert "input_schema" in TOOL_SCHEMA
+        from abilities.rich_render import RichRenderAbility
+        assert RichRenderAbility.NAME == "rich_render"
+        assert isinstance(RichRenderAbility.INPUT_SCHEMA, dict)

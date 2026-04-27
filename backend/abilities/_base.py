@@ -8,6 +8,7 @@ class Ability(ABC):
     EXAMPLES: ClassVar[list[str]]
     INPUT_SCHEMA: ClassVar[dict]
     ALWAYS_AVAILABLE: ClassVar[bool] = False
+    INTERNAL: ClassVar[bool] = False
     TIMEOUT: ClassVar[int] = 10
 
     def __init_subclass__(cls, **kwargs: object) -> None:

@@ -24,6 +24,5 @@ INSERT OR IGNORE INTO job_provider_assignments (job_name, provider_id)
 SELECT job_name, (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) AS provider_id
 FROM (
     SELECT 'frontal-cortex-unified'
-    UNION ALL SELECT 'cognitive-triage'
 )
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;

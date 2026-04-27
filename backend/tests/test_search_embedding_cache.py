@@ -155,23 +155,23 @@ class TestRouteQuery:
 class TestSearchExecute:
 
     def _reset(self):
-        import tools.search.search as s
-        s._providers = None
+        from abilities.search import SearchAbility
+        SearchAbility._providers = None
 
     def test_empty_query(self):
-        from tools.search.search import execute
-        r = execute("topic", {})
+        from abilities.search import SearchAbility
+        r = SearchAbility().execute("topic", {}, None)
         assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_whitespace_query(self):
-        from tools.search.search import execute
-        r = execute("topic", {"query": "   "})
+        from abilities.search import SearchAbility
+        r = SearchAbility().execute("topic", {"query": "   "}, None)
         assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_forced_ddg(self):
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m:
-            from tools.search.search import execute
-            r = execute("t", {"query": "test", "provider": "ddg"})
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m:
+            from abilities.search import SearchAbility
+            r = SearchAbility().execute("t", {"query": "test", "provider": "ddg"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
@@ -179,68 +179,68 @@ class TestSearchExecute:
     def test_forced_known_provider(self, tmp_path):
         self._reset()
         db = _make_providers_db(tmp_path, providers=[(1, "brave", 1)])
-        import tools.search.search as s
-        with patch.object(s, '_DB', str(db)), \
-             patch('tools.search.search.fetch_providers', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m, \
-             patch('tools.search.search.fetch_ddg_fallback'):
-            r = s.execute("t", {"query": "test", "provider": "brave"})
+        from abilities.search import SearchAbility
+        with patch.object(SearchAbility, '_DB', str(db)), \
+             patch('abilities.search.fetch_providers', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m, \
+             patch('abilities.search.fetch_ddg_fallback'):
+            r = SearchAbility().execute("t", {"query": "test", "provider": "brave"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
 
     def test_forced_unknown_provider(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {'brave': {'name': 'brave'}}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[]):
-            r = s.execute("t", {"query": "test", "provider": "nonexistent"})
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {'brave': {'name': 'brave'}}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[]):
+            r = SearchAbility().execute("t", {"query": "test", "provider": "nonexistent"}, None)
         assert r['text'].startswith('EMPTY: zero results')
         assert 'Do NOT fabricate' in r['text']
 
     def test_router_failure_falls_back_to_ddg(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]), \
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]), \
              patch('tools.search.router.route_query', side_effect=Exception("boom")):
-            r = s.execute("t", {"query": "test"})
+            r = SearchAbility().execute("t", {"query": "test"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
 
     def test_limit_clamped_high(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[]) as m, \
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
              patch('tools.search.router.route_query', return_value=[]):
-            s.execute("t", {"query": "test", "limit": 99})
+            SearchAbility().execute("t", {"query": "test", "limit": 99}, None)
         assert m.call_args[0][1] == 10
 
     def test_limit_clamped_low(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[]) as m, \
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
              patch('tools.search.router.route_query', return_value=[]):
-            s.execute("t", {"query": "test", "limit": -5})
+            SearchAbility().execute("t", {"query": "test", "limit": -5}, None)
         assert m.call_args[0][1] == 1
 
     def test_default_limit_5(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[]) as m, \
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
              patch('tools.search.router.route_query', return_value=[]):
-            s.execute("t", {"query": "test"})
+            SearchAbility().execute("t", {"query": "test"}, None)
         assert m.call_args[0][1] == 5
 
     def test_response_shape(self):
         self._reset()
-        import tools.search.search as s
-        s._providers = {}
-        with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": "desc"}]), \
+        from abilities.search import SearchAbility
+        SearchAbility._providers = {}
+        with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": "desc"}]), \
              patch('tools.search.router.route_query', return_value=[]):
-            r = s.execute("t", {"query": "test"})
+            r = SearchAbility().execute("t", {"query": "test"}, None)
         assert 'text' in r
         import json
         parsed = json.loads(r['text'])
@@ -250,19 +250,19 @@ class TestSearchExecute:
     def test_load_providers_filters_disabled(self, tmp_path):
         self._reset()
         db = _make_providers_db(tmp_path, providers=[(1, "brave", 1), (2, "off", 0)])
-        import tools.search.search as s
-        with patch.object(s, '_DB', str(db)):
-            p = s._load_providers()
+        from abilities.search import SearchAbility
+        with patch.object(SearchAbility, '_DB', str(db)):
+            p = SearchAbility._load_providers()
         assert 'brave' in p
         assert 'off' not in p
 
     def test_load_providers_missing_db(self):
         self._reset()
-        import tools.search.search as s
-        with patch.object(s, '_DB', '/nonexistent/db'):
-            p = s._load_providers()
+        from abilities.search import SearchAbility
+        with patch.object(SearchAbility, '_DB', '/nonexistent/db'):
+            p = SearchAbility._load_providers()
         assert p == {}
-        assert s._providers is None  # not cached on failure
+        assert SearchAbility._providers is None  # not cached on failure
 
 
 # ── generate_search_cache.py ─────────────────────────────────────────────────

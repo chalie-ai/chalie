@@ -291,7 +291,7 @@ Returns the daemon's UI for the app overlay as a `Block[]`. The gateway proxies 
 
 **Response:** `201 {"interface_id": "<uuid>", "signal_token": "<token>"}`
 
-After pairing, the interface's capabilities register as normal tools. The LLM does not distinguish them from innate skills or local tools.
+After pairing, the interface's capabilities register as normal abilities. The LLM does not distinguish them from innate or first-party abilities.
 
 ### Management Endpoints
 

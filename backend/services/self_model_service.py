@@ -30,7 +30,7 @@ REFRESH_INTERVAL = 30  # background thread cycle
 
 # Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
 CRITICAL_JOBS = frozenset({
-    'frontal-cortex-unified', 'cognitive-triage',
+    'frontal-cortex-unified',
 })
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
@@ -401,13 +401,13 @@ class SelfModelService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to load tool inventory: {e}", exc_info=True)
 
-        # Innate skills from authoritative registry
+        # Abilities from registry
         innate_skills = []
         try:
-            from services.innate_skills.registry import ALL_SKILL_NAMES
-            innate_skills = sorted(ALL_SKILL_NAMES)
+            from abilities._registry import AbilityRegistry
+            innate_skills = sorted(a.NAME for a in AbilityRegistry.all())
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load innate skills: {e}", exc_info=True)
+            logger.warning(f"{LOG_PREFIX} Failed to load abilities: {e}", exc_info=True)
 
         # Provider features
         provider_features = self._get_provider_features()

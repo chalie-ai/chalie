@@ -19,10 +19,9 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def service():
-    """ActDispatcherService with innate-skill registration suppressed."""
-    with patch("services.innate_skills.register_innate_skills"):
-        svc = ActDispatcherService(timeout=2.0)
-        yield svc
+    """ActDispatcherService for wrapper-intent routing tests."""
+    svc = ActDispatcherService(timeout=2.0)
+    yield svc
 
 
 def _make_wrapper(wrapper_id="wrp_ide", intent_types=None):

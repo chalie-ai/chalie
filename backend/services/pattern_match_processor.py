@@ -12,13 +12,11 @@ this pass loses 0.005 confidence; rows at <=0 are soft-deleted (active=0).
 import json
 import logging
 
+from abilities.pattern_match.save_graph import SaveGraphAbility
+from abilities.pattern_match.save_pattern import SavePatternAbility
 from services.database_service import get_shared_db_service
 from services.message_processor import MessageProcessor
 from services.time_utils import utc_now
-from tools.pattern_match.save_graph import TOOL_SCHEMA as SAVE_GRAPH_SCHEMA
-from tools.pattern_match.save_graph import execute as save_graph_execute
-from tools.pattern_match.save_pattern import TOOL_SCHEMA as SAVE_PATTERN_SCHEMA
-from tools.pattern_match.save_pattern import execute as save_pattern_execute
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PATTERN_MATCH]"
@@ -104,14 +102,14 @@ class PatternMatchProcessor(MessageProcessor):
         getDynamicTools() injects them via the base getTools() call without
         bypassing the deduplication logic in the final getTools() method.
         """
-        return [SAVE_PATTERN_SCHEMA, SAVE_GRAPH_SCHEMA]
+        return [SavePatternAbility.TOOL_SCHEMA, SaveGraphAbility.TOOL_SCHEMA]
 
     def handleTool(self, tc: dict) -> str:
         """Dispatch save_pattern / save_graph via their execute() functions.
 
         Overrides base handleTool() because these tools are not registered
-        in the innate skill registry or ActDispatcherService. The ctx dict
-        passes self so the tool functions can read/write processor state.
+        in the innate skill registry or ActDispatcherService. Ability instances
+        receive self so they can read/write processor state directly.
 
         Falls through to the base for any other tool name (e.g. find_tools
         if the LLM somehow discovers it), letting the base handle dispatch
@@ -128,12 +126,11 @@ class PatternMatchProcessor(MessageProcessor):
 
         self._metrics.record_tool(tool_name)
 
-        ctx = {"processor": self}
         try:
             if tool_name == "save_pattern":
-                result = save_pattern_execute(tc_input, ctx)
+                result = SavePatternAbility().execute_with_processor(tc_input, self)
             else:
-                result = save_graph_execute(tc_input, ctx)
+                result = SaveGraphAbility().execute_with_processor(tc_input, self)
             result_text = json.dumps(result)
         except Exception as exc:
             logger.exception(f"{LOG_PREFIX} tool {tool_name} raised")

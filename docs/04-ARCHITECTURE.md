@@ -86,7 +86,7 @@ Chalie keeps thinking when you are not typing. Background workers run as daemon 
 - **Decay engine** — applies power-law decay to episode retrieval weights and data-graph entries, and purges old transcript entries and tool-call rows. The engine itself (`DecayEngineService`) has no daemon thread of its own; it exposes `run_once()` and is called by the subconscious worker as Step 2 of its tick.
 - **Pattern matcher** — `PatternMatchProcessor` runs as Step 3 of the subconscious worker tick when ≥50 new transcripts have accumulated since the last cursor (`data_graph` kind=`system`, key=`pattern_match_cursor`). One LLM forward pass over the new transcript window with two processor-scoped tools: `save_pattern` (UPSERT a `behavioral_pattern` row with confidence math: new=7, reinforced=`min(10, prev+7)`, capped at 10; budget 20 calls) and `save_graph` (routes through `DataGraphService.store()` for `user_specific` / `misc` / `moment` / `document` kinds; budget 50 calls). The model emits all calls in parallel; `MAX_ITERATIONS=30` bounds runaway loops. After the pass, an in-place SQL decay sweep subtracts 0.005 from every untouched active pattern's confidence; rows that hit 0.0 flip to `active=0` (soft delete). `UserSummaryProcessor` reads active behavioral_pattern rows directly when assembling its synopsis prompt — no tool surface for user turns.
 - **DMN (Default Mode Network)** — after a period of idle time, Chalie initiates a proactive thought using recent or high-salience episodes as context. Uses its own `MessageProcessor` subclass; exits silently when nothing warrants a response.
-- **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate skill. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
+- **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate ability. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
 - **Supporting workers** — world awareness (weather, news), moment context enrichment, document purge, folder watcher, interface health monitor, self-model health signals, and the `SearchExpanderService` (single FIFO consumer that generates + embeds query variants for every new data-graph row). User-summary synthesis and super-episode consolidation no longer run their own daemons — both are driven by the subconscious worker tick.
 - **EmbeddingService** — a module-level singleton that serialises all ONNX inference through a single daemon worker thread via a FIFO queue (`_embedding_queue`). All callers — `generate_embedding(text)`, `generate_embedding_np(text)`, `generate_embeddings_batch(texts)` — check MemoryStore first; cache hits bypass the queue entirely. The worker is started lazily on the first job submission (not at import time) so tests that never call the service never spawn a real ONNX thread. The single-worker model eliminates concurrent `session.run()` calls, which each allocate 500 MB+ of working memory and caused OOM under bulk document ingestion. Session construction routes through `onnx_session.build_session()` (see below).
@@ -129,7 +129,7 @@ Two distinct on-disk directories separate runtime-downloaded weights from pre-sh
 |------|----------------|----------|
 | `backend/data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
 | `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
-| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. As of Phase 1, `abilities.sqlite` contains 1 ability (`weather`): 1 SUMMARY row + 7 EXAMPLE rows, all embedded at 768 dim. Drift sidecar: `backend/data/pre-trained/abilities_sha.json`. |
+| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. `abilities.sqlite` contains 15 dispatchable abilities (1 SUMMARY row + 6–8 EXAMPLE rows each, all embedded at 768 dim). Drift sidecar: `backend/data/pre-trained/abilities_sha.json`. |
 
 `OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
 
@@ -141,25 +141,25 @@ The pre-shipped `<task>-classifier_meta.json` is the authoritative calibration s
 
 Two loading tiers stack on every user turn and are merged first-seen, so the unconditional tier can never be shadowed by a dynamic entry of the same name:
 
-**Innate skills (unconditional)** are the core cognitive capabilities the user-channel LLM always has on hand: `memory`, `schedule`, `list`, `goal_pursuit`, `document`, `read`, `find_tools`, `rich_render`, and `review_tool_calls`. They cover recall, discovery, audit, scheduling, lists, long-running pursuit, document retrieval, web reading, and rich rendering — the foundational operations every turn may need.
+**Innate abilities (unconditional)** are the core cognitive capabilities the user-channel LLM always has on hand: `memory`, `schedule`, `list`, `goal_pursuit`, `document`, `read`, `find_tools`, `rich_render`, and `review_tool_calls`. They cover recall, discovery, audit, scheduling, lists, long-running pursuit, document retrieval, web reading, and rich rendering — the foundational operations every turn may need. Each is an `Ability` subclass under `backend/abilities/` declaring `ALWAYS_AVAILABLE = True`.
 
-**Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. All external (first-party + interface) tools are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
+**Discoverable abilities (dynamic)** are never pre-injected. The `find_tools` innate ability performs semantic search against the abilities index at runtime. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
-`find_tools` performs **RRF (Reciprocal Rank Fusion) discovery** exclusively against `backend/abilities/assets/abilities.sqlite`. Each query runs two independent retrievals — (a) sqlite-vec k-NN (`KNN_DEPTH=30`) over per-entry embeddings and (b) FTS5 BM25 over the same entries — both filtered to `always_available = 0`. Results are grouped per ability (best distance / best BM25 score per ability), ranked independently, then fused via `score(a) = Σ 1 / (15 + rank_i(a))` across the two lists. The top-`k` abilities by fused score are returned. The non-standard `RRF_K=15` (vs. the standard 60) is deliberate: at ~17 candidates, k=60 compresses scores into too narrow a band for crisp separation. The `tool_capability_profiles_vec` table in the main database is no longer queried by `find_tools`; the `tool_capability_profiles*` tables and `ToolProfileService` remain live for other consumers and will be dropped in a later phase. If `EmbeddingService` fails, a keyword-only fallback queries `ability_search_fts MATCH ?` in `abilities.sqlite` directly. If `abilities.sqlite` is missing, both paths return `[]` with a `[FIND_TOOLS]` WARNING.
+`find_tools` performs **RRF (Reciprocal Rank Fusion) discovery** exclusively against `backend/abilities/assets/abilities.sqlite`. Each query runs two independent retrievals — (a) sqlite-vec k-NN (`KNN_DEPTH=30`) over per-entry embeddings and (b) FTS5 BM25 over the same entries — both filtered to `always_available = 0`. Results are grouped per ability (best distance / best BM25 score per ability), ranked independently, then fused via `score(a) = Σ 1 / (15 + rank_i(a))` across the two lists. The top-`k` abilities by fused score are returned. The non-standard `RRF_K=15` (vs. the standard 60) is deliberate: at ~17 candidates, k=60 compresses scores into too narrow a band for crisp separation. If `EmbeddingService` fails, a keyword-only fallback queries `ability_search_fts MATCH ?` in `abilities.sqlite` directly. If `abilities.sqlite` is missing, both paths return `[]` with a `[FIND_TOOLS]` WARNING.
 
 `ModeGateService` runs once per user turn (via `UserMessageProcessor._get_mode_state()`) but **does not gate tool availability**. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) emits per-mode probabilities. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. The mode set powers prompt-steering directives (long-summary swap on `converse`, brainstorm/research/analyze suffixes) and is reserved for future mode-driven features. A single `[MODE-GATE]` log line per turn records probabilities, state transition, and the active mode set.
 
 Tool results flow through a single render-and-record path (`ToolRenderAndRecordService`) that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure.
 
-Every innate skill result uses the canonical tag block format from `backend/services/innate_skills/_tag.py`:
+Every ability result uses the canonical tag block format from `backend/services/innate_skills/_tag.py` (the only file remaining under `services/innate_skills/` after Phase 4 cutover — kept because it is purely a formatter shared by every ability):
 
 ```
-[<skill_name>(k1=v1, k2=v2)]
+[<ability_name>(k1=v1, k2=v2)]
 <body>
-[end:<skill_name>]
+[end:<ability_name>]
 ```
 
-This is the single source of truth — no skill constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
+This is the single source of truth — no ability constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 
 **`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
 
@@ -167,7 +167,7 @@ This is the single source of truth — no skill constructs its own format string
 
 ## Ability Framework
 
-`backend/abilities/` is the migration path for tools that belong inside Chalie's cognitive boundary. The framework runs in parallel with the legacy `backend/tools/` dispatch path during the transition; abilities become the sole dispatch path when the legacy tool is ripped (Phase 4).
+`backend/abilities/` is the **sole dispatch path** for every cognitive operation an LLM turn can invoke. Legacy `services/innate_skills/*_skill.py` modules and `tools/<name>.py` modules have been ripped — every dispatchable capability is now an `Ability` subclass. The only files kept under their old paths are companion modules that an `Ability` imports from (`tools/browser/{security,pool,extraction,interaction,credentials}.py`, `tools/search/{router,fetcher,transformers}.py`) and the shared formatter `services/innate_skills/_tag.py`.
 
 ### `Ability` ABC (`backend/abilities/_base.py`)
 
@@ -175,49 +175,45 @@ Every concrete ability subclasses `Ability` and declares:
 
 | Class attribute | Type | Notes |
 |-----------------|------|-------|
-| `NAME` | `str` | Stable identifier. Matches the legacy tool name where one exists. |
+| `NAME` | `str` | Stable identifier; matches the channel-level tool name. |
 | `SUMMARY` | `str` | One sentence used as the SUMMARY row in `abilities.sqlite`. |
 | `EXAMPLES` | `list[str]` | 6–8 natural-language phrases for EXAMPLE rows (enforced by `__init_subclass__`). |
 | `INPUT_SCHEMA` | `dict` | JSON Schema for `execute()` params. |
-| `ALWAYS_AVAILABLE` | `bool` | `False` = discoverable via `find_tools` only. Reserved for future always-on abilities. |
+| `ALWAYS_AVAILABLE` | `bool` | `True` = always in the channel's tool list (innate); `False` = discoverable via `find_tools` only. |
+| `INTERNAL` | `bool` | `True` excludes the class from `AbilityRegistry` even when reachable via `Ability.__subclasses__()`. Reserved for processor-internal abilities (see Pattern-match exclusion below). Default `False`. |
 | `TIMEOUT` | `int` | Per-call timeout in seconds (default 10). |
 
 The `execute(channel, params, telemetry)` method is the sole dispatch surface. `pre_dispatch` and `post_dispatch` hooks exist for subclass-level lifecycle work.
 
-### Phase 1 — `WeatherAbility` (`backend/abilities/weather.py`)
+### Concrete abilities (15 dispatchable)
 
-First concrete subclass. Behaviour is a verbatim port of `tools/weather.py::execute()` — Open-Meteo (primary, coordinate-based) with wttr.in fallback (city-name lookups). Class-level `_cache` and `_CACHE_TTL=600` are `ClassVar`s so the 10-minute cache is shared across all instances.
+`abilities/{browser, code_eval, document, find_tools, goal_pursuit, list, memory, news, programming_docs_search, read, review_tool_calls, rich_render, schedule, search, weather}.py`. `abilities.sqlite` indexes all 15 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
 
-Module-level helpers (`_fetch_open_meteo`, `_fetch_wttr`, `_degrees_to_compass`, `_estimate_daylight`, `_WMO`, `_RAIN_WORDS`, `_CLEAR_WORDS`) are private to the module. `requests` is imported at module top.
+Per-ability implementation notes:
 
-**Dispatch path in Phase 1:** the legacy `tools/weather.py` still owns the ACT-loop dispatch path. `WeatherAbility` is exercised via `find_tools` dual-read and its own unit tests. The legacy tool will be ripped in Phase 4.
+- `browser` — `playwright.sync_api` imported unconditionally at module top. Companion modules under `tools/browser/`.
+- `code_eval` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]`; a fresh `dict()` copy is taken per call so state never leaks between executions.
+- `document` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so `api/documents.py` and `services/folder_watcher_service.py` import the same path.
+- `find_tools` — RRF discovery against `abilities.sqlite` (see Tools and Skills section).
+- `goal_pursuit` — `threading.Thread(target=_run, daemon=True)`; `GoalPursuitProcessor` and `OutputService` lazy-imported inside the `_run()` closure to avoid import cycles.
+- `list` — `_DEFAULT_LIST_NAME` as `ClassVar[str]`; handler helpers at module level.
+- `memory` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path.
+- `news` — `_service` classvar lazily initialised via `_get_service()` classmethod.
+- `programming_docs_search` — all 23 `_Source` subclasses and `_ALL_SOURCES`/`_ALIAS_MAP` at module level.
+- `read` — `requests` at module top; `_BLOCKED_NETS`, `_BROWSER_HEADERS`, `_BLOCKED_PATH_PREFIXES`, `_URL_FETCH_TIMEOUT` as `ClassVar`.
+- `review_tool_calls` — returns `dict` directly.
+- `rich_render` — `_BLOCK_REFERENCE` as `ClassVar[str]`.
+- `schedule` — atomic dedup `INSERT...WHERE NOT EXISTS` preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`.
+- `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`.
+- `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared.
 
-### Phase 2 — Bulk ability ports (14 abilities, `backend/abilities/`)
+### Pattern-match exclusion via `INTERNAL=True`
 
-ADD-only, behaviour-preserving. Legacy dispatch paths in `services/innate_skills/` and `tools/` remain intact and own ACT-loop dispatch until Phase 4. The 14 new `Ability` subclasses are scaffolding for Phase 3+ cutover.
-
-| Ability file | NAME | Source |
-|---|---|---|
-| `abilities/browser.py` | `browser` | `tools/browser/browser.py` — `playwright.sync_api` is imported unconditionally at module top (Playwright is a hard dependency declared in `requirements.txt`). Companion files (`tools/browser/{security,pool,extraction,interaction,credentials}.py`) stay in `tools/browser/` and are imported from there. |
-| `abilities/code_eval.py` | `code_eval` | `services/innate_skills/code_eval_skill.py` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]` at class definition; a fresh `dict()` copy is taken per call so state never leaks between executions. |
-| `abilities/document.py` | `document` | `services/innate_skills/document_skill.py` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so existing callers (`api/documents.py`, `services/folder_watcher_service.py`) import it without modification. |
-| `abilities/find_tools.py` | `find_tools` | `services/innate_skills/find_tools_skill.py` — discovery migrated to RRF over `abilities.sqlite` only (see Tools and Skills section). Legacy `tool_capability_profiles` table no longer queried. |
-| `abilities/goal_pursuit.py` | `goal_pursuit` | `services/innate_skills/goal_pursuit_skill.py` — `threading.Thread(target=_run, daemon=True)` pattern preserved verbatim; `GoalPursuitProcessor` and `OutputService` are lazy-imported inside the `_run()` closure. |
-| `abilities/list.py` | `list` | `services/innate_skills/list_skill.py` — handler helpers extracted as module-level functions; `_DEFAULT_LIST_NAME` promoted to `ClassVar[str]`. |
-| `abilities/memory.py` | `memory` | `services/innate_skills/memory_skill.py` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path. |
-| `abilities/news.py` | `news` | `services/innate_skills/news_skill.py` — `_service` classvar lazily initialised via `_get_service()` classmethod. |
-| `abilities/programming_docs_search.py` | `programming_docs_search` | `tools/programming_docs_search/tool.py` — all 23 `_Source` subclasses and `_ALL_SOURCES`/`_ALIAS_MAP` live at module level. |
-| `abilities/read.py` | `read` | `tools/read/tool.py` — `requests` hoisted to module top; `_BLOCKED_NETS`, `_BROWSER_HEADERS`, `_BLOCKED_PATH_PREFIXES`, `_URL_FETCH_TIMEOUT` promoted to `ClassVar`. |
-| `abilities/review_tool_calls.py` | `review_tool_calls` | `services/innate_skills/review_tool_calls_skill.py` — already returned `dict`; ported directly. |
-| `abilities/rich_render.py` | `rich_render` | `services/innate_skills/rich_render_skill.py` — `_BLOCK_REFERENCE` as `ClassVar[str]`. |
-| `abilities/schedule.py` | `schedule` | `services/innate_skills/schedule_skill.py` — atomic dedup `INSERT...WHERE NOT EXISTS` (PR #1685) preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`. |
-| `abilities/search.py` | `search` | `tools/search/search.py` — `_DB` path computed as `parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"` (search assets stay in `tools/search/` until Phase 4). |
-
-After Phase 2, `abilities.sqlite` contains **15 abilities** (134 embedded entries). `abilities_sha.json` is regenerated to reflect all 15.
+`abilities/pattern_match/save_pattern.py` and `abilities/pattern_match/save_graph.py` are processor-internal abilities used only by `PatternMatchProcessor`. They subclass `Ability` (so they share the schema-validation, telemetry, and tag-formatting machinery) but declare `INTERNAL = True`. This keeps them out of `AbilityRegistry.all()` even when test files import them directly (which would otherwise pollute `Ability.__subclasses__()`). The registry walk explicitly filters classes with `INTERNAL=True` set on the class itself; the subdirectory layout (`abilities/pattern_match/` not `abilities/`) is a defence-in-depth so a top-level `glob("*.py")` would still skip them if the flag were ever forgotten.
 
 ### Registry (`backend/abilities/_registry.py`)
 
-Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access and deduplicates by `NAME`. The registry is the source of truth for which abilities are active in the process.
+Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access via shallow `glob("*.py")` (skipping files starting with `_`), then traverses `Ability.__subclasses__()` filtering out abstract classes and `INTERNAL=True` classes. The registry is the single source of truth for which abilities are active in the process and is the only path an `Ability` instance is created — no module elsewhere instantiates an ability directly.
 
 ---
 

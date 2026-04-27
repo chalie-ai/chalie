@@ -75,7 +75,7 @@ class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
     def __init__(self, timeout: float = 10.0):
-        """Initialize dispatcher with innate skills.
+        """Initialize dispatcher with ability handlers.
 
         Args:
             timeout: Maximum execution time per action (seconds)
@@ -83,9 +83,42 @@ class ActDispatcherService:
         self.timeout = timeout
         self.handlers = {}
 
-        # Register innate skills (new system + backward-compat aliases)
-        from services.innate_skills import register_innate_skills
-        register_innate_skills(self)
+        # Register every ability from the registry as a handler.
+        # Each handler calls ability.execute(channel, params, telemetry=None).
+        # The dispatcher unwraps the returned dict's 'text' key automatically.
+        from abilities._registry import AbilityRegistry
+        for ability in AbilityRegistry.all():
+            _ability = ability  # capture for closure
+            self.handlers[_ability.NAME] = (
+                lambda channel, action, _a=_ability: _a.execute(
+                    channel,
+                    {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
+                    None,
+                )
+            )
+
+        # Register on_demand external tools from the tool registry (dynamic plugins).
+        # Uses registry.execute() which returns {'text': ...} — same shape as
+        # ability handlers so the dispatcher unwraps them identically.
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            for tool_name in registry.get_on_demand_tools():
+                if tool_name in self.handlers:
+                    logging.debug(
+                        "[ACT DISPATCH] Skipping dynamic tool '%s' — ability registered",
+                        tool_name,
+                    )
+                    continue
+                self.handlers[tool_name] = (
+                    lambda topic, action, tn=tool_name: registry.execute(
+                        tn, topic,
+                        {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
+                        exchange_id=action.get('exchange_id', ''),
+                    )
+                )
+        except Exception as e:
+            logging.warning("[ACT DISPATCH] Tool registry failed to load: %s", e)
 
     def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -121,15 +154,15 @@ class ActDispatcherService:
                 'notes': '',
             }
 
-        # Determine effective timeout: tool metadata can override the default.
-        # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
+        # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
+        # Falls back to self.timeout when the action type is not a registered ability.
         effective_timeout = self.timeout
         try:
-            from services.tool_library_service import TOOL_METADATA
-            tool_timeout = TOOL_METADATA.get(action_type, {}).get('timeout')
-            if tool_timeout and tool_timeout > effective_timeout:
-                effective_timeout = float(tool_timeout)
-        except Exception:
+            from abilities._registry import AbilityRegistry
+            ability_timeout = AbilityRegistry.get(action_type).TIMEOUT
+            if ability_timeout and ability_timeout > effective_timeout:
+                effective_timeout = float(ability_timeout)
+        except (KeyError, Exception):
             pass
 
         # Execute with timeout

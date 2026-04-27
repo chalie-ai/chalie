@@ -139,10 +139,16 @@ class Providers:
         return create_llm_service(config)
 
     def _get_tools(self, job):
-        """Get native tool schemas for a job. Default: all innate skills."""
-        from services.tool_schema_service import get_skill_schemas
-        from services.innate_skills.registry import ALL_SKILL_NAMES
-        return get_skill_schemas(list(ALL_SKILL_NAMES))
+        """Get native tool schemas for a job. Default: all registered abilities."""
+        from abilities._registry import AbilityRegistry
+        return [
+            {
+                "name": ability.NAME,
+                "description": ability.SUMMARY,
+                "input_schema": ability.INPUT_SCHEMA,
+            }
+            for ability in AbilityRegistry.all()
+        ]
 
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider."""

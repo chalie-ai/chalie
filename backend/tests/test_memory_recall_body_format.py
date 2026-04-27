@@ -15,6 +15,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def _handle_memory(topic: str, params: dict) -> str:
+    """Thin shim: call MemoryAbility.execute and return the text string."""
+    from abilities.memory import MemoryAbility
+    return MemoryAbility().execute(topic, params, None)["text"]
+
+
 class TestMemoryRecallBodyFormat:
     """Verify the [id:X,relevance:Y] body format is produced by real recall."""
 
@@ -27,7 +33,6 @@ class TestMemoryRecallBodyFormat:
         r'\\[id:([^,\\]]+)' to resolve back-references.
         """
         from services.data_graph_service import get_data_graph_service
-        from services.innate_skills.memory_skill import handle_memory
 
         # Seed a known fact via the real DataGraphService (bound to test db)
         dgs = get_data_graph_service()
@@ -38,7 +43,7 @@ class TestMemoryRecallBodyFormat:
             source='test:seed',
         )
 
-        result = handle_memory('topic', {'action': 'recall', 'query': 'residence city'})
+        result = _handle_memory('topic', {'action': 'recall', 'query': 'residence city'})
 
         # Both markers must be present
         assert '[memory(' in result, f"Missing opener in: {result!r}"
@@ -67,9 +72,7 @@ class TestMemoryRecallBodyFormat:
         Verifies the 'No memories found' semantic is now expressed as a tag
         arg rather than a body string, keeping the wire format consistent.
         """
-        from services.innate_skills.memory_skill import handle_memory
-
-        result = handle_memory('topic', {'action': 'recall', 'query': 'xyzzy_nonexistent_key_abc'})
+        result = _handle_memory('topic', {'action': 'recall', 'query': 'xyzzy_nonexistent_key_abc'})
 
         assert '[memory(' in result
         assert '[end:memory]' in result
@@ -86,7 +89,6 @@ class TestMemoryRecallBodyFormat:
         TranscriptService uses this id to look up the original memory row.
         """
         from services.data_graph_service import get_data_graph_service
-        from services.innate_skills.memory_skill import handle_memory
 
         dgs = get_data_graph_service()
         dgs.store(
@@ -96,7 +98,7 @@ class TestMemoryRecallBodyFormat:
             source='test:seed',
         )
 
-        result = handle_memory('topic', {'action': 'recall', 'query': 'partner relationship'})
+        result = _handle_memory('topic', {'action': 'recall', 'query': 'partner relationship'})
 
         if 'results=0' in result:
             pytest.skip("FTS did not surface this hit — embedding unavailable in this env")

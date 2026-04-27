@@ -13,7 +13,7 @@ import logging
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import GoalPursuitSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
+from abilities._registry import AbilityRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class GoalPursuitProcessor(MessageProcessor):
     MAX_ITERATIONS = 50
     MAX_TIMEOUT = 7200  # 2 hours
     SYSTEM_PROMPT_CLASS = GoalPursuitSystemMessagePrompt
-    NATIVE_TOOLS: list[str] = sorted(s for s in ALL_SKILL_NAMES if s != 'goal_pursuit')
+    NATIVE_TOOLS: list[str] = sorted(a.NAME for a in AbilityRegistry.all() if a.NAME != 'goal_pursuit')
 
     def getUserDefinition(self) -> str:
         return (

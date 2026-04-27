@@ -251,17 +251,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Tool registry load failed: {e}")
 
-    # Bootstrap tool profiles (background thread)
-    try:
-        from services.tool_profile_service import ToolProfileService
-        def _run_bootstrap():
-            try:
-                ToolProfileService().bootstrap_all()
-                logging.info("[Consumer] Tool profile bootstrap complete")
-            except Exception as e:
-                logging.warning(f"[Consumer] Tool profile bootstrap failed: {e}")
-        threading.Thread(target=_run_bootstrap, daemon=True, name="profile-bootstrap").start()
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool profile bootstrap start failed: {e}")
-
     manager.run()

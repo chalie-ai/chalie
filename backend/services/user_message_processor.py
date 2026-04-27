@@ -28,7 +28,7 @@ from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
+from abilities._registry import AbilityRegistry
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
@@ -87,8 +87,8 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All innate skills are always injected into the user-channel tool list.
-    NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
+    # All registered abilities are always injected into the user-channel tool list.
+    NATIVE_TOOLS: list[str] = sorted(a.NAME for a in AbilityRegistry.all())
 
     # ── Constructor ───────────────────────────────────────────────────────────
 
@@ -309,10 +309,11 @@ class UserMessageProcessor(MessageProcessor):
         storage path as any other durable tool call — and stores the block on
         self._memory_seed for getUserPrompt() to inject verbatim.
         """
-        from services.innate_skills.memory_skill import handle_memory, SEED_RADIUS_BASELINE
+        from abilities._registry import AbilityRegistry
+        from abilities.memory import MemoryAbility
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
-        radius = SEED_RADIUS_BASELINE
+        radius = MemoryAbility.SEED_RADIUS_BASELINE
         query = self._raw_input
 
         # Expose query separately so recall_episodes() can embed the raw text
@@ -320,10 +321,10 @@ class UserMessageProcessor(MessageProcessor):
         self._memory_seed_query = query
         self._memory_seed_radius = radius
 
-        block = handle_memory(self.CHANNEL, {
+        block = AbilityRegistry.get('memory').execute(self.CHANNEL, {
             'action': 'recall',
             'query': query,
-        })
+        }, None).get('text', '')
 
         # Row is recorded every turn — the seed dispatch is part of the ACT
         # trail whether or not it returned matches. Inject into the prompt

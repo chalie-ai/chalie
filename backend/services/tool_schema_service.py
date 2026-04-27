@@ -1,9 +1,9 @@
 """
-Tool Schema Service — builds native tool definitions for skills and external tools.
+Tool Schema Service — builds native tool definitions for external (on-demand) tools.
 
-Converts innate skill TOOL_SCHEMA dicts and external tool manifests into the
-provider-agnostic format expected by the LLM service layer's `tools` parameter.
-Each provider then converts to its native format internally.
+Converts external tool manifests into the provider-agnostic format expected by
+the LLM service layer's ``tools`` parameter.  Ability schemas are built directly
+from ``AbilityRegistry`` — this module only handles external/on-demand tools.
 
 The normalized tool schema format (matches Anthropic's native format):
 {
@@ -18,57 +18,8 @@ The normalized tool schema format (matches Anthropic's native format):
 """
 
 import logging
-import inspect
 
 logger = logging.getLogger(__name__)
-
-# Cache to avoid repeated module introspection
-_schema_cache: dict = {}
-
-
-def get_skill_schemas(skill_names: list = None) -> list:
-    """Build native tool schema definitions for the given innate skills.
-
-    Args:
-        skill_names: List of skill names. If None, returns schemas for ALL
-                     registered innate skills.
-
-    Returns:
-        List of tool schema dicts ready for the LLM `tools` parameter.
-    """
-    if skill_names is None:
-        from services.innate_skills.registry import ALL_SKILL_NAMES
-        skill_names = list(ALL_SKILL_NAMES)
-
-    from services.innate_skills import get_skill_handler
-
-    schemas = []
-    for name in skill_names:
-        # Check cache first
-        if name in _schema_cache:
-            schemas.append(_schema_cache[name])
-            continue
-
-        handler = get_skill_handler(name)
-        if not handler:
-            logger.warning(f"[TOOL SCHEMA] No handler for skill '{name}'")
-            continue
-
-        module = inspect.getmodule(handler)
-        schema = getattr(module, 'TOOL_SCHEMA', None)
-        if not schema:
-            logger.warning(f"[TOOL SCHEMA] No TOOL_SCHEMA for skill '{name}'")
-            continue
-
-        # Validate minimal structure
-        if 'name' not in schema or 'input_schema' not in schema:
-            logger.warning(f"[TOOL SCHEMA] Invalid TOOL_SCHEMA for skill '{name}': missing name or input_schema")
-            continue
-
-        _schema_cache[name] = schema
-        schemas.append(schema)
-
-    return schemas
 
 
 def get_external_tool_schemas(tool_names: list) -> list:

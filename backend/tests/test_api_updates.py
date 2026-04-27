@@ -191,7 +191,7 @@ class TestUpdateBelief:
 @pytest.mark.unit
 class TestUpdateMemory:
     def test_cookie_auth_stores_memory(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
+        with patch("abilities.memory._handle_store",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'work'.") as mock_mem:
             resp = cookie_client.post(
                 "/api/updates/memory",
@@ -220,8 +220,8 @@ class TestUpdateMemory:
         assert resp.status_code == 400
 
     def test_memorize_error_returns_422(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Error: no traits specified."):
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, error=no-traits-specified)]"):
             resp = cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Something"},
@@ -230,8 +230,8 @@ class TestUpdateMemory:
         assert resp.status_code == 422
 
     def test_default_topic_is_general(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'.") as mock_mem:
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, key=general)]\nStored 1 trait(s).") as mock_mem:
             cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Something important happened today"},
@@ -242,8 +242,8 @@ class TestUpdateMemory:
 
     def test_salience_clamped(self, cookie_client):
         """Salience values outside 1–10 should be clamped silently."""
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Stored 1 trait(s) for topic 'test'."):
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, key=test)]\nStored 1 trait(s)."):
             resp = cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Very important note", "salience": 999},
@@ -276,7 +276,7 @@ class TestUpdateMemory:
             permissions={"update": ["memory"]}
         )
         with patch_session, patch_auth, \
-             patch("services.innate_skills.memory_skill.handle_memory",
+             patch("abilities.memory._handle_store",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'."):
             with app.test_client() as client:
                 resp = client.post(

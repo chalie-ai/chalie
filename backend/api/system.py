@@ -275,12 +275,10 @@ def observability_tools():
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
         rows = db.fetch_all(
-            "SELECT tc.tool_name, COUNT(*) AS count, MAX(tc.created_at) AS last_used_at, "
-            "       p.short_summary, p.domain, p.effort "
-            "FROM tool_calls tc "
-            "LEFT JOIN tool_capability_profiles p ON p.tool_name = tc.tool_name "
-            "WHERE tc.tool_name NOT IN ('compaction', 'tool_compaction', 'thinking') "
-            "GROUP BY tc.tool_name "
+            "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
+            "FROM tool_calls "
+            "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'thinking') "
+            "GROUP BY tool_name "
             "ORDER BY last_used_at DESC"
         )
         tools = [
@@ -288,9 +286,6 @@ def observability_tools():
                 'tool_name': r['tool_name'],
                 'count': r['count'],
                 'last_used_at': r['last_used_at'],
-                'short_summary': r.get('short_summary') or '',
-                'domain': r.get('domain') or 'Other',
-                'effort': r.get('effort') or 'moderate',
             }
             for r in (rows or [])
         ]

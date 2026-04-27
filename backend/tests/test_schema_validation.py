@@ -71,19 +71,6 @@ class TestSchemaValidation:
         yield conn
         conn.close()
 
-    # ── Scenario 145 ─────────────────────────────────────────────────────────
-
-    def test_effort_column_in_tool_profiles(self, schema_db):
-        """Absorbs scenario 145: tool_capability_profiles has an effort column.
-
-        The effort field distinguishes low/moderate/high-cost tools so the
-        ACT loop can factor in execution cost during tool selection.
-        """
-        columns = _get_columns(schema_db, 'tool_capability_profiles')
-        assert 'effort' in columns, (
-            "effort column missing from tool_capability_profiles"
-        )
-
     # ── Scenario 200 ─────────────────────────────────────────────────────────
 
     def test_legacy_tables_removed_from_schema(self, schema_db):

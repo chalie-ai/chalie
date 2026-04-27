@@ -308,9 +308,8 @@ class TestSystemAPI:
     def test_observability_tools_returns_stats(self, client, db):
         """GET /system/observability/tools returns per-tool usage counts from tool_calls.
 
-        Verifies: aggregation (COUNT, MAX), ORDER BY last_used_at DESC,
-        LEFT JOIN defaults for missing profile rows, and exclusion of
-        pseudo-tool audit rows (compaction/thinking).
+        Verifies: aggregation (COUNT, MAX), ORDER BY last_used_at DESC, and
+        exclusion of pseudo-tool audit rows (compaction/thinking).
         """
         # Seed a transcript row so FK constraint is satisfied
         db.execute(
@@ -319,7 +318,7 @@ class TestSystemAPI:
         transcript_id = db.execute(
             "SELECT id FROM transcript ORDER BY id DESC LIMIT 1"
         ).fetchone()[0]
-        # weather: 2 calls, has profile (tests JOIN metadata path)
+        # weather: 2 calls
         db.execute(
             "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
             "VALUES (?, ?, ?, ?)",
@@ -330,7 +329,7 @@ class TestSystemAPI:
             "VALUES (?, ?, ?, ?)",
             (transcript_id, 'weather', 'cloudy', '2025-01-03T00:00:00'),
         )
-        # code_exec: 1 call, no profile (tests LEFT JOIN defaults path)
+        # code_exec: 1 call
         db.execute(
             "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
             "VALUES (?, ?, ?, ?)",
@@ -346,14 +345,6 @@ class TestSystemAPI:
             "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
             "VALUES (?, ?, ?, ?)",
             (transcript_id, 'thinking', '{}', '2025-01-05T00:00:00'),
-        )
-        # Profile row for weather only
-        db.execute(
-            "INSERT INTO tool_capability_profiles "
-            "(tool_name, tool_type, short_summary, full_profile, manifest_hash, "
-            " domain, effort, descriptor, keywords, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            ('weather', 'tool', 'Weather lookup', 'Full', 'h', 'Information', 'cheap', 'weather', 'forecast,temp'),
         )
         db.commit()
 
@@ -386,15 +377,11 @@ class TestSystemAPI:
         # ORDER BY last_used_at DESC — weather (Jan 3) before code_exec (Jan 2)
         assert names.index('weather') < names.index('code_exec')
 
-        # JOIN metadata populated for tool with profile
-        assert weather['short_summary'] == 'Weather lookup'
-        assert weather['domain'] == 'Information'
-        assert weather['effort'] == 'cheap'
-
-        # LEFT JOIN defaults for tool without profile
-        assert code_exec['short_summary'] == ''
-        assert code_exec['domain'] == 'Other'
-        assert code_exec['effort'] == 'moderate'
+        # Response shape: only tool_name, count, last_used_at
+        for tool in tools:
+            assert 'tool_name' in tool
+            assert 'count' in tool
+            assert 'last_used_at' in tool
 
 
 

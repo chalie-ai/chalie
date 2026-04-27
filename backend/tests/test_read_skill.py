@@ -1,5 +1,5 @@
 """
-Tests for services/innate_skills/read_skill.py
+Tests for abilities/read.py (ReadAbility)
 """
 
 import pytest
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 @pytest.mark.unit
 class TestSourceClassification:
     def _classify(self, source):
-        from services.innate_skills.read_skill import _classify_source
+        from abilities.read import _classify_source
         return _classify_source(source)
 
     def test_http_url(self):
@@ -46,33 +46,33 @@ class TestSourceClassification:
 @pytest.mark.unit
 class TestHandleRead:
     def test_empty_source_returns_error(self):
-        from services.innate_skills.read_skill import handle_read
-        result = handle_read('topic', {})
+        from abilities.read import ReadAbility
+        result = ReadAbility().execute('topic', {}, None)['text']
         assert '[read(' in result
         assert 'error=source-required' in result
         assert '[end:read]' in result
 
     def test_max_chars_uncapped(self):
-        with patch('services.innate_skills.read_skill._read_url') as mock_read:
+        with patch('abilities.read._read_url') as mock_read:
             mock_read.return_value = '[read(source=x, max_chars=4000)] ok'
-            from services.innate_skills.read_skill import handle_read
-            handle_read('topic', {'source': 'https://ex.com', 'max_chars': 100_000_000})
+            from abilities.read import ReadAbility
+            ReadAbility().execute('topic', {'source': 'https://ex.com', 'max_chars': 100_000_000}, None)
         _, called_max = mock_read.call_args[0]
         assert called_max == 100_000_000
 
     def test_max_chars_clamped_to_floor(self):
-        with patch('services.innate_skills.read_skill._read_url') as mock_read:
+        with patch('abilities.read._read_url') as mock_read:
             mock_read.return_value = '[read(source=x, max_chars=4000)] ok'
-            from services.innate_skills.read_skill import handle_read
-            handle_read('topic', {'source': 'https://ex.com', 'max_chars': 0})
+            from abilities.read import ReadAbility
+            ReadAbility().execute('topic', {'source': 'https://ex.com', 'max_chars': 0}, None)
         _, called_max = mock_read.call_args[0]
         assert called_max == 100
 
     def test_invalid_max_chars_uses_default(self):
-        with patch('services.innate_skills.read_skill._read_url', return_value='[read(source=x, max_chars=4000)] ok\n[end:read]'):
-            from services.innate_skills.read_skill import handle_read
+        with patch('abilities.read._read_url', return_value='[read(source=x, max_chars=4000)] ok\n[end:read]'):
+            from abilities.read import ReadAbility
             # Should not raise
-            result = handle_read('topic', {'source': 'https://ex.com', 'max_chars': 'banana'})
+            result = ReadAbility().execute('topic', {'source': 'https://ex.com', 'max_chars': 'banana'}, None)['text']
         assert '[read(' in result
         assert '[end:read]' in result
 
@@ -82,7 +82,7 @@ class TestHandleRead:
 @pytest.mark.unit
 class TestUrlSSRF:
     def _check(self, url):
-        from services.innate_skills.read_skill import _is_private_url
+        from abilities.read import _is_private_url
         return _is_private_url(url)
 
     def test_localhost_blocked(self):
@@ -158,17 +158,17 @@ class TestUrlReading:
     def test_successful_fetch_returns_content(self):
         mock_req = self._make_mock_requests('<html><body><article><p>Article.</p></article></body></html>')
         with patch.dict('sys.modules', {'requests': mock_req}), \
-             patch('services.innate_skills.read_skill._is_private_url', return_value=False), \
+             patch('abilities.read._is_private_url', return_value=False), \
              patch('services.text_extractor.extract_html', return_value='Article content.'):
-            from services.innate_skills.read_skill import _read_url
+            from abilities.read import _read_url
             result = _read_url('https://example.com', 4000)
         assert '[read(source=https://example.com' in result
         assert 'Article content' in result
         assert '[end:read]' in result
 
     def test_private_url_blocked_before_fetch(self):
-        from services.innate_skills.read_skill import _read_url
-        with patch('services.innate_skills.read_skill._is_private_url', return_value=True):
+        from abilities.read import _read_url
+        with patch('abilities.read._is_private_url', return_value=True):
             result = _read_url('http://localhost', 4000)
         assert 'blocked' in result.lower()
         assert '[end:read]' in result
@@ -177,8 +177,8 @@ class TestUrlReading:
         import requests as real_requests
         mock_req = self._make_mock_requests(side_effect=real_requests.RequestException('Connection refused'))
         with patch.dict('sys.modules', {'requests': mock_req}), \
-             patch('services.innate_skills.read_skill._is_private_url', return_value=False):
-            from services.innate_skills.read_skill import _read_url
+             patch('abilities.read._is_private_url', return_value=False):
+            from abilities.read import _read_url
             result = _read_url('https://unreachable.example.com', 4000)
         assert 'error=fetch-failed' in result
         assert '[end:read]' in result
@@ -186,9 +186,9 @@ class TestUrlReading:
     def test_empty_content_returns_informative_message(self):
         mock_req = self._make_mock_requests('<html></html>')
         with patch.dict('sys.modules', {'requests': mock_req}), \
-             patch('services.innate_skills.read_skill._is_private_url', return_value=False), \
+             patch('abilities.read._is_private_url', return_value=False), \
              patch('services.text_extractor.extract_html', return_value=''):
-            from services.innate_skills.read_skill import _read_url
+            from abilities.read import _read_url
             result = _read_url('https://example.com', 4000)
         assert 'no-readable-content' in result
         assert '[end:read]' in result
@@ -199,13 +199,13 @@ class TestUrlReading:
 @pytest.mark.unit
 class TestFileReading:
     def test_file_not_found_returns_error(self):
-        from services.innate_skills.read_skill import _read_file
+        from abilities.read import _read_file
         result = _read_file('/nonexistent/path/to/file.txt', 4000)
         assert 'file-not-found' in result
         assert '[end:read]' in result
 
     def test_directory_rejected(self):
-        from services.innate_skills.read_skill import _read_file
+        from abilities.read import _read_file
         with patch('os.path.exists', return_value=True), \
              patch('os.path.isfile', return_value=False):
             result = _read_file('/tmp/some_directory', 4000)
@@ -213,7 +213,7 @@ class TestFileReading:
         assert '[end:read]' in result
 
     def test_no_read_permission_returns_error(self):
-        from services.innate_skills.read_skill import _read_file
+        from abilities.read import _read_file
         with patch('os.path.exists', return_value=True), \
              patch('os.path.isfile', return_value=True), \
              patch('os.access', return_value=False):
@@ -229,7 +229,7 @@ class TestFileReading:
              patch('services.text_extractor.detect_mime_type', return_value='application/pdf'), \
              patch('services.text_extractor.extract_text', return_value='PDF content here.'), \
              patch('services.text_extractor.normalize_text', return_value='PDF content here.'):
-            from services.innate_skills.read_skill import _read_file
+            from abilities.read import _read_file
             result = _read_file('/tmp/doc.pdf', 4000)
         assert '[read(source=/tmp/doc.pdf' in result
         assert 'mime=application/pdf' in result
@@ -244,7 +244,7 @@ class TestFileReading:
              patch('services.text_extractor.detect_mime_type', return_value='text/plain'), \
              patch('services.text_extractor.extract_text', return_value=''), \
              patch('services.text_extractor.normalize_text', return_value=''):
-            from services.innate_skills.read_skill import _read_file
+            from abilities.read import _read_file
             result = _read_file('/tmp/empty.txt', 4000)
         assert 'no-text-content' in result
         assert '[end:read]' in result
@@ -258,7 +258,7 @@ class TestFileReading:
              patch('services.text_extractor.detect_mime_type', return_value='text/plain'), \
              patch('services.text_extractor.extract_text', return_value=long_content), \
              patch('services.text_extractor.normalize_text', return_value=long_content):
-            from services.innate_skills.read_skill import _read_file
+            from abilities.read import _read_file
             result = _read_file('/tmp/big.txt', 500)
         assert 'truncated' in result
         assert '[end:read]' in result
@@ -269,7 +269,7 @@ class TestFileReading:
 @pytest.mark.unit
 class TestFileReadSecurity:
     def _read(self, path):
-        from services.innate_skills.read_skill import _read_file
+        from abilities.read import _read_file
         return _read_file(path, 4000)
 
     def test_etc_passwd_blocked(self):

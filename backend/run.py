@@ -299,20 +299,6 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool registry load failed: {e}")
 
-    # Bootstrap tool profiles (background thread)
-    try:
-        import threading
-        from services.tool_profile_service import ToolProfileService
-        def _run_bootstrap():
-            try:
-                ToolProfileService().bootstrap_all()
-                logger.info("[Startup] Tool profile bootstrap complete")
-            except Exception as e:
-                logger.warning(f"[Startup] Tool profile bootstrap failed: {e}")
-        threading.Thread(target=_run_bootstrap, daemon=True, name="profile-bootstrap").start()
-    except Exception as e:
-        logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
-
     # Verify search routing embeddings are present
     try:
         import os as _os

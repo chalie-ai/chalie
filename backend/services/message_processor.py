@@ -223,18 +223,33 @@ class MessageProcessor:
         """Return the full tool list for the current ACT iteration.
 
         Resolution order (first-seen wins on duplicates):
-        1. NATIVE_TOOLS — unconditional tier (resolved via get_skill_schemas).
-           Base is []; UserMessageProcessor sets the full innate skill set.
+        1. NATIVE_TOOLS — unconditional tier (resolved via AbilityRegistry).
+           Base is []; UserMessageProcessor sets the full ability name list.
         2. getDynamicTools() — tools discovered this turn via find_tools.
+
+        Schema shape: {name, description, input_schema} — pulled from each
+        Ability's NAME, SUMMARY, and INPUT_SCHEMA ClassVars respectively.
 
         Deduplication preserves first-seen order so the unconditional tier
         cannot be shadowed by a dynamic entry of the same name.
         """
-        from services.tool_schema_service import get_skill_schemas
+        from abilities._registry import AbilityRegistry
 
         native: list[dict] = []
         if self.NATIVE_TOOLS:
-            native = get_skill_schemas(self.NATIVE_TOOLS)
+            for tool_name in self.NATIVE_TOOLS:
+                try:
+                    ability = AbilityRegistry.get(tool_name)
+                    native.append({
+                        'name': ability.NAME,
+                        'description': ability.SUMMARY,
+                        'input_schema': ability.INPUT_SCHEMA,
+                    })
+                except KeyError:
+                    logger.warning(
+                        "[MessageProcessor.getTools] No ability registered for '%s'",
+                        tool_name,
+                    )
 
         dynamic = self.getDynamicTools()
 

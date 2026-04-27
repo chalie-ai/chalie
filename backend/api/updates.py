@@ -169,8 +169,8 @@ def update_memory():
         salience = 5
 
     try:
-        from services.innate_skills.memory_skill import handle_memory
-        result = handle_memory(
+        from abilities.memory import _handle_store
+        result = _handle_store(
             topic,
             {
                 "action": "store",
@@ -179,7 +179,7 @@ def update_memory():
                 "kind": "misc",
             },
         )
-        if "Error" in result:
+        if "error=" in result.split('\n', 1)[0]:
             logger.warning("[Updates API] memory update result: %s", result)
             return jsonify({"error": "Memory encoding failed"}), 422
     except Exception as exc:

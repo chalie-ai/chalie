@@ -286,29 +286,9 @@ CREATE TABLE IF NOT EXISTS list_events (
 
 CREATE INDEX IF NOT EXISTS idx_list_events_list ON list_events(list_id, created_at DESC);
 
--- ────────────────────────────────────────────────────────────────
--- TOOL CAPABILITY PROFILES
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS tool_capability_profiles (
-    id TEXT PRIMARY KEY,
-    tool_name TEXT NOT NULL UNIQUE,
-    tool_type TEXT NOT NULL DEFAULT 'tool',
-    short_summary TEXT NOT NULL,
-    full_profile TEXT NOT NULL,
-    anti_scenarios TEXT NOT NULL DEFAULT '[]',     -- JSONB
-    complementary_skills TEXT DEFAULT '[]',        -- JSONB
-    manifest_hash TEXT,
-    cost_tier TEXT DEFAULT 'free',
-    domain TEXT DEFAULT 'Other',
-    effort TEXT DEFAULT 'moderate',
-    skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
-    descriptor TEXT,                                -- compact discovery label: 'name (synonym1, synonym2, ...)'
-    keywords TEXT DEFAULT '',                       -- comma-separated search keywords for 2-axis scoring
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tcp_tool_name ON tool_capability_profiles(tool_name);
+-- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
+-- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs
+-- both the table and its index on next boot.
 
 -- ────────────────────────────────────────────────────────────────
 -- USER TOOL PREFERENCES
@@ -442,7 +422,7 @@ CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embedding float[768]);
+-- tool_capability_profiles_vec removed — replaced by abilities.sqlite.
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);

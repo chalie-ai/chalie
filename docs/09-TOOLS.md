@@ -1,19 +1,19 @@
 # Tools System
 
-Three capability tiers exist in Chalie, each with a different scope and lifecycle.
+Every dispatchable capability in Chalie is an `Ability` subclass under `backend/abilities/`. The framework knows two categories, distinguished by a single class attribute:
 
-**Innate skills** are core cognitive capabilities — memory, schedule, list, goal_pursuit, document, read, find_tools, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory. **All innate skills are always loaded on every user turn** — there is no mode-gated tool tier.
+**Innate abilities** (`ALWAYS_AVAILABLE = True`) are core cognitive capabilities — memory, schedule, list, goal_pursuit, document, read, find_tools, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory and are loaded on every user turn.
 
-**First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
+**Discoverable abilities** (`ALWAYS_AVAILABLE = False`) are surfaced this turn via the `find_tools` innate ability's semantic search. They cover everything the LLM cannot do unaided: search, news, live weather, sandboxed code execution, programming-doc lookup, browser automation, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
 
-**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They extend what Chalie can act on without being committed to this repo. See [15-INTERFACES.md](15-INTERFACES.md).
+**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They are projected into the abilities surface at boot via the same RRF discovery path. See [15-INTERFACES.md](15-INTERFACES.md).
 
 ## How tools are loaded on a user turn
 
 Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
 
-1. **Unconditional** — every innate skill. Always present.
-2. **Dynamic (discoverable)** — tools surfaced this turn via the `find_tools` innate skill's semantic search. All external (first-party + interface) tools are reachable exclusively through this path.
+1. **Unconditional** — every innate ability. Always present.
+2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` innate ability's semantic search. Every non-innate ability (first-party + interface) is reachable exclusively through this path.
 
 `ModeGateService` runs once per user turn but **does not gate tool availability**. It classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`. The active mode set powers prompt-steering directives in `UserMessageProcessor` (long-summary swap on `converse`, brainstorm/research/analyze suffixes appended to the system prompt) and is reserved for future mode-driven features.
 
@@ -29,30 +29,42 @@ Three status values appear in the tools list:
 | `available` | Discovered but not yet configured (missing required secrets) |
 | `connected` | Fully configured and ready to use |
 
-## Adding a first-party tool
+## Adding a first-party ability
 
-A first-party tool is a Python module that exposes a single function:
+A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability` and implements a single dispatch method:
 
 ```python
-def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict
+from abilities._base import Ability
+
+class WeatherAbility(Ability):
+    NAME = "weather"
+    SUMMARY = "Live weather lookup by coordinates or city name."
+    EXAMPLES = [
+        "what is the weather in Valletta",
+        "is it raining in San Francisco",
+        # 6 to 8 entries total — enforced by __init_subclass__
+    ]
+    INPUT_SCHEMA = {"type": "object", "properties": {...}}
+    ALWAYS_AVAILABLE = False  # discoverable via find_tools
+
+    def execute(self, channel, params, telemetry):
+        ...
 ```
 
-`topic` is the current conversation topic, `params` are the LLM-extracted arguments, `config` contains any stored secrets or endpoints, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return dict can include a `text` key for a plain-text result, an `html` key for a UI card fragment, and an `error` key that signals failure and suppresses the other fields.
-
-Alongside the module, declare the tool's metadata: a description that the semantic search will embed, a parameter schema the LLM uses to extract arguments, and any constraints. The description is the most important field — it determines when `find_tools` surfaces this tool.
+`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. After adding or changing an ability, regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
 ## Configuration
 
 Tools that require API keys or custom endpoints declare their required config keys in their metadata. Configure them through the Brain UI (Settings > Tools) or via the REST API — see the API reference for endpoints. Stored secrets are masked in all API responses.
 
-## Innate skill output format
+## Ability output format
 
-Every innate skill returns its result as a canonical tag block defined in `backend/services/innate_skills/_tag.py`. `_tag.py` is the single source of truth — no skill constructs its own format string.
+Every ability returns its result as a canonical tag block defined in `backend/services/innate_skills/_tag.py`. `_tag.py` is the single source of truth — no ability constructs its own format string. (The `services/innate_skills/` directory holds only this formatter after the Phase 4 cutover; every dispatchable ability lives under `backend/abilities/`.)
 
 ```
-[<skill_name>(k1=v1, k2=v2)]
+[<ability_name>(k1=v1, k2=v2)]
 <body>
-[end:<skill_name>]
+[end:<ability_name>]
 ```
 
 If the body is empty (error path with no content), the body line is omitted:
@@ -64,7 +76,7 @@ If the body is empty (error path with no content), the body line is omitted:
 
 Errors are just arguments — `error=<slug>` in the opener, not a separate response format. Multi-line bodies (e.g. memory recall results, rich render reference) appear verbatim between opener and terminator.
 
-The `memory` skill preserves its inner per-row marker format inside the body so downstream services that parse `[id:X,relevance:Y]` continue to work:
+The `memory` ability preserves its inner per-row marker format inside the body so downstream services that parse `[id:X,relevance:Y]` continue to work:
 
 ```
 [memory(query=Malta, results=3)]

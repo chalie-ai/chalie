@@ -1,2 +1,3 @@
-# First-party tools — simple callable Python modules.
-# Each exposes execute(topic, params, config, telemetry) -> dict.
+# Companion modules for browser and search abilities live here.
+# First-party tool execution is handled by AbilityRegistry (backend/abilities/).
+# Stream G owns pattern_match/ migration.

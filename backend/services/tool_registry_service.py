@@ -121,24 +121,6 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
-        # Kick off profile enrichment in background (skip built-in tools — they are seeded at startup)
-        from services.tool_library_service import BUILTIN_TOOL_PROFILES
-        for name in list(self.tools.keys()):
-            if name in BUILTIN_TOOL_PROFILES:
-                continue
-            _name = name
-            _metadata = dict(self.tools[name]["manifest"])
-
-            def _build_profile(n=_name, m=_metadata):
-                try:
-                    from services.tool_profile_service import ToolProfileService
-                    ToolProfileService().build_profile(n, m)
-                except Exception as _e:
-                    logger.warning(f"[TOOL REGISTRY] Profile build failed for '{n}': {_e}")
-
-            threading.Thread(target=_build_profile, daemon=True,
-                             name=f"profile-build-{name}").start()
-
     def _refresh_oauth_token(self, tool_name: str, manifest: dict, settings: dict) -> dict:
         """Refresh OAuth token if manifest declares auth.type == 'oauth2'.
 
@@ -450,28 +432,8 @@ class ToolRegistryService:
 
         logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
 
-        # Immediately kick off profile enrichment so the tool is discoverable
-        # via find_tools as soon as the interface is detected — no waiting for the 6h cycle.
-        _iface_name = name
-        _iface_manifest = dict(tool_entry['manifest'])
-
-        def _build_iface_profile():
-            try:
-                from services.tool_profile_service import ToolProfileService
-                ToolProfileService().build_profile(_iface_name, _iface_manifest)
-                logger.info(f"[TOOL REGISTRY] Profile built for interface tool '{_iface_name}'")
-            except Exception as _e:
-                logger.warning(f"[TOOL REGISTRY] Profile build failed for interface tool '{_iface_name}': {_e}")
-
-        threading.Thread(target=_build_iface_profile, daemon=True,
-                         name=f"profile-build-{name}").start()
-
     def remove_interface_tools(self, interface_id: str):
-        """Remove all tools that belong to a specific interface.
-
-        Cleans up both the in-memory registry and tool_capability_profiles
-        so removed interfaces don't linger in find_tools results.
-        """
+        """Remove all tools that belong to a specific interface from the in-memory registry."""
         with self._lock:
             to_remove = [
                 name for name, tool in self.tools.items()
@@ -480,32 +442,7 @@ class ToolRegistryService:
             for name in to_remove:
                 self.tools.pop(name, None)
 
-        # Remove profiles so find_tools stops returning them
         if to_remove:
-            try:
-                from services.database_service import get_shared_db_service
-                db = get_shared_db_service()
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    for name in to_remove:
-                        # Delete vec entry first (FK on rowid)
-                        row = cursor.execute(
-                            "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
-                            (name,),
-                        ).fetchone()
-                        if row:
-                            cursor.execute(
-                                "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
-                                (row[0],),
-                            )
-                        cursor.execute(
-                            "DELETE FROM tool_capability_profiles WHERE tool_name = ?",
-                            (name,),
-                        )
-                    cursor.close()
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] Failed to remove profiles: {e}")
-
             logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
 
     # ── Public API ──────────────────────────────────────────────────

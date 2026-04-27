@@ -387,16 +387,16 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
     """Test 8 — save_graph with kind='behavioral_pattern' returns invalid_kind error."""
 
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
-        from tools.pattern_match.save_graph import execute as save_graph_execute
+        from abilities.pattern_match.save_graph import SaveGraphAbility
 
         # Build a minimal processor stub that has the required counter attribute.
         class _StubProcessor:
             _save_graph_calls = 0
 
-        ctx = {"processor": _StubProcessor()}
-        result = save_graph_execute(
+        processor = _StubProcessor()
+        result = SaveGraphAbility().execute_with_processor(
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
-            ctx,
+            processor,
         )
 
         assert result.get("error") == "invalid_kind", (
@@ -461,18 +461,18 @@ class TestSaveGraphBudgetCapAt50:
     """Test 10 — 51 save_graph calls → 50 land, 51st returns budget_exceeded."""
 
     def test_save_graph_budget_cap_at_50(self, db, store):
-        from tools.pattern_match.save_graph import execute as save_graph_execute
+        from abilities.pattern_match.save_graph import SaveGraphAbility
 
         class _StubProcessor:
             _save_graph_calls = 0
 
-        ctx = {"processor": _StubProcessor()}
+        processor = _StubProcessor()
 
         results = []
         for i in range(51):
-            result = save_graph_execute(
+            result = SaveGraphAbility().execute_with_processor(
                 {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
-                ctx,
+                processor,
             )
             results.append(result)
 
@@ -487,8 +487,8 @@ class TestSaveGraphBudgetCapAt50:
         assert results[50].get("tool") == "save_graph"
 
         # Counter must be exactly 50.
-        assert ctx["processor"]._save_graph_calls == 50, (
-            f"Expected _save_graph_calls=50, got {ctx['processor']._save_graph_calls}"
+        assert processor._save_graph_calls == 50, (
+            f"Expected _save_graph_calls=50, got {processor._save_graph_calls}"
         )
 
 

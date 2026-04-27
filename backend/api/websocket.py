@@ -383,9 +383,10 @@ def _handle_action(ws, store, msg):
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
     try:
-        from services.innate_skills import get_skill_handler
-        handler = get_skill_handler(skill)
-        if not handler:
+        from abilities._registry import AbilityRegistry
+        try:
+            ability = AbilityRegistry.get(skill)
+        except KeyError:
             seq = _next_seq()
             _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
             seq = _next_seq()
@@ -393,7 +394,7 @@ def _handle_action(ws, store, msg):
             return
 
         start = time.time()
-        result = handler('action_button', payload)
+        result = ability.execute('action_button', payload, None)
 
         # Handle structured results (text + reply_actions)
         reply_actions = None

@@ -1,8 +1,8 @@
-# First-Party Tools
+# First-Party Abilities
 
-These tools ship with Chalie and are invoked in-process via the ACT loop. Most of them are surfaced to the LLM either via the mode gate (when the current user turn activates a cognitive intent they serve) or by the `find_tools` innate skill's semantic search — the full list is never pre-injected into context. A `browser` tool is also available when Playwright dependencies are installed.
+These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. None are pre-injected into context — they reach the LLM exclusively through the `find_tools` innate ability's semantic search. A `browser` ability is also present when Playwright dependencies are installed.
 
-The mode-gate mapping at time of writing: `search` and `news` serve `research` and `brainstorm`; `browser` serves `research` and `analyze`; `code_eval` serves `coding` and `math`; `programming_docs_search` serves `coding` and `research`. `weather` is intentionally unmapped and reaches the LLM only through `find_tools`. See `docs/09-TOOLS.md` for how the three loading tiers stack and when each fires.
+See `docs/09-TOOLS.md` for how innate vs. discoverable tiers stack and when each fires.
 
 ## Weather
 

@@ -9,43 +9,9 @@ No real external connections. MemoryStore IS the production implementation.
 
 import shutil
 import sqlite3
-import sys
-import types
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ── Pre-load guard for locked/unreadable service files ────────────────────────
-# Some environments (SMB mounts, sandboxed builds) may produce files that are
-# execute-only at the OS level, making Python unable to read them. When that
-# happens services/__init__.py chain-imports the locked file and collection
-# fails for every test.  We detect the problem early and insert a stub so the
-# package loads cleanly.  This does NOT affect production behaviour.
-def _ensure_services_package_loadable():
-    _BASE = str(__file__).replace('/tests/conftest.py', '/services')
-
-    _LOCKED_MODULES = [
-        ('services.innate_skills.memory_skill', f"{_BASE}/innate_skills/memory_skill.py", 'services.innate_skills'),
-    ]
-
-    for mod_name, mod_path, mod_package in _LOCKED_MODULES:
-        if mod_name in sys.modules:
-            continue
-        try:
-            with open(mod_path, 'rb'):
-                pass  # intentional: just tests that the file is readable
-            continue  # readable — nothing to do
-        except PermissionError:
-            pass  # fall through to stub insertion
-
-        stub = types.ModuleType(mod_name)
-        stub.__file__ = mod_path
-        stub.__package__ = mod_package
-        stub.__getattr__ = lambda name: MagicMock()
-        sys.modules[mod_name] = stub
-
-
-_ensure_services_package_loadable()
 
 
 # ── Pre-import modules that bind get_shared_db_service at module level ────────

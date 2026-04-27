@@ -116,37 +116,35 @@ class TestTimeout:
 
 class TestConfidenceEstimation:
 
-    def test_memorize_confidence_is_deterministic(self, service):
-        """Deterministic actions like 'memorize' get 0.92 confidence."""
-        # Use the real memorize handler if available, or a lambda
-        # Since we want to pressure test the dispatcher's confidence logic:
-        service.handlers['memorize'] = lambda topic, action: 'stored'
+    def test_memory_confidence_is_deterministic(self, service):
+        """Deterministic actions like 'memory' get 0.92 confidence."""
+        service.handlers['memory'] = lambda topic, action: 'stored'
 
-        result = service.dispatch_action('topic', {'type': 'memorize'})
+        result = service.dispatch_action('topic', {'type': 'memory'})
 
         assert result['confidence'] == pytest.approx(0.92)
 
-    def test_recall_long_result_confidence(self, service):
-        """Recall with a result longer than 100 chars gets 0.75 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'x' * 101
+    def test_find_tools_long_result_confidence(self, service):
+        """A read action with a result longer than 100 chars gets 0.75 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'x' * 101
 
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.75)
 
-    def test_recall_medium_result_confidence(self, service):
-        """Recall with a result between 21 and 100 chars gets 0.60 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'x' * 50
+    def test_find_tools_medium_result_confidence(self, service):
+        """A read action with a result between 21 and 100 chars gets 0.60 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'x' * 50
 
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.60)
 
-    def test_recall_short_result_confidence(self, service):
-        """Recall with a result of 20 chars or fewer gets 0.40 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'short'
+    def test_find_tools_short_result_confidence(self, service):
+        """A read action with a result of 20 chars or fewer gets 0.40 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'short'
 
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.40)
 
@@ -166,10 +164,10 @@ class TestEstimateConfidenceDirectly:
 
     def test_deterministic_ignores_result_content(self):
         """Deterministic confidence is fixed regardless of result."""
-        assert _estimate_confidence('memorize', '') == pytest.approx(0.92)
-        assert _estimate_confidence('memorize', None) == pytest.approx(0.92)
+        assert _estimate_confidence('memory', '') == pytest.approx(0.92)
+        assert _estimate_confidence('memory', None) == pytest.approx(0.92)
 
     def test_read_with_none_result(self):
         """Read action with None result gets the lowest read confidence."""
-        assert _estimate_confidence('recall', None) == pytest.approx(0.40)
+        assert _estimate_confidence('find_tools', None) == pytest.approx(0.40)
 

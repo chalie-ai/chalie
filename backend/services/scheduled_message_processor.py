@@ -12,7 +12,7 @@ import logging
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import ScheduledSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
+from abilities._registry import AbilityRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class ScheduledMessageProcessor(MessageProcessor):
     ROLE = 'scheduled'
     SYSTEM_PROMPT_CLASS = ScheduledSystemMessagePrompt
     NATIVE_TOOLS: list[str] = sorted(
-        s for s in ALL_SKILL_NAMES if s not in _EXCLUDED_SKILLS
+        a.NAME for a in AbilityRegistry.all() if a.NAME not in _EXCLUDED_SKILLS
     )
 
     def getUserDefinition(self) -> str:
