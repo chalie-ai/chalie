@@ -17,6 +17,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,8 @@ from abilities._registry import _reset_for_tests
 from utils.build_ability_db import _build, _compute_sha
 
 pytestmark = pytest.mark.unit
+
+_BACKEND_DIR = str(Path(__file__).resolve().parent.parent)
 
 
 @pytest.fixture(autouse=True)
@@ -127,7 +130,7 @@ from pathlib import Path
 _check(Path(r"{sha_path}"))
 """,
         ],
-        cwd="/Volumes/llm/Chalie/backend",
+        cwd=_BACKEND_DIR,
         capture_output=True,
         text=True,
     )
@@ -155,7 +158,7 @@ from pathlib import Path
 _check(Path(r"{sha_path}"))
 """,
         ],
-        cwd="/Volumes/llm/Chalie/backend",
+        cwd=_BACKEND_DIR,
         capture_output=True,
         text=True,
     )
@@ -200,7 +203,7 @@ from pathlib import Path
 _check(Path(r"{sha_path}"))
 """,
         ],
-        cwd="/Volumes/llm/Chalie/backend",
+        cwd=_BACKEND_DIR,
         capture_output=True,
         text=True,
     )
