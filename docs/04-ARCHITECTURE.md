@@ -123,12 +123,13 @@ All session construction goes through `backend/services/onnx_session.py`:
 
 ### Asset layout
 
-Two distinct on-disk directories separate runtime-downloaded weights from pre-shipped classifier files:
+Two distinct on-disk directories separate runtime-downloaded weights from pre-shipped classifier files, with one extra location for pre-shipped sqlite-vec/FTS5 search indexes:
 
 | Path | Tracked in git | Contents |
 |------|----------------|----------|
 | `backend/data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
-| `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads. Currently `deliberation_score/` and `mode_detector/`. Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
+| `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
+| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. |
 
 `OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
 
