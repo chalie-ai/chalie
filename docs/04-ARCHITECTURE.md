@@ -129,7 +129,7 @@ Two distinct on-disk directories separate runtime-downloaded weights from pre-sh
 |------|----------------|----------|
 | `backend/data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
 | `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
-| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. |
+| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. As of Phase 1, `abilities.sqlite` contains 1 ability (`weather`): 1 SUMMARY row + 7 EXAMPLE rows, all embedded at 768 dim. Drift sidecar: `backend/data/pre-trained/abilities_sha.json`. |
 
 `OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
 
@@ -144,6 +144,8 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 **Innate skills (unconditional)** are the core cognitive capabilities the user-channel LLM always has on hand: `memory`, `schedule`, `list`, `goal_pursuit`, `document`, `read`, `find_tools`, `rich_render`, and `review_tool_calls`. They cover recall, discovery, audit, scheduling, lists, long-running pursuit, document retrieval, web reading, and rich rendering — the foundational operations every turn may need.
 
 **Discoverable tools (dynamic)** are never pre-injected. The `find_tools` innate skill performs semantic search against tool capability profiles at runtime. When the LLM invokes `find_tools`, the matching tools become available for the remainder of that ACT loop. All external (first-party + interface) tools are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
+
+`find_tools` performs a **dual-read** (Phase 1): it queries both the legacy `tool_capability_profiles_vec` table in the main database and the pre-shipped `backend/abilities/assets/abilities.sqlite` via a separate `sqlite3.connect()`. Results are merged inline — new-DB entries shadow any matching old-DB row (priority merge, not RRF; RRF is Phase 3). New-DB rows arrive pre-scored (`score = distance * 10`) and bypass `ToolRegistryService` checks in `_filter_available`. If `abilities.sqlite` is missing or fails to open, `_query_abilities_db` returns `[]` and logs a `[FIND_TOOLS]` WARNING — the skill degrades to old-DB-only without crashing.
 
 `ModeGateService` runs once per user turn (via `UserMessageProcessor._get_mode_state()`) but **does not gate tool availability**. A small ONNX multi-label classifier (`mode_detector`, eight heads: `research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) emits per-mode probabilities. Per-mode EMA state snaps up on a fire and decays by 0.75 on a miss, so a topic stays "warm" for roughly four turns before falling below the activation threshold. State persists in MemoryStore under `mode_gate:state` and clears on `/privacy/delete-all`. The mode set powers prompt-steering directives (long-summary swap on `converse`, brainstorm/research/analyze suffixes) and is reserved for future mode-driven features. A single `[MODE-GATE]` log line per turn records probabilities, state transition, and the active mode set.
 
@@ -160,6 +162,39 @@ Every innate skill result uses the canonical tag block format from `backend/serv
 This is the single source of truth — no skill constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 
 **`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
+
+---
+
+## Ability Framework
+
+`backend/abilities/` is the migration path for tools that belong inside Chalie's cognitive boundary. The framework runs in parallel with the legacy `backend/tools/` dispatch path during the transition; abilities become the sole dispatch path when the legacy tool is ripped (Phase 4).
+
+### `Ability` ABC (`backend/abilities/_base.py`)
+
+Every concrete ability subclasses `Ability` and declares:
+
+| Class attribute | Type | Notes |
+|-----------------|------|-------|
+| `NAME` | `str` | Stable identifier. Matches the legacy tool name where one exists. |
+| `SUMMARY` | `str` | One sentence used as the SUMMARY row in `abilities.sqlite`. |
+| `EXAMPLES` | `list[str]` | 6–8 natural-language phrases for EXAMPLE rows (enforced by `__init_subclass__`). |
+| `INPUT_SCHEMA` | `dict` | JSON Schema for `execute()` params. |
+| `ALWAYS_AVAILABLE` | `bool` | `False` = discoverable via `find_tools` only. Reserved for future always-on abilities. |
+| `TIMEOUT` | `int` | Per-call timeout in seconds (default 10). |
+
+The `execute(channel, params, telemetry)` method is the sole dispatch surface. `pre_dispatch` and `post_dispatch` hooks exist for subclass-level lifecycle work.
+
+### Phase 1 — `WeatherAbility` (`backend/abilities/weather.py`)
+
+First concrete subclass. Behaviour is a verbatim port of `tools/weather.py::execute()` — Open-Meteo (primary, coordinate-based) with wttr.in fallback (city-name lookups). Class-level `_cache` and `_CACHE_TTL=600` are `ClassVar`s so the 10-minute cache is shared across all instances.
+
+Module-level helpers (`_fetch_open_meteo`, `_fetch_wttr`, `_degrees_to_compass`, `_estimate_daylight`, `_WMO`, `_RAIN_WORDS`, `_CLEAR_WORDS`) are private to the module. `requests` is imported at module top.
+
+**Dispatch path in Phase 1:** the legacy `tools/weather.py` still owns the ACT-loop dispatch path. `WeatherAbility` is exercised via `find_tools` dual-read and its own unit tests. The legacy tool will be ripped in Phase 4.
+
+### Registry (`backend/abilities/_registry.py`)
+
+Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access and deduplicates by `NAME`. The registry is the source of truth for which abilities are active in the process.
 
 ---
 
