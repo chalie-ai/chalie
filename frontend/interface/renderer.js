@@ -114,9 +114,6 @@ export class Renderer {
     const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
     el.appendChild(metaRow);
 
-    // Collapse any narration bubbles before appending the response
-    this._collapseNarrations();
-
     this._spine.appendChild(el);
     this._setActiveForm(el);
     this._scrollToBottom();
@@ -157,33 +154,40 @@ export class Renderer {
   }
 
   /**
-   * Append a narration bubble — lightweight progress indicator during ACT loops.
+   * Append a narration bubble as a sub-message inside the persistent fastpath
+   * (the pendingForm). The fastpath stays put for the entire ACT loop —
+   * narrations stack inside it as Chalie progresses through iterations.
+   *
+   * Removes the thinking-indicator on first narration so the placeholder dots
+   * don't co-exist with sub-bubble content (and so the t=2s upgradePendingText
+   * timer becomes a no-op via its `if (!dots) return` guard).
+   *
+   * @param {HTMLElement} parentEl — the fastpath bubble (pendingForm)
    * @param {string} text — narration line from the LLM
    * @param {number} step — iteration number
    */
-  appendNarrationBubble(text, step) {
+  appendNarrationBubble(parentEl, text, step) {
+    if (!parentEl) return null;
+
+    const dots = parentEl.querySelector(':scope > .thinking-indicator');
+    if (dots) dots.remove();
+
     const bubble = this._createEl('div', 'narration-bubble');
     bubble.dataset.step = step;
     bubble.textContent = text;
-
-    // Insert before the pending form (thinking dots) if present
-    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
-    if (pending) {
-      this._spine.insertBefore(bubble, pending);
-    } else {
-      this._spine.appendChild(bubble);
-    }
+    parentEl.appendChild(bubble);
     this._scrollToBottom();
     return bubble;
   }
 
   /**
    * Append a tool pill — inline progress indicator for a single tool call.
-   * Pills nest inside narration bubbles (when present) or pending-form
-   * (single-iteration turns). Pills auto-collapse with their parent
-   * narration bubble via `.narration-group--collapsed .tool-pill-row`.
+   * Pills nest inside the latest narration bubble (subsequent iterations) or
+   * directly inside the fastpath (iter 1, pre-narration). The fastpath bubble
+   * persists across the whole ACT loop and is wiped + replaced by the final
+   * response, so pills disappear with it on resolve.
    *
-   * @param {HTMLElement} parentEl — narration-bubble or pending-form element
+   * @param {HTMLElement} parentEl — narration-bubble or fastpath element
    * @param {string} callId — server-assigned id for resolveToolPill lookup
    * @param {string} name — tool name to display
    * @returns {HTMLElement|null} the pill element (null if parentEl falsy)
@@ -289,9 +293,6 @@ export class Renderer {
     const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
     form.appendChild(metaRow);
 
-    // Collapse narration bubbles into an expandable group
-    this._collapseNarrations();
-
     this._setActiveForm(form);
     this._scrollToBottom();
   }
@@ -313,18 +314,23 @@ export class Renderer {
   /**
    * Upgrade a pending (thinking dots) form to a brief placeholder phrase.
    * Called after 2 seconds when the response is still in flight.
+   *
+   * Replaces the dots with a text label but preserves any narration sub-bubbles
+   * or tool pills that have already accumulated inside the form. The fastpath
+   * persists for the whole ACT loop so its inner content must survive this
+   * upgrade.
+   *
    * @param {HTMLElement} form
    */
   upgradePendingText(form) {
     const phrases = ['Working on it...', 'One moment...', 'On it...', 'Thinking...'];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
-    const dots = form.querySelector('.thinking-indicator');
+    const dots = form.querySelector(':scope > .thinking-indicator');
     if (!dots) return; // already resolved
-    form.innerHTML = '';
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = text;
     textEl.style.opacity = '0.80';
-    form.appendChild(textEl);
+    form.replaceChild(textEl, dots);
   }
 
   /** Remove all children from the spine. */
@@ -335,30 +341,6 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  _collapseNarrations() {
-    const bubbles = this._spine.querySelectorAll('.narration-bubble:not(.narration--collapsed), .steer-bubble:not(.narration--collapsed)');
-    if (bubbles.length < 2) return; // Don't collapse a single bubble
-
-    const wrapper = this._createEl('div', 'narration-group narration-group--collapsed');
-    const toggle = this._createEl('button', 'narration-toggle');
-    toggle.textContent = `${bubbles.length} steps`;
-    toggle.addEventListener('click', () => {
-      wrapper.classList.toggle('narration-group--collapsed');
-      toggle.textContent = wrapper.classList.contains('narration-group--collapsed')
-        ? `${bubbles.length} steps`
-        : 'collapse';
-    });
-    wrapper.appendChild(toggle);
-
-    // Move bubbles into the wrapper
-    const firstBubble = bubbles[0];
-    firstBubble.parentNode.insertBefore(wrapper, firstBubble);
-    for (const b of bubbles) {
-      b.classList.add('narration--collapsed');
-      wrapper.appendChild(b);
-    }
-  }
 
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };

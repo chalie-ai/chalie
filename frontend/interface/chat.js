@@ -140,20 +140,21 @@ export class Chat {
         this._presence.setState(stage);
       },
       onNarration: (data) => {
-        // Live ACT narration: remove thinking dots, show narration bubble instead
+        // Live ACT narration: nest as a sub-bubble inside the persistent
+        // fastpath (pendingForm). The fastpath stays put for the entire ACT
+        // loop — only the final response replaces it.
         clearTimeout(pendingUpgradeTimer);
-        // Remove the pending form entirely — narration bubbles replace it
-        if (pendingForm.isConnected) pendingForm.remove();
         this._presence.setState('narrating');
-        this._lastNarrationBubble = this._renderer.appendNarrationBubble(data.text, data.step);
+        this._lastNarrationBubble = this._renderer.appendNarrationBubble(
+          pendingForm, data.text, data.step
+        );
       },
       onToolStart: (msg) => {
-        // Prefer the most recent narration bubble; fall back to pending form
-        // (single-iteration turns where no narration arrived yet).
-        let host = this._lastNarrationBubble;
-        if (!host || !host.isConnected) {
-          host = pendingForm;
-        }
+        // Pills nest under the latest narration when one exists; otherwise
+        // they attach directly to the fastpath (iter 1, pre-narration).
+        const host = (this._lastNarrationBubble && this._lastNarrationBubble.isConnected)
+          ? this._lastNarrationBubble
+          : pendingForm;
         if (!host) return;
         this._renderer.appendToolPill(host, msg.call_id, msg.name);
       },
@@ -188,12 +189,12 @@ export class Chat {
         if (responseBlocks.length) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
+          // Fastpath persists for the whole turn, so pendingForm is still
+          // connected — resolvePendingForm wipes its inner narrations + pills
+          // and renders the final response in their place.
           if (pendingForm.isConnected) {
-            // resolvePendingForm() does form.innerHTML = '', so any
-            // orphan pills from single-iteration turns are wiped here.
             this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
           } else {
-            // pendingForm was removed by narration — append fresh
             this._renderer.appendChalieForm(responseBlocks, responseMeta);
           }
           this._pendingForm = null;

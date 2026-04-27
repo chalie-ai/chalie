@@ -34,21 +34,40 @@ The chat interface uses three fixed regions:
 - **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
 - **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
 
-## Tool Pills
+## Tool Pills + Fastpath Shape
 
-Inline progress indicators that appear during the ACT loop whenever a tool is dispatched. Pills stack vertically as minimal monospace rows — name on the left, state on the right — with no chrome or fill. The defining visual is a thin iridescent gradient running along the bottom edge of each row (cyan → lavender, magenta on error), the same accent language as the rest of the Radiant surface.
+When the user sends a message, Chalie immediately renders a **fastpath bubble** — a single Chalie speech-form that persists for the entire ACT loop. Everything that happens during the turn (narrations, tool calls) lives **inside** this bubble. The final response replaces it wholesale; nothing leaks into a sibling bubble.
+
+The shape grows iteration by iteration:
+
+```
+Iteration 1:                  Iteration 2:                   Final:
+┌──────────────┐              ┌──────────────┐               ┌──────────────┐
+│ Working on…  │              │ Working on…  │               │ <response>   │
+│   ▸ tool 1   │              │   ▸ tool 1   │               │              │
+│   ▸ tool 2   │              │   [narr_1]   │               │              │
+└──────────────┘              │     ▸ tool 3 │               └──────────────┘
+                              │     ▸ tool 4 │
+                              └──────────────┘
+```
+
+- **Iter 1, pre-narration**: tool pills attach directly to the fastpath.
+- **Iter 2+, narration arrived**: each narration is a sub-bubble nested inside the fastpath; the iteration's tool pills nest under that narration.
+- **Final response**: `resolvePendingForm` wipes the fastpath's inner content and renders the response blocks in its place — narrations and pills disappear with it.
+
+Pills themselves are minimal monospace rows — name on the left, state on the right — with no chrome or fill. The defining visual is a thin iridescent gradient running along the bottom edge of each row (cyan → lavender, magenta on error), the same accent language as the rest of the Radiant surface.
 
 - **Active** (`tool-pill--active`) — full-opacity gradient with a small lavender spinner.
 - **Done** (`tool-pill--done`) — gradient fades to ~28% opacity; status slot shows the elapsed duration in seconds (e.g. `0.7s`).
 - **Error** (`tool-pill--error`) — gradient swaps to a pure magenta band; status slot reads `error`.
 
-The first pill on a turn replaces the `thinking-indicator` dots inside the pending bubble — they are redundant with the pill spinner, and removing them also makes the 2-second `upgradePendingText` timer a no-op (its `if (!dots) return` guard short-circuits) so the pills survive. If the first pill arrives after the upgrade has already fired, the "On it…" placeholder text stays as a parent label and pills nest below it.
+The thinking-dots placeholder lives inside the fastpath until the first pill or narration arrives — at which point it is removed (so the 2 s `upgradePendingText` timer becomes a no-op via its `if (!dots) return` guard). If the timer fires first, `upgradePendingText` swaps the dots for an "On it…" label using `replaceChild` so any sub-bubbles or pills already nested inside the fastpath survive the upgrade.
 
-Pills nest inside the current narration bubble when one exists; otherwise they attach to the pending form. Sub-100ms tools enforce a 150ms minimum visible duration so the spinner-to-state transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips. On multi-iteration turns, pills collapse with their parent narration bubble (`.narration-group--collapsed .tool-pill-row { display: none }`). On single-iteration turns, `resolvePendingForm` wipes the pending form entirely and pills disappear with it.
+Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips.
 
-**CSS classes:** `tool-pill-row` (vertical flex column hosting the pill stack), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`. The gradient is rendered via `tool-pill::after` so the row itself stays unbordered.
+**CSS classes:** `tool-pill-row` (vertical flex column hosting the pill stack), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`. The gradient is rendered via `tool-pill::after` so the row itself stays unbordered. Nested narration sub-bubbles use the `narration-bubble` class with a thin violet left edge marking each iteration.
 
-**Frontend wiring:** `renderer.js` exposes `appendToolPill(parentEl, callId, name)` and `resolveToolPill(callId, ms, ok)`. `chat.js` routes `act_tool_start` events to `appendToolPill` and `act_tool_end` events to `resolveToolPill`, using `_lastNarrationBubble` (set on each `appendNarrationBubble` call, cleared on `onDone`) to locate the correct host element.
+**Frontend wiring:** `renderer.js` exposes `appendNarrationBubble(parentEl, text, step)`, `appendToolPill(parentEl, callId, name)`, and `resolveToolPill(callId, ms, ok)`. `chat.js` keeps `pendingForm` (the fastpath) connected for the entire turn — `onNarration` nests bubbles inside it via `appendNarrationBubble(pendingForm, …)`, `onToolStart` routes to `_lastNarrationBubble` when set or to the fastpath otherwise, and `onDone` calls `resolvePendingForm` to wipe + replace the inner content with the final blocks.
 
 ## Presence Dot
 

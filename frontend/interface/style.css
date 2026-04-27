@@ -1061,16 +1061,29 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   40%           { transform: scale(1); opacity: 1; }
 }
 
-/* Narration Bubbles — live ACT loop progress */
+/* Narration Bubbles — live ACT loop progress.
+   Nested inside the fastpath (speech-form--chalie) as sub-messages.
+   The fastpath persists across the entire ACT loop; narrations stack
+   inside it iteration by iteration until the final response replaces
+   the whole bubble. */
 .narration-bubble {
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   color: var(--text-secondary);
-  padding: 6px 14px;
-  margin: 2px 0 2px 48px;
-  border-left: 2px solid rgba(138, 92, 255, 0.20);
+  padding: 4px 0 4px 12px;
+  margin: 10px 0 2px 0;
+  border-left: 2px solid rgba(138, 92, 255, 0.22);
   line-height: 1.5;
   animation: formEntry 200ms var(--ease-out) both;
-  max-width: 85%;
+}
+
+.narration-bubble:first-child {
+  margin-top: 2px;
+}
+
+/* Tool pills nested under a narration bubble indent slightly so they
+   visually belong to that iteration. */
+.narration-bubble .tool-pill-row {
+  margin-left: 12px;
 }
 
 .steer-bubble {
@@ -1202,40 +1215,6 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 @keyframes tool-pill-enter {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
-}
-
-/* Hide pills inside collapsed narration groups along with their bubble. */
-.narration-group--collapsed .tool-pill-row {
-  display: none;
-}
-
-.narration-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 2px 48px;
-}
-
-.narration-group--collapsed .narration-bubble,
-.narration-group--collapsed .steer-bubble {
-  display: none;
-}
-
-.narration-toggle {
-  background: none;
-  border: 1px solid rgba(138, 92, 255, 0.15);
-  border-radius: 10px;
-  color: var(--text-tertiary);
-  font-size: 0.72rem;
-  padding: 2px 10px;
-  cursor: pointer;
-  width: fit-content;
-  transition: all 220ms ease;
-}
-
-.narration-toggle:hover {
-  color: var(--text-secondary);
-  border-color: rgba(138, 92, 255, 0.30);
 }
 
 /* Error form */
