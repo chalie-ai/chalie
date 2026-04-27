@@ -29,13 +29,7 @@ def _load() -> dict[str, Ability]:
 
 
 def _all_concrete_subclasses(cls: type) -> list[type]:
-    """Recursively collect unique concrete (non-abstract, non-internal) subclasses.
-
-    Subclasses with ``INTERNAL = True`` (e.g. processor-internal abilities like
-    SavePatternAbility) are excluded from registry walk. They are still reachable
-    via direct import; this filter prevents them from surfacing as dispatchable
-    abilities even when test imports contaminate ``Ability.__subclasses__()``.
-    """
+    """Recursively collect unique concrete (non-abstract) subclasses of *cls*."""
     seen: set[type] = set()
     out: list[type] = []
 
@@ -44,9 +38,6 @@ def _all_concrete_subclasses(cls: type) -> list[type]:
             if sub in seen:
                 continue
             seen.add(sub)
-            if getattr(sub, "INTERNAL", False):
-                _walk(sub)
-                continue
             if not getattr(sub, "__abstractmethods__", None):
                 out.append(sub)
             _walk(sub)

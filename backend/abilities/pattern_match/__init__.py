@@ -1,6 +1,6 @@
-# Processor-internal abilities — NOT registered in AbilityRegistry.
+# Processor-internal helpers — plain classes, NOT Ability subclasses.
 # Only PatternMatchProcessor may import from this package.
-from abilities.pattern_match.save_graph import SaveGraphAbility
-from abilities.pattern_match.save_pattern import SavePatternAbility
+from abilities.pattern_match.save_graph import SaveGraph
+from abilities.pattern_match.save_pattern import SavePattern
 
-__all__ = ["SavePatternAbility", "SaveGraphAbility"]
+__all__ = ["SavePattern", "SaveGraph"]

@@ -157,13 +157,13 @@ class ActDispatcherService:
         # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
         # Falls back to self.timeout when the action type is not a registered ability.
         effective_timeout = self.timeout
+        from abilities._registry import AbilityRegistry
         try:
-            from abilities._registry import AbilityRegistry
             ability_timeout = AbilityRegistry.get(action_type).TIMEOUT
-            if ability_timeout and ability_timeout > effective_timeout:
-                effective_timeout = float(ability_timeout)
-        except (KeyError, Exception):
-            pass
+        except KeyError:
+            ability_timeout = None
+        if ability_timeout and ability_timeout > effective_timeout:
+            effective_timeout = float(ability_timeout)
 
         # Execute with timeout
         try:

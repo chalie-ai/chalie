@@ -1,8 +1,8 @@
 """
-Tool Library Service — Single source of truth for first-party tool metadata.
+Tool Library Service — first-party tool metadata + dynamic capability handlers.
 
-First-party tool execution is handled exclusively by AbilityRegistry.
-This module owns:
+First-party tool execution is handled exclusively by AbilityRegistry. This
+module owns:
   - TOOL_METADATA: prompt descriptions and input_schema for all first-party tools
   - Dynamic registration API (register_tool / unregister_tool) for capability plugins
 
@@ -13,8 +13,7 @@ Capability plugins (and tests) may register and unregister tools at runtime via
 :data:`TOOL_HANDLERS` / :data:`TOOL_METADATA` are protected by the
 module-level :data:`_registry_lock` so concurrent calls across threads are safe.
 
-Use :func:`get_all_tool_names` rather than the :data:`ALL_TOOL_NAMES` constant
-whenever the set of registered tools may have changed since import time.
+Read the live set of registered tool names with :func:`get_all_tool_names`.
 """
 
 import threading
@@ -32,12 +31,6 @@ except ImportError:
 # TOOL_HANDLERS holds only capability-plugin handlers registered at runtime.
 
 TOOL_HANDLERS: dict = {}
-
-#: Snapshot of built-in tool names taken at import time.  This constant is
-#: preserved for backward compatibility but reflects only the tools registered
-#: before any dynamic ``register_tool()`` calls.  Prefer
-#: :func:`get_all_tool_names` for code that runs after capability loading.
-ALL_TOOL_NAMES: frozenset = frozenset(TOOL_HANDLERS.keys())
 
 #: Module-level lock that serialises all reads and writes to
 #: :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA`.

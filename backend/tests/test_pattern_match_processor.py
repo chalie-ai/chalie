@@ -387,14 +387,14 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
     """Test 8 — save_graph with kind='behavioral_pattern' returns invalid_kind error."""
 
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
-        from abilities.pattern_match.save_graph import SaveGraphAbility
+        from abilities.pattern_match.save_graph import SaveGraph
 
         # Build a minimal processor stub that has the required counter attribute.
         class _StubProcessor:
             _save_graph_calls = 0
 
         processor = _StubProcessor()
-        result = SaveGraphAbility().execute_with_processor(
+        result = SaveGraph().execute(
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
             processor,
         )
@@ -461,7 +461,7 @@ class TestSaveGraphBudgetCapAt50:
     """Test 10 — 51 save_graph calls → 50 land, 51st returns budget_exceeded."""
 
     def test_save_graph_budget_cap_at_50(self, db, store):
-        from abilities.pattern_match.save_graph import SaveGraphAbility
+        from abilities.pattern_match.save_graph import SaveGraph
 
         class _StubProcessor:
             _save_graph_calls = 0
@@ -470,7 +470,7 @@ class TestSaveGraphBudgetCapAt50:
 
         results = []
         for i in range(51):
-            result = SaveGraphAbility().execute_with_processor(
+            result = SaveGraph().execute(
                 {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
                 processor,
             )

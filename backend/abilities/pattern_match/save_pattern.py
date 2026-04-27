@@ -1,14 +1,12 @@
-"""SavePatternAbility — processor-internal ability for PatternMatchProcessor.
+"""SavePattern — processor-internal helper for PatternMatchProcessor.
 
-NOT registered in AbilityRegistry. Only PatternMatchProcessor imports this.
-The normal Ability.execute() path is not used; callers must use
-execute_with_processor() which carries the processor context needed for budget
-tracking and bookkeeping.
+Not an Ability subclass and not registered in AbilityRegistry. Lives in a
+subdirectory so the registry's shallow ``glob("*.py")`` walk skips it. Only
+PatternMatchProcessor imports this module.
 """
 import json
 import re
 
-from abilities._base import Ability
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
 
@@ -20,22 +18,8 @@ _NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
 
 
-class SavePatternAbility(Ability):
+class SavePattern:
     NAME = "save_pattern"
-    SUMMARY = (
-        "Record a repeating behavioural pattern observed in the user's "
-        "transcripts. Processor-internal: only PatternMatchProcessor may call this."
-    )
-    EXAMPLES = [
-        "user exercises every morning",
-        "user checks email at 07:00 daily",
-        "user reads news on weekdays",
-        "user meditates on weekends",
-        "user drinks coffee after waking",
-        "user walks dog in the evening",
-        "user reviews tasks before bed",
-        "user calls family on Sundays",
-    ]
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
@@ -59,11 +43,7 @@ class SavePatternAbility(Ability):
         },
         "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
     }
-    ALWAYS_AVAILABLE = False
-    INTERNAL = True
-    TIMEOUT = 10
 
-    # Canonical tool schema consumed by PatternMatchProcessor.getDynamicTools().
     TOOL_SCHEMA: dict = {
         "name": NAME,
         "description": (
@@ -75,23 +55,15 @@ class SavePatternAbility(Ability):
         "input_schema": INPUT_SCHEMA,
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        """Not used via normal ability dispatch — call execute_with_processor() instead."""
-        raise NotImplementedError(
-            "SavePatternAbility is processor-internal. Use execute_with_processor()."
-        )
-
-    def execute_with_processor(self, args: dict, processor: object) -> dict:
+    def execute(self, args: dict, processor: object) -> dict:
         """Persist a behavioural pattern row.
 
         processor must be a PatternMatchProcessor instance — reads/writes
         _save_pattern_calls and _touched_pattern_ids.
         """
-        # 1. Budget cap
         if processor._save_pattern_calls >= 20:
             return {"budget_exceeded": True, "tool": "save_pattern"}
 
-        # 2. Validate
         name = args.get("name", "")
         if not name or not _NAME_PATTERN.fullmatch(name):
             return {"error": "invalid_name", "name": name}
@@ -112,7 +84,6 @@ class SavePatternAbility(Ability):
             }
         time_anchor = args.get("time_anchor", "") or ""
 
-        # 3. UPSERT raw SQL
         now_iso = utc_now().isoformat()
         db = get_shared_db_service()
 
@@ -133,7 +104,6 @@ class SavePatternAbility(Ability):
                 prev_conf = float(prev.get("confidence") or 0.0)
                 new_conf = min(10.0, prev_conf + 7.0)
                 prev_evidence = prev.get("evidence_transcript_ids") or []
-                # Merge evidence: union with order preservation, dedup
                 merged = list(dict.fromkeys([*prev_evidence, *evidence]))
                 new_value = {
                     "name": name,
@@ -178,7 +148,6 @@ class SavePatternAbility(Ability):
                 row_id = cur.lastrowid
                 confidence_out = 7.0
 
-        # 4. Bookkeep
         processor._touched_pattern_ids.add(row_id)
         processor._save_pattern_calls += 1
 

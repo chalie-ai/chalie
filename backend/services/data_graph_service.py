@@ -48,7 +48,7 @@ _KIND_POLICY = {
     KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
     KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
-    # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePatternAbility
+    # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
     # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
     # soft-delete at 0) is handled by PatternMatchProcessor.postTurn() — DecayEngine
     # does NOT touch this kind.

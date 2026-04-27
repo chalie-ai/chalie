@@ -180,7 +180,6 @@ Every concrete ability subclasses `Ability` and declares:
 | `EXAMPLES` | `list[str]` | 6–8 natural-language phrases for EXAMPLE rows (enforced by `__init_subclass__`). |
 | `INPUT_SCHEMA` | `dict` | JSON Schema for `execute()` params. |
 | `ALWAYS_AVAILABLE` | `bool` | `True` = always in the channel's tool list (innate); `False` = discoverable via `find_tools` only. |
-| `INTERNAL` | `bool` | `True` excludes the class from `AbilityRegistry` even when reachable via `Ability.__subclasses__()`. Reserved for processor-internal abilities (see Pattern-match exclusion below). Default `False`. |
 | `TIMEOUT` | `int` | Per-call timeout in seconds (default 10). |
 
 The `execute(channel, params, telemetry)` method is the sole dispatch surface. `pre_dispatch` and `post_dispatch` hooks exist for subclass-level lifecycle work.
@@ -207,13 +206,13 @@ Per-ability implementation notes:
 - `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`.
 - `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared.
 
-### Pattern-match exclusion via `INTERNAL=True`
+### Pattern-match helpers — plain classes, not Ability subclasses
 
-`abilities/pattern_match/save_pattern.py` and `abilities/pattern_match/save_graph.py` are processor-internal abilities used only by `PatternMatchProcessor`. They subclass `Ability` (so they share the schema-validation, telemetry, and tag-formatting machinery) but declare `INTERNAL = True`. This keeps them out of `AbilityRegistry.all()` even when test files import them directly (which would otherwise pollute `Ability.__subclasses__()`). The registry walk explicitly filters classes with `INTERNAL=True` set on the class itself; the subdirectory layout (`abilities/pattern_match/` not `abilities/`) is a defence-in-depth so a top-level `glob("*.py")` would still skip them if the flag were ever forgotten.
+`abilities/pattern_match/save_pattern.py` (`SavePattern`) and `abilities/pattern_match/save_graph.py` (`SaveGraph`) are processor-internal helpers used only by `PatternMatchProcessor`. They are intentionally **plain Python classes** (no `Ability` inheritance) so that even when a test imports them directly they cannot pollute `Ability.__subclasses__()` and slip into the registry walk. The subdirectory layout (`abilities/pattern_match/` not `abilities/`) is defence-in-depth: the registry's shallow `glob("*.py")` over `abilities/` skips them at the file-system level. Each helper exposes a `TOOL_SCHEMA` consumed directly by `PatternMatchProcessor.getDynamicTools()` and an `execute(args, processor)` method that reads/writes processor state.
 
 ### Registry (`backend/abilities/_registry.py`)
 
-Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access via shallow `glob("*.py")` (skipping files starting with `_`), then traverses `Ability.__subclasses__()` filtering out abstract classes and `INTERNAL=True` classes. The registry is the single source of truth for which abilities are active in the process and is the only path an `Ability` instance is created — no module elsewhere instantiates an ability directly.
+Singleton with an `RLock`. Lazily walks `backend/abilities/` on first access via shallow `glob("*.py")` (skipping files starting with `_`), then traverses `Ability.__subclasses__()` filtering out abstract classes. The registry is the single source of truth for which abilities are active in the process and is the only path an `Ability` instance is created — no module elsewhere instantiates an ability directly.
 
 ---
 
