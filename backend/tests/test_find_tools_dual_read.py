@@ -11,15 +11,14 @@ Strategy: monkeypatch _ABILITIES_DB_PATH in find_tools_skill to a tmp_path
 database. Use either the production 256-dim db fixture or a local 768-dim
 fixture depending on which embedding dimension the test path requires.
 
-Real embeddings are generated once per session via _real_embeddings fixture so
-they are available before any patch() decorator activates.
+Real embeddings are generated once per session via _real_embeddings fixture.
+Real EmbeddingService and ToolRegistryService are used — no mocks.
 """
 
 import shutil
 import sqlite3
 import struct
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -29,8 +28,6 @@ from services.innate_skills.find_tools_skill import handle_find_tools
 
 pytestmark = pytest.mark.unit
 
-_REGISTRY = 'services.tool_registry_service.ToolRegistryService'
-_EMB = 'services.embedding_service.EmbeddingService'
 
 # ---------------------------------------------------------------------------
 # Session-scoped real embeddings (computed once, reused across all tests)
@@ -40,7 +37,7 @@ _EMB = 'services.embedding_service.EmbeddingService'
 def _real_embeddings():
     """Return pre-computed 768-dim embeddings for reuse across tests.
 
-    Computed once per process before any patch() context activates.
+    Computed once per process using the real EmbeddingService.
     """
     from services.embedding_service import EmbeddingService
     es = EmbeddingService()
@@ -110,6 +107,32 @@ def db768(_db_template_768, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Real ToolRegistryService fixture — seeds the singleton's tools dict directly
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _real_registry():
+    """Yield a real ToolRegistryService with a clean tools dict.
+
+    Resets the module-level singleton before and after each test so tests
+    don't bleed state. Returns the live instance for per-test seeding.
+    """
+    import services.tool_registry_service as _trs_mod
+    from services.tool_registry_service import ToolRegistryService
+
+    # Reset the singleton so __init__ runs fresh
+    _trs_mod._instance = None
+    registry = ToolRegistryService()
+    # Override tools with an empty dict — tests seed what they need
+    registry.tools = {}
+
+    yield registry
+
+    # Cleanup: reset again so subsequent tests get a clean slate
+    _trs_mod._instance = None
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -117,12 +140,14 @@ def _pack_embedding(values):
     return struct.pack(f'{len(values)}f', *values)
 
 
-def _mock_registry(tools=None):
-    mock = MagicMock()
-    mock.tools = tools or {}
-    mock._is_ready.return_value = True
-    mock._is_interface_online.return_value = True
-    return mock
+def _library_tool_entry(manifest=None):
+    """Minimal registry entry that passes _is_ready() and _is_interface_online()."""
+    return {
+        "manifest": manifest or {
+            "input_schema": {"type": "object", "properties": {}, "required": []}
+        },
+        "source_type": "library",
+    }
 
 
 def _seed_old_db_tool(conn, tool_name, embedding):
@@ -200,17 +225,15 @@ class TestDualRead:
 
     # -- 1. New-DB-only weather discovery ------------------------------------
 
-    @patch(_REGISTRY)
-    @patch(_EMB)
     def test_new_db_only_weather_discovered(
-        self, mock_emb_cls, mock_registry_cls, db768, tmp_path, monkeypatch, _real_embeddings
+        self, db768, tmp_path, monkeypatch, _real_embeddings, _real_registry
     ):
-        """Weather in new DB, no weather in old DB → 'weather' appears in _discovered_tools."""
-        query_emb = _real_embeddings["query"]
-        weather_emb = _real_embeddings["weather_summary"]
+        """Weather in new DB, no weather in old DB → 'weather' appears in _discovered_tools.
 
-        # EmbeddingService mock returns real 768-dim query embedding
-        mock_emb_cls.return_value.generate_embedding.return_value = query_emb
+        New-DB rows bypass registry checks (they are pre-scored dicts), so the
+        empty real registry is sufficient — no tool seeding needed here.
+        """
+        weather_emb = _real_embeddings["weather_summary"]
 
         # Build new DB with weather (768-dim; matches abilities.sqlite schema)
         new_db_path = tmp_path / "abilities.sqlite"
@@ -221,9 +244,8 @@ class TestDualRead:
         }])
         monkeypatch.setattr(_fts_mod, "_ABILITIES_DB_PATH", new_db_path)
 
-        # Old DB (db768): no weather rows, so old-DB vec search returns 0 rows.
-        # Registry mock returns empty tools — new-DB path (bypasses registry) is the only source.
-        mock_registry_cls.return_value = _mock_registry(tools={})
+        # Old DB (db768): no weather rows — new-DB is the only source.
+        # Registry has no tools — new-DB rows bypass registry checks entirely.
 
         result = handle_find_tools("text", {"query": "weather forecast"})
         assert isinstance(result, dict)
@@ -233,25 +255,24 @@ class TestDualRead:
 
     # -- 2. Old-DB-only weather discovery (regression) -----------------------
 
-    @patch(_REGISTRY)
-    @patch(_EMB)
     def test_old_db_only_weather_still_discovered(
-        self, mock_emb_cls, mock_registry_cls, db, tmp_path, monkeypatch
+        self, db768, tmp_path, monkeypatch, _real_embeddings, _real_registry
     ):
-        """Old-DB has weather, new DB is empty → 'weather' still surfaces (regression guard)."""
-        # 256-dim matches the standard db fixture schema
-        embedding = [0.1] * 256
-        mock_emb_cls.return_value.generate_embedding.return_value = embedding
+        """Old-DB has weather, new DB is empty → 'weather' still surfaces (regression guard).
 
-        _seed_old_db_tool(db, "weather", embedding)
+        Uses db768 (768-dim vec table) so the real EmbeddingService query embedding
+        matches the stored vector dimension without a mismatch error.
+        """
+        embedding = _real_embeddings["weather_summary"]
+
+        _seed_old_db_tool(db768, "weather", embedding)
 
         new_db_path = tmp_path / "abilities.sqlite"
         _schema_only_abilities_sqlite(new_db_path)
         monkeypatch.setattr(_fts_mod, "_ABILITIES_DB_PATH", new_db_path)
 
-        mock_registry_cls.return_value = _mock_registry(tools={"weather": {"manifest": {
-            "input_schema": {"type": "object", "properties": {}, "required": []}
-        }}})
+        # Old-DB tuples go through registry checks: seed the real registry
+        _real_registry.tools["weather"] = _library_tool_entry()
 
         result = handle_find_tools("text", {"query": "weather forecast"})
         assert "weather" in result["_discovered_tools"], (
@@ -260,16 +281,12 @@ class TestDualRead:
 
     # -- 3. Dedup: both DBs contain "weather" — appears exactly once ---------
 
-    @patch(_REGISTRY)
-    @patch(_EMB)
     def test_dedup_weather_appears_once_when_in_both_dbs(
-        self, mock_emb_cls, mock_registry_cls, db768, tmp_path, monkeypatch, _real_embeddings
+        self, db768, tmp_path, monkeypatch, _real_embeddings, _real_registry
     ):
         """Both DBs have 'weather'. _discovered_tools lists it exactly once."""
         query_emb = _real_embeddings["query"]
         weather_emb = _real_embeddings["weather_summary"]
-
-        mock_emb_cls.return_value.generate_embedding.return_value = query_emb
 
         # New DB
         new_db_path = tmp_path / "abilities.sqlite"
@@ -283,9 +300,8 @@ class TestDualRead:
         # Old DB also has weather (768-dim to match db768)
         _seed_old_db_tool(db768, "weather", query_emb)
 
-        mock_registry_cls.return_value = _mock_registry(tools={"weather": {"manifest": {
-            "input_schema": {"type": "object", "properties": {}, "required": []}
-        }}})
+        # Registry entry needed only if old-DB row survives dedup (it won't — new DB wins)
+        _real_registry.tools["weather"] = _library_tool_entry()
 
         result = handle_find_tools("text", {"query": "weather forecast"})
         discovered = result["_discovered_tools"]
@@ -296,23 +312,17 @@ class TestDualRead:
 
     # -- 4. Missing new DB: graceful degrade, old-DB results surface ---------
 
-    @patch(_REGISTRY)
-    @patch(_EMB)
     def test_missing_new_db_falls_back_to_old_db(
-        self, mock_emb_cls, mock_registry_cls, db, tmp_path, monkeypatch
+        self, db768, tmp_path, monkeypatch, _real_embeddings, _real_registry
     ):
         """If abilities.sqlite does not exist, old-DB results still surface; no exception raised."""
-        embedding = [0.1] * 256
-        mock_emb_cls.return_value.generate_embedding.return_value = embedding
-
-        _seed_old_db_tool(db, "weather", embedding)
+        embedding = _real_embeddings["weather_summary"]
+        _seed_old_db_tool(db768, "weather", embedding)
 
         nonexistent = tmp_path / "does_not_exist" / "abilities.sqlite"
         monkeypatch.setattr(_fts_mod, "_ABILITIES_DB_PATH", nonexistent)
 
-        mock_registry_cls.return_value = _mock_registry(tools={"weather": {"manifest": {
-            "input_schema": {"type": "object", "properties": {}, "required": []}
-        }}})
+        _real_registry.tools["weather"] = _library_tool_entry()
 
         result = handle_find_tools("text", {"query": "weather forecast"})
         assert isinstance(result, dict)
@@ -320,24 +330,18 @@ class TestDualRead:
 
     # -- 5. Empty new DB: adds nothing, identical to old-DB-only ------------
 
-    @patch(_REGISTRY)
-    @patch(_EMB)
     def test_empty_new_db_adds_nothing(
-        self, mock_emb_cls, mock_registry_cls, db, tmp_path, monkeypatch
+        self, db768, tmp_path, monkeypatch, _real_embeddings, _real_registry
     ):
         """Schema-only abilities.sqlite (zero rows) contributes nothing; old-DB result unchanged."""
-        embedding = [0.1] * 256
-        mock_emb_cls.return_value.generate_embedding.return_value = embedding
-
-        _seed_old_db_tool(db, "weather", embedding)
+        embedding = _real_embeddings["weather_summary"]
+        _seed_old_db_tool(db768, "weather", embedding)
 
         new_db_path = tmp_path / "abilities.sqlite"
         _schema_only_abilities_sqlite(new_db_path)
         monkeypatch.setattr(_fts_mod, "_ABILITIES_DB_PATH", new_db_path)
 
-        mock_registry_cls.return_value = _mock_registry(tools={"weather": {"manifest": {
-            "input_schema": {"type": "object", "properties": {}, "required": []}
-        }}})
+        _real_registry.tools["weather"] = _library_tool_entry()
 
         result = handle_find_tools("text", {"query": "weather forecast"})
         assert "weather" in result["_discovered_tools"]

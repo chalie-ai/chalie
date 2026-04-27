@@ -202,18 +202,22 @@ def test_execute_cache_hit_calls_requests_once():
 
 
 # ---------------------------------------------------------------------------
-# execute() — fallback: Open-Meteo 500 → wttr.in used for city-name param
+# execute() — wttr.in retry: first attempt returns 500, second succeeds
 # ---------------------------------------------------------------------------
 
-def test_execute_falls_back_to_wttr_when_open_meteo_fails_for_city_param():
-    """When Open-Meteo is unavailable and a city name param is given, wttr.in response is accepted."""
+def test_execute_retries_wttr_on_first_failure():
+    """wttr.in returns 500 on the first attempt; retry path triggers and second attempt succeeds.
+
+    When a location param is given with no telemetry coords, the production
+    guard (weather.py:117) never tries Open-Meteo — both requests.get calls
+    target wttr.in. The first returns HTTP 500; the retry returns the full
+    wttr.in JSON response and the result is parsed successfully.
+    """
     side_effects = [
         _make_http_response({}, status_code=500),
         _make_http_response(_WTTR_RESPONSE),
     ]
 
-    # Open-Meteo is only tried when we have coords without a location param.
-    # With an explicit location param and no coords, only wttr.in is called.
     with patch("requests.get", side_effect=side_effects):
         result = WeatherAbility().execute("text", {"location": "London"}, None)
 
