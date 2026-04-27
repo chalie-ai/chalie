@@ -1,19 +1,19 @@
 # Tools System
 
-Every dispatchable capability in Chalie is an `Ability` subclass under `backend/abilities/`. The framework knows two categories, distinguished by a single class attribute:
+Every dispatchable capability in Chalie is an `Ability` subclass under `backend/abilities/`. Tool scope — which abilities are pre-injected and which are discoverable — is declared on each `MessageProcessor` subclass, not on the `Ability` ABC itself.
 
-**Innate abilities** (`ALWAYS_AVAILABLE = True`) are core cognitive capabilities — memory, schedule, list, goal_pursuit, document, read, find_tools, rich_render, and review_tool_calls. They have direct access to Chalie's services and memory and are loaded on every user turn.
+**Innate abilities (ALWAYS_AVAILABLE)** are pre-injected on every ACT iteration for the current processor. For `UserMessageProcessor` this set is: `document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `rich_render`, `schedule`. Other processors declare their own lists; the subconscious `PatternMatchProcessor`, for example, carries only `save_pattern` and `save_graph`.
 
-**Discoverable abilities** (`ALWAYS_AVAILABLE = False`) are surfaced this turn via the `find_tools` innate ability's semantic search. They cover everything the LLM cannot do unaided: search, news, live weather, sandboxed code execution, programming-doc lookup, browser automation, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
+**Discoverable abilities (DISCOVERABLE)** are never pre-injected. The `find_tools` ability performs semantic search against `abilities.sqlite` at runtime, restricted to the names listed in the calling processor's `DISCOVERABLE` class var. For `UserMessageProcessor` the discoverable set is: `browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
 **Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They are projected into the abilities surface at boot via the same RRF discovery path. See [15-INTERFACES.md](15-INTERFACES.md).
 
-## How tools are loaded on a user turn
+## How tools are loaded on a turn
 
 Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
 
-1. **Unconditional** — every innate ability. Always present.
-2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` innate ability's semantic search. Every non-innate ability (first-party + interface) is reachable exclusively through this path.
+1. **Unconditional** — every ability in the processor's `ALWAYS_AVAILABLE` list. Always present.
+2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` ability's semantic search, gated to the processor's `DISCOVERABLE` list. Every non-innate ability (first-party + interface) is reachable exclusively through this path.
 
 `ModeGateService` runs once per user turn but **does not gate tool availability**. It classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`. The active mode set powers prompt-steering directives in `UserMessageProcessor` (long-summary swap on `converse`, brainstorm/research/analyze suffixes appended to the system prompt) and is reserved for future mode-driven features.
 
@@ -45,13 +45,15 @@ class WeatherAbility(Ability):
         # 6 to 8 entries total — enforced by __init_subclass__
     ]
     INPUT_SCHEMA = {"type": "object", "properties": {...}}
-    ALWAYS_AVAILABLE = False  # discoverable via find_tools
+    TIMEOUT = 10  # optional; default is 10
 
     def execute(self, channel, params, telemetry):
         ...
 ```
 
-`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. After adding or changing an ability, regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
+`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability.
+
+After registering the ability, wire it into the appropriate processor(s). For a discoverable ability, add its `NAME` to `DISCOVERABLE` on the processors that should be able to find it (e.g. `UserMessageProcessor.DISCOVERABLE`). For an always-available ability, add it to `ALWAYS_AVAILABLE` instead. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
 ## Configuration
 
