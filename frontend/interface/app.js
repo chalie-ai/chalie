@@ -478,7 +478,7 @@ class ChalieApp {
       if (!payload || this._chat.isSending) return;
 
       this._chat.isSending = true;
-      const pendingForm = this.renderer.createPendingForm();
+      const actEl = this.renderer.createActCycle();
 
       this.ws.sendAction(payload, {
         onMessage: (data) => {
@@ -487,14 +487,10 @@ class ChalieApp {
             mode: data.mode || 'ACT',
             confidence: data.confidence || 0.95,
           };
-          if (pendingForm.isConnected) {
-            this.renderer.resolvePendingForm(pendingForm, blocks, meta);
-          } else {
-            this.renderer.appendChalieForm(blocks, meta);
-          }
+          this.renderer.replaceActWithResponse(actEl, blocks, meta);
         },
         onError: (data) => {
-          this.renderer.resolvePendingFormError(pendingForm, data.message);
+          this.renderer.replaceActWithError(actEl, data.message);
         },
         onDone: () => {
           this._chat.isSending = false;

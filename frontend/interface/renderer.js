@@ -140,93 +140,90 @@ export class Renderer {
     return el;
   }
 
-  /** Create a pending (thinking dots) form. Returns the element. */
-  createPendingForm() {
-    const el = this._createEl('div', 'speech-form speech-form--chalie');
-    const dots = this._createEl('div', 'thinking-indicator');
-    for (let i = 0; i < 3; i++) {
-      dots.appendChild(this._createEl('div', 'thinking-indicator__dot'));
-    }
-    el.appendChild(dots);
+  /**
+   * Create an ACT-cycle host — chrome-less placeholder for the live tool loop.
+   *
+   * Structure:
+   *   .act-cycle
+   *     .act-row          (logo + narrative line)
+   *       .act-logo       (blinking violet disc, always present)
+   *       .act-narrative  (italic text, mutated in-place by setActNarrative)
+   *     .act-tools        (cumulative tool list, populated by appendToolPill)
+   *
+   * No background, no border, no padding — the logo IS the placeholder.
+   * On final response, replaceActWithResponse swaps the whole node for a
+   * normal Chalie speech-form bubble.
+   */
+  createActCycle() {
+    const el = this._createEl('div', 'act-cycle');
+
+    const row = this._createEl('div', 'act-row');
+    const logo = this._createEl('span', 'act-logo');
+    const narrative = this._createEl('span', 'act-narrative');
+    row.appendChild(logo);
+    row.appendChild(narrative);
+    el.appendChild(row);
+
+    const tools = this._createEl('div', 'act-tools');
+    el.appendChild(tools);
+
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
   }
 
   /**
-   * Append a narration bubble as a sub-message inside the persistent fastpath
-   * (the pendingForm). The fastpath stays put for the entire ACT loop —
-   * narrations stack inside it as Chalie progresses through iterations.
+   * Set the active narration text inside an ACT cycle.
+   * Replaces the previous narrative — the spec is one-line-at-a-time, not
+   * a stack of iterations. The logo stays put; only the text mutates.
    *
-   * Removes the thinking-indicator on first narration so the placeholder dots
-   * don't co-exist with sub-bubble content (and so the t=2s upgradePendingText
-   * timer becomes a no-op via its `if (!dots) return` guard).
-   *
-   * @param {HTMLElement} parentEl — the fastpath bubble (pendingForm)
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} text — narration line from the LLM
-   * @param {number} step — iteration number
+   * @param {number} [step] — iteration number (stored as data attribute)
    */
-  appendNarrationBubble(parentEl, text, step) {
-    if (!parentEl) return null;
-
-    const dots = parentEl.querySelector(':scope > .thinking-indicator');
-    if (dots) dots.remove();
-
-    const bubble = this._createEl('div', 'narration-bubble');
-    bubble.dataset.step = step;
-    bubble.textContent = text;
-    parentEl.appendChild(bubble);
+  setActNarrative(actEl, text, step) {
+    if (!actEl) return;
+    const slot = actEl.querySelector(':scope > .act-row > .act-narrative');
+    if (!slot) return;
+    slot.textContent = text || '';
+    if (step != null) slot.dataset.step = String(step);
     this._scrollToBottom();
-    return bubble;
   }
 
   /**
-   * Append a tool pill — inline progress indicator for a single tool call.
-   * Pills nest inside the latest narration bubble (subsequent iterations) or
-   * directly inside the fastpath (iter 1, pre-narration). The fastpath bubble
-   * persists across the whole ACT loop and is wiped + replaced by the final
-   * response, so pills disappear with it on resolve.
+   * Append a tool row to an ACT cycle's cumulative tool list.
+   * Tool rows span the entire ACT loop — they are NOT nested under narrations.
    *
-   * @param {HTMLElement} parentEl — narration-bubble or fastpath element
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} callId — server-assigned id for resolveToolPill lookup
    * @param {string} name — tool name to display
-   * @returns {HTMLElement|null} the pill element (null if parentEl falsy)
+   * @returns {HTMLElement|null} the row element (null if actEl falsy)
    */
-  appendToolPill(parentEl, callId, name) {
-    if (!parentEl || !callId) return null;
+  appendToolPill(actEl, callId, name) {
+    if (!actEl || !callId) return null;
+    const host = actEl.querySelector(':scope > .act-tools');
+    if (!host) return null;
 
-    // First pill in a pending bubble replaces the thinking dots — they're
-    // redundant with the pill spinner and would otherwise be wiped by the
-    // 2s upgradePendingText timer (which would also wipe these pills).
-    const dots = parentEl.querySelector(':scope > .thinking-indicator');
-    if (dots) dots.remove();
+    const row = this._createEl('div', 'act-tool act-tool--running');
+    row.dataset.callId = callId;
+    row.dataset.startedAt = String(Date.now());
 
-    let host = parentEl.querySelector(':scope > .tool-pill-row');
-    if (!host) {
-      host = this._createEl('div', 'tool-pill-row');
-      parentEl.appendChild(host);
-    }
-
-    const pill = this._createEl('div', 'tool-pill tool-pill--active');
-    pill.dataset.callId = callId;
-    pill.dataset.startedAt = String(Date.now());
-
-    const nameEl = this._createEl('span', 'tool-pill__name');
+    const nameEl = this._createEl('span', 'act-tool__name');
     nameEl.textContent = name || 'tool';
 
-    const statusEl = this._createEl('span', 'tool-pill__status');
-    const spinner = this._createEl('span', 'tool-pill__spinner');
+    const statusEl = this._createEl('span', 'act-tool__status');
+    const spinner = this._createEl('span', 'act-spinner');
     statusEl.appendChild(spinner);
 
-    pill.appendChild(nameEl);
-    pill.appendChild(statusEl);
-    host.appendChild(pill);
+    row.appendChild(nameEl);
+    row.appendChild(statusEl);
+    host.appendChild(row);
     this._scrollToBottom();
-    return pill;
+    return row;
   }
 
   /**
-   * Resolve a tool pill — transitions spinner → duration (ok) or "error" (!ok).
+   * Resolve a tool row — spinner → duration (ok) or literal "error" (!ok).
    * Enforces a 150ms minimum visible duration so sub-100ms tools still flash
    * the spinner before settling.
    *
@@ -236,19 +233,19 @@ export class Renderer {
    */
   resolveToolPill(callId, ms, ok) {
     if (!callId) return;
-    const pill = this._spine.querySelector(
-      `.tool-pill[data-call-id="${CSS.escape(callId)}"]`
+    const row = this._spine.querySelector(
+      `.act-tool[data-call-id="${CSS.escape(callId)}"]`
     );
-    if (!pill) return;
+    if (!row) return;
 
-    const startedAt = parseInt(pill.dataset.startedAt || '0', 10);
+    const startedAt = parseInt(row.dataset.startedAt || '0', 10);
     const elapsed = startedAt ? Date.now() - startedAt : 200;
     const wait = Math.max(0, 150 - elapsed);
 
     setTimeout(() => {
-      pill.classList.remove('tool-pill--active');
-      pill.classList.add(ok ? 'tool-pill--done' : 'tool-pill--error');
-      const statusEl = pill.querySelector('.tool-pill__status');
+      row.classList.remove('act-tool--running');
+      row.classList.add(ok ? 'act-tool--done' : 'act-tool--error');
+      const statusEl = row.querySelector('.act-tool__status');
       if (!statusEl) return;
       statusEl.innerHTML = '';
       if (ok) {
@@ -268,9 +265,9 @@ export class Renderer {
     const bubble = this._createEl('div', 'steer-bubble');
     bubble.textContent = text;
 
-    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
-    if (pending) {
-      this._spine.insertBefore(bubble, pending);
+    const act = this._spine.querySelector('.act-cycle');
+    if (act) {
+      this._spine.insertBefore(bubble, act);
     } else {
       this._spine.appendChild(bubble);
     }
@@ -279,58 +276,34 @@ export class Renderer {
   }
 
   /**
-   * Replace a pending form's thinking dots with actual content.
-   * @param {HTMLElement} form
+   * Replace an ACT cycle with a final Chalie response bubble.
+   * The act-cycle node is removed; a fresh .speech-form--chalie is appended
+   * in its place. This is the spec-mandated transition: ACT UI vanishes
+   * entirely on completion, replaced by a normal chat bubble.
+   *
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {Array} blocks — block protocol array
    * @param {{topic?: string, duration_ms?: number}} [meta]
    */
-  resolvePendingForm(form, blocks, meta = {}) {
-    form.innerHTML = '';
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
-    form.appendChild(textEl);
-
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
-    form.appendChild(metaRow);
-
-    this._setActiveForm(form);
-    this._scrollToBottom();
+  replaceActWithResponse(actEl, blocks, meta = {}) {
+    if (actEl && actEl.isConnected) actEl.remove();
+    return this.appendChalieForm(blocks, meta);
   }
 
   /**
-   * Replace a pending form with an error message.
-   * @param {HTMLElement} form
+   * Replace an ACT cycle with an error speech-form.
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} message
    */
-  resolvePendingFormError(form, message) {
-    form.innerHTML = '';
-    form.classList.add('speech-form--error');
+  replaceActWithError(actEl, message) {
+    if (actEl && actEl.isConnected) actEl.remove();
+    const el = this._createEl('div', 'speech-form speech-form--chalie speech-form--error');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = message;
-    form.appendChild(textEl);
+    el.appendChild(textEl);
+    this._spine.appendChild(el);
     this._scrollToBottom();
-  }
-
-  /**
-   * Upgrade a pending (thinking dots) form to a brief placeholder phrase.
-   * Called after 2 seconds when the response is still in flight.
-   *
-   * Replaces the dots with a text label but preserves any narration sub-bubbles
-   * or tool pills that have already accumulated inside the form. The fastpath
-   * persists for the whole ACT loop so its inner content must survive this
-   * upgrade.
-   *
-   * @param {HTMLElement} form
-   */
-  upgradePendingText(form) {
-    const phrases = ['Working on it...', 'One moment...', 'On it...', 'Thinking...'];
-    const text = phrases[Math.floor(Math.random() * phrases.length)];
-    const dots = form.querySelector(':scope > .thinking-indicator');
-    if (!dots) return; // already resolved
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
-    textEl.style.opacity = '0.80';
-    form.replaceChild(textEl, dots);
+    return el;
   }
 
   /** Remove all children from the spine. */

@@ -1038,52 +1038,133 @@ body {
 /* Hide all voice controls when the voice service is unavailable */
 body.voice-unavailable .speech-form__speak-btn { display: none; }
 
-/* Thinking indicator */
-.thinking-indicator {
+/* ACT cycle — chrome-less live tool loop UI.
+   Layout:
+     .act-cycle
+       .act-row
+         .act-logo        (blinking violet disc — IS the placeholder)
+         .act-narrative   (italic, replaces in-place each iteration)
+       .act-tools         (cumulative MONO list across the whole ACT loop)
+   No background, no border, no padding. Replaced wholesale by the final
+   .speech-form--chalie bubble on act_done. */
+.act-cycle {
+  align-self: flex-start;
+  max-width: 90%;
   display: flex;
-  gap: 6px;
-  padding: var(--space-lg);
-}
-
-.thinking-indicator__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  animation: thinkingBounce 1.4s ease-in-out infinite;
-}
-
-.thinking-indicator__dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking-indicator__dot:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes thinkingBounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40%           { transform: scale(1); opacity: 1; }
-}
-
-/* Narration Bubbles — live ACT loop progress.
-   Nested inside the fastpath (speech-form--chalie) as sub-messages.
-   The fastpath persists across the entire ACT loop; narrations stack
-   inside it iteration by iteration until the final response replaces
-   the whole bubble. */
-.narration-bubble {
-  font-size: 0.86rem;
-  color: var(--text-secondary);
-  padding: 4px 0 4px 12px;
-  margin: 10px 0 2px 0;
-  border-left: 2px solid rgba(138, 92, 255, 0.22);
-  line-height: 1.5;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
   animation: formEntry 200ms var(--ease-out) both;
 }
 
-.narration-bubble:first-child {
-  margin-top: 2px;
+.act-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
 }
 
-/* Tool pills nested under a narration bubble indent slightly so they
-   visually belong to that iteration. */
-.narration-bubble .tool-pill-row {
-  margin-left: 12px;
+.act-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--violet);
+  flex-shrink: 0;
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
+.act-narrative {
+  font-style: italic;
+  color: var(--text-primary);
+  opacity: 0.75;
+  line-height: 1.5;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+}
+
+.act-narrative:empty {
+  display: none;
+}
+
+/* Tool list — indented under the logo (logo width 12 + gap 12 = 24). */
+.act-tools {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.act-tools:empty {
+  display: none;
+}
+
+.act-tool {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+  min-width: 220px;
+  max-width: 320px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-tool__name {
+  font-weight: 500;
+}
+
+.act-tool__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+
+/* States — use Chalie's canonical token colors. Opacity carries the dim. */
+.act-tool--running {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.act-tool--done {
+  color: var(--success);
+  opacity: 0.9;
+}
+
+.act-tool--error {
+  color: var(--error);
+  opacity: 0.5;
+}
+
+/* Spinner — small lavender ring, matches reference design */
+.act-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  animation: act-spinner-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes act-spinner-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes act-logo-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 4px rgba(138, 92, 255, 0.25);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(138, 92, 255, 0.7);
+  }
 }
 
 .steer-bubble {
@@ -1097,124 +1178,6 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   line-height: 1.5;
   animation: formEntry 200ms var(--ease-out) both;
   max-width: 70%;
-}
-
-/* Tool pills — minimal vertical rows, iridescent gradient bottom border.
-   Per Radiant design spec: name LEFT, state RIGHT, no chrome, no fill.
-   Stack vertically under the parent (narration bubble or pending bubble). */
-.tool-pill-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin-top: 8px;
-  width: 100%;
-  max-width: 360px;
-}
-
-.tool-pill {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 2px;
-  width: 100%;
-  font-size: 0.82rem;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  line-height: 1;
-  background: transparent;
-  border: 0;
-  color: rgba(231, 227, 242, 0.85);
-  animation: tool-pill-enter 220ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
-}
-
-/* Iridescent bottom border — cyan → lavender. Active brightens it. */
-.tool-pill::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1.5px;
-  opacity: 0.55;
-  background: linear-gradient(
-    90deg,
-    rgba(34, 211, 238, 0)    0%,
-    rgba(34, 211, 238, 0.55) 22%,
-    rgba(138, 92, 255, 0.95) 70%,
-    rgba(138, 92, 255, 0)    100%
-  );
-  transition: opacity 220ms ease;
-}
-
-.tool-pill__name {
-  font-weight: 500;
-  letter-spacing: 0.005em;
-  color: inherit;
-}
-
-.tool-pill__status {
-  font-variant-numeric: tabular-nums;
-  color: rgba(231, 227, 242, 0.55);
-  font-size: 0.74rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 36px;
-}
-
-.tool-pill--active {
-  color: rgba(231, 227, 242, 1);
-}
-
-.tool-pill--active::after {
-  opacity: 1;
-}
-
-.tool-pill--done {
-  color: rgba(231, 227, 242, 0.55);
-}
-
-.tool-pill--done::after {
-  opacity: 0.28;
-}
-
-.tool-pill--error {
-  color: rgba(229, 120, 120, 0.95);
-}
-
-.tool-pill--error::after {
-  background: linear-gradient(
-    90deg,
-    rgba(229, 120, 120, 0)   0%,
-    rgba(229, 120, 120, 0.9) 50%,
-    rgba(229, 120, 120, 0)   100%
-  );
-  opacity: 1;
-}
-
-.tool-pill--error .tool-pill__status {
-  color: rgba(229, 120, 120, 0.95);
-}
-
-.tool-pill__spinner {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(157, 141, 240, 0.22);
-  border-top-color: rgba(157, 141, 240, 0.95);
-  border-right-color: rgba(157, 141, 240, 0.95);
-  animation: tool-pill-spin 700ms linear infinite;
-  display: inline-block;
-}
-
-@keyframes tool-pill-spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes tool-pill-enter {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* Error form */

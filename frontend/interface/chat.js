@@ -16,7 +16,6 @@ export class Chat {
     // Send state
     this._isSending = false;
     this._pendingForm = null;
-    this._lastNarrationBubble = null;
 
     // Scroll-up pagination state
     this._historyOffset = 0;
@@ -123,14 +122,10 @@ export class Chat {
     // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
     this._renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
 
-    // Create pending form and store reference for potential early resolution
-    const pendingForm = this._renderer.createPendingForm();
-    this._pendingForm = pendingForm;
-
-    // After 2 seconds, upgrade the "..." dots to a brief placeholder phrase
-    const pendingUpgradeTimer = setTimeout(() => {
-      this._renderer.upgradePendingText(pendingForm);
-    }, 2000);
+    // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
+    // Persists for the entire turn; replaced wholesale by the final response.
+    const actEl = this._renderer.createActCycle();
+    this._pendingForm = actEl;
 
     let responseBlocks = [];
     let responseMeta = {};
@@ -140,23 +135,13 @@ export class Chat {
         this._presence.setState(stage);
       },
       onNarration: (data) => {
-        // Live ACT narration: nest as a sub-bubble inside the persistent
-        // fastpath (pendingForm). The fastpath stays put for the entire ACT
-        // loop — only the final response replaces it.
-        clearTimeout(pendingUpgradeTimer);
+        // Each new narration REPLACES the previous one — no stacking.
         this._presence.setState('narrating');
-        this._lastNarrationBubble = this._renderer.appendNarrationBubble(
-          pendingForm, data.text, data.step
-        );
+        this._renderer.setActNarrative(actEl, data.text, data.step);
       },
       onToolStart: (msg) => {
-        // Pills nest under the latest narration when one exists; otherwise
-        // they attach directly to the fastpath (iter 1, pre-narration).
-        const host = (this._lastNarrationBubble && this._lastNarrationBubble.isConnected)
-          ? this._lastNarrationBubble
-          : pendingForm;
-        if (!host) return;
-        this._renderer.appendToolPill(host, msg.call_id, msg.name);
+        // Tools accumulate in a single flat list spanning the whole ACT loop.
+        this._renderer.appendToolPill(actEl, msg.call_id, msg.name);
       },
       onToolEnd: (msg) => {
         this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
@@ -166,7 +151,6 @@ export class Chat {
         this._renderer.appendSteerBubble(steerText);
       },
       onMessage: (data) => {
-        clearTimeout(pendingUpgradeTimer);
         responseBlocks = data.blocks || [];
         responseMeta = {
           topic: data.topic,
@@ -177,26 +161,18 @@ export class Chat {
         this._presence.setState('responding');
       },
       onError: (data) => {
-        clearTimeout(pendingUpgradeTimer);
-        this._renderer.resolvePendingFormError(pendingForm, data.message);
+        this._renderer.replaceActWithError(actEl, data.message);
         if (!data.recoverable) {
           this._onAuthFailureCb?.();
         }
       },
       onDone: (data) => {
-        clearTimeout(pendingUpgradeTimer);
         this._onResponseReceivedCb?.();
         if (responseBlocks.length) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          // Fastpath persists for the whole turn, so pendingForm is still
-          // connected — resolvePendingForm wipes its inner narrations + pills
-          // and renders the final response in their place.
-          if (pendingForm.isConnected) {
-            this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
-          } else {
-            this._renderer.appendChalieForm(responseBlocks, responseMeta);
-          }
+          // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
+          this._renderer.replaceActWithResponse(actEl, responseBlocks, responseMeta);
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
@@ -207,11 +183,10 @@ export class Chat {
             if (notifText) this._notifications.notifyBackground(notifText);
           }
         } else {
-          // No blocks response — remove the pending bubble
-          pendingForm.remove();
+          // No blocks response — remove the ACT placeholder
+          if (actEl.isConnected) actEl.remove();
           this._pendingForm = null;
         }
-        this._lastNarrationBubble = null;
         this._presence.setState('resting');
         this._isSending = false;
         this._onSendCompleteCb?.();

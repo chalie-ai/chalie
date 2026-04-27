@@ -34,40 +34,40 @@ The chat interface uses three fixed regions:
 - **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
 - **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
 
-## Tool Pills + Fastpath Shape
+## ACT Cycle UI
 
-When the user sends a message, Chalie immediately renders a **fastpath bubble** — a single Chalie speech-form that persists for the entire ACT loop. Everything that happens during the turn (narrations, tool calls) lives **inside** this bubble. The final response replaces it wholesale; nothing leaks into a sibling bubble.
+When the user sends a message, Chalie immediately renders a **chrome-less ACT cycle** — no bubble, no border, no background. Just a small blinking violet logo that signals "Chalie is working". Narrations and tool calls accumulate beside and below the logo until the ACT loop completes; on completion, the entire ACT UI vanishes and is replaced by a normal Chalie speech-form bubble carrying the final response.
 
-The shape grows iteration by iteration:
+The shape:
 
 ```
-Iteration 1:                  Iteration 2:                   Final:
-┌──────────────┐              ┌──────────────┐               ┌──────────────┐
-│ Working on…  │              │ Working on…  │               │ <response>   │
-│   ▸ tool 1   │              │   ▸ tool 1   │               │              │
-│   ▸ tool 2   │              │   [narr_1]   │               │              │
-└──────────────┘              │     ▸ tool 3 │               └──────────────┘
-                              │     ▸ tool 4 │
-                              └──────────────┘
+While the ACT loop runs:                    Final:
+●  Got it — checking the weather…           ┌──────────────┐
+   Search          1.5s                     │ <response>   │
+   Read            2.2s                     │              │
+   weather         error                    └──────────────┘
+   find_tools      2.4s
+   Read            ⟳
 ```
 
-- **Iter 1, pre-narration**: tool pills attach directly to the fastpath.
-- **Iter 2+, narration arrived**: each narration is a sub-bubble nested inside the fastpath; the iteration's tool pills nest under that narration.
-- **Final response**: `resolvePendingForm` wipes the fastpath's inner content and renders the response blocks in its place — narrations and pills disappear with it.
+- **Logo** (`act-logo`) — 12 px violet disc, 1.4 s sine pulse. It IS the placeholder; there is no "Working on it…" text.
+- **Narrative** (`act-narrative`) — italic text at 75 % opacity sitting on the same row as the logo. **Each new narration replaces the previous one** — narratives do not stack.
+- **Tool list** (`act-tools`) — cumulative across the entire ACT loop (NOT per-iteration). Indented 24 px under the logo so it visually belongs to the row.
+- **Final response**: `replaceActWithResponse` removes the `act-cycle` node and appends a fresh `.speech-form--chalie` bubble in its place.
 
-Pills themselves are minimal monospace rows — name on the left, state on the right — with no chrome or fill. The defining visual is a thin iridescent gradient running along the bottom edge of each row (cyan → lavender, magenta on error), the same accent language as the rest of the Radiant surface.
+Tool rows are minimal monospace lines — name LEFT, state RIGHT — with no chrome:
 
-- **Active** (`tool-pill--active`) — full-opacity gradient with a small lavender spinner.
-- **Done** (`tool-pill--done`) — gradient fades to ~28% opacity; status slot shows the elapsed duration in seconds (e.g. `0.7s`).
-- **Error** (`tool-pill--error`) — gradient swaps to a pure magenta band; status slot reads `error`.
+| State | Class | Color | Status slot |
+|---|---|---|---|
+| Running | `act-tool--running` | white @ 75 % | small white spinner |
+| Done | `act-tool--done` | `var(--success)` (#34d399) @ 90 % | duration in seconds (e.g. `1.5s`) |
+| Error | `act-tool--error` | `var(--error)` (#fb7185) @ 50 % | literal `error` (the actual error string is not surfaced) |
 
-The thinking-dots placeholder lives inside the fastpath until the first pill or narration arrives — at which point it is removed (so the 2 s `upgradePendingText` timer becomes a no-op via its `if (!dots) return` guard). If the timer fires first, `upgradePendingText` swaps the dots for an "On it…" label using `replaceChild` so any sub-bubbles or pills already nested inside the fastpath survive the upgrade.
+Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Rows are display-only — no click-to-expand, no tooltips.
 
-Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Pills are display-only — no click-to-expand, no tooltips.
+**CSS classes:** `act-cycle` (chrome-less host), `act-row` (logo + narrative line), `act-logo` (blinking disc), `act-narrative` (italic text), `act-tools` (cumulative list), `act-tool` + `act-tool--running` / `--done` / `--error`, `act-tool__name`, `act-tool__status`, `act-spinner`. Animations: `@keyframes act-logo-pulse` (1.4 s opacity + box-shadow), `@keyframes act-spinner-spin` (0.9 s linear).
 
-**CSS classes:** `tool-pill-row` (vertical flex column hosting the pill stack), `tool-pill`, `tool-pill__name`, `tool-pill__status`, `tool-pill__spinner`, `tool-pill--active`, `tool-pill--done`, `tool-pill--error`. The gradient is rendered via `tool-pill::after` so the row itself stays unbordered. Nested narration sub-bubbles use the `narration-bubble` class with a thin violet left edge marking each iteration.
-
-**Frontend wiring:** `renderer.js` exposes `appendNarrationBubble(parentEl, text, step)`, `appendToolPill(parentEl, callId, name)`, and `resolveToolPill(callId, ms, ok)`. `chat.js` keeps `pendingForm` (the fastpath) connected for the entire turn — `onNarration` nests bubbles inside it via `appendNarrationBubble(pendingForm, …)`, `onToolStart` routes to `_lastNarrationBubble` when set or to the fastpath otherwise, and `onDone` calls `resolvePendingForm` to wipe + replace the inner content with the final blocks.
+**Frontend wiring:** `renderer.js` exposes `createActCycle()`, `setActNarrative(actEl, text, step)`, `appendToolPill(actEl, callId, name)`, `resolveToolPill(callId, ms, ok)`, `replaceActWithResponse(actEl, blocks, meta)`, `replaceActWithError(actEl, message)`. `chat.js` calls `createActCycle()` once on send and stores the element for the whole turn — `onNarration` calls `setActNarrative` (which mutates the single text slot in-place), `onToolStart` calls `appendToolPill(actEl, …)` (single flat list, no nesting under narrations), `onDone` calls `replaceActWithResponse` to swap the ACT UI for the final bubble. The action flow in `app.js` (deterministic skill invocation) shares the same primitives.
 
 ## Presence Dot
 

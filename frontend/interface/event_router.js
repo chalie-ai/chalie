@@ -106,7 +106,7 @@ export class EventRouter {
     }
 
     // Ignore 'response' events from the drift stream while a /chat SSE request
-    // is in flight — the chat SSE already renders the reply via resolvePendingForm.
+    // is in flight — the chat SSE already renders the reply via replaceActWithResponse.
     if (data.type === 'response' && this._isSendingGetter()) return;
 
     // System notification + sound when tab is not focused
