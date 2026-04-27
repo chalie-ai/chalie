@@ -49,7 +49,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
     """
     query = (params.get('query') or '').strip()
     if not query:
-        return {'text': 'No results found'}
+        return {'text': 'EMPTY: no query supplied. Tell the user no search was performed.'}
 
     limit = max(1, min(10, int(params['limit']) if params.get('limit') is not None else 5))
     forced = (params.get('provider') or '').strip().lower()
@@ -73,7 +73,11 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
     logger.info('[SEARCH] query="%s" providers=%s count=%d', query, used, len(results))
 
     if not results:
-        return {'text': 'No results found'}
+        return {'text': (
+            f'EMPTY: zero results for query "{query}". '
+            'Do NOT fabricate results, URLs, titles, or categories. '
+            'Tell the user honestly that nothing was found and offer to refine the query.'
+        )}
 
     return {'text': json.dumps({'results': [
         {'title': r.get('title', ''), 'desc': r.get('snippet', ''), 'url': r.get('url', '')}

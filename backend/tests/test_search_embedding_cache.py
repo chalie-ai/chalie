@@ -161,19 +161,19 @@ class TestSearchExecute:
     def test_empty_query(self):
         from tools.search.search import execute
         r = execute("topic", {})
-        assert r == {'text': 'No results found'}
+        assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_whitespace_query(self):
         from tools.search.search import execute
         r = execute("topic", {"query": "   "})
-        assert r == {'text': 'No results found'}
+        assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_forced_ddg(self):
         with patch('tools.search.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m:
             from tools.search.search import execute
             r = execute("t", {"query": "test", "provider": "ddg"})
         assert 'text' in r
-        assert r['text'] != 'No results found'
+        assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
 
     def test_forced_known_provider(self, tmp_path):
@@ -185,7 +185,7 @@ class TestSearchExecute:
              patch('tools.search.search.fetch_ddg_fallback'):
             r = s.execute("t", {"query": "test", "provider": "brave"})
         assert 'text' in r
-        assert r['text'] != 'No results found'
+        assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
 
     def test_forced_unknown_provider(self):
@@ -194,7 +194,8 @@ class TestSearchExecute:
         s._providers = {'brave': {'name': 'brave'}}
         with patch('tools.search.search.fetch_ddg_fallback', return_value=[]):
             r = s.execute("t", {"query": "test", "provider": "nonexistent"})
-        assert r == {'text': 'No results found'}
+        assert r['text'].startswith('EMPTY: zero results')
+        assert 'Do NOT fabricate' in r['text']
 
     def test_router_failure_falls_back_to_ddg(self):
         self._reset()
@@ -204,7 +205,7 @@ class TestSearchExecute:
              patch('tools.search.router.route_query', side_effect=Exception("boom")):
             r = s.execute("t", {"query": "test"})
         assert 'text' in r
-        assert r['text'] != 'No results found'
+        assert not r['text'].startswith('EMPTY:')
 
     def test_limit_clamped_high(self):
         self._reset()
