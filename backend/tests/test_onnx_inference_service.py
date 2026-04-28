@@ -48,78 +48,161 @@ def _real_encoder_sha() -> str:
     )
 
 
-def _write_regression_head(
-    pretrained_dir,
-    *,
-    task_name: str = "deliberation_score",
-    prefix: str = "deliberation-score",
-    sha256: str | None = None,
-    num_outputs: int = 1,
-    extra_feature_dim: int = 0,
-    output_activation: str = "sigmoid",
-    w1: np.ndarray | None = None,
-    b1: np.ndarray | None = None,
-    w2: np.ndarray | None = None,
-    b2: np.ndarray | None = None,
-    head_asset_name: str | None = None,
-    skip_meta: bool = False,
-    skip_npz: bool = False,
-    corrupt_meta: bool = False,
-    omit_head_asset: bool = False,
-) -> None:
-    """Write a regression head + meta JSON pair into ``pretrained_dir/<task>/``.
+_TASK_NAME = "deliberation_score"
+_PREFIX = "deliberation-score"
 
-    Defaults produce a valid scalar regression head with the real encoder sha256.
-    Override knobs flip individual contract/format properties for negative tests.
-    """
-    task_dir = os.path.join(str(pretrained_dir), task_name)
-    os.makedirs(task_dir, exist_ok=True)
 
-    if sha256 is None:
-        sha256 = _real_encoder_sha()
-    if w1 is None:
-        w1 = np.zeros((256, 768), dtype=np.float32)
-    if b1 is None:
-        b1 = np.zeros(256, dtype=np.float32)
-    if w2 is None:
-        w2 = np.zeros((num_outputs, 256), dtype=np.float32)
-    if b2 is None:
-        b2 = np.zeros(num_outputs, dtype=np.float32)
+def _default_arrays(num_outputs: int) -> dict:
+    """Build the default all-zeros W1/b1/W2/b2 array set for ``num_outputs`` head."""
+    return {
+        "W1": np.zeros((256, 768), dtype=np.float32),
+        "b1": np.zeros(256, dtype=np.float32),
+        "W2": np.zeros((num_outputs, 256), dtype=np.float32),
+        "b2": np.zeros(num_outputs, dtype=np.float32),
+    }
 
-    head_filename = head_asset_name or f"{prefix}_head.npz"
 
-    if not skip_npz:
-        np.savez(
-            os.path.join(task_dir, head_filename),
-            W1=w1, b1=b1, W2=w2, b2=b2,
-        )
-
-    if skip_meta:
-        return
-
+def _build_meta(sha256: str, arrays: dict, *, num_outputs: int, extra_feature_dim: int, output_activation: str, head_asset: str | None) -> dict:
+    """Assemble a regression-head meta dict from concrete pieces."""
     meta = {
         "labels": ["score"],
-        "model_name": task_name,
+        "model_name": _TASK_NAME,
         "task_type": "regression",
         "base_encoder_sha256": sha256,
-        "input_dim": int(w1.shape[1]),
-        "hidden_dim": int(w1.shape[0]),
+        "input_dim": int(arrays["W1"].shape[1]),
+        "hidden_dim": int(arrays["W1"].shape[0]),
         "num_outputs": num_outputs,
         "num_classes": num_outputs,
         "extra_feature_dim": extra_feature_dim,
         "activation": "gelu",
         "output_activation": output_activation,
     }
-    if not omit_head_asset:
-        meta["head_asset"] = head_filename
+    if head_asset is not None:
+        meta["head_asset"] = head_asset
+    return meta
 
-    meta_path = os.path.join(task_dir, f"{prefix}-classifier_meta.json")
-    if corrupt_meta:
+
+def _ensure_task_dir(pretrained_dir) -> str:
+    task_dir = os.path.join(str(pretrained_dir), _TASK_NAME)
+    os.makedirs(task_dir, exist_ok=True)
+    return task_dir
+
+
+def _write_npz(task_dir: str, head_filename: str, arrays: dict) -> None:
+    np.savez(os.path.join(task_dir, head_filename), **arrays)
+
+
+def _write_meta(task_dir: str, meta: dict) -> None:
+    with open(os.path.join(task_dir, f"{_PREFIX}-classifier_meta.json"), "w") as f:
+        json.dump(meta, f)
+
+
+# ── Public factories — each focused on one negative-test axis ────────────────
+
+
+def _write_valid_head(
+    pretrained_dir,
+    *,
+    sha256: str | None = None,
+    num_outputs: int = 1,
+    extra_feature_dim: int = 0,
+    output_activation: str = "sigmoid",
+) -> None:
+    """Write a valid head with default zero-weights. Override meta knobs to provoke contract failures."""
+    task_dir = _ensure_task_dir(pretrained_dir)
+    arrays = _default_arrays(num_outputs)
+    head_filename = f"{_PREFIX}_head.npz"
+    _write_npz(task_dir, head_filename, arrays)
+    meta = _build_meta(
+        sha256 or _real_encoder_sha(),
+        arrays,
+        num_outputs=num_outputs,
+        extra_feature_dim=extra_feature_dim,
+        output_activation=output_activation,
+        head_asset=head_filename,
+    )
+    _write_meta(task_dir, meta)
+
+
+def _write_head_with_arrays(
+    pretrained_dir,
+    *,
+    num_outputs: int = 1,
+    w1: np.ndarray | None = None,
+    b1: np.ndarray | None = None,
+    w2: np.ndarray | None = None,
+    b2: np.ndarray | None = None,
+) -> None:
+    """Write a head with caller-supplied weight arrays (poison weights, shape mismatches)."""
+    task_dir = _ensure_task_dir(pretrained_dir)
+    defaults = _default_arrays(num_outputs)
+    arrays = {
+        "W1": w1 if w1 is not None else defaults["W1"],
+        "b1": b1 if b1 is not None else defaults["b1"],
+        "W2": w2 if w2 is not None else defaults["W2"],
+        "b2": b2 if b2 is not None else defaults["b2"],
+    }
+    head_filename = f"{_PREFIX}_head.npz"
+    _write_npz(task_dir, head_filename, arrays)
+    meta = _build_meta(
+        _real_encoder_sha(),
+        arrays,
+        num_outputs=num_outputs,
+        extra_feature_dim=0,
+        output_activation="sigmoid",
+        head_asset=head_filename,
+    )
+    _write_meta(task_dir, meta)
+
+
+def _write_corrupted_head(pretrained_dir, *, mode: str) -> None:
+    """Write a head deliberately broken in one specific way.
+
+    ``mode`` must be one of:
+      - ``"skip_meta"``        — npz exists, no meta JSON
+      - ``"skip_npz"``         — meta exists, no npz
+      - ``"corrupt_meta"``     — meta JSON is malformed
+      - ``"omit_head_asset"``  — meta JSON missing the ``head_asset`` key
+    """
+    task_dir = _ensure_task_dir(pretrained_dir)
+    arrays = _default_arrays(1)
+    head_filename = f"{_PREFIX}_head.npz"
+
+    if mode != "skip_npz":
+        _write_npz(task_dir, head_filename, arrays)
+    if mode == "skip_meta":
+        return
+
+    meta_path = os.path.join(task_dir, f"{_PREFIX}-classifier_meta.json")
+    if mode == "corrupt_meta":
         with open(meta_path, "w") as f:
             f.write("{this is not valid json")
-    else:
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
+        return
+    head_asset = None if mode == "omit_head_asset" else head_filename
+    meta = _build_meta(
+        _real_encoder_sha(),
+        arrays,
+        num_outputs=1,
+        extra_feature_dim=0,
+        output_activation="sigmoid",
+        head_asset=head_asset,
+    )
+    _write_meta(task_dir, meta)
+
+
+def _write_head_with_custom_asset(pretrained_dir, *, head_asset_name: str) -> None:
+    """Write only a meta whose ``head_asset`` points at a non-existent file (no npz written)."""
+    task_dir = _ensure_task_dir(pretrained_dir)
+    arrays = _default_arrays(1)
+    meta = _build_meta(
+        _real_encoder_sha(),
+        arrays,
+        num_outputs=1,
+        extra_feature_dim=0,
+        output_activation="sigmoid",
+        head_asset=head_asset_name,
+    )
+    _write_meta(task_dir, meta)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -209,7 +292,7 @@ class TestPredictScalarNaNGuard:
     def test_nan_weights_in_w1_returns_none(self, tmp_path):
         w1 = np.zeros((256, 768), dtype=np.float32)
         w1[0, 0] = np.nan  # Single NaN poisons the whole forward pass.
-        _write_regression_head(tmp_path, w1=w1)
+        _write_head_with_arrays(tmp_path, w1=w1)
 
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         result = svc.predict_scalar("deliberation_score", "anything")
@@ -218,7 +301,7 @@ class TestPredictScalarNaNGuard:
     def test_nan_in_b2_returns_none(self, tmp_path):
         b2 = np.zeros(1, dtype=np.float32)
         b2[0] = np.nan
-        _write_regression_head(tmp_path, b2=b2)
+        _write_head_with_arrays(tmp_path, b2=b2)
 
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         result = svc.predict_scalar("deliberation_score", "anything")
@@ -227,7 +310,7 @@ class TestPredictScalarNaNGuard:
     def test_nan_in_w2_returns_none(self, tmp_path):
         w2 = np.zeros((1, 256), dtype=np.float32)
         w2[0, 5] = np.nan
-        _write_regression_head(tmp_path, w2=w2)
+        _write_head_with_arrays(tmp_path, w2=w2)
 
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         result = svc.predict_scalar("deliberation_score", "anything")
@@ -240,7 +323,7 @@ class TestPredictScalarNaNGuard:
         legitimate edge cases. Without this control, a too-aggressive guard
         could mask a real bug by returning None for valid corner inputs.
         """
-        _write_regression_head(tmp_path)  # all zeros by default
+        _write_valid_head(tmp_path)  # all zeros by default
 
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         result = svc.predict_scalar("deliberation_score", "anything")
@@ -261,7 +344,7 @@ class TestRegisterTaskContractViolations:
         _get_session_and_tokenizer()
 
     def test_num_outputs_not_one_raises(self, tmp_path):
-        _write_regression_head(
+        _write_head_with_arrays(
             tmp_path,
             num_outputs=3,
             w2=np.zeros((3, 256), dtype=np.float32),
@@ -272,20 +355,20 @@ class TestRegisterTaskContractViolations:
             svc._register_task("deliberation_score")
 
     def test_extra_feature_dim_nonzero_raises(self, tmp_path):
-        _write_regression_head(tmp_path, extra_feature_dim=5)
+        _write_valid_head(tmp_path, extra_feature_dim=5)
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(ValueError, match="extra_feature_dim"):
             svc._register_task("deliberation_score")
 
     def test_output_activation_not_sigmoid_raises(self, tmp_path):
-        _write_regression_head(tmp_path, output_activation="softmax")
+        _write_valid_head(tmp_path, output_activation="softmax")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(ValueError, match="sigmoid"):
             svc._register_task("deliberation_score")
 
     def test_w2_row_count_mismatch_raises(self, tmp_path):
         # num_outputs=1 in meta but W2 has 2 rows — boot validation must catch this.
-        _write_regression_head(
+        _write_head_with_arrays(
             tmp_path,
             w2=np.zeros((2, 256), dtype=np.float32),
             b2=np.zeros(2, dtype=np.float32),
@@ -307,16 +390,13 @@ class TestSha256PinCheck:
 
     def test_wrong_sha256_in_meta_raises(self, tmp_path):
         """A head trained against a different encoder must NOT register."""
-        _write_regression_head(
-            tmp_path,
-            sha256="0" * 64,  # Definitely not the real encoder sha.
-        )
+        _write_valid_head(tmp_path, sha256="0" * 64)  # Definitely not the real encoder sha.
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(RuntimeError, match="sha256 mismatch"):
             svc._register_task("deliberation_score")
 
     def test_matching_sha256_succeeds(self, tmp_path):
-        _write_regression_head(tmp_path)  # uses real encoder sha by default
+        _write_valid_head(tmp_path)  # uses real encoder sha by default
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         head = svc._register_task("deliberation_score")
         assert head is not None
@@ -335,54 +415,32 @@ class TestRegisterTaskGracefulDegradation:
 
     def test_missing_meta_returns_none(self, tmp_path):
         # Only a .npz, no meta — register should bail with None.
-        _write_regression_head(tmp_path, skip_meta=True)
+        _write_corrupted_head(tmp_path, mode="skip_meta")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         # Public surface stays None, no exception.
         assert svc.predict_scalar("deliberation_score", "x") is None
 
     def test_corrupt_meta_returns_none(self, tmp_path):
-        _write_regression_head(tmp_path, corrupt_meta=True)
+        _write_corrupted_head(tmp_path, mode="corrupt_meta")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
     def test_missing_npz_returns_none(self, tmp_path):
-        _write_regression_head(tmp_path, skip_npz=True)
+        _write_corrupted_head(tmp_path, mode="skip_npz")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
     def test_meta_omits_head_asset_returns_none(self, tmp_path):
-        _write_regression_head(tmp_path, omit_head_asset=True)
+        _write_corrupted_head(tmp_path, mode="omit_head_asset")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
     def test_meta_references_nonexistent_npz_returns_none(self, tmp_path):
-        _write_regression_head(
-            tmp_path,
-            head_asset_name="totally-not-shipped.npz",
-            skip_npz=True,
-        )
-        # Now write a meta whose head_asset points at the missing file.
-        os.makedirs(os.path.join(str(tmp_path), "deliberation_score"), exist_ok=True)
-        meta_path = os.path.join(
-            str(tmp_path), "deliberation_score", "deliberation-score-classifier_meta.json"
-        )
-        with open(meta_path, "w") as f:
-            json.dump({
-                "task_type": "regression",
-                "base_encoder_sha256": _real_encoder_sha(),
-                "input_dim": 768,
-                "hidden_dim": 256,
-                "num_outputs": 1,
-                "num_classes": 1,
-                "extra_feature_dim": 0,
-                "output_activation": "sigmoid",
-                "head_asset": "totally-not-shipped.npz",
-                "labels": ["score"],
-            }, f)
+        _write_head_with_custom_asset(tmp_path, head_asset_name="totally-not-shipped.npz")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
 
@@ -422,7 +480,7 @@ class TestDeliberationScoreServiceReal:
         """End-to-end NaN propagation guard: bad head → wrapper returns None."""
         w1 = np.zeros((256, 768), dtype=np.float32)
         w1[0, 0] = np.nan
-        _write_regression_head(tmp_path, w1=w1)
+        _write_head_with_arrays(tmp_path, w1=w1)
 
         svc = DeliberationScoreService(
             inference_service=OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
