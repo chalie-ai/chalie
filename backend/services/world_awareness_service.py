@@ -199,7 +199,7 @@ class WorldAwarenessService:
 
 # ── Worker entry point ────────────────────────────────────────
 
-def world_awareness_worker(shared_state=None):
+def world_awareness_worker():
     """Module-level entry point for run.py registration."""
     from services.database_service import DatabaseService
 

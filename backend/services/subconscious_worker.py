@@ -484,7 +484,7 @@ def get_subconscious_worker() -> SubconsciousWorker:
     return _DEFAULT_INSTANCE
 
 
-def subconscious_worker(shared_state=None):  # noqa: ARG001 — required by WorkerManager
+def subconscious_worker():
     """WorkerManager entry point. Tick loop with a stable cadence.
 
     The first tick is delayed by the configured tick interval so the worker

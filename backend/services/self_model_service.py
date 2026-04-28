@@ -518,7 +518,7 @@ class SelfModelService:
 
 # ── Background worker ───────────────────────────────────────────
 
-def self_model_worker(shared_state=None):
+def self_model_worker():
     """Background thread: refresh self-model snapshot every 30s."""
     service = SelfModelService()
     logger.info(f"{LOG_PREFIX} Worker started (refresh every {REFRESH_INTERVAL}s)")

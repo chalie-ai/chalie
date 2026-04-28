@@ -49,9 +49,7 @@ class WorkerManager:
     """Master supervisor for managing worker threads."""
 
     def __init__(self):
-        """Initialise the WorkerManager with empty shared state and thread registry."""
-        self.shared_state: Dict = {}
-        self._state_lock = threading.Lock()
+        """Initialise the WorkerManager with an empty thread registry."""
         self.threads: Dict[str, threading.Thread] = {}
         self.service_definitions: List[Tuple[str, callable]] = []
         self.running = True
@@ -66,9 +64,7 @@ class WorkerManager:
         Args:
             worker_id: Unique string identifier for the worker, also used as
                 the daemon thread name (e.g., ``'decay-engine-service'``).
-            worker_func: Callable with signature
-                ``(shared_state: dict) -> None`` that implements the worker's
-                blocking run loop.
+            worker_func: Zero-arg callable implementing the worker's blocking run loop.
         """
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
@@ -77,22 +73,18 @@ class WorkerManager:
         """Spawn a worker as a daemon thread, skipping if one is already alive.
 
         If a thread with the given ``worker_id`` already exists and is alive,
-        this method returns immediately without creating a duplicate.  The
-        thread passes ``shared_state`` to ``worker_func`` and logs any
-        unhandled exception before terminating.
+        this method returns immediately without creating a duplicate.
 
         Args:
             worker_id: Unique identifier and daemon thread name for the worker.
-            worker_func: Callable with signature
-                ``(shared_state: dict) -> None`` that implements the worker's
-                blocking run loop.
+            worker_func: Zero-arg callable implementing the worker's blocking run loop.
         """
         if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
         def _run():
             try:
-                worker_func(self.shared_state)
+                worker_func()
             except Exception:
                 logging.exception(f"[Manager] Service {worker_id} crashed")
 

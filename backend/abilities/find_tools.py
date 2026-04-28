@@ -108,6 +108,73 @@ def _load_vec(conn: sqlite3.Connection) -> None:
         conn.load_extension("vec0")
 
 
+def _fetch_search_rows(conn: sqlite3.Connection, query: str, blob: bytes, allow: List[str]) -> tuple[list, list]:
+    """Run vec + FTS queries against abilities.sqlite, returning (vec_rows, fts_rows).
+
+    FTS failures (special characters in the query) are caught and surfaced as an
+    empty list so vec results still reach the caller.
+    """
+    placeholders = ",".join("?" * len(allow))
+    vec_rows = conn.execute(
+        f"""
+        SELECT a.name, a.summary, v.distance
+        FROM ability_search_vec v
+        JOIN ability_search_entries e ON e.id = v.rowid
+        JOIN abilities a ON a.id = e.ability_id
+        WHERE v.embedding MATCH ? AND k = ?
+          AND a.name IN ({placeholders})
+        ORDER BY v.distance ASC
+        """,
+        (blob, KNN_DEPTH, *allow),
+    ).fetchall()
+    try:
+        fts_rows = conn.execute(
+            f"""
+            SELECT a.name, a.summary, bm25(ability_search_fts) AS score
+            FROM ability_search_fts
+            JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
+            JOIN abilities a ON a.id = e.ability_id
+            WHERE ability_search_fts MATCH ?
+              AND a.name IN ({placeholders})
+            ORDER BY score ASC
+            """,
+            (query, *allow),
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        logger.warning(f"{LOG_PREFIX} FTS5 query failed (special chars in query?): {e}")
+        fts_rows = []
+    return vec_rows, fts_rows
+
+
+def _rrf_merge(vec_rows: list, fts_rows: list, k: int) -> List[Dict]:
+    """Merge vector + FTS results via reciprocal rank fusion, capped at ``k`` rows."""
+    summary_by_name: Dict[str, str] = {}
+    vec_best: Dict[str, float] = {}
+    for name, summary, distance in vec_rows:
+        summary_by_name[name] = summary
+        if name not in vec_best or distance < vec_best[name]:
+            vec_best[name] = distance
+    fts_best: Dict[str, float] = {}
+    for name, summary, score in fts_rows:
+        summary_by_name.setdefault(name, summary)
+        if name not in fts_best or score < fts_best[name]:
+            fts_best[name] = score
+
+    rrf_scores: Dict[str, float] = defaultdict(float)
+    for rank, (name, _) in enumerate(sorted(vec_best.items(), key=lambda x: x[1]), start=1):
+        rrf_scores[name] += 1.0 / (RRF_K + rank)
+    for rank, (name, _) in enumerate(sorted(fts_best.items(), key=lambda x: x[1]), start=1):
+        rrf_scores[name] += 1.0 / (RRF_K + rank)
+
+    if not rrf_scores:
+        return []
+    merged = sorted(rrf_scores.items(), key=lambda x: -x[1])
+    return [
+        {"tool_name": name, "summary": summary_by_name.get(name, ""), "score": rrf_score}
+        for name, rrf_score in merged[:k]
+    ]
+
+
 def _query_abilities_db(
     query: str,
     blob: bytes,
@@ -120,84 +187,18 @@ def _query_abilities_db(
         return []
     if not allow:
         return []
-    placeholders = ",".join("?" * len(allow))
     try:
         conn = sqlite3.connect(str(db_path))
         try:
             _load_vec(conn)
-
-            vec_rows = conn.execute(
-                f"""
-                SELECT a.name, a.summary, v.distance
-                FROM ability_search_vec v
-                JOIN ability_search_entries e ON e.id = v.rowid
-                JOIN abilities a ON a.id = e.ability_id
-                WHERE v.embedding MATCH ? AND k = ?
-                  AND a.name IN ({placeholders})
-                ORDER BY v.distance ASC
-                """,
-                (blob, KNN_DEPTH, *allow),
-            ).fetchall()
-
-            try:
-                fts_rows = conn.execute(
-                    f"""
-                    SELECT a.name, a.summary, bm25(ability_search_fts) AS score
-                    FROM ability_search_fts
-                    JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
-                    JOIN abilities a ON a.id = e.ability_id
-                    WHERE ability_search_fts MATCH ?
-                      AND a.name IN ({placeholders})
-                    ORDER BY score ASC
-                    """,
-                    (query, *allow),
-                ).fetchall()
-            except sqlite3.OperationalError as e:
-                logger.warning(f"{LOG_PREFIX} FTS5 query failed (special chars in query?): {e}")
-                fts_rows = []
-
+            vec_rows, fts_rows = _fetch_search_rows(conn, query, blob, allow)
         finally:
             conn.close()
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} abilities.sqlite query failed: {e}")
         return []
 
-    summary_by_name: Dict[str, str] = {}
-    vec_best: Dict[str, float] = {}
-    for name, summary, distance in vec_rows:
-        summary_by_name[name] = summary
-        if name not in vec_best or distance < vec_best[name]:
-            vec_best[name] = distance
-
-    fts_best: Dict[str, float] = {}
-    for name, summary, score in fts_rows:
-        summary_by_name.setdefault(name, summary)
-        if name not in fts_best or score < fts_best[name]:
-            fts_best[name] = score
-
-    vec_ranked = sorted(vec_best.items(), key=lambda x: x[1])
-    fts_ranked = sorted(fts_best.items(), key=lambda x: x[1])
-
-    rrf_scores: Dict[str, float] = defaultdict(float)
-    for rank, (name, _) in enumerate(vec_ranked, start=1):
-        rrf_scores[name] += 1.0 / (RRF_K + rank)
-    for rank, (name, _) in enumerate(fts_ranked, start=1):
-        rrf_scores[name] += 1.0 / (RRF_K + rank)
-
-    if not rrf_scores:
-        return []
-
-    merged = sorted(rrf_scores.items(), key=lambda x: -x[1])
-
-    results: List[Dict] = []
-    for name, rrf_score in merged[:k]:
-        results.append({
-            "tool_name": name,
-            "summary": summary_by_name.get(name, ""),
-            "score": rrf_score,
-        })
-
-    return results
+    return _rrf_merge(vec_rows, fts_rows, k)
 
 
 def _format_added_tools(tools: List[Dict]) -> str:

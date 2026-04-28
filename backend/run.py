@@ -344,7 +344,7 @@ def main():
         logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
     # Register the Flask API worker (this is the main thread's HTTP server)
-    def _flask_worker(shared_state=None):
+    def _flask_worker():
         from api import create_app
         app = create_app()
         logger.info(f"[Chalie] Starting on http://{host}:{port}")

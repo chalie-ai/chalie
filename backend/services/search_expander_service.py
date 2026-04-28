@@ -93,7 +93,7 @@ class SearchExpanderService:
         self._store.rpush(_QUEUE_KEY, item)
         self._event.set()
 
-    def run(self, shared_state=None) -> None:
+    def run(self) -> None:
         """Blocking worker loop — call from a daemon thread."""
         logger.info("[SES] Worker starting")
         self._self_heal()
@@ -348,7 +348,7 @@ class SearchExpanderService:
 
 # ── Worker entry point ────────────────────────────────────────────────────────
 
-def search_expander_worker(shared_state=None):
+def search_expander_worker():
     """Entry point registered in run.py via _try_register.
 
     Creates the singleton and enters the blocking run loop. Registered with
@@ -359,4 +359,4 @@ def search_expander_worker(shared_state=None):
     global _service_instance
     with _instance_lock:
         _service_instance = service
-    service.run(shared_state)
+    service.run()

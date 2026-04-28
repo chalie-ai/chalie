@@ -273,7 +273,7 @@ def get_dmn_service() -> DMNService:
     return _dmn_instance
 
 
-def dmn_worker(shared_state: dict = None):
+def dmn_worker():
     """Background worker — registered as a daemon thread in run.py."""
     logger.info("[DMN] Worker starting")
     time.sleep(30)  # Allow other services to boot first
