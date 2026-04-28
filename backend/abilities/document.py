@@ -130,6 +130,20 @@ def _resolve_document(service, params: dict) -> Optional[dict]:
     return None
 
 
+def _group_results_by_doc(results: list) -> dict:
+    """Bucket data_graph search rows by their owning document id."""
+    doc_artifacts: dict = {}
+    for row in results:
+        source = row.get("source", "") or ""
+        if source.startswith("document:"):
+            doc_id = source.split(":", 1)[1]
+        else:
+            parts = (row.get("key", "") or "").split(":")
+            doc_id = parts[1] if len(parts) >= 3 else "unknown"
+        doc_artifacts.setdefault(doc_id, []).append(row)
+    return doc_artifacts
+
+
 def _handle_search(service, params: dict) -> str:
     query = params.get("query", "").strip()
     if not query:
@@ -144,18 +158,7 @@ def _handle_search(service, params: dict) -> str:
         if not results:
             return f"[DOCUMENT] No documents match '{query}'."
 
-        doc_artifacts = {}
-        for row in results:
-            source = row.get("source", "") or ""
-            if source.startswith("document:"):
-                doc_id = source.split(":", 1)[1]
-            else:
-                parts = (row.get("key", "") or "").split(":")
-                doc_id = parts[1] if len(parts) >= 3 else "unknown"
-
-            if doc_id not in doc_artifacts:
-                doc_artifacts[doc_id] = []
-            doc_artifacts[doc_id].append(row)
+        doc_artifacts = _group_results_by_doc(results)
 
         lines = []
         for doc_id, artifacts in doc_artifacts.items():
@@ -215,6 +218,47 @@ def _handle_list(service) -> str:
     return "\n".join(lines)
 
 
+def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
+    """Append type/pages/companies/dates/values/refs lines to ``lines`` based on parsed meta."""
+    doc_type = meta.get("document_type", {})
+    if isinstance(doc_type, dict):
+        doc_type = doc_type.get("value", "")
+    elif not isinstance(doc_type, str):
+        doc_type = ""
+    if doc_type:
+        lines.append(f"  Type: {doc_type}")
+    if doc.get("page_count"):
+        lines.append(f"  Pages: {doc['page_count']}")
+    if meta.get("companies"):
+        lines.append("  Companies: " + ", ".join(c["name"] for c in meta["companies"][:5]))
+    if meta.get("dates"):
+        lines.append("  Dates: " + ", ".join(d["value"] for d in meta["dates"][:5]))
+    if meta.get("expiration_dates"):
+        lines.append("  Expiration dates: " + ", ".join(d["value"] for d in meta["expiration_dates"][:3]))
+    if meta.get("monetary_values"):
+        lines.append("  Monetary values: " + ", ".join(
+            f"{v['currency']} {v['amount']}" for v in meta["monetary_values"][:5]
+        ))
+    if meta.get("reference_numbers"):
+        lines.append("  References: " + ", ".join(r["value"] for r in meta["reference_numbers"][:5]))
+
+
+def _fetch_doc_fragments(doc_id: str) -> list:
+    """Pull data_graph artifact fragments for a document, ordered by key."""
+    from services.data_graph_service import get_data_graph_service
+    dgs = get_data_graph_service()
+    try:
+        with dgs.db.connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
+                (f'document:{doc_id}',),
+            )
+            return [row[0] for row in cursor.fetchall() if row[0]]
+    except Exception as exc:
+        logger.warning("[DOCUMENT SKILL] Fragment query failed: %s", exc, exc_info=True)
+        return []
+
+
 def _handle_view(service, params: dict) -> str:
     doc = _resolve_document(service, params)
     if not doc:
@@ -225,60 +269,18 @@ def _handle_view(service, params: dict) -> str:
 
     meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
-
-    doc_type = meta.get("document_type", {})
-    if isinstance(doc_type, dict):
-        doc_type = doc_type.get("value", "")
-    elif not isinstance(doc_type, str):
-        doc_type = ""
-    if doc_type:
-        lines.append(f"  Type: {doc_type}")
-
-    if doc.get("page_count"):
-        lines.append(f"  Pages: {doc['page_count']}")
-
-    if meta.get("companies"):
-        companies = ", ".join(c["name"] for c in meta["companies"][:5])
-        lines.append(f"  Companies: {companies}")
-
-    if meta.get("dates"):
-        dates = ", ".join(d["value"] for d in meta["dates"][:5])
-        lines.append(f"  Dates: {dates}")
-
-    if meta.get("expiration_dates"):
-        exps = ", ".join(d["value"] for d in meta["expiration_dates"][:3])
-        lines.append(f"  Expiration dates: {exps}")
-
-    if meta.get("monetary_values"):
-        vals = ", ".join(f"{v['currency']} {v['amount']}" for v in meta["monetary_values"][:5])
-        lines.append(f"  Monetary values: {vals}")
-
-    if meta.get("reference_numbers"):
-        refs = ", ".join(r["value"] for r in meta["reference_numbers"][:5])
-        lines.append(f"  References: {refs}")
+    _append_meta_summary(lines, doc, meta)
 
     clean_text = doc.get("clean_text", "")
     if clean_text:
         lines.append(f"\n--- Full Document Text ---\n{clean_text}")
-    else:
-        from services.data_graph_service import get_data_graph_service
-        dgs = get_data_graph_service()
-        try:
-            with dgs.db.connection() as conn:
-                cursor = conn.execute(
-                    "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-                    (f'document:{doc["id"]}',),
-                )
-                fragments = [row[0] for row in cursor.fetchall() if row[0]]
-        except Exception as exc:
-            logger.warning("[DOCUMENT SKILL] Fragment query failed: %s", exc, exc_info=True)
-            fragments = []
+        return "\n".join(lines)
 
-        if fragments:
-            full_text = "\n\n".join(fragments)
-            lines.append(f"\n--- Full Document Text ---\n{full_text}")
-        else:
-            lines.append("\n  (No text content available)")
+    fragments = _fetch_doc_fragments(doc["id"])
+    if fragments:
+        lines.append("\n--- Full Document Text ---\n" + "\n\n".join(fragments))
+    else:
+        lines.append("\n  (No text content available)")
 
     return "\n".join(lines)
 
@@ -327,61 +329,68 @@ def _handle_restore(service, params: dict) -> str:
     return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
 
 
+def _split_paragraph_into_sentences(para: str, max_chars: int) -> list:
+    """Greedily split a paragraph at sentence boundaries; fall back to fixed-width slicing."""
+    sentences = []
+    remaining = para
+    while remaining:
+        for sep in (". ", "! ", "? "):
+            idx = remaining.find(sep)
+            if idx != -1 and idx + len(sep) <= max_chars:
+                sentences.append(remaining[: idx + 1])
+                remaining = remaining[idx + len(sep):]
+                break
+        else:
+            sentences.append(remaining[:max_chars])
+            remaining = remaining[max_chars:]
+    return [s for s in sentences if s]
+
+
+def _absorb_long_para(buffer: str, para: str, chunks: list, min_chars: int, max_chars: int) -> str:
+    """Flush buffer, split the long paragraph, and accumulate sentences back into buffer."""
+    if buffer:
+        chunks.append(buffer)
+    new_buf = ""
+    for sentence in _split_paragraph_into_sentences(para, max_chars):
+        if len(new_buf) + len(sentence) >= min_chars:
+            chunks.append(new_buf + sentence)
+            new_buf = ""
+        else:
+            new_buf += sentence + " "
+    return new_buf
+
+
+def _build_chunks(paragraphs: list, min_chars: int, max_chars: int) -> list:
+    """Pack paragraphs into chunks ≥ ``min_chars``; oversize paragraphs are sentence-split."""
+    chunks: list = []
+    buffer = ""
+    for para in paragraphs:
+        if len(para) > max_chars:
+            buffer = _absorb_long_para(buffer, para, chunks, min_chars, max_chars)
+            continue
+        buffer = (buffer + "\n\n" + para).strip() if buffer else para
+        if len(buffer) >= min_chars:
+            chunks.append(buffer)
+            buffer = ""
+    if buffer:
+        chunks.append(buffer)
+    return chunks
+
+
 def _split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024, overlap: int = 48) -> list:
     if not text:
         return []
-
     if len(text) <= min_chars:
         return [text]
 
-    def _split_paragraph(para: str) -> list:
-        sentences = []
-        remaining = para
-        while remaining:
-            for sep in (". ", "! ", "? "):
-                idx = remaining.find(sep)
-                if idx != -1 and idx + len(sep) <= max_chars:
-                    sentences.append(remaining[: idx + 1])
-                    remaining = remaining[idx + len(sep):]
-                    break
-            else:
-                sentences.append(remaining[:max_chars])
-                remaining = remaining[max_chars:]
-        return [s for s in sentences if s]
-
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-
-    chunks = []
-    buffer = ""
-
-    for para in paragraphs:
-        if len(para) > max_chars:
-            if buffer:
-                chunks.append(buffer)
-                buffer = ""
-            for sentence in _split_paragraph(para):
-                if len(buffer) + len(sentence) >= min_chars:
-                    chunks.append(buffer + sentence)
-                    buffer = ""
-                else:
-                    buffer += sentence + " "
-        else:
-            buffer = (buffer + "\n\n" + para).strip() if buffer else para
-            if len(buffer) >= min_chars:
-                chunks.append(buffer)
-                buffer = ""
-
-    if buffer:
-        chunks.append(buffer)
-
+    chunks = _build_chunks(paragraphs, min_chars, max_chars)
     if not chunks:
         return [text]
 
     result = [chunks[0]]
     for chunk in chunks[1:]:
-        prefix = result[-1][-overlap:]
-        result.append(prefix + chunk)
-
+        result.append(result[-1][-overlap:] + chunk)
     return result
 
 

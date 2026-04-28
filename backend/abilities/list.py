@@ -220,6 +220,20 @@ def _handle_remove(service, params: dict, default_list_name: str) -> str:
     return _success(lst_data)
 
 
+def _split_check_items(raw_items: list) -> tuple[list, list]:
+    """Partition raw items into (to_check, to_uncheck) by their `checked` flag."""
+    to_check, to_uncheck = [], []
+    for item in raw_items:
+        if isinstance(item, dict):
+            content = item.get("content", "").strip()
+            if not content:
+                continue
+            (to_check if item.get("checked", True) else to_uncheck).append(content)
+        elif isinstance(item, str) and item.strip():
+            to_check.append(item.strip())
+    return to_check, to_uncheck
+
+
 def _handle_check(service, params: dict, default_list_name: str) -> str:
     raw_items = params.get("items", [])
     if not isinstance(raw_items, list):
@@ -229,17 +243,7 @@ def _handle_check(service, params: dict, default_list_name: str) -> str:
     if not name:
         return _fail(_AMBIGUOUS_LIST_NAME)
 
-    to_check = []
-    to_uncheck = []
-    for item in raw_items:
-        if isinstance(item, dict):
-            content = item.get("content", "").strip()
-            checked = item.get("checked", True)
-            if content:
-                (to_check if checked else to_uncheck).append(content)
-        elif isinstance(item, str) and item.strip():
-            to_check.append(item.strip())
-
+    to_check, to_uncheck = _split_check_items(raw_items)
     if not to_check and not to_uncheck:
         return _fail("No valid items provided. Each item must have 'content' and 'checked'.")
 

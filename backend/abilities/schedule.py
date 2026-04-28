@@ -123,6 +123,97 @@ class ScheduleAbility(Ability):
         return {"text": _skill_tag("schedule", body, action=action)}
 
 
+def _validate_message(params: dict) -> tuple[str, dict | None]:
+    """Validate the `message` field. Returns (message, error_response | None)."""
+    message = params.get("message", "").strip()
+    if not message:
+        return "", {"status": "error", "error": "message is required"}
+    if len(message) > 1000:
+        return "", {"status": "error", "error": "message exceeds 1000 characters"}
+    return message, None
+
+
+def _resolve_due_at(params: dict, past_due_grace: int):
+    """Parse due_at, apply grace if past, return (due_at, error_response | None)."""
+    due_at_str = params.get("due_at", "").strip()
+    if not due_at_str:
+        return None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
+
+    from services.time_utils import parse_utc
+    sentinel = datetime.min.replace(tzinfo=timezone.utc)
+    due_at = parse_utc(due_at_str)
+    if due_at == sentinel:
+        return None, {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
+
+    now = utc_now()
+    if due_at > now:
+        return due_at, None
+
+    past_seconds = (now - due_at).total_seconds()
+    if past_seconds <= past_due_grace:
+        original_due_at_iso = due_at.isoformat()
+        due_at = now + timedelta(seconds=5)
+        logger.info(f"{LOG_PREFIX} _create: past-due {original_due_at_iso} bumped to {due_at.isoformat()} (grace)")
+        return due_at, None
+
+    from services.time_formatter_service import TimeFormatterService
+    logger.warning(f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future (now={now.isoformat()})")
+    local_now = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
+    return None, {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
+
+
+_VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
+
+
+def _validate_recurrence(params: dict) -> tuple[str | None, dict | None]:
+    """Validate `recurrence`. Returns (normalized_recurrence | None, error_response | None)."""
+    recurrence = params.get("recurrence")
+    if not recurrence:
+        return None, None
+    recurrence = recurrence.lower()
+    if recurrence in _VALID_RECURRENCES:
+        return recurrence, None
+    if recurrence.startswith("interval:"):
+        try:
+            mins = int(recurrence.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return None, {"status": "error", "error": "interval recurrence must be 'interval:N' where N is 1–1440"}
+        if not (1 <= mins <= 1440):
+            return None, {"status": "error", "error": f"interval minutes must be 1–1440, got {mins}"}
+        return f"interval:{mins}", None
+    return None, {"status": "error", "error": f"recurrence must be one of {_VALID_RECURRENCES} or 'interval:N', got {recurrence}"}
+
+
+def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, dict | None]:
+    """Validate window_start/window_end pairing with hourly recurrence."""
+    window_start = params.get("window_start")
+    window_end = params.get("window_end")
+
+    if not (window_start or window_end):
+        return None, None, None
+    if recurrence != "hourly":
+        return None, None, {"status": "error", "error": "window_start/window_end only valid with recurrence='hourly'"}
+    if not (window_start and window_end):
+        return None, None, {"status": "error", "error": "both window_start and window_end required if using hourly windows"}
+    window_start = _normalize_hhmm(window_start)
+    if not window_start:
+        return None, None, {"status": "error", "error": "window_start must be HH:MM format (e.g., '09:00')"}
+    window_end = _normalize_hhmm(window_end)
+    if not window_end:
+        return None, None, {"status": "error", "error": "window_end must be HH:MM format (e.g., '17:00')"}
+    if window_start >= window_end:
+        return None, None, {"status": "error", "error": "window_start must be before window_end"}
+    return window_start, window_end, None
+
+
+def _validate_item_type(params: dict) -> tuple[str, dict | None]:
+    """Validate the `item_type` field."""
+    item_type = params.get("item_type", "notification").lower()
+    if item_type not in ("notification", "prompt"):
+        return "", {"status": "error", "error": f"item_type must be 'notification' or 'prompt', got {item_type}"}
+    return item_type, None
+
+
 def _create(channel: str, params: dict, past_due_grace: int) -> dict:
     try:
         from services.database_service import get_shared_db_service
@@ -133,82 +224,21 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
             f"recurrence={params.get('recurrence')!r}"
         )
 
-        message = params.get("message", "").strip()
-        if not message:
-            return {"status": "error", "error": "message is required"}
-
-        if len(message) > 1000:
-            return {"status": "error", "error": "message exceeds 1000 characters"}
-
-        due_at_str = params.get("due_at", "").strip()
-        if not due_at_str:
-            return {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
-
-        from services.time_utils import parse_utc
-        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
-        due_at = parse_utc(due_at_str)
-        if due_at == _SENTINEL:
-            return {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
-
-        now = utc_now()
-        if due_at <= now:
-            past_seconds = (now - due_at).total_seconds()
-            if past_seconds <= past_due_grace:
-                original_due_at_iso = due_at.isoformat()
-                due_at = now + timedelta(seconds=5)
-                logger.info(
-                    f"{LOG_PREFIX} _create: past-due {original_due_at_iso} bumped to "
-                    f"{due_at.isoformat()} (grace)"
-                )
-            else:
-                from services.time_formatter_service import TimeFormatterService
-                logger.warning(
-                    f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future "
-                    f"(now={now.isoformat()})"
-                )
-                local_now = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
-                return {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
-
-        item_type = params.get("item_type", "notification").lower()
-        if item_type not in ("notification", "prompt"):
-            return {"status": "error", "error": f"item_type must be 'notification' or 'prompt', got {item_type}"}
-
-        recurrence = params.get("recurrence")
-        if recurrence:
-            recurrence = recurrence.lower()
-            valid_recurrences = ("daily", "weekly", "monthly", "weekdays", "hourly")
-            if recurrence not in valid_recurrences:
-                if recurrence.startswith("interval:"):
-                    try:
-                        mins = int(recurrence.split(":", 1)[1])
-                        if not (1 <= mins <= 1440):
-                            return {"status": "error", "error": f"interval minutes must be 1–1440, got {mins}"}
-                        recurrence = f"interval:{mins}"
-                    except (ValueError, IndexError):
-                        return {"status": "error", "error": "interval recurrence must be 'interval:N' where N is 1–1440"}
-                else:
-                    return {"status": "error", "error": f"recurrence must be one of {valid_recurrences} or 'interval:N', got {recurrence}"}
-
-        window_start = params.get("window_start")
-        window_end = params.get("window_end")
-
-        if (window_start or window_end) and recurrence != "hourly":
-            return {"status": "error", "error": "window_start/window_end only valid with recurrence='hourly'"}
-
-        if window_start or window_end:
-            if not (window_start and window_end):
-                return {"status": "error", "error": "both window_start and window_end required if using hourly windows"}
-
-            window_start = _normalize_hhmm(window_start)
-            if not window_start:
-                return {"status": "error", "error": "window_start must be HH:MM format (e.g., '09:00')"}
-
-            window_end = _normalize_hhmm(window_end)
-            if not window_end:
-                return {"status": "error", "error": "window_end must be HH:MM format (e.g., '17:00')"}
-
-            if window_start >= window_end:
-                return {"status": "error", "error": "window_start must be before window_end"}
+        message, err = _validate_message(params)
+        if err:
+            return err
+        due_at, err = _resolve_due_at(params, past_due_grace)
+        if err:
+            return err
+        item_type, err = _validate_item_type(params)
+        if err:
+            return err
+        recurrence, err = _validate_recurrence(params)
+        if err:
+            return err
+        window_start, window_end, err = _validate_windows(params, recurrence)
+        if err:
+            return err
 
         db = get_shared_db_service()
         item_id = uuid.uuid4().hex[:8]

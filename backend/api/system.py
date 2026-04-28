@@ -17,36 +17,48 @@ system_bp = Blueprint('system', __name__)
 _SIGNAL_SOURCE_HEALTH = '/health'
 
 
+def _ok_response():
+    """Standard health response body — used by both GET and POST."""
+    from consumer import APP_VERSION
+    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+
+
+def _mirror_telemetry_to_world_state(svc, data: dict) -> None:
+    """Mirror persisted client telemetry into WorldState as Signals."""
+    from services.world_state import world_state, Signal
+    world_state.set("telemetry", svc.get() or data)
+    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
+    device_class = data.get('device_class') or (data.get('device') or {}).get('class')
+    if device_class:
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
+    local_time = data.get('local_time')
+    if local_time:
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
+
+
+def _persist_heartbeat(data: dict) -> None:
+    """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
+    from services.client_context_service import ClientContextService
+    svc = ClientContextService()
+    svc.save(data)
+    try:
+        _mirror_telemetry_to_world_state(svc, data)
+    except Exception as ws_err:
+        logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
+
+
 @system_bp.route('/health', methods=['GET', 'POST'])
 def health_check():
     """Health check endpoint (no auth required). POST saves client context."""
-    if request.method == 'POST':
-        try:
-            from services.client_context_service import ClientContextService
-            data = request.get_json() or {}
-            if data:
-                # ClientContextService.save() is the single chokepoint for
-                # heartbeat persistence — it writes to the telemetry table.
-                # We then mirror into WorldState so the [telemetry] block
-                # surfaces in the user prompt and Cognition tab.
-                svc = ClientContextService()
-                svc.save(data)
-                try:
-                    from services.world_state import world_state, Signal
-                    world_state.set("telemetry", svc.get() or data)
-                    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
-                    if device_class := data.get('device_class') or (data.get('device') or {}).get('class'):
-                        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
-                    if local_time := data.get('local_time'):
-                        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
-                except Exception as ws_err:
-                    logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
-        except Exception as e:
-            logger.warning(f"[HEALTH] Failed to save client context: {e}")
-        from consumer import APP_VERSION
-        return jsonify({"status": "ok", "version": APP_VERSION}), 200
-    from consumer import APP_VERSION
-    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+    if request.method != 'POST':
+        return _ok_response()
+    try:
+        data = request.get_json() or {}
+        if data:
+            _persist_heartbeat(data)
+    except Exception as e:
+        logger.warning(f"[HEALTH] Failed to save client context: {e}")
+    return _ok_response()
 
 
 @system_bp.route('/ready', methods=['GET'])

@@ -85,71 +85,91 @@ class WeatherAbility(Ability):
             observation_time, is_raining, is_daylight, is_hot, is_cold, is_windy, is_clear
         """
         location_param = params.get("location", "").strip()
+        lat, lon, location_name = _extract_location(telemetry)
+        cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
-        # Extract lat/lon and location name from telemetry (flattened format)
-        lat = lon = None
-        location_name = None
-        if telemetry:
-            lat = telemetry.get("lat")
-            lon = telemetry.get("lon")
-            city = telemetry.get("city", "")
-            country = telemetry.get("country", "")
-            location_name = f"{city}, {country}" if city and country else city or country or None
+        cached = _get_fresh_cache(cache_key)
+        if cached is not None:
+            return cached
 
-        # Build cache key -- prefer resolved name, fall back to coords or param
-        if location_name and not location_param:
-            cache_key = location_name.lower()
-        elif lat is not None and lon is not None and not location_param:
-            cache_key = f"{lat:.4f},{lon:.4f}"
-        else:
-            cache_key = location_param.lower() if location_param else "auto"
-
-        now = time.time()
-        if cache_key in WeatherAbility._cache:
-            cached_result, cached_ts = WeatherAbility._cache[cache_key]
-            if (now - cached_ts) < WeatherAbility._CACHE_TTL:
-                return cached_result
-
-        result = None
-        open_meteo_err = ""
-        wttr_err = ""
-
-        # Use Open-Meteo when we have coordinates and no explicit city name
-        if lat is not None and lon is not None and not location_param:
-            result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
-
-        # Fall back to wttr.in only when we have an explicit city name param
-        # (raw coordinates passed to wttr.in fail silently -- skip if coords-only)
-        if result is None and location_param:
-            result, wttr_err = _fetch_wttr(location_param)
-
-        # Final retry with shorter timeout before giving up
-        if result is None:
-            logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
-            if lat is not None and lon is not None and not location_param:
-                result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
-            if result is None and location_param:
-                result, _ = _fetch_wttr(location_param, timeout=5)
+        result, open_meteo_err, wttr_err = _fetch_with_fallback(location_param, lat, lon, location_name, cache_key)
 
         if result is not None:
-            WeatherAbility._cache[cache_key] = (result, now)
+            WeatherAbility._cache[cache_key] = (result, time.time())
             return result
 
-        # Return stale cache if available
-        if cache_key in WeatherAbility._cache:
-            logger.warning(f"[WEATHER] All sources unavailable, returning stale cache for '{cache_key}'")
-            return WeatherAbility._cache[cache_key][0]
+        return _stale_or_error(cache_key, open_meteo_err, wttr_err)
 
-        failures = []
-        if open_meteo_err:
-            failures.append(f"Open-Meteo: {open_meteo_err}")
-        if wttr_err:
-            failures.append(f"wttr.in: {wttr_err}")
-        logger.error(f"[WEATHER] All weather sources unavailable for '{cache_key}': {'; '.join(failures)}")
-        return {
-            "error": "All weather sources unavailable",
-            "details": "; ".join(failures) if failures else "Unknown error",
-        }
+
+def _extract_location(telemetry: dict | None) -> tuple:
+    """Pull (lat, lon, location_name) from telemetry; all default to None."""
+    if not telemetry:
+        return None, None, None
+    lat = telemetry.get("lat")
+    lon = telemetry.get("lon")
+    city = telemetry.get("city", "")
+    country = telemetry.get("country", "")
+    location_name = f"{city}, {country}" if city and country else city or country or None
+    return lat, lon, location_name
+
+
+def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -> str:
+    """Prefer resolved name, fall back to coords, then to the literal param ('auto' if empty)."""
+    if location_name and not location_param:
+        return location_name.lower()
+    if lat is not None and lon is not None and not location_param:
+        return f"{lat:.4f},{lon:.4f}"
+    return location_param.lower() if location_param else "auto"
+
+
+def _get_fresh_cache(cache_key: str):
+    """Return the cached result if still within TTL, else None."""
+    if cache_key not in WeatherAbility._cache:
+        return None
+    cached_result, cached_ts = WeatherAbility._cache[cache_key]
+    if (time.time() - cached_ts) < WeatherAbility._CACHE_TTL:
+        return cached_result
+    return None
+
+
+def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
+    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err)."""
+    result = None
+    open_meteo_err = ""
+    wttr_err = ""
+
+    if lat is not None and lon is not None and not location_param:
+        result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
+
+    if result is None and location_param:
+        result, wttr_err = _fetch_wttr(location_param)
+
+    if result is None:
+        logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
+        if lat is not None and lon is not None and not location_param:
+            result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
+        if result is None and location_param:
+            result, _ = _fetch_wttr(location_param, timeout=5)
+
+    return result, open_meteo_err, wttr_err
+
+
+def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
+    """Return stale-cached result if any, else build a structured error response."""
+    if cache_key in WeatherAbility._cache:
+        logger.warning(f"[WEATHER] All sources unavailable, returning stale cache for '{cache_key}'")
+        return WeatherAbility._cache[cache_key][0]
+
+    failures = []
+    if open_meteo_err:
+        failures.append(f"Open-Meteo: {open_meteo_err}")
+    if wttr_err:
+        failures.append(f"wttr.in: {wttr_err}")
+    logger.error(f"[WEATHER] All weather sources unavailable for '{cache_key}': {'; '.join(failures)}")
+    return {
+        "error": "All weather sources unavailable",
+        "details": "; ".join(failures) if failures else "Unknown error",
+    }
 
 
 def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple:

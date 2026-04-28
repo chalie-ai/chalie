@@ -72,87 +72,11 @@ class SavePattern(Ability):
         if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_pattern"}
 
-        name = params.get("name", "")
-        if not name or not _NAME_PATTERN.fullmatch(name):
-            return {"error": "invalid_name", "name": name}
-        frequency = params.get("frequency", "")
-        if frequency not in _VALID_FREQUENCIES:
-            return {"error": "invalid_frequency", "frequency": frequency}
-        summary = (params.get("summary") or "").strip()
-        if not summary:
-            return {"error": "empty_summary"}
-        evidence = params.get("evidence_transcript_ids") or []
-        if not isinstance(evidence, list) or len(evidence) < 2:
-            return {
-                "error": "insufficient_evidence",
-                "required_min": 2,
-                "got": len(evidence) if isinstance(evidence, list) else 0,
-            }
-        time_anchor = params.get("time_anchor", "") or ""
+        validated = _validate_pattern_params(params)
+        if "error" in validated:
+            return validated
 
-        now_iso = utc_now().isoformat()
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            existing = conn.execute(
-                "SELECT id, value FROM data_graph "
-                "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
-                "ORDER BY id DESC LIMIT 1",
-                ("behavioral_pattern", name),
-            ).fetchone()
-
-            if existing:
-                existing_id, existing_value = existing[0], existing[1]
-                try:
-                    prev = json.loads(existing_value or "{}") or {}
-                except Exception:
-                    prev = {}
-                prev_conf = float(prev.get("confidence") or 0.0)
-                new_conf = min(10.0, prev_conf + 7.0)
-                prev_evidence = prev.get("evidence_transcript_ids") or []
-                merged = list(dict.fromkeys([*prev_evidence, *evidence]))
-                new_value = {
-                    "name": name,
-                    "frequency": frequency,
-                    "time_anchor": time_anchor,
-                    "summary": summary,
-                    "confidence": new_conf,
-                    "last_seen_at": now_iso,
-                    "evidence_transcript_ids": merged,
-                }
-                conn.execute(
-                    "UPDATE data_graph "
-                    "SET value=?, last_confirmed_at=?, source=? "
-                    "WHERE id=?",
-                    (json.dumps(new_value), now_iso, "pattern_match", existing_id),
-                )
-                row_id = existing_id
-                confidence_out = new_conf
-            else:
-                new_value = {
-                    "name": name,
-                    "frequency": frequency,
-                    "time_anchor": time_anchor,
-                    "summary": summary,
-                    "confidence": 7.0,
-                    "last_seen_at": now_iso,
-                    "evidence_transcript_ids": list(evidence),
-                }
-                cur = conn.execute(
-                    "INSERT INTO data_graph "
-                    "(kind, key, value, first_seen_at, last_confirmed_at, source, active) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1)",
-                    (
-                        "behavioral_pattern",
-                        name,
-                        json.dumps(new_value),
-                        now_iso,
-                        now_iso,
-                        "pattern_match",
-                    ),
-                )
-                row_id = cur.lastrowid
-                confidence_out = 7.0
+        row_id, confidence_out = _upsert_pattern(validated)
 
         if proc is not None:
             proc._save_pattern_calls = count + 1
@@ -160,4 +84,93 @@ class SavePattern(Ability):
             if touched is not None:
                 touched.add(row_id)
 
-        return {"ok": True, "name": name, "confidence": confidence_out, "row_id": row_id}
+        return {"ok": True, "name": validated["name"], "confidence": confidence_out, "row_id": row_id}
+
+
+def _validate_pattern_params(params: dict) -> dict:
+    """Validate a save_pattern request. Returns the normalized fields, or an error dict."""
+    name = params.get("name", "")
+    if not name or not _NAME_PATTERN.fullmatch(name):
+        return {"error": "invalid_name", "name": name}
+    frequency = params.get("frequency", "")
+    if frequency not in _VALID_FREQUENCIES:
+        return {"error": "invalid_frequency", "frequency": frequency}
+    summary = (params.get("summary") or "").strip()
+    if not summary:
+        return {"error": "empty_summary"}
+    evidence = params.get("evidence_transcript_ids") or []
+    if not isinstance(evidence, list) or len(evidence) < 2:
+        return {
+            "error": "insufficient_evidence",
+            "required_min": 2,
+            "got": len(evidence) if isinstance(evidence, list) else 0,
+        }
+    return {
+        "name": name,
+        "frequency": frequency,
+        "summary": summary,
+        "evidence": evidence,
+        "time_anchor": params.get("time_anchor", "") or "",
+    }
+
+
+def _upsert_pattern(validated: dict) -> tuple[int, float]:
+    """Insert or merge a behavioral_pattern row in data_graph. Returns (row_id, confidence)."""
+    now_iso = utc_now().isoformat()
+    db = get_shared_db_service()
+
+    with db.connection() as conn:
+        existing = conn.execute(
+            "SELECT id, value FROM data_graph "
+            "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
+            "ORDER BY id DESC LIMIT 1",
+            ("behavioral_pattern", validated["name"]),
+        ).fetchone()
+
+        if existing:
+            return _update_existing_pattern(conn, existing, validated, now_iso)
+        return _insert_new_pattern(conn, validated, now_iso)
+
+
+def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
+    existing_id, existing_value = existing[0], existing[1]
+    try:
+        prev = json.loads(existing_value or "{}") or {}
+    except Exception:
+        prev = {}
+    prev_conf = float(prev.get("confidence") or 0.0)
+    new_conf = min(10.0, prev_conf + 7.0)
+    merged_evidence = list(dict.fromkeys([*(prev.get("evidence_transcript_ids") or []), *validated["evidence"]]))
+    new_value = {
+        "name": validated["name"],
+        "frequency": validated["frequency"],
+        "time_anchor": validated["time_anchor"],
+        "summary": validated["summary"],
+        "confidence": new_conf,
+        "last_seen_at": now_iso,
+        "evidence_transcript_ids": merged_evidence,
+    }
+    conn.execute(
+        "UPDATE data_graph SET value=?, last_confirmed_at=?, source=? WHERE id=?",
+        (json.dumps(new_value), now_iso, "pattern_match", existing_id),
+    )
+    return existing_id, new_conf
+
+
+def _insert_new_pattern(conn, validated: dict, now_iso: str) -> tuple[int, float]:
+    new_value = {
+        "name": validated["name"],
+        "frequency": validated["frequency"],
+        "time_anchor": validated["time_anchor"],
+        "summary": validated["summary"],
+        "confidence": 7.0,
+        "last_seen_at": now_iso,
+        "evidence_transcript_ids": list(validated["evidence"]),
+    }
+    cur = conn.execute(
+        "INSERT INTO data_graph "
+        "(kind, key, value, first_seen_at, last_confirmed_at, source, active) "
+        "VALUES (?, ?, ?, ?, ?, ?, 1)",
+        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, "pattern_match"),
+    )
+    return cur.lastrowid, 7.0

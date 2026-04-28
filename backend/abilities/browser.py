@@ -330,88 +330,84 @@ class BrowserAbility(Ability):
         if not ok:
             return {"error": f"URL blocked: {reason}", "text": ""}
 
-        wait_for = self._parse_wait(params.get("wait_for"))
-        extract_after = (params.get("extract_after") or "text").lower()
-        selector = params.get("selector")
-        screenshot_after = bool(params.get("screenshot_after", False))
-        max_chars = self._parse_max_chars(params.get("max_chars"))
-        save_session = bool(params.get("save_session", False))
-        cred_label = params.get("credential_label")
+        cfg = self._build_interact_cfg(params, url, steps)
 
         def _work(browser):
-            from tools.browser.security import DnsCache, setup_page_security
-            from tools.browser.extraction import extract_text, extract_html
-            from tools.browser.interaction import execute_steps
-
-            vw = params.get("viewport_width", self._DEFAULT_VIEWPORT_W)
-            vh = params.get("viewport_height", self._DEFAULT_VIEWPORT_H)
-            dns_cache = DnsCache()
-
-            context = browser.new_context(
-                viewport={"width": vw, "height": vh},
-                user_agent=_user_agent(),
-                java_script_enabled=True,
-                ignore_https_errors=True,
-            )
-
-            if cred_label:
-                _inject_credentials(context, url, cred_label)
-
-            page = context.new_page()
-            setup_page_security(page, dns_cache)
-            page.set_default_navigation_timeout(self._NAV_TIMEOUT)
-
-            t0 = time.time()
-            try:
-                page.goto(url, wait_until=wait_for)
-                _wait_extra(page, params)
-
-                step_results = execute_steps(page, steps)
-                total_ms = int((time.time() - t0) * 1000)
-
-                steps_completed = sum(1 for s in step_results if s["ok"])
-                last_failed = next((s for s in step_results if not s["ok"]), None)
-
-                title = page.title()
-                final_url = page.url
-
-                if extract_after == "html":
-                    text = extract_html(page, selector, max_chars)
-                else:
-                    text = extract_text(page, selector, max_chars)
-
-                screenshot_b64 = ""
-                if screenshot_after:
-                    img_bytes = page.screenshot(type="png")
-                    screenshot_b64 = base64.b64encode(img_bytes).decode()
-
-                if save_session and steps_completed == len(steps):
-                    _capture_session(context, url, cred_label or "auto")
-
-                result = {
-                    "text": text,
-                    "title": title,
-                    "url": final_url,
-                    "steps_completed": steps_completed,
-                    "steps_total": len(steps),
-                    "error": "",
-                    "_meta": {
-                        "action": "interact",
-                        "total_ms": total_ms,
-                        "steps": step_results,
-                    },
-                }
-                if screenshot_b64:
-                    result["screenshot_b64"] = screenshot_b64
-                if last_failed:
-                    result["step_error"] = last_failed["error"]
-
-                return result
-            finally:
-                page.close()
-                context.close()
+            return self._run_interact(browser, cfg)
 
         return self._submit(_work)
+
+    def _build_interact_cfg(self, params: dict, url: str, steps: list) -> dict:
+        return {
+            "url": url,
+            "steps": steps,
+            "wait_for": self._parse_wait(params.get("wait_for")),
+            "extract_after": (params.get("extract_after") or "text").lower(),
+            "selector": params.get("selector"),
+            "screenshot_after": bool(params.get("screenshot_after", False)),
+            "max_chars": self._parse_max_chars(params.get("max_chars")),
+            "save_session": bool(params.get("save_session", False)),
+            "cred_label": params.get("credential_label"),
+            "viewport_width": params.get("viewport_width", self._DEFAULT_VIEWPORT_W),
+            "viewport_height": params.get("viewport_height", self._DEFAULT_VIEWPORT_H),
+            "params": params,  # forwarded for _wait_extra()
+        }
+
+    def _run_interact(self, browser, cfg: dict) -> dict:
+        from tools.browser.security import DnsCache, setup_page_security
+        from tools.browser.extraction import extract_text, extract_html
+        from tools.browser.interaction import execute_steps
+
+        dns_cache = DnsCache()
+        context = browser.new_context(
+            viewport={"width": cfg["viewport_width"], "height": cfg["viewport_height"]},
+            user_agent=_user_agent(),
+            java_script_enabled=True,
+            ignore_https_errors=True,
+        )
+        if cfg["cred_label"]:
+            _inject_credentials(context, cfg["url"], cfg["cred_label"])
+
+        page = context.new_page()
+        setup_page_security(page, dns_cache)
+        page.set_default_navigation_timeout(self._NAV_TIMEOUT)
+
+        t0 = time.time()
+        try:
+            page.goto(cfg["url"], wait_until=cfg["wait_for"])
+            _wait_extra(page, cfg["params"])
+
+            step_results = execute_steps(page, cfg["steps"])
+            steps_completed = sum(1 for s in step_results if s["ok"])
+            last_failed = next((s for s in step_results if not s["ok"]), None)
+
+            text = (extract_html if cfg["extract_after"] == "html" else extract_text)(
+                page, cfg["selector"], cfg["max_chars"],
+            )
+
+            result = {
+                "text": text,
+                "title": page.title(),
+                "url": page.url,
+                "steps_completed": steps_completed,
+                "steps_total": len(cfg["steps"]),
+                "error": "",
+                "_meta": {
+                    "action": "interact",
+                    "total_ms": int((time.time() - t0) * 1000),
+                    "steps": step_results,
+                },
+            }
+            if cfg["screenshot_after"]:
+                result["screenshot_b64"] = base64.b64encode(page.screenshot(type="png")).decode()
+            if cfg["save_session"] and steps_completed == len(cfg["steps"]):
+                _capture_session(context, cfg["url"], cfg["cred_label"] or "auto")
+            if last_failed:
+                result["step_error"] = last_failed["error"]
+            return result
+        finally:
+            page.close()
+            context.close()
 
     # =========================================================================
     #  MONITOR
@@ -431,90 +427,75 @@ class BrowserAbility(Ability):
         if not ok:
             return {"error": f"URL blocked: {reason}", "text": ""}
 
-        wait_for = self._parse_wait(params.get("wait_for"))
-        selector = params.get("selector")
-        max_chars = self._parse_max_chars(params.get("max_chars"))
+        cfg = {
+            "url": url,
+            "snapshot_key": snapshot_key,
+            "wait_for": self._parse_wait(params.get("wait_for")),
+            "selector": params.get("selector"),
+            "max_chars": self._parse_max_chars(params.get("max_chars")),
+            "viewport_width": params.get("viewport_width", self._DEFAULT_VIEWPORT_W),
+            "viewport_height": params.get("viewport_height", self._DEFAULT_VIEWPORT_H),
+            "params": params,
+        }
 
         def _work(browser):
-            from tools.browser.security import DnsCache, setup_page_security
-            from tools.browser.extraction import extract_text
-
-            vw = params.get("viewport_width", self._DEFAULT_VIEWPORT_W)
-            vh = params.get("viewport_height", self._DEFAULT_VIEWPORT_H)
-            dns_cache = DnsCache()
-
-            context = browser.new_context(
-                viewport={"width": vw, "height": vh},
-                user_agent=_user_agent(),
-                java_script_enabled=True,
-                ignore_https_errors=True,
-            )
-            page = context.new_page()
-            setup_page_security(page, dns_cache)
-            page.set_default_navigation_timeout(self._NAV_TIMEOUT)
-
-            t0 = time.time()
-            try:
-                page.goto(url, wait_until=wait_for)
-                _wait_extra(page, params)
-                load_ms = int((time.time() - t0) * 1000)
-
-                current_text = extract_text(page, selector, max_chars)
-                content_hash = hashlib.sha256(current_text.encode()).hexdigest()
-
-                snapshot_store = _get_snapshot_store()
-                previous = snapshot_store.get(1, snapshot_key) if snapshot_store else None
-
-                first_check = previous is None
-                changed = False
-                diff_lines = ""
-                previous_text = ""
-                change_ratio = 0.0
-
-                if previous:
-                    previous_text = previous["content_text"]
-                    changed = previous["content_hash"] != content_hash
-                    if changed:
-                        diff = list(difflib.unified_diff(
-                            previous_text.splitlines(keepends=True),
-                            current_text.splitlines(keepends=True),
-                            fromfile="previous",
-                            tofile="current",
-                            lineterm="",
-                            n=1,
-                        ))
-                        diff_lines = "\n".join(diff[:100])
-                        if previous_text:
-                            sm = difflib.SequenceMatcher(None, previous_text, current_text)
-                            change_ratio = round(1.0 - sm.ratio(), 3)
-
-                if snapshot_store:
-                    snapshot_store.save(1, snapshot_key, url, content_hash, current_text)
-
-                return {
-                    "changed": changed,
-                    "first_check": first_check,
-                    "diff": diff_lines,
-                    "current_text": current_text,
-                    "previous_text": previous_text if changed else "",
-                    "change_ratio": change_ratio,
-                    "title": page.title(),
-                    "url": page.url,
-                    "error": "",
-                    "_meta": {
-                        "action": "monitor",
-                        "load_ms": load_ms,
-                        "snapshot_key": snapshot_key,
-                        "content_hash": content_hash,
-                        "chars_current": len(current_text),
-                        "chars_previous": len(previous_text) if previous else 0,
-                    },
-                }
-            finally:
-                page.close()
-                context.close()
+            return self._run_monitor(browser, cfg)
 
         return self._submit(_work)
+
+    def _run_monitor(self, browser, cfg: dict) -> dict:
+        from tools.browser.security import DnsCache, setup_page_security
+        from tools.browser.extraction import extract_text
+
+        dns_cache = DnsCache()
+        context = browser.new_context(
+            viewport={"width": cfg["viewport_width"], "height": cfg["viewport_height"]},
+            user_agent=_user_agent(),
+            java_script_enabled=True,
+            ignore_https_errors=True,
+        )
+        page = context.new_page()
+        setup_page_security(page, dns_cache)
+        page.set_default_navigation_timeout(self._NAV_TIMEOUT)
+
+        t0 = time.time()
+        try:
+            page.goto(cfg["url"], wait_until=cfg["wait_for"])
+            _wait_extra(page, cfg["params"])
+            load_ms = int((time.time() - t0) * 1000)
+
+            current_text = extract_text(page, cfg["selector"], cfg["max_chars"])
+            content_hash = hashlib.sha256(current_text.encode()).hexdigest()
+
+            snapshot_store = _get_snapshot_store()
+            previous = snapshot_store.get(1, cfg["snapshot_key"]) if snapshot_store else None
+            changed, diff_lines, previous_text, change_ratio = _compute_diff(previous, current_text, content_hash)
+
+            if snapshot_store:
+                snapshot_store.save(1, cfg["snapshot_key"], cfg["url"], content_hash, current_text)
+
+            return {
+                "changed": changed,
+                "first_check": previous is None,
+                "diff": diff_lines,
+                "current_text": current_text,
+                "previous_text": previous_text if changed else "",
+                "change_ratio": change_ratio,
+                "title": page.title(),
+                "url": page.url,
+                "error": "",
+                "_meta": {
+                    "action": "monitor",
+                    "load_ms": load_ms,
+                    "snapshot_key": cfg["snapshot_key"],
+                    "content_hash": content_hash,
+                    "chars_current": len(current_text),
+                    "chars_previous": len(previous_text) if previous else 0,
+                },
+            }
+        finally:
+            page.close()
+            context.close()
 
     # =========================================================================
     #  HELPERS
@@ -548,6 +529,29 @@ class BrowserAbility(Ability):
             return max(100, int(raw))
         except (TypeError, ValueError):
             return self._DEFAULT_MAX_CHARS
+
+def _compute_diff(previous, current_text: str, content_hash: str) -> tuple[bool, str, str, float]:
+    """Compare current to previous snapshot. Returns (changed, diff_lines, previous_text, change_ratio)."""
+    if not previous:
+        return False, "", "", 0.0
+    previous_text = previous["content_text"]
+    if previous["content_hash"] == content_hash:
+        return False, "", previous_text, 0.0
+    diff = list(difflib.unified_diff(
+        previous_text.splitlines(keepends=True),
+        current_text.splitlines(keepends=True),
+        fromfile="previous",
+        tofile="current",
+        lineterm="",
+        n=1,
+    ))
+    diff_lines = "\n".join(diff[:100])
+    change_ratio = 0.0
+    if previous_text:
+        sm = difflib.SequenceMatcher(None, previous_text, current_text)
+        change_ratio = round(1.0 - sm.ratio(), 3)
+    return True, diff_lines, previous_text, change_ratio
+
 
 def _user_agent() -> str:
     return (

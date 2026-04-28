@@ -689,6 +689,34 @@ def _write_recall_telemetry(
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
 
+def _gather_query_history(proc, emb_svc) -> tuple[list, str, object]:
+    """Build (history, turn_uid, transcript_id) from the bound processor, if any.
+
+    Inserts the seed-query record at the head of history when the processor has a
+    pending seed that hasn't been recorded yet. Returns ephemeral defaults if no
+    processor is bound.
+    """
+    if proc is None:
+        return [], "ephemeral", None
+
+    history: List[Dict] = list(proc._memory_query_history or [])
+    seed_query = getattr(proc, "_memory_seed_query", None) or None
+    if seed_query and not any(h.get("caller") == "seed" for h in history):
+        try:
+            seed_emb = emb_svc.generate_embedding(seed_query)
+            history.insert(0, {
+                "query": seed_query,
+                "embedding": seed_emb,
+                "caller": "seed",
+                "effective_radius": MemoryAbility.SEED_RADIUS_BASELINE,
+            })
+        except Exception as _seed_exc:
+            logger.debug(f"{LOG_PREFIX} Could not embed seed for drift calc: {_seed_exc}")
+    turn_uid = str(getattr(proc, "_uid", None) or proc.CHANNEL or "unbound")
+    transcript_id = getattr(proc, "_uid", None)
+    return history, turn_uid, transcript_id
+
+
 def recall_episodes(
     channel: str,
     query: str,
@@ -722,35 +750,8 @@ def recall_episodes(
         emb_svc = get_embedding_service()
 
         q_embedding = emb_svc.generate_embedding(query)
-
         proc = current_processor()
-        history: List[Dict] = []
-        turn_uid = "ephemeral"
-        transcript_id = None
-        if proc is not None:
-            history = list(proc._memory_query_history or [])
-            seed_query = getattr(proc, "_memory_seed_query", None) or None
-            if seed_query and not any(
-                h.get("caller") == "seed" for h in history
-            ):
-                try:
-                    seed_emb = emb_svc.generate_embedding(seed_query)
-                    history.insert(
-                        0,
-                        {
-                            "query": seed_query,
-                            "embedding": seed_emb,
-                            "caller": "seed",
-                            "effective_radius": MemoryAbility.SEED_RADIUS_BASELINE,
-                        },
-                    )
-                except Exception as _seed_exc:
-                    logger.debug(
-                        f"{LOG_PREFIX} Could not embed seed for drift calc: {_seed_exc}"
-                    )
-            turn_uid = getattr(proc, "_uid", None) or proc.CHANNEL or "unbound"
-            turn_uid = str(turn_uid)
-            transcript_id = getattr(proc, "_uid", None)
+        history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc)
 
         narrow_factor, _min_dist = _compute_narrow_factor(q_embedding, history)
         expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
