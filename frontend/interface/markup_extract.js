@@ -6,6 +6,27 @@ const ALT_RE = /\balt\s*=\s*"([^"]*)"/i;
 
 const DROP_TAGS = new Set(['actions']);
 
+// Single shared DOMParser. Parsing as text/html lets us delegate ALL XML and
+// numeric character entity decoding to the browser — including `&#9731;`,
+// `&#x2603;`, `&hearts;`, etc. Manual maps would silently miss numerics and
+// every named entity outside the obvious five.
+const _parser = (typeof DOMParser !== 'undefined') ? new DOMParser() : null;
+
+function decodeEntities(text) {
+  if (text.indexOf('&') === -1) return text;
+  if (_parser) {
+    try {
+      // Wrap in <body> so leading whitespace is preserved verbatim.
+      const doc = _parser.parseFromString(`<!doctype html><body>${text}`, 'text/html');
+      return doc.body.textContent || '';
+    } catch (_e) { /* fall through */ }
+  }
+  // Fallback (no DOM available — Node test env). Covers the common five.
+  return text
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
 export function extractPlaintext(content) {
   if (!content) return '';
   const out = [];
@@ -32,9 +53,7 @@ export function extractPlaintext(content) {
   if (skipDepth === 0 && pos < content.length) {
     out.push(content.slice(pos));
   }
-  return out
-    .join(' ')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  return decodeEntities(out.join(' '))
     .replace(/\s+/g, ' ')
     .trim();
 }
