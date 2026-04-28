@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 # Thresholds from the shipped deliberation-score-classifier_meta.json.
 _HIGH_THR = 0.67
 _MED_THR = 0.46
-_ALPHA = 0.6  # ema = alpha * prev + (1 - alpha) * new
+_ALPHA = 0.6
 
 
 class TestDeliberationEmaColdStart:

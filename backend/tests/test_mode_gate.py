@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 def _zero_state() -> dict:
     from services.mode_gate_service import ModeGateService
-    return {m: 0.0 for m in ModeGateService.MODES}
+    return dict.fromkeys(ModeGateService.MODES, 0.0)
 
 
 def _fresh_service(fire_threshold: float = 0.60):
@@ -49,7 +49,7 @@ def _fresh_service(fire_threshold: float = 0.60):
     mgm._fire_thresholds_cache = None
 
     svc = mgm.ModeGateService()
-    mgm._fire_thresholds_cache = {m: fire_threshold for m in mgm.ModeGateService.MODES}
+    mgm._fire_thresholds_cache = dict.fromkeys(mgm.ModeGateService.MODES, fire_threshold)
     svc._fire_thresholds = dict(mgm._fire_thresholds_cache)
     return svc
 
@@ -66,7 +66,7 @@ class TestUpdateStateFireRule:
     def test_fire_from_zero_sets_state_to_prob(self):
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
         probs['research'] = 0.82
 
         result = svc._update_state(state, probs)
@@ -77,7 +77,7 @@ class TestUpdateStateFireRule:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.90
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
         probs['research'] = 0.70
 
         result = svc._update_state(state, probs)
@@ -88,7 +88,7 @@ class TestUpdateStateFireRule:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['coding'] = 0.70
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
         probs['coding'] = 0.95
 
         result = svc._update_state(state, probs)
@@ -98,7 +98,7 @@ class TestUpdateStateFireRule:
     def test_fire_clamps_at_ceiling(self):
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
         probs['analyze'] = 1.0
         state = svc._update_state(state, probs)
         probs['analyze'] = 1.0
@@ -115,7 +115,7 @@ class TestUpdateStateDecayRule:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.90
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
 
         result = svc._update_state(state, probs)
 
@@ -125,7 +125,7 @@ class TestUpdateStateDecayRule:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['write'] = 0.012
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
 
         result = svc._update_state(state, probs)
 
@@ -134,7 +134,7 @@ class TestUpdateStateDecayRule:
     def test_miss_on_zero_state_stays_zero(self):
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
 
         result = svc._update_state(state, probs)
 
@@ -145,7 +145,7 @@ class TestUpdateStateDecayRule:
         state = _zero_state()
         state['research'] = 0.80
         state['coding'] = 0.50
-        probs = {m: 0.0 for m in svc.MODES}
+        probs = dict.fromkeys(svc.MODES, 0.0)
         probs['brainstorm'] = 0.75
 
         result = svc._update_state(state, probs)
@@ -167,9 +167,9 @@ class TestDecayTrajectory:
         svc = _fresh_service(fire_threshold=0.60)
         activation = 0.30
         state = _zero_state()
-        probs_fire = {m: 0.0 for m in svc.MODES}
+        probs_fire = dict.fromkeys(svc.MODES, 0.0)
         probs_fire['research'] = 0.90
-        probs_miss = {m: 0.0 for m in svc.MODES}
+        probs_miss = dict.fromkeys(svc.MODES, 0.0)
 
         state = svc._update_state(state, probs_fire)
         assert state['research'] == pytest.approx(0.900)
@@ -278,7 +278,7 @@ class TestStateRoundTrip:
 
     def test_save_then_load_returns_same_values(self, store):
         svc = _fresh_service()
-        written = {m: 0.0 for m in svc.MODES}
+        written = dict.fromkeys(svc.MODES, 0.0)
         written['research'] = 0.72
         written['coding'] = 0.33
 
@@ -297,11 +297,11 @@ class TestStateRoundTrip:
 
     def test_save_overwrites_previous_state(self, store):
         svc = _fresh_service()
-        first = {m: 0.0 for m in svc.MODES}
+        first = dict.fromkeys(svc.MODES, 0.0)
         first['research'] = 0.80
         svc._save_state(first)
 
-        second = {m: 0.0 for m in svc.MODES}
+        second = dict.fromkeys(svc.MODES, 0.0)
         second['research'] = 0.30
         svc._save_state(second)
 
@@ -310,7 +310,7 @@ class TestStateRoundTrip:
 
     def test_reset_state_clears_store(self, store):
         svc = _fresh_service()
-        state = {m: 0.0 for m in svc.MODES}
+        state = dict.fromkeys(svc.MODES, 0.0)
         state['analyze'] = 0.55
         svc._save_state(state)
 
@@ -326,8 +326,8 @@ class TestTick:
 
     def test_returns_active_modes_above_threshold(self, store):
         svc = _fresh_service()
-        svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
-        svc._classify = lambda _text: {m: 0.90 for m in svc.MODES}
+        svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
+        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.90)
 
         active = svc.tick("anything", turn_id="t-1")
 
@@ -337,8 +337,8 @@ class TestTick:
 
     def test_persists_state_across_calls(self, store):
         svc = _fresh_service()
-        svc._fire_thresholds = {m: 0.05 for m in svc.MODES}
-        svc._classify = lambda _text: {m: 0.85 for m in svc.MODES}
+        svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
+        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.85)
 
         svc.tick("first turn", turn_id="t-a")
         state = svc._load_state()

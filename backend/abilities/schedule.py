@@ -479,7 +479,7 @@ def _cancel(params: dict) -> dict:
         return {"status": "error", "error": f"Cancel failed: {e}"}
 
 
-def _normalize_hhmm(time_str: str) -> str:
+def _normalize_hhmm(time_str: str) -> str | None:
     try:
         parts = time_str.split(":")
         if len(parts) != 2:

@@ -163,7 +163,7 @@ def _normalize_items(params: dict) -> list:
         try:
             parsed = json.loads(items)
             items = parsed if isinstance(parsed, list) else [items]
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             items = [items]
     return [i for i in items if isinstance(i, str) and i.strip()]
 

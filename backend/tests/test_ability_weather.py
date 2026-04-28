@@ -232,13 +232,6 @@ def test_execute_retries_wttr_on_first_failure():
 
 def test_execute_total_failure_returns_error_dict():
     """When both Open-Meteo and wttr.in fail, returned dict has 'error' and 'details' keys."""
-    from requests.exceptions import HTTPError
-
-    def _always_raise(*args, **kwargs):
-        mock = MagicMock()
-        mock.raise_for_status.side_effect = HTTPError("server down")
-        return mock
-
     # Force both sources to fail: provide coords (triggers Open-Meteo attempt + retry)
     # and a location param (triggers wttr.in attempt) by using location_param only
     # so we exercise the wttr.in failure path cleanly.

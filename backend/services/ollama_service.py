@@ -166,44 +166,39 @@ class OllamaService:
         if status == 429:
             _raise_rate_limit(e)
         if status is not None and status >= 500:
-            body_snippet = ''
-            try:
-                if e.response is not None:
-                    body_snippet = e.response.text[:1000]
-            except Exception:
-                try:
-                    body_snippet = repr(e.response.content[:200]) if e.response is not None else ''
-                except Exception:
-                    pass
-            if attempt < self.max_retries:
-                backoff = 1.5 * (2 ** attempt)
-                logging.warning(
-                    "[OllamaService] Retry %d/%d after HTTP %s — body=%r backoff %.1fs",
-                    attempt + 1, self.max_retries, status, body_snippet, backoff,
-                )
-                time.sleep(backoff)
-                return
-            logging.error(
-                "[OllamaService] All %d attempts failed (HTTP %s) — body=%r",
-                1 + self.max_retries, status, body_snippet,
+            self._handle_5xx_error(e, attempt, status)
+            return
+        self._log_4xx_error(e, status, payload)
+        raise e
+
+    def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int, status: int) -> None:
+        body_len = _safe_body_len(e)
+        if attempt < self.max_retries:
+            backoff = 1.5 * (2 ** attempt)
+            logging.warning(
+                "[OllamaService] Retry %d/%d after HTTP %s — body_len=%d backoff %.1fs",
+                attempt + 1, self.max_retries, status, body_len, backoff,
             )
-            raise e
-        # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
-        # can diagnose — raise_for_status() otherwise discards it.
-        body = ''
-        try:
-            body = e.response.text[:4000] if e.response is not None else ''
-        except Exception:
-            pass
+            time.sleep(backoff)
+            return
         logging.error(
-            "[OllamaService] HTTP %s model=%s think=%s tools=%d body=%r",
+            "[OllamaService] All %d attempts failed (HTTP %s) — body_len=%d",
+            1 + self.max_retries, status, body_len,
+        )
+        raise e
+
+    def _log_4xx_error(self, e: requests.exceptions.HTTPError, status: int | None, payload: dict) -> None:
+        # Body content not logged — upstream may echo request data which can include sensitive
+        # values (system prompt, user messages). Length only, plus structured payload metadata.
+        body_len = _safe_body_len(e)
+        logging.error(
+            "[OllamaService] HTTP %s model=%s think=%s tools=%d body_len=%d",
             status if status is not None else '?',
             self.model,
             payload.get('think', False),
             len(payload.get('tools', [])),
-            body,
+            body_len,
         )
-        raise e
 
     def _model_supports_thinking(self) -> bool:
         """Return True if the configured model advertises thinking capability.
@@ -294,6 +289,19 @@ class OllamaService:
         except Exception as e:
             logging.error(f"Failed to generate embedding: {e}")
             raise
+
+
+def _safe_body_len(e: requests.exceptions.HTTPError) -> int:
+    """Return upstream response body length without exposing content to logs."""
+    if e.response is None:
+        return 0
+    try:
+        return len(e.response.text)
+    except Exception:
+        try:
+            return len(e.response.content)
+        except Exception:
+            return 0
 
 
 def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:

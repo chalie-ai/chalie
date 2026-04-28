@@ -19,6 +19,16 @@ pytestmark = pytest.mark.unit
 _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six"]
 
 
+def _noop_execute(self, channel, params, telemetry):  # noqa: ARG001
+    return {}
+
+
+def _make_subclass(**attrs):
+    """Build an Ability subclass dynamically; triggers __init_subclass__ validation."""
+    namespace = {"execute": _noop_execute, **attrs}
+    type("_TestSubclass", (Ability,), namespace)
+
+
 # ---------------------------------------------------------------------------
 # Required class attribute enforcement
 # ---------------------------------------------------------------------------
@@ -27,14 +37,7 @@ _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six
 def test_missing_name_raises_at_class_creation():
     """Subclass without NAME raises TypeError at class body evaluation time."""
     with pytest.raises(TypeError, match="NAME"):
-
-        class _MissingName(Ability):
-            SUMMARY = "some summary"
-            EXAMPLES = _VALID_EXAMPLES
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(SUMMARY="some summary", EXAMPLES=_VALID_EXAMPLES, INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -42,14 +45,7 @@ def test_missing_name_raises_at_class_creation():
 def test_missing_summary_raises_at_class_creation():
     """Subclass without SUMMARY raises TypeError at class body evaluation time."""
     with pytest.raises(TypeError, match="SUMMARY"):
-
-        class _MissingSummary(Ability):
-            NAME = "missing_summary"
-            EXAMPLES = _VALID_EXAMPLES
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="missing_summary", EXAMPLES=_VALID_EXAMPLES, INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -57,14 +53,7 @@ def test_missing_summary_raises_at_class_creation():
 def test_missing_examples_raises_at_class_creation():
     """Subclass without EXAMPLES raises TypeError at class body evaluation time."""
     with pytest.raises(TypeError, match="EXAMPLES"):
-
-        class _MissingExamples(Ability):
-            NAME = "missing_examples"
-            SUMMARY = "some summary"
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="missing_examples", SUMMARY="some summary", INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -72,14 +61,7 @@ def test_missing_examples_raises_at_class_creation():
 def test_missing_input_schema_raises_at_class_creation():
     """Subclass without INPUT_SCHEMA raises TypeError at class body evaluation time."""
     with pytest.raises(TypeError, match="INPUT_SCHEMA"):
-
-        class _MissingSchema(Ability):
-            NAME = "missing_schema"
-            SUMMARY = "some summary"
-            EXAMPLES = _VALID_EXAMPLES
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="missing_schema", SUMMARY="some summary", EXAMPLES=_VALID_EXAMPLES)
 
     gc.collect()
 
@@ -92,15 +74,7 @@ def test_missing_input_schema_raises_at_class_creation():
 def test_examples_non_list_raises():
     """EXAMPLES as a non-list raises TypeError."""
     with pytest.raises(TypeError, match="EXAMPLES"):
-
-        class _ExamplesString(Ability):
-            NAME = "examples_string"
-            SUMMARY = "some summary"
-            EXAMPLES = "not a list"
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="examples_string", SUMMARY="some summary", EXAMPLES="not a list", INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -108,15 +82,7 @@ def test_examples_non_list_raises():
 def test_examples_list_of_non_strings_raises():
     """EXAMPLES with non-string elements raises TypeError."""
     with pytest.raises(TypeError, match="EXAMPLES"):
-
-        class _ExamplesNonStrings(Ability):
-            NAME = "examples_non_strings"
-            SUMMARY = "some summary"
-            EXAMPLES = [1, 2, 3, 4, 5, 6]
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="examples_non_strings", SUMMARY="some summary", EXAMPLES=[1, 2, 3, 4, 5, 6], INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -124,15 +90,7 @@ def test_examples_list_of_non_strings_raises():
 def test_examples_too_short_raises():
     """EXAMPLES with fewer than 6 entries raises TypeError."""
     with pytest.raises(TypeError, match="6"):
-
-        class _ExamplesShort(Ability):
-            NAME = "examples_short"
-            SUMMARY = "some summary"
-            EXAMPLES = ["a", "b", "c", "d"]  # 4 entries
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(NAME="examples_short", SUMMARY="some summary", EXAMPLES=["a", "b", "c", "d"], INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -140,15 +98,12 @@ def test_examples_too_short_raises():
 def test_examples_too_long_raises():
     """EXAMPLES with more than 8 entries raises TypeError."""
     with pytest.raises(TypeError, match="8"):
-
-        class _ExamplesLong(Ability):
-            NAME = "examples_long"
-            SUMMARY = "some summary"
-            EXAMPLES = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]  # 10 entries
-            INPUT_SCHEMA = {}
-
-            def execute(self, channel, params, telemetry):
-                return {}
+        _make_subclass(
+            NAME="examples_long",
+            SUMMARY="some summary",
+            EXAMPLES=["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
+            INPUT_SCHEMA={},
+        )
 
     gc.collect()
 
@@ -299,8 +254,7 @@ def test_pre_dispatch_is_noop_by_default():
             return {}
 
     instance = _HookAbility()
-    result = instance.pre_dispatch({"key": "value"})
-    assert result is None
+    instance.pre_dispatch({"key": "value"})
 
     del _HookAbility
     gc.collect()
@@ -319,8 +273,7 @@ def test_post_dispatch_is_noop_by_default():
             return {}
 
     instance = _PostHookAbility()
-    result = instance.post_dispatch({"text": "result"})
-    assert result is None
+    instance.post_dispatch({"text": "result"})
 
     del _PostHookAbility
     gc.collect()

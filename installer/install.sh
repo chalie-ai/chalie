@@ -282,6 +282,10 @@ _install_onnxruntime_variant() {
       wheel="onnxruntime-rocm==$ORT_VERSION"
       extra=(--extra-index-url "$ROCM_PIP_INDEX")
       ;;
+    *)
+      _error "Unknown ONNX Runtime variant: $variant"
+      return 1
+      ;;
   esac
 
   _info "Detected $variant — installing $wheel"
