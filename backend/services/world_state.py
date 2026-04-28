@@ -179,6 +179,18 @@ def _schedule_recurrence_field(recurrence_str) -> str | None:
     return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
 
 
+def _keep_extreme(bucket: dict, message: str, row: dict, *, ts_key: str, prefer_lower: bool) -> None:
+    """Insert ``row`` into ``bucket[message]`` if it has the more extreme timestamp under ``ts_key``."""
+    current = bucket.get(message)
+    if current is None:
+        bucket[message] = row
+        return
+    incoming_ts = row.get(ts_key) or ""
+    current_ts = current.get(ts_key) or ""
+    if (prefer_lower and incoming_ts < current_ts) or (not prefer_lower and incoming_ts > current_ts):
+        bucket[message] = row
+
+
 def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
     """Split rows into pending-by-message (earliest due_at) and fired-by-message (latest last_fired_at)."""
     pending_by_msg: dict[str, dict] = {}
@@ -187,13 +199,9 @@ def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
         message = row.get("message") or ""
         status = row.get("status")
         if status == "pending":
-            current = pending_by_msg.get(message)
-            if current is None or (row.get("due_at") or "") < (current.get("due_at") or ""):
-                pending_by_msg[message] = row
+            _keep_extreme(pending_by_msg, message, row, ts_key="due_at", prefer_lower=True)
         elif status == "fired":
-            current = fired_by_msg.get(message)
-            if current is None or (row.get("last_fired_at") or "") > (current.get("last_fired_at") or ""):
-                fired_by_msg[message] = row
+            _keep_extreme(fired_by_msg, message, row, ts_key="last_fired_at", prefer_lower=False)
     return pending_by_msg, fired_by_msg
 
 
