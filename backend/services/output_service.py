@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .time_utils import utc_now
-from .markup import wrap_text_xml, actions_to_xml
+from .markup import wrap_text_xml, actions_to_xml, is_xml_content
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class OutputService:
 
         # LLM emits XML directly. If a plain string arrives (rare edge case),
         # wrap it as <p>. Append programmatic action buttons as XML.
-        content = response if (response or "").lstrip().startswith("<") else wrap_text_xml(response)
+        content = response if is_xml_content(response) else wrap_text_xml(response)
         if reply_actions:
             content = (content or "") + actions_to_xml(reply_actions)
         metadata_dict["content"] = content

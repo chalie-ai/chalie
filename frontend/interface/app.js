@@ -492,26 +492,6 @@ class ChalieApp {
       });
     });
 
-    // Proactive thought-card action (expand / dismiss)
-    // Dispatched when the user clicks a proactive thought card button.
-    document.addEventListener('chalie:thought-action', (e) => {
-      const { action, blockId } = e.detail;
-      console.log('[chalie:thought-action]', { action, blockId });
-
-      if (action === 'expand') {
-        if (this._chat.isSending) return;
-        // Pre-fill the textarea so sendMessage() picks up the text, then send.
-        const textarea = document.getElementById('messageInput');
-        if (textarea) {
-          textarea.value = 'Tell me more about that';
-          // Sync the send-button enabled state with the new value.
-          textarea.dispatchEvent(new Event('input'));
-        }
-        this._chat.sendMessage();
-      }
-      // 'dismiss' — fade-out animation is handled by CSS; nothing else needed here.
-    });
-
     // Pin moment event (from remember button on Chalie messages)
     let pinDebounce = 0;
     document.addEventListener('chalie:pin-moment', async (e) => {

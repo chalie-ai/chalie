@@ -23,7 +23,7 @@ from collections import deque
 
 from utils.logger import set_correlation_id
 
-from services.markup import wrap_text_xml, actions_to_xml
+from services.markup import wrap_text_xml, actions_to_xml, is_xml_content
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +405,7 @@ def _handle_action(ws, store, msg):
 
         # LLM / skill result → XML content string
         content = (result or "Done.")
-        if not content.lstrip().startswith("<"):
+        if not is_xml_content(content):
             content = wrap_text_xml(content)
         if reply_actions:
             content += actions_to_xml(reply_actions)
@@ -598,7 +598,7 @@ def _handle_chat(ws, store, msg, active_request=None):
             # Store result at output:{request_id} so the fallback path can
             # find it if the pub/sub message was missed.
             try:
-                _fb_content = response if (response or "").lstrip().startswith("<") else wrap_text_xml(response)
+                _fb_content = response if is_xml_content(response) else wrap_text_xml(response)
                 fallback_output = {
                     "type": "TEXT",
                     "topic": 'user',

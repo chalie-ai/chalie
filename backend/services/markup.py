@@ -38,6 +38,16 @@ def escape_attr(value: str) -> str:
     )
 
 
+def is_xml_content(text: str | None) -> bool:
+    """True if *text* is non-empty and its first non-whitespace char is '<'.
+
+    Single chokepoint for the "did the LLM emit XML or plaintext?" decision.
+    Used by output_service + websocket fallbacks to decide whether to wrap
+    the response in <p>...</p>.
+    """
+    return bool((text or "").lstrip().startswith("<"))
+
+
 def wrap_text_xml(text: str) -> str:
     """Wrap a plain string as <p>{escaped}</p>. Empty input returns empty."""
     stripped = (text or "").strip()
