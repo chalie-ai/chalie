@@ -63,17 +63,21 @@ function createElement(name, attrs) {
   const el = document.createElement(name);
   if (name === 'a') {
     const href = attrs.href || '#';
-    // Sanitise href: only allow http(s):, mailto:, /
-    if (/^(https?:|mailto:|\/)/i.test(href)) {
+    // Sanitise href: only allow http(s)://, mailto:, or root-relative `/`
+    // that is NOT scheme-relative `//evil.com` (the browser would otherwise
+    // resolve `//x` to `https://x` — open-redirect / phishing surface).
+    if (/^(https?:\/\/|mailto:|\/(?!\/))/i.test(href)) {
       el.setAttribute('href', href);
-      if (/^https?:/i.test(href)) {
+      if (/^https?:\/\//i.test(href)) {
         el.setAttribute('target', '_blank');
         el.setAttribute('rel', 'noopener noreferrer');
       }
     }
   } else if (name === 'img') {
     const src = attrs.src || '';
-    if (/^(https?:|\/)/i.test(src)) {
+    // Same scheme-relative guard as <a>. Note: `data:` URIs are blocked by
+    // virtue of not matching this allowlist (intentional — no inline data).
+    if (/^(https?:\/\/|\/(?!\/))/i.test(src)) {
       el.setAttribute('src', src);
       el.setAttribute('alt', attrs.alt || '');
       el.setAttribute('loading', 'lazy');
@@ -105,8 +109,16 @@ export function renderMarkupTo(container, content) {
       parent.appendChild(el);
       stack.push(el);
     } else if (tok.kind === 'close') {
-      // Auto-close intervening tags if a close arrives out of order
-      const stackIdx = stack.findLastIndex((el) => el.tagName.toLowerCase() === tok.name);
+      // Auto-close intervening tags if a close arrives out of order.
+      // Manual reverse scan (Array.prototype.findLastIndex requires Safari
+      // 15.4+ / 2022 — keep this baseline-safe).
+      let stackIdx = -1;
+      for (let i = stack.length - 1; i >= 1; i -= 1) {
+        if (stack[i].tagName.toLowerCase() === tok.name) {
+          stackIdx = i;
+          break;
+        }
+      }
       if (stackIdx > 0) {
         stack.length = stackIdx;
       }
