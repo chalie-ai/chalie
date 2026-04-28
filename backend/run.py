@@ -191,6 +191,17 @@ def main():
     except Exception as _adl_err:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
+    # One-shot markdown→XML migration for legacy transcript rows.
+    try:
+        import sqlite3 as _sqlite3
+        from services.markdown_xml_migration import run_if_needed as _run_xml_migration
+        with _sqlite3.connect(database_service.db_path) as _conn:
+            _migrated = _run_xml_migration(_conn)
+            if _migrated:
+                logger.info("[Boot] Migrated %d transcript rows from markdown to XML", _migrated)
+    except Exception as _xml_mig_err:
+        logger.warning(f"[Startup] Markdown→XML migration skipped: {_xml_mig_err}")
+
     # Clean up expired auth sessions from SQLite
     try:
         from services.auth_session_service import cleanup_expired_sessions
