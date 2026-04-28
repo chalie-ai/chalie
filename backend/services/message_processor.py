@@ -391,7 +391,6 @@ class MessageProcessor:
         import time as _time
         from uuid import uuid4
         from services.tool_render_and_record_service import ToolRenderAndRecordService
-        from services.tool_schema_service import get_external_tool_schemas
 
         tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
@@ -428,19 +427,24 @@ class MessageProcessor:
             ):
                 discovered = dispatch.get('_discovered_tools', [])
                 if discovered:
-                    new_schemas = get_external_tool_schemas(discovered)
+                    from abilities._registry import AbilityRegistry
                     existing_names = {
                         t.get('name') for t in self._discovered_tools
                     }
-                    for s in new_schemas:
-                        name = s.get('name') if isinstance(s, dict) else None
-                        if name and name not in existing_names:
-                            self._discovered_tools.append(s)
-                            existing_names.add(name)
-
-                    # Register as dispatcher handlers so they dispatch
-                    # through the standard handler path (no fallback needed).
-                    self._register_discovered_tools(discovered)
+                    for name in discovered:
+                        if name in existing_names:
+                            continue
+                        try:
+                            a = AbilityRegistry.get(name)
+                            schema = {
+                                'name': a.NAME,
+                                'description': a.SUMMARY,
+                                'input_schema': a.INPUT_SCHEMA,
+                            }
+                        except KeyError:
+                            continue
+                        self._discovered_tools.append(schema)
+                        existing_names.add(name)
 
         except Exception as exc:
             ok = False
@@ -476,33 +480,6 @@ class MessageProcessor:
         # 3. Add to context
         self._act_trail.append(rendered)
         return result_text
-
-    def _register_discovered_tools(self, tool_names: list[str]) -> None:
-        """Register discovered tool names as handlers on self._dispatcher.
-
-        Called after find_tools returns results. Uses registry.execute()
-        which returns {'text': ...} — same shape as innate skill handlers,
-        so the dispatcher unwraps them identically.
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            for tn in tool_names:
-                if tn in self._dispatcher.handlers:
-                    continue
-                self._dispatcher.handlers[tn] = (
-                    lambda topic, action, _tn=tn: registry.execute(
-                        _tn, topic,
-                        {k: v for k, v in action.items()
-                         if k not in ('type', 'exchange_id')},
-                        exchange_id=action.get('exchange_id', ''),
-                    )
-                )
-        except Exception as exc:
-            logger.warning(
-                "[MessageProcessor] Failed to register discovered tools: %s",
-                exc,
-            )
 
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.

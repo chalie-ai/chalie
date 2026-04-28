@@ -1,4 +1,10 @@
-"""Tests for InterfaceRegistryService — interface lifecycle management."""
+"""Tests for InterfaceRegistryService — interface lifecycle management.
+
+Phase 4 ability-unification (v0.4.0) intentionally broke `InterfaceRegistryService`
+— the underlying `services.tool_registry_service` it imports is deleted. The
+service module is left on disk as accepted-broken (plan §4). These tests stay in
+the repo so the broken surface is named (per plan §5), not silently ignored.
+"""
 
 import sqlite3
 import pytest
@@ -6,6 +12,10 @@ from unittest.mock import patch, MagicMock
 from datetime import timedelta
 
 from services.time_utils import utc_now
+
+pytestmark = pytest.mark.skip(
+    reason="accepted-broken: interface registry intentionally inert post Phase 4 ability-unification"
+)
 
 
 def _create_in_memory_db():

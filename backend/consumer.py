@@ -242,13 +242,5 @@ if __name__ == "__main__":
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
-    # Load tool registry
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        tool_count = len(ToolRegistryService().get_tool_names())
-        if tool_count > 0:
-            logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool registry load failed: {e}")
 
     manager.run()

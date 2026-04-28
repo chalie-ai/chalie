@@ -169,8 +169,8 @@ def update_memory():
         salience = 5
 
     try:
-        from abilities.memory import _handle_store
-        result = _handle_store(
+        from abilities._registry import AbilityRegistry
+        result = AbilityRegistry.get("memory").execute(
             topic,
             {
                 "action": "store",
@@ -178,9 +178,11 @@ def update_memory():
                 "value": content,
                 "kind": "misc",
             },
+            None,
         )
-        if "error=" in result.split('\n', 1)[0]:
-            logger.warning("[Updates API] memory update result: %s", result)
+        text = result.get("text", "") if isinstance(result, dict) else str(result)
+        if "error=" in text.split('\n', 1)[0]:
+            logger.warning("[Updates API] memory update result: %s", text)
             return jsonify({"error": "Memory encoding failed"}), 422
     except Exception as exc:
         logger.error("[Updates API] memory update failed: %s", exc)

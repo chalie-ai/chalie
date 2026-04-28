@@ -98,29 +98,6 @@ class ActDispatcherService:
                 )
             )
 
-        # Register on_demand external tools from the tool registry (dynamic plugins).
-        # Uses registry.execute() which returns {'text': ...} — same shape as
-        # ability handlers so the dispatcher unwraps them identically.
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            for tool_name in registry.get_on_demand_tools():
-                if tool_name in self.handlers:
-                    logging.debug(
-                        "[ACT DISPATCH] Skipping dynamic tool '%s' — ability registered",
-                        tool_name,
-                    )
-                    continue
-                self.handlers[tool_name] = (
-                    lambda topic, action, tn=tool_name: registry.execute(
-                        tn, topic,
-                        {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
-                        exchange_id=action.get('exchange_id', ''),
-                    )
-                )
-        except Exception as e:
-            logging.warning("[ACT DISPATCH] Tool registry failed to load: %s", e)
-
     def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute single action with timeout enforcement.
