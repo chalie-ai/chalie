@@ -13,6 +13,8 @@ from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
 
+_AMBIGUOUS_LIST_NAME = "Multiple lists exist. Specify 'name'."
+
 
 class ListAbility(Ability):
     NAME = "list"
@@ -202,7 +204,7 @@ def _handle_remove(service, params: dict, default_list_name: str) -> str:
 
     name = _resolve_name(service, params, default_list_name)
     if not name:
-        return _fail("Multiple lists exist. Specify 'name'.")
+        return _fail(_AMBIGUOUS_LIST_NAME)
 
     if not items:
         success = service.delete_list(name)
@@ -225,7 +227,7 @@ def _handle_check(service, params: dict, default_list_name: str) -> str:
 
     name = _resolve_name(service, params, default_list_name)
     if not name:
-        return _fail("Multiple lists exist. Specify 'name'.")
+        return _fail(_AMBIGUOUS_LIST_NAME)
 
     to_check = []
     to_uncheck = []
@@ -256,7 +258,7 @@ def _handle_check(service, params: dict, default_list_name: str) -> str:
 def _handle_view(service, params: dict, default_list_name: str) -> str:
     name = _resolve_name(service, params, default_list_name)
     if not name:
-        return _fail("Multiple lists exist. Specify 'name'.")
+        return _fail(_AMBIGUOUS_LIST_NAME)
 
     lst_data = _list_json(service, name)
     if lst_data is None:

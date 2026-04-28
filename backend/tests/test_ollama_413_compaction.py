@@ -252,8 +252,8 @@ class TestMessageProcessorSend413Recovery:
 
     def test_first_413_runs_stage2_then_succeeds(self):
         from services.llm_service import PayloadTooLargeError
-        Cls = _build_test_processor_class()
-        proc = Cls()
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
 
         side_effects = [PayloadTooLargeError("simulated 413"), _llm_response()]
         ctx, fake = self._patch_providers(side_effects)
@@ -267,8 +267,8 @@ class TestMessageProcessorSend413Recovery:
 
     def test_second_413_breaks_to_cap_exit(self):
         from services.llm_service import PayloadTooLargeError
-        Cls = _build_test_processor_class()
-        proc = Cls()
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
 
         # Two 413s back-to-back. Second must NOT trigger Stage 2 again.
         side_effects = [
@@ -286,9 +286,9 @@ class TestMessageProcessorSend413Recovery:
 
     def test_stage2_failure_breaks_to_cap_exit(self):
         from services.llm_service import PayloadTooLargeError
-        Cls = _build_test_processor_class()
+        processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(Cls):
+        class _FailingStage2(processor_cls):
             def _run_full_compaction(self):
                 self.full_compaction_calls += 1
                 return None  # Stage 2 failure
@@ -305,10 +305,10 @@ class TestMessageProcessorSend413Recovery:
             "Provider must not be called again after Stage 2 failure"
 
     def test_no_413_path_does_not_set_recovery_flag(self):
-        Cls = _build_test_processor_class()
-        proc = Cls()
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
 
-        ctx, fake = self._patch_providers([_llm_response()])
+        ctx, _ = self._patch_providers([_llm_response()])
         with ctx:
             result = proc.send()
 
@@ -321,8 +321,8 @@ class TestStage2ClearsThinkingExploration:
     def test_exploration_cleared_on_restart(self):
         """Large exploration text would re-inflate user_body after Stage 2.
         Confirm it's nulled when Stage 2 succeeds."""
-        Cls = _build_test_processor_class()
-        proc = Cls()
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
         proc._thinking_exploration = "X" * 50_000  # large block
 
         result = proc._run_stage2_act_restart()
@@ -335,9 +335,9 @@ class TestStage2ClearsThinkingExploration:
         """If full_compaction returns None, Stage 2 returns False BEFORE the
         trail/exploration clears — exploration is preserved (no recovery
         happened, so the existing state must be intact)."""
-        Cls = _build_test_processor_class()
+        processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(Cls):
+        class _FailingStage2(processor_cls):
             def _run_full_compaction(self):
                 return None
 

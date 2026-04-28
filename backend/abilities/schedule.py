@@ -18,6 +18,9 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER SKILL]"
 
+# ISO 8601 with offset, used by TimeFormatterService.local() to render due_at in the user's timezone.
+_LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
+
 
 class ScheduleAbility(Ability):
     NAME = "schedule"
@@ -163,7 +166,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
                     f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future "
                     f"(now={now.isoformat()})"
                 )
-                local_now = TimeFormatterService.local(now, fmt="%Y-%m-%dT%H:%M:%S%z") or now.isoformat()
+                local_now = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
                 return {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
 
         item_type = params.get("item_type", "notification").lower()
@@ -251,7 +254,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
                 existing_id = existing_row[0] if existing_row else item_id
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
                 from services.time_formatter_service import TimeFormatterService
-                local_due = TimeFormatterService.local(due_at, fmt="%Y-%m-%dT%H:%M:%S%z") or due_at.isoformat()
+                local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or due_at.isoformat()
                 return {
                     "status": "success",
                     "action_performed": "create",
@@ -267,7 +270,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
 
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
         from services.time_formatter_service import TimeFormatterService
-        local_due = TimeFormatterService.local(due_at, fmt="%Y-%m-%dT%H:%M:%S%z") or due_at.isoformat()
+        local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or due_at.isoformat()
         return {
             "status": "success",
             "action_performed": "create",
@@ -317,7 +320,7 @@ def _list(params: dict) -> dict:
         records = []
         for row in rows:
             item_id, item_type, message, due_at, recurrence, status = row
-            local_due = TimeFormatterService.local(due_at, fmt="%Y-%m-%dT%H:%M:%S%z") or str(due_at)
+            local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or str(due_at)
             records.append({
                 "id": item_id,
                 "message": message,

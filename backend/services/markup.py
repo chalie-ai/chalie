@@ -18,12 +18,18 @@ ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 
 VOID_TAGS = frozenset({"img", "action"})  # self-closing, no children
 
+_ENTITY_AMP = "&amp;"
+_ENTITY_LT = "&lt;"
+_ENTITY_GT = "&gt;"
+_ENTITY_QUOT = "&quot;"
+_ENTITY_APOS = "&#39;"
+
 
 def escape_text(text: str) -> str:
     """Escape & < > for XML text content. Does not escape attribute quotes."""
     if not text:
         return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return text.replace("&", _ENTITY_AMP).replace("<", _ENTITY_LT).replace(">", _ENTITY_GT)
 
 
 def escape_attr(value: str) -> str:
@@ -31,10 +37,10 @@ def escape_attr(value: str) -> str:
     if not value:
         return ""
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        value.replace("&", _ENTITY_AMP)
+        .replace("<", _ENTITY_LT)
+        .replace(">", _ENTITY_GT)
+        .replace('"', _ENTITY_QUOT)
     )
 
 
@@ -94,7 +100,7 @@ _TAG_RE = re.compile(
     r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*\s*=\s*\"[^\"]*\")*)\s*(/)?\s*>"
 )
 _ATTR_RE = re.compile(r'([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"')
-_ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'"}
+_ENTITY_MAP = {_ENTITY_AMP: "&", _ENTITY_LT: "<", _ENTITY_GT: ">", _ENTITY_QUOT: '"', _ENTITY_APOS: "'"}
 
 
 def _decode_entities(text: str) -> str:

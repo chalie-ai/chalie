@@ -24,9 +24,15 @@ def _noop_execute(self, channel, params, telemetry):  # noqa: ARG001
 
 
 def _make_subclass(**attrs):
-    """Build an Ability subclass dynamically; triggers __init_subclass__ validation."""
+    """Build an Ability subclass dynamically; triggers __init_subclass__ validation.
+
+    Returns the created class so the construction expression is consumed by
+    callers (or by the discard convention). Most call sites ignore the return
+    because the test asserts on the side effect — TypeError raised mid-build —
+    via ``pytest.raises``.
+    """
     namespace = {"execute": _noop_execute, **attrs}
-    type("_TestSubclass", (Ability,), namespace)
+    return type("_TestSubclass", (Ability,), namespace)
 
 
 # ---------------------------------------------------------------------------

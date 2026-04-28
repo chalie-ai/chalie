@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 system_bp = Blueprint('system', __name__)
 
+# Signal source for telemetry signals absorbed by WorldState from health pings.
+_SIGNAL_SOURCE_HEALTH = '/health'
+
 
 @system_bp.route('/health', methods=['GET', 'POST'])
 def health_check():
@@ -31,11 +34,11 @@ def health_check():
                 try:
                     from services.world_state import world_state, Signal
                     world_state.set("telemetry", svc.get() or data)
-                    world_state.absorb(Signal(source='/health', kind='heartbeat', payload=data))
+                    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
                     if device_class := data.get('device_class') or (data.get('device') or {}).get('class'):
-                        world_state.absorb(Signal(source='/health', kind='device', payload={'device_class': device_class}))
+                        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
                     if local_time := data.get('local_time'):
-                        world_state.absorb(Signal(source='/health', kind='local_time', payload={'local_time': local_time}))
+                        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
                 except Exception as ws_err:
                     logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
         except Exception as e:
