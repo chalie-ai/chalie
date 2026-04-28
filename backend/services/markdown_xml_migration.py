@@ -17,6 +17,10 @@ from services.markup import escape_attr, escape_text
 
 logger = logging.getLogger(__name__)
 
+# Bound input to avoid pathological regex backtracking on hostile input.
+# Real transcript rows are bounded by LLM token limits; 5 MB is generous.
+_MAX_CONTENT_LEN = 5_000_000
+
 _FENCED_CODE_RE = re.compile(r"```[a-zA-Z0-9_-]*\n(.*?)\n?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
@@ -97,9 +101,13 @@ def markdown_to_xml(md: str) -> str:
     """Convert markdown string to allowlisted XML.
 
     Idempotent: input that already looks like XML passes through unchanged.
+    Input is truncated at _MAX_CONTENT_LEN to bound regex execution time on
+    hostile input. Real transcript rows are bounded by LLM token limits.
     """
     if not md:
         return ""
+    if len(md) > _MAX_CONTENT_LEN:
+        md = md[:_MAX_CONTENT_LEN]
     if _looks_like_xml(md):
         return md.strip()
 

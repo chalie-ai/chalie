@@ -83,6 +83,10 @@ class Token:
     attrs: dict[str, str] = field(default_factory=dict)
 
 
+# Bound input to avoid pathological regex backtracking on hostile input.
+# Real content is bounded by LLM token limits; 5 MB is generous.
+_MAX_CONTENT_LEN = 5_000_000
+
 _TAG_RE = re.compile(
     r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9]*)\s*((?:[a-zA-Z][a-zA-Z0-9-]*\s*=\s*\"[^\"]*\"\s*)*)\s*(/)?\s*>"
 )
@@ -99,10 +103,14 @@ def _decode_entities(text: str) -> str:
 def tokenize(content: str) -> list[Token]:
     """Tokenize XML markup. Unknown tags become text tokens (escaped allowlist enforcement).
 
-    Returns flat list. Nesting validity is the renderer's concern.
+    Returns flat list. Nesting validity is the renderer's concern. Input is
+    truncated at _MAX_CONTENT_LEN to bound regex execution time on hostile
+    input.
     """
     if not content:
         return []
+    if len(content) > _MAX_CONTENT_LEN:
+        content = content[:_MAX_CONTENT_LEN]
     tokens: list[Token] = []
     pos = 0
     for match in _TAG_RE.finditer(content):

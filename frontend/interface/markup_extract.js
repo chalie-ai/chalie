@@ -1,6 +1,10 @@
 // Extract plaintext from XML markup for the speak button (TTS).
 // Drops <actions> entirely. Uses <img alt> when present.
 
+// Bound input to avoid pathological regex backtracking on hostile input.
+// Real content is bounded by LLM token limits; 5 MB is generous.
+const MAX_CONTENT_LEN = 5_000_000;
+
 const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)\s*([^>]*?)\s*(\/)?\s*>/g;
 const ALT_RE = /\balt\s*=\s*"([^"]*)"/i;
 
@@ -29,6 +33,9 @@ function decodeEntities(text) {
 
 export function extractPlaintext(content) {
   if (!content) return '';
+  if (content.length > MAX_CONTENT_LEN) {
+    content = content.slice(0, MAX_CONTENT_LEN);
+  }
   const out = [];
   let skipDepth = 0;
   let pos = 0;
