@@ -29,6 +29,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+from services.llm_service import PayloadTooLargeError
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
 from services.time_utils import utc_now
@@ -175,6 +176,11 @@ class MessageProcessor:
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
         self._thinking_exploration: str | None = None
+        # One-shot guard: a 413 from the provider triggers a Stage 2 ACT
+        # restart, but only once per turn. A second 413 after compaction
+        # means the compacted body is still over the transport-level cap;
+        # restarting again would loop forever.
+        self._payload_too_large_recovered: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
 
@@ -656,10 +662,40 @@ class MessageProcessor:
 
                 # Provider errors propagate here. store() is not called if
                 # this raises — the turn leaves no trace in the DB.
-                llm_response = Providers.instance().send_messages(
-                    system_prompt, messages, job=self.JOB, tools=tools,
-                    thinking_mode=self._get_thinking_mode_for_send(),
-                )
+                # PayloadTooLargeError (HTTP 413) is the one exception: the
+                # provider's transport-level body cap was hit (e.g. Ollama
+                # Cloud edge proxy), so we run a Stage 2 ACT restart once
+                # to compact the trail and retry. A second 413 after that
+                # means even the compacted body is too big — break to cap
+                # exit rather than loop forever.
+                try:
+                    llm_response = Providers.instance().send_messages(
+                        system_prompt, messages, job=self.JOB, tools=tools,
+                        thinking_mode=self._get_thinking_mode_for_send(),
+                    )
+                except PayloadTooLargeError as exc:
+                    if self._payload_too_large_recovered:
+                        logger.error(
+                            "[COMPACTION] %s: PayloadTooLargeError after Stage 2 "
+                            "restart — breaking to cap exit (final_text=''): %s",
+                            self.CHANNEL, exc,
+                        )
+                        break
+                    logger.warning(
+                        "[COMPACTION] %s: PayloadTooLarge from provider — "
+                        "running Stage 2 ACT restart (%s)",
+                        self.CHANNEL, exc,
+                    )
+                    self._payload_too_large_recovered = True
+                    if self._run_stage2_act_restart():
+                        self._current_iteration = 0
+                        continue
+                    logger.error(
+                        "[COMPACTION] %s: Stage 2 failed after PayloadTooLarge "
+                        "— breaking to cap exit (final_text='')",
+                        self.CHANNEL,
+                    )
+                    break
                 self._metrics.accumulate(llm_response)
 
                 if not llm_response.tool_calls:
@@ -864,6 +900,16 @@ class MessageProcessor:
         proc = FullCompactionProcessor(raw_input=compaction_input)
         try:
             compacted_text = (proc.send() or '').strip()
+        except PayloadTooLargeError as exc:
+            # Compaction LLM itself rejected the body — payload was already
+            # over the transport cap before we could compact it. Distinct
+            # log so on-call doesn't conflate this with a generic LLM error.
+            logger.error(
+                "[COMPACTION] %s: compaction LLM hit HTTP 413 — cannot "
+                "compact further; turn will hit cap exit: %s",
+                self.CHANNEL, exc,
+            )
+            return None
         except Exception as exc:
             logger.error(
                 "[COMPACTION] %s: LLM call failed during _run_full_compaction: %s",
@@ -1008,6 +1054,12 @@ class MessageProcessor:
 
         self._act_trail = []
         self._discovered_tools = []
+        # Exploration text was generated against the now-collapsed pre-restart
+        # context and has already been summarised into the checkpoint. Keeping
+        # it would re-inflate every subsequent user_body via
+        # _wrap_with_exploration() — directly defeating the recovery for the
+        # 413 path (large exploration block alone can exceed the cloud cap).
+        self._thinking_exploration = None
 
         return True
 

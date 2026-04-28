@@ -62,6 +62,15 @@ class NonRetryableError(Exception):
     """Raised for permanent provider errors (5xx) that should not be retried."""
 
 
+class PayloadTooLargeError(NonRetryableError):
+    """Raised when a provider rejects a request with HTTP 413.
+
+    Caught by ``MessageProcessor.send`` as a signal to run a Stage 2 ACT
+    restart (full checkpoint compaction + trail collapse). One recovery
+    attempt per turn — a second 413 after compaction breaks to cap exit.
+    """
+
+
 def _resolve_api_key(config: dict) -> str:
     """
     Resolve API key from provider config (from database).
@@ -221,6 +230,11 @@ class FallbackLLMService:
         """
         try:
             return self._primary.send_message(system_prompt, user_message, stream=stream)
+        except NonRetryableError:
+            # PayloadTooLargeError + other 5xx-derived non-retryables. Re-raise
+            # so callers (e.g. MessageProcessor.send) can act — sending the
+            # same oversized body to the fallback would just 413 again.
+            raise
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
@@ -228,6 +242,10 @@ class FallbackLLMService:
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
             return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
+        except NonRetryableError:
+            # PayloadTooLargeError + other 5xx-derived non-retryables. See
+            # send_message() above for rationale.
+            raise
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
