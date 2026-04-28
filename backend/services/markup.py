@@ -55,6 +55,10 @@ def actions_to_xml(actions: list[dict]) -> str:
         return ""
     parts = ["<actions>"]
     for a in actions:
+        # Defensive: callers (or upstream JSON) may include strings/None in the
+        # list. Skip non-dict entries rather than crashing the whole render.
+        if not isinstance(a, dict):
+            continue
         label = escape_attr(str(a.get("label", "")))
         value = escape_attr(str(a.get("value", "")))
         parts.append(f'<action label="{label}" value="{value}"/>')

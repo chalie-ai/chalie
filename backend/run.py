@@ -192,10 +192,13 @@ def main():
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
     # One-shot markdown→XML migration for legacy transcript rows.
+    # Uses database_service.connection() so PRAGMAs (busy_timeout=15000, WAL,
+    # foreign_keys, sqlite-vec) match the rest of the runtime — a raw
+    # sqlite3.connect would race with concurrent readers and silently skip on
+    # OperationalError.
     try:
-        import sqlite3 as _sqlite3
         from services.markdown_xml_migration import run_if_needed as _run_xml_migration
-        with _sqlite3.connect(database_service.db_path) as _conn:
+        with database_service.connection() as _conn:
             _migrated = _run_xml_migration(_conn)
             if _migrated:
                 logger.info("[Boot] Migrated %d transcript rows from markdown to XML", _migrated)

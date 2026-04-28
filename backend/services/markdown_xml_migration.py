@@ -190,39 +190,55 @@ def markdown_to_xml(md: str) -> str:
     return result
 
 
+_BATCH_SIZE = 500
+
+
 def run_if_needed(conn: sqlite3.Connection) -> int:
     """Convert all unmigrated transcript rows from markdown → XML.
 
     Idempotent. Returns count of rows processed (including NULL-content rows
-    that just get the sentinel flipped).
+    that just get the sentinel flipped). Streams in batches of _BATCH_SIZE to
+    keep memory bounded on large transcripts (10K+ rows).
     """
+    # Match DatabaseService PRAGMAs so the migration plays nicely under WAL
+    # contention with concurrent readers (boot is the only writer here, but
+    # other long-lived connections may still hold the WAL).
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+    except sqlite3.Error:
+        pass
+
     cursor = conn.execute(
         "SELECT id, content FROM transcript WHERE xml_migrated = 0"
     )
-    rows = cursor.fetchall()
-    if not rows:
-        return 0
-    logger.info("xml-migration: converting %d transcript rows", len(rows))
-    for row_id, content in rows:
-        if content is None:
+    total = 0
+    while True:
+        batch = cursor.fetchmany(_BATCH_SIZE)
+        if not batch:
+            break
+        for row_id, content in batch:
+            if content is None:
+                conn.execute(
+                    "UPDATE transcript SET xml_migrated = 1 WHERE id = ?",
+                    (row_id,),
+                )
+                continue
+            try:
+                converted = markdown_to_xml(content)
+            except Exception as exc:
+                logger.warning(
+                    "xml-migration: row %d conversion failed (%s); marking migrated to skip retry",
+                    row_id,
+                    exc,
+                )
+                converted = content  # best-effort: keep original
             conn.execute(
-                "UPDATE transcript SET xml_migrated = 1 WHERE id = ?",
-                (row_id,),
+                "UPDATE transcript SET content = ?, xml_migrated = 1 WHERE id = ?",
+                (converted, row_id),
             )
-            continue
-        try:
-            converted = markdown_to_xml(content)
-        except Exception as exc:
-            logger.warning(
-                "xml-migration: row %d conversion failed (%s); marking migrated to skip retry",
-                row_id,
-                exc,
-            )
-            converted = content  # best-effort: keep original
-        conn.execute(
-            "UPDATE transcript SET content = ?, xml_migrated = 1 WHERE id = ?",
-            (converted, row_id),
-        )
-    conn.commit()
-    logger.info("xml-migration: completed %d rows", len(rows))
-    return len(rows)
+        conn.commit()
+        total += len(batch)
+        logger.info("xml-migration: committed batch (%d rows total)", total)
+    if total:
+        logger.info("xml-migration: completed %d rows", total)
+    return total

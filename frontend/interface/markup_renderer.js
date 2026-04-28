@@ -22,6 +22,11 @@ function decodeEntities(text) {
 
 function tokenize(content) {
   if (!content) return [];
+  // Strip NUL bytes — DOM createTextNode silently drops them, leaving an
+  // ambiguous gap. Defensive: shouldn't appear in well-formed content.
+  if (content.indexOf('\x00') !== -1) {
+    content = content.replace(/\x00/g, '');
+  }
   const tokens = [];
   let pos = 0;
   TAG_RE.lastIndex = 0;
