@@ -4,8 +4,7 @@ Minimal — only asserts invariants that catch real regressions:
 1. Recursion guard: _check_threshold is hard-disabled on both subclasses.
 2. Class constants: JOB, ALWAYS_AVAILABLE, DISCOVERABLE, SKIP_TRANSCRIPT_WRITE.
 3. compaction_service module is gone (ModuleNotFoundError on import).
-4. cognitive_jobs.json has no 'compaction' job entry.
-5. MetricsAccumulator.merge() sums token and tool counts correctly.
+4. MetricsAccumulator.merge() sums token and tool counts correctly.
 """
 
 import json
@@ -62,19 +61,6 @@ class TestCompactionServiceGone:
     def test_compaction_service_not_importable(self):
         with pytest.raises(ModuleNotFoundError):
             import services.compaction_service  # noqa: F401
-
-
-class TestCognitiveJobsNoCompactionEntry:
-    def test_no_compaction_job_in_cognitive_jobs(self):
-        import os
-        config_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', 'configs', 'cognitive_jobs.json',
-        )
-        with open(config_path) as f:
-            data = json.load(f)
-        job_ids = [j['id'] for j in data.get('jobs', [])]
-        assert 'compaction' not in job_ids
 
 
 class TestMetricsAccumulatorMerge:

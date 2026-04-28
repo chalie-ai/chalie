@@ -48,15 +48,14 @@ def _populate_healthy_state(store):
 
 
 def _mock_providers_assigned():
-    """Return a provider mock where all critical jobs are assigned."""
+    """Return a provider mock where a provider is selected and active."""
     mock_provider = MagicMock()
     mock_provider.get_all_providers.return_value = [
         {"is_active": True, "platform": "anthropic"},
     ]
-    mock_provider.get_all_job_assignments.return_value = [
-        {"job_name": "frontal-cortex-unified", "provider_id": 1},
-        {"job_name": "cognitive-triage", "provider_id": 1},
-    ]
+    mock_provider.get_selected_provider.return_value = {
+        "id": 1, "is_active": True, "platform": "anthropic", "model": "claude-sonnet-4-6",
+    }
     return mock_provider
 
 

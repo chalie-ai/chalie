@@ -158,8 +158,7 @@ CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     platform TEXT NOT NULL,
-    model TEXT NOT NULL,                     -- default model
-    models TEXT,                             -- JSON array of available models (NULL = [model])
+    model TEXT NOT NULL,                     -- single model for this provider
     host TEXT,
     api_key BLOB,                            -- encrypted storage
     dimensions INTEGER,
@@ -170,18 +169,8 @@ CREATE TABLE IF NOT EXISTS providers (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS job_provider_assignments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_name TEXT UNIQUE NOT NULL,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    model TEXT,                              -- model override (NULL = use provider default)
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
 CREATE INDEX IF NOT EXISTS idx_providers_name ON providers(name);
 CREATE INDEX IF NOT EXISTS idx_providers_platform ON providers(platform);
-CREATE INDEX IF NOT EXISTS idx_job_assignments_job ON job_provider_assignments(job_name);
 
 -- ────────────────────────────────────────────────────────────────
 -- SETTINGS — application-wide configuration
@@ -202,6 +191,9 @@ CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key);
 
 INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
 VALUES ('api_key', 'string', 'REST API authentication key (auto-generated on first startup if not set)', 1);
+
+INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
+VALUES ('selected_provider_id', 'int', 'ID of the active LLM provider used for all cognitive jobs', 0);
 
 -- ────────────────────────────────────────────────────────────────
 -- MASTER ACCOUNT

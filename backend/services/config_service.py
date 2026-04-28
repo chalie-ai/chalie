@@ -145,35 +145,40 @@ class ConfigService:
     def resolve_agent_config(agent_name: str) -> Dict[str, Any]:
         """Load agent config and resolve any provider references.
 
-        Checks DB for job assignment first, then uses JSON provider resolution.
+        Uses the globally selected provider (set via Brain UI). Falls back to
+        the first active provider if none is selected.
         """
         config = ConfigService.get_agent_config(agent_name)
 
-        # Check if there's a DB-level job assignment (via cached service)
         try:
             from services.provider_cache_service import ProviderCacheService
 
-            assignment_provider, model_override = ProviderCacheService.get_job_assignment(agent_name)
-            if assignment_provider:
-                config['provider'] = assignment_provider
-                # Model override takes precedence over provider default.
-                # resolve_provider() merges as: provider defaults < agent config,
-                # so setting config['model'] here wins over the provider's model.
-                if model_override:
-                    config['model'] = model_override
-                logger.debug(f"[ConfigService] Using cached provider '{assignment_provider}'"
-                             f"{f' model={model_override}' if model_override else ''}"
-                             f" for job '{agent_name}'")
+            selected = ProviderCacheService.get_selected_provider()
+            if selected:
+                # The selected provider dict already contains platform, model, etc.
+                # We need to find its name in the providers dict for resolve_provider().
+                providers = ProviderCacheService.get_providers()
+                selected_name = None
+                for name, p in providers.items():
+                    if p.get('model') == selected.get('model') and p.get('platform') == selected.get('platform'):
+                        selected_name = name
+                        break
+                if selected_name:
+                    config['provider'] = selected_name
+                    logger.debug(f"[ConfigService] Using selected provider '{selected_name}' for job '{agent_name}'")
+                else:
+                    # Selected provider not in cache — use its config directly
+                    config.update(selected)
             else:
-                # No explicit assignment — fall back to the first active provider.
+                # No selected provider — fall back to the first active provider.
                 providers = ConfigService.get_providers()
                 if providers:
                     fallback_name = next(iter(providers))
                     config['provider'] = fallback_name
-                    logger.warning(f"[ConfigService] No provider assigned for job '{agent_name}', "
+                    logger.warning(f"[ConfigService] No provider selected for job '{agent_name}', "
                                    f"falling back to '{fallback_name}'")
         except Exception as e:
-            logger.warning(f"[ConfigService] Job assignment lookup failed for '{agent_name}': {e}")
+            logger.warning(f"[ConfigService] Provider selection lookup failed for '{agent_name}': {e}")
 
         config['_job_name'] = agent_name
         return ConfigService.resolve_provider(config)
