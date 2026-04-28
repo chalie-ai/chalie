@@ -1,5 +1,5 @@
 import pytest
-from services.markup import escape_text, escape_attr, wrap_text_xml, actions_to_xml, tokenize, Token, extract_plaintext
+from services.markup import escape_text, wrap_text_xml, actions_to_xml, tokenize, Token, extract_plaintext
 
 
 @pytest.mark.unit

@@ -3,15 +3,12 @@
 Each test here catches a specific regression that the original 55 tests miss.
 The regressions are stated in each test's docstring.
 """
-import sqlite3
 
 import pytest
 
 from services.markup import (
     Token,
-    actions_to_xml,
     escape_attr,
-    escape_text,
     extract_plaintext,
     tokenize,
 )

@@ -75,7 +75,6 @@ class TestOutputServiceXmlWireFrame:
 
     @pytest.fixture
     def svc(self, store):
-        from services.config_service import ConfigService
         from services.output_service import OutputService
         from unittest.mock import patch
 
