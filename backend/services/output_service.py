@@ -142,10 +142,6 @@ class OutputService:
             except Exception as e:
                 logger.warning(f"Notification buffer push failed: {e}")
 
-        # Notification tools (Telegram etc.) for drift and all background events
-        if source in ('reminder', 'task', 'goal_pursuit', 'scheduled_prompt'):
-            self._send_to_notification_tools(response)
-
         logger.info(
             f"Enqueued TEXT output {output_id} for topic '{_channel}' "
             f"(mode={mode}, confidence={confidence:.2f})"
@@ -186,27 +182,6 @@ class OutputService:
             original_metadata=metadata,
             metrics=metrics,
         )
-
-    def _send_to_notification_tools(self, message: str) -> None:
-        """
-        Deliver proactive drift to all tools that declare notification support.
-
-        Discovers tools at call time via ToolRegistryService. Any tool with
-        "notification": {"default_enabled": true} in its manifest will receive
-        the message via registry.invoke() (routed through Docker container).
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            for tool in registry.get_notification_tools():
-                try:
-                    result_str = registry.invoke(tool["name"], "__notification__", {"message": message})
-                    if "Error:" in result_str:
-                        logger.warning(f"Notification tool '{tool['name']}' failed: {result_str}")
-                except Exception as e:
-                    logger.warning(f"Notification tool '{tool['name']}' error: {e}")
-        except Exception as e:
-            logger.warning(f"Notification dispatch error: {e}")
 
     def enqueue_act(
         self,

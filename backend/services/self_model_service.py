@@ -379,35 +379,16 @@ class SelfModelService:
         capability_categories = {}
 
         try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            tool_names = registry.get_tool_names()
-
-            # Categorize tools by scanning manifest documentation keywords
-            for name in tool_names:
-                manifest = registry.get_tool_full_description(name)
-                if not manifest:
-                    continue
-                doc = (manifest.get("documentation", "") or "").lower()
-                desc = (manifest.get("description", "") or "").lower()
-                text = f"{doc} {desc}"
-
+            from abilities._registry import AbilityRegistry
+            for ability in AbilityRegistry.all():
+                name = ability.NAME
+                tool_names.append(name)
+                text = (ability.SUMMARY or '').lower()
                 for category, keywords in CATEGORY_KEYWORDS.items():
                     if any(kw in text for kw in keywords):
-                        if category not in capability_categories:
-                            capability_categories[category] = []
-                        if name not in capability_categories[category]:
-                            capability_categories[category].append(name)
+                        capability_categories.setdefault(category, []).append(name)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load tool inventory: {e}", exc_info=True)
-
-        # Abilities from registry
-        innate_skills = []
-        try:
-            from abilities._registry import AbilityRegistry
-            innate_skills = sorted(a.NAME for a in AbilityRegistry.all())
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load abilities: {e}", exc_info=True)
+            logger.warning(f"{LOG_PREFIX} Failed to load ability inventory: {e}", exc_info=True)
 
         # Provider features
         provider_features = self._get_provider_features()
@@ -415,7 +396,7 @@ class SelfModelService:
         return {
             "tool_count": len(tool_names),
             "tool_names": sorted(tool_names),
-            "innate_skills": innate_skills,
+            "innate_skills": sorted(tool_names),
             "capability_categories": capability_categories,
             "provider_features": provider_features,
         }

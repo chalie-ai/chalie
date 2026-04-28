@@ -290,14 +290,6 @@ def main():
     # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
-    # Load tool registry
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        tool_count = len(ToolRegistryService().get_tool_names())
-        if tool_count > 0:
-            logger.info(f"[Startup] Tool registry loaded: {tool_count} tools")
-    except Exception as e:
-        logger.warning(f"[Startup] Tool registry load failed: {e}")
 
     # Verify search routing embeddings are present
     try:
@@ -380,17 +372,6 @@ def _bootstrap_capability_sync():
                             logger.warning("[bootstrap] Failed to register tool '%s': %s", tool_name, reg_exc)
             except Exception as exc:
                 logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
-        # If ToolRegistryService was already initialised before this bootstrap ran,
-        # its in-memory tools dict is stale. Reload so find_tools can discover
-        # the freshly registered capability tools.
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            reg = ToolRegistryService()
-            if reg._initialized:
-                reg._load_tools()
-                logger.info("[bootstrap] Tool registry reloaded after capability tool registration")
-        except Exception as reg_exc:
-            logger.warning("[bootstrap] Tool registry reload failed: %s", reg_exc)
     except Exception as exc:
         logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 
