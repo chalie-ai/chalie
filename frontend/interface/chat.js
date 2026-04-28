@@ -127,7 +127,7 @@ export class Chat {
     const actEl = this._renderer.createActCycle();
     this._pendingForm = actEl;
 
-    let responseBlocks = [];
+    let responseContent = '';
     let responseMeta = {};
 
     this._ws.send(text || '[Image attached]', source, {
@@ -151,7 +151,7 @@ export class Chat {
         this._renderer.appendSteerBubble(steerText);
       },
       onMessage: (data) => {
-        responseBlocks = data.blocks || [];
+        responseContent = data.content || '';
         responseMeta = {
           topic: data.topic,
           exchange_id: data.exchange_id,
@@ -168,22 +168,22 @@ export class Chat {
       },
       onDone: (data) => {
         this._onResponseReceivedCb?.();
-        if (responseBlocks.length) {
+        if (responseContent) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
           // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
-          this._renderer.replaceActWithResponse(actEl, responseBlocks, responseMeta);
+          this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
-            const notifText = responseBlocks
-              .filter(b => b.type === 'text' || b.type === 'header')
-              .map(b => b.content || '')
-              .join(' ');
-            if (notifText) this._notifications.notifyBackground(notifText);
+            // Import extractPlaintext lazily for background notification text
+            import('./markup_extract.js').then(({ extractPlaintext }) => {
+              const notifText = extractPlaintext(responseContent);
+              if (notifText) this._notifications.notifyBackground(notifText);
+            }).catch(() => {});
           }
         } else {
-          // No blocks response — remove the ACT placeholder
+          // No content response — remove the ACT placeholder
           if (actEl.isConnected) actEl.remove();
           this._pendingForm = null;
         }
@@ -270,16 +270,16 @@ export class Chat {
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.blocks?.length) {
-      this._renderer.appendChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content) {
+      this._renderer.appendChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 
   _prependMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.blocks?.length) {
-      this._renderer.prependChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content) {
+      this._renderer.prependChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 

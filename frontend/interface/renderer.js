@@ -1,7 +1,8 @@
 /**
  * Conversation spine DOM renderer.
  */
-import { BlockRenderer } from './blocks.js';
+import { renderMarkupTo } from './markup_renderer.js';
+import { extractPlaintext } from './markup_extract.js';
 
 const REMEMBER_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -21,7 +22,6 @@ export class Renderer {
    */
   constructor(spine) {
     this._spine = spine;
-    this._blockRenderer = new BlockRenderer();
     this._userScrolledUp = false;
     this._activeForm = null;
     this._initScrollTracking();
@@ -100,18 +100,18 @@ export class Renderer {
 
   /**
    * Append a Chalie speech form.
-   * @param {Array} blocks — block protocol array
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  appendChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
+  appendChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
+    renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
     el.appendChild(metaRow);
 
     this._spine.appendChild(el);
@@ -122,18 +122,18 @@ export class Renderer {
 
   /**
    * Prepend a Chalie speech form (for scroll-up pagination).
-   * @param {Array} blocks — block protocol array
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  prependChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
+  prependChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
+    renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
     el.appendChild(metaRow);
 
     this._spine.prepend(el);
@@ -282,12 +282,12 @@ export class Renderer {
    * entirely on completion, replaced by a normal chat bubble.
    *
    * @param {HTMLElement} actEl — the .act-cycle element
-   * @param {Array} blocks — block protocol array
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    */
-  replaceActWithResponse(actEl, blocks, meta = {}) {
+  replaceActWithResponse(actEl, content, meta = {}) {
     if (actEl && actEl.isConnected) actEl.remove();
-    return this.appendChalieForm(blocks, meta);
+    return this.appendChalieForm(content, meta);
   }
 
   /**
@@ -379,23 +379,8 @@ export class Renderer {
     return metaRow;
   }
 
-  _extractPlainText(blocks) {
-    if (!Array.isArray(blocks)) return '';
-    const parts = [];
-    for (const b of blocks) {
-      if (b.type === 'text' || b.type === 'header' || b.type === 'code') {
-        if (b.content) parts.push(b.content);
-      } else if (b.type === 'list' && Array.isArray(b.items)) {
-        parts.push(b.items.join('\n'));
-      } else if (b.type === 'keyvalue' && Array.isArray(b.pairs)) {
-        parts.push(b.pairs.map(p => `${p.key}: ${p.value}`).join('\n'));
-      } else if (b.type === 'table') {
-        if (Array.isArray(b.rows)) parts.push(b.rows.map(r => r.join(', ')).join('\n'));
-      } else if (b.type === 'alert' && b.message) {
-        parts.push(b.message);
-      }
-    }
-    return parts.join('\n');
+  _extractPlainText(content) {
+    return extractPlaintext(content || '');
   }
 
   _createEl(tag, className) {

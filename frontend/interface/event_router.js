@@ -87,8 +87,8 @@ export class EventRouter {
       return;
     }
 
-    const blocks = data.blocks || [];
-    if (!blocks.length) return;
+    const content = data.content || '';
+    if (!content) return;
 
     // Proactive thought card — render directly in the conversation spine.
     // Handled before the 'response' sending-guard so thought cards always
@@ -101,7 +101,7 @@ export class EventRouter {
         mode: data.mode || '',
         confidence: data.confidence || 0,
       };
-      this._renderer.appendChalieForm(blocks, meta);
+      this._renderer.appendChalieForm(content, meta);
       return;
     }
 
@@ -111,11 +111,11 @@ export class EventRouter {
 
     // System notification + sound when tab is not focused
     if (!document.hasFocus()) {
-      const notifText = blocks
-        .filter(b => b.type === 'text' || b.type === 'header')
-        .map(b => b.content || '')
-        .join(' ');
-      if (notifText && this._onBackgroundContent) this._onBackgroundContent(notifText);
+      // Extract plaintext from XML for background notification
+      import('./markup_extract.js').then(({ extractPlaintext }) => {
+        const notifText = extractPlaintext(content);
+        if (notifText && this._onBackgroundContent) this._onBackgroundContent(notifText);
+      }).catch(() => {});
     }
 
     // Scheduler trigger events — refresh task strip, play sound
@@ -133,7 +133,7 @@ export class EventRouter {
     };
 
     // Render in conversation spine as a Chalie message
-    const formEl = this._renderer.appendChalieForm(blocks, meta);
+    const formEl = this._renderer.appendChalieForm(content, meta);
 
     // Critic escalation — amber border to signal "needs your attention"
     if (data.type === 'escalation') {
