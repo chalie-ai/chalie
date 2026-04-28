@@ -48,7 +48,7 @@ def _real_encoder_sha() -> str:
     )
 
 
-def _write_regression_head(  # NOSONAR S107 — test factory; explicit kwargs make negative-test setups readable
+def _write_regression_head(
     pretrained_dir,
     *,
     task_name: str = "deliberation_score",
