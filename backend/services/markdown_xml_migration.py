@@ -13,7 +13,7 @@ import logging
 import re
 import sqlite3
 
-from services.markup import escape_text
+from services.markup import escape_attr, escape_text
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,20 @@ _HORIZONTAL_RULE_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 
 
 def _looks_like_xml(text: str) -> bool:
-    """Heuristic: starts with an allowlisted opening tag."""
+    """Heuristic: starts with an allowlisted opening tag.
+
+    Covers all 11 allowlisted tags (LLM_TAGS + PROGRAMMATIC_TAGS). Without this,
+    rows that begin with inline-only tags (e.g. `<b>...`, `<a href=...>`) would
+    be re-processed on every boot once Phase C cuts over to XML-emitting
+    writers — silently corrupting valid XML.
+    """
     stripped = text.lstrip()
-    return stripped.startswith(("<p>", "<h1>", "<ul>", "<code>", "<img", "<actions"))
+    return stripped.startswith((
+        "<p>", "<h1>", "<ul>", "<li>",
+        "<b>", "<i>", "<u>",
+        "<code>", "<a ", "<a>",
+        "<img", "<actions",
+    ))
 
 
 def _convert_inline(text: str) -> str:
@@ -48,7 +59,10 @@ def _convert_inline(text: str) -> str:
     placeholders: list[str] = []
 
     def stash_code(match: re.Match) -> str:
-        placeholders.append(f"<code>{escape_text(match.group(1))}</code>")
+        # NOTE: text has already been XML-escaped by the caller (markdown_to_xml).
+        # Re-escaping group(1) here would double-escape `&` `<` `>`. Use the
+        # captured group directly.
+        placeholders.append(f"<code>{match.group(1)}</code>")
         return f"\x00{len(placeholders) - 1}\x00"
 
     text = _INLINE_CODE_RE.sub(stash_code, text)
@@ -62,9 +76,16 @@ def _convert_inline(text: str) -> str:
     # Strikethrough — no equivalent tag, drop the tildes, keep the text
     text = _STRIKE_RE.sub(r"\1", text)
     # Images first (so `!` doesn't get swallowed by link regex)
-    text = _IMAGE_RE.sub(lambda m: f'<img src="{m.group(2)}" alt="{m.group(1)}"/>', text)
-    # Links
-    text = _LINK_RE.sub(lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', text)
+    # escape_attr both groups — alt may contain quotes; src may contain &.
+    text = _IMAGE_RE.sub(
+        lambda m: f'<img src="{escape_attr(m.group(2))}" alt="{escape_attr(m.group(1))}"/>',
+        text,
+    )
+    # Links — href must be attr-escaped; label is already text-escaped.
+    text = _LINK_RE.sub(
+        lambda m: f'<a href="{escape_attr(m.group(2))}">{m.group(1)}</a>',
+        text,
+    )
 
     # Restore code placeholders
     for idx, code_xml in enumerate(placeholders):
@@ -151,7 +172,10 @@ def markdown_to_xml(md: str) -> str:
         # Standalone image — emit bare <img/> without <p> wrapper
         _img_only = _IMAGE_RE.fullmatch(block.strip())
         if _img_only:
-            out.append(f'<img src="{_img_only.group(2)}" alt="{_img_only.group(1)}"/>')
+            out.append(
+                f'<img src="{escape_attr(_img_only.group(2))}" '
+                f'alt="{escape_attr(_img_only.group(1))}"/>'
+            )
             continue
 
         # Default: paragraph
