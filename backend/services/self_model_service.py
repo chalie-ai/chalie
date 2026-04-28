@@ -28,10 +28,7 @@ CACHE_KEY = "self_model:snapshot"
 CACHE_TTL = 45  # seconds
 REFRESH_INTERVAL = 30  # background thread cycle
 
-# Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
-CRITICAL_JOBS = frozenset({
-    'frontal-cortex-unified',
-})
+# Removed CRITICAL_JOBS — single global provider replaces per-job assignment
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
 CATEGORY_KEYWORDS = {
@@ -274,7 +271,7 @@ class SelfModelService:
         return {"alive": 0, "total": 0, "dead_threads": []}
 
     def _get_provider_status(self) -> dict:
-        """Check LLM provider assignments for critical cognitive jobs."""
+        """Check if a provider is selected and active."""
         try:
             from services.provider_db_service import ProviderDbService
             db = self._get_db()
@@ -284,18 +281,17 @@ class SelfModelService:
             providers = provider_service.get_all_providers()
             active_count = sum(1 for p in providers if p.get("is_active"))
 
-            # Check which critical jobs have assigned providers
-            assignments = provider_service.get_all_job_assignments()
-            assigned_jobs = {a["job_name"] for a in assignments}
-            unassigned = [j for j in CRITICAL_JOBS if j not in assigned_jobs]
+            # Check if a provider is selected
+            selected = provider_service.get_selected_provider()
+            has_selected = selected is not None and selected.get("is_active")
 
             return {
                 "active_count": active_count,
-                "unassigned_jobs": sorted(unassigned),
+                "has_selected_provider": has_selected,
             }
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to get provider status: {e}", exc_info=True)
-            return {"active_count": 0, "unassigned_jobs": []}
+            return {"active_count": 0, "has_selected_provider": False}
 
     def _get_memory_pressure(self) -> dict:
         """Episode/concept/trait counts and average activation from SQLite."""
@@ -450,11 +446,10 @@ class SelfModelService:
                 "severity": SEVERITY_DEAD_THREADS,
             })
 
-        # Missing providers for critical jobs (severity: 0.8)
-        unassigned = op.get("provider_status", {}).get("unassigned_jobs", [])
-        if unassigned:
+        # No selected provider (severity: 0.8)
+        if not op.get("provider_status", {}).get("has_selected_provider", False):
             notes.append({
-                "signal": f"No LLM provider assigned for: {', '.join(unassigned)}",
+                "signal": "No LLM provider selected — add and select a provider in Brain",
                 "severity": SEVERITY_MISSING_PROVIDER,
             })
 
