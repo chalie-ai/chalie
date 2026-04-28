@@ -89,8 +89,40 @@ function createElement(name, attrs) {
     }
   } else if (name === 'action') {
     el.classList.add('chalie-action-button');
+    // Chat actions (LLM-emitted): label + value → dispatch chalie:action.
+    // Overlay actions (apps_panel daemon UI): execute/collect/target/open-url/
+    // payload/style → propagated as data-* attrs; click wired by host.
     el.setAttribute('data-value', attrs.value || '');
+    if (attrs.execute) el.setAttribute('data-execute', attrs.execute);
+    if (attrs.collect) el.setAttribute('data-collect', attrs.collect);
+    if (attrs.target) el.setAttribute('data-target', attrs.target);
+    if (attrs['open-url']) el.setAttribute('data-open-url', attrs['open-url']);
+    if (attrs.payload) el.setAttribute('data-payload', attrs.payload);
+    if (attrs.style === 'secondary') el.classList.add('chalie-action-button--secondary');
+    if (attrs.style === 'danger') el.classList.add('chalie-action-button--danger');
     el.textContent = attrs.label || '';
+    // Chat-action click handler. Overlay actions have data-execute and are
+    // wired by AppsPanel._wireOverlayActions; we skip dispatch in that case
+    // to avoid double-firing.
+    if (!attrs.execute) {
+      el.addEventListener('click', () => {
+        // One-time use: disable siblings in the same <actions> row.
+        const row = el.closest('.chalie-actions-row');
+        if (row) {
+          for (const b of row.querySelectorAll('.chalie-action-button')) {
+            b.setAttribute('disabled', '');
+          }
+        } else {
+          el.setAttribute('disabled', '');
+        }
+        el.classList.add('chalie-action-button--selected');
+        document.dispatchEvent(new CustomEvent('chalie:action', {
+          detail: {
+            payload: { value: attrs.value || '', label: attrs.label || '' },
+          },
+        }));
+      });
+    }
     return el; // action is its own thing — don't append children
   } else if (name === 'actions') {
     el.classList.add('chalie-actions-row');
