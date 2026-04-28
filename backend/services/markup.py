@@ -87,8 +87,11 @@ class Token:
 # Real content is bounded by LLM token limits; 5 MB is generous.
 _MAX_CONTENT_LEN = 5_000_000
 
+# Non-backtracking variant: each attribute requires a leading \s+ separator,
+# eliminating the ambiguity between trailing \s* inside the repetition and
+# the outer \s* before (/)?>.  Sonar polynomial-runtime hotspot mitigated.
 _TAG_RE = re.compile(
-    r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9]*)\s*((?:[a-zA-Z][a-zA-Z0-9-]*\s*=\s*\"[^\"]*\"\s*)*)\s*(/)?\s*>"
+    r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*\s*=\s*\"[^\"]*\")*)\s*(/)?\s*>"
 )
 _ATTR_RE = re.compile(r'([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"')
 _ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'"}

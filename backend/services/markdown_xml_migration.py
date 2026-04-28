@@ -138,16 +138,18 @@ def markdown_to_xml(md: str) -> str:
         if _HORIZONTAL_RULE_RE.match(block):
             continue
 
-        # Heading (any level → h1)
-        heading_match = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", block)
+        # Heading (any level → h1).  Greedy capture + rstrip avoids the
+        # ambiguous \s* trailer that triggered a Sonar ReDoS hotspot.
+        heading_match = re.match(r"^\s*#{1,6}\s+(.+)$", block)
         if heading_match:
-            inner = _convert_inline(escape_text(heading_match.group(1)))
+            inner = _convert_inline(escape_text(heading_match.group(1).rstrip()))
             out.append(f"<h1>{inner}</h1>")
             continue
 
-        # List (unordered or ordered)
+        # List (unordered or ordered).  Anchored prefix with no nested
+        # quantifiers — single \s* at start, single \s+ separator, no trailer.
         lines = block.split("\n")
-        if all(re.match(r"^\s*(?:[-*]|\d+\.)\s+", ln) for ln in lines if ln.strip()):
+        if all(re.match(r"^[ \t]*(?:[-*]|\d+\.)[ \t]+", ln) for ln in lines if ln.strip()):
             items = []
             for ln in lines:
                 if not ln.strip():
@@ -165,10 +167,12 @@ def markdown_to_xml(md: str) -> str:
             out.append(f"<p><i>{inner}</i></p>")
             continue
 
-        # Table (markdown pipe table) — flatten each row to a paragraph
-        if any("|" in ln for ln in lines) and any(re.match(r"^\s*\|?\s*[-:]+", ln) for ln in lines):
+        # Table (markdown pipe table) — flatten each row to a paragraph.
+        # Tightened separator regex: tab/space char class + single optional
+        # `|` + tab/space class + 1-or-more dash/colon. No nested \s* groups.
+        if any("|" in ln for ln in lines) and any(re.match(r"^[ \t]*\|?[ \t]*[-:]+", ln) for ln in lines):
             for ln in lines:
-                if re.match(r"^\s*\|?\s*[-:]+", ln):
+                if re.match(r"^[ \t]*\|?[ \t]*[-:]+", ln):
                     continue  # skip separator
                 cells = [c.strip() for c in ln.strip().strip("|").split("|")]
                 cells = [c for c in cells if c]

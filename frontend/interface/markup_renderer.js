@@ -13,7 +13,10 @@ const VOID_TAGS = new Set(['img', 'action']);
 // Real content is bounded by LLM token limits; 5 MB is generous.
 const MAX_CONTENT_LEN = 5_000_000;
 
-const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)\s*((?:[a-zA-Z][a-zA-Z0-9-]*\s*=\s*"[^"]*"\s*)*)\s*(\/)?\s*>/g;
+// Non-backtracking variant: each attribute requires a leading \s+ separator,
+// removing the ambiguity between trailing \s* inside the repetition and the
+// outer \s* before (\/)?>. Mitigates polynomial-runtime regex hotspot.
+const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*\s*=\s*"[^"]*")*)\s*(\/)?\s*>/g;
 const ATTR_RE = /([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"/g;
 
 const ENTITY_MAP = {

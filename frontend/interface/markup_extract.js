@@ -5,7 +5,10 @@
 // Real content is bounded by LLM token limits; 5 MB is generous.
 const MAX_CONTENT_LEN = 5_000_000;
 
-const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)\s*([^>]*?)\s*(\/)?\s*>/g;
+// Greedy attribute capture (no nested optional whitespace) — the [^>]*? body
+// already handles all whitespace internally, so dropping the surrounding \s*
+// removes the ambiguity that triggers polynomial backtracking on hostile input.
+const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*?)(\/)?>/g;
 const ALT_RE = /\balt\s*=\s*"([^"]*)"/i;
 
 const DROP_TAGS = new Set(['actions']);
