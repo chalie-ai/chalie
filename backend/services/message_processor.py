@@ -25,6 +25,7 @@ compaction primitives.
 import contextlib
 import contextvars
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -34,6 +35,23 @@ from services.time_utils import utc_now
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
+
+_LLM_SENTINEL_PATTERNS = (
+    re.compile(r'<\|[^|<>]*\|>'),
+    re.compile(r'<\|[^|<>]*\|'),
+)
+
+
+def _sanitize_llm_args(value):
+    if isinstance(value, str):
+        for p in _LLM_SENTINEL_PATTERNS:
+            value = p.sub('', value)
+        return value.strip()
+    if isinstance(value, list):
+        return [_sanitize_llm_args(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _sanitize_llm_args(v) for k, v in value.items()}
+    return value
 
 
 # ── Current-processor context ─────────────────────────────────────────────────
@@ -396,6 +414,7 @@ class MessageProcessor:
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
+        tc_input = _sanitize_llm_args(tc_input)
 
         self._metrics.record_tool(tool_name)
 
