@@ -251,6 +251,57 @@ class OnnxInferenceService:
 
     # ── Task registration ─────────────────────────────────────────────────────
 
+    def _load_task_meta(self, task_name: str):
+        """Locate and parse the task's meta JSON. Returns (meta_dict, task_dir) or None."""
+        task_dir = self._pretrained_dir / task_name
+        prefix = _TASK_PREFIXES.get(task_name, task_name)
+        meta_path = task_dir / f"{prefix}-classifier_meta.json"
+        if not meta_path.exists():
+            logger.warning(f"{LOG_PREFIX} Missing {meta_path.name} for task '{task_name}' at {task_dir}")
+            return None
+        try:
+            with open(meta_path) as f:
+                return json.load(f), task_dir
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"{LOG_PREFIX} Cannot read meta for '{task_name}': {e}")
+            return None
+
+    def _verify_encoder_sha(self, task_name: str, expected_sha: str) -> str | None:
+        """Compute the encoder's sha256 and compare against `expected_sha`. Returns actual sha or None."""
+        onnx_path = self._encoder_onnx_path()
+        if not onnx_path.exists():
+            logger.warning(f"{LOG_PREFIX} Encoder ONNX not found at {onnx_path}")
+            return None
+        actual_sha = _get_encoder_sha256(onnx_path)
+        if actual_sha.lower() != expected_sha:
+            raise RuntimeError(
+                f"[CLASSIFIER BOOT] sha256 mismatch: task={task_name} "
+                f"expected={expected_sha} got={actual_sha}"
+            )
+        return actual_sha
+
+    def _load_head_arrays(self, task_name: str, task_dir, meta: dict):
+        """Load W1/b1/W2/b2 from the head .npz; returns the four arrays or None on failure."""
+        head_asset = meta.get("head_asset")
+        if not head_asset:
+            logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
+            return None
+        npz_path = task_dir / head_asset
+        if not npz_path.exists():
+            logger.warning(f"{LOG_PREFIX} Head file not found: {npz_path}")
+            return None
+        try:
+            with np.load(str(npz_path)) as f:
+                return (
+                    f["W1"].astype(np.float32),
+                    f["b1"].astype(np.float32),
+                    f["W2"].astype(np.float32),
+                    f["b2"].astype(np.float32),
+                )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to load head for '{task_name}': {e}")
+            return None
+
     def _register_task(self, task_name: str) -> Optional[_ClassifierHead]:
         """Load meta + head for one task, perform sha256 pin check, emit boot marker.
 
@@ -260,56 +311,19 @@ class OnnxInferenceService:
             output_activation != sigmoid)
         Returns None if the task directory or meta is missing.
         """
-        task_dir = self._pretrained_dir / task_name
-        prefix = _TASK_PREFIXES.get(task_name, task_name)
-        meta_filename = f"{prefix}-classifier_meta.json"
-        meta_path = task_dir / meta_filename
+        loaded = self._load_task_meta(task_name)
+        if loaded is None:
+            return None
+        meta, task_dir = loaded
 
-        if not meta_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing {meta_filename} for task '{task_name}' at {task_dir}")
+        actual_sha = self._verify_encoder_sha(task_name, meta.get("base_encoder_sha256", "").lower())
+        if actual_sha is None:
             return None
 
-        try:
-            with open(meta_path) as f:
-                meta = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"{LOG_PREFIX} Cannot read meta for '{task_name}': {e}")
+        arrays = self._load_head_arrays(task_name, task_dir, meta)
+        if arrays is None:
             return None
-
-        # sha256 pin check — computed once per process, not per task
-        expected_sha = meta.get("base_encoder_sha256", "").lower()
-        onnx_path = self._encoder_onnx_path()
-        if not onnx_path.exists():
-            logger.warning(f"{LOG_PREFIX} Encoder ONNX not found at {onnx_path}")
-            return None
-
-        actual_sha = _get_encoder_sha256(onnx_path)
-        if actual_sha.lower() != expected_sha:
-            raise RuntimeError(
-                f"[CLASSIFIER BOOT] sha256 mismatch: task={task_name} "
-                f"expected={expected_sha} got={actual_sha}"
-            )
-
-        # Load head .npz
-        head_asset = meta.get("head_asset")
-        if not head_asset:
-            logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
-            return None
-
-        npz_path = task_dir / head_asset
-        if not npz_path.exists():
-            logger.warning(f"{LOG_PREFIX} Head file not found: {npz_path}")
-            return None
-
-        try:
-            with np.load(str(npz_path)) as f:
-                w1 = f["W1"].astype(np.float32)
-                b1 = f["b1"].astype(np.float32)
-                w2 = f["W2"].astype(np.float32)
-                b2 = f["b2"].astype(np.float32)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load head for '{task_name}': {e}")
-            return None
+        w1, b1, w2, b2 = arrays
 
         labels = meta.get("labels", [])
         activation = meta.get("activation", meta.get("mlp_activation", "gelu"))

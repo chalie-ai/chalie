@@ -18,8 +18,8 @@ const MAX_CONTENT_LEN = 5_000_000;
 // outer \s* before (\/)?>. Mitigates polynomial-runtime regex hotspot.
 // \w used for [a-zA-Z0-9] to reduce regex complexity (underscore is harmless
 // since the allowlist governs what tags/attrs are actually processed).
-const TAG_RE = /<\s*(\/)?\s*([a-zA-Z]\w*)((?:\s+[a-zA-Z][\w-]*\s*=\s*"[^"]*")*)\s*(\/)?>/g;
-const ATTR_RE = /([a-zA-Z][\w-]*)\s*=\s*"([^"]*)"/g;
+const TAG_RE = /<\s*(\/)?\s*(\w+)((?:\s+[\w-]+\s*=\s*"[^"]*")*)\s*(\/)?>/g;
+const ATTR_RE = /([\w-]+)\s*=\s*"([^"]*)"/g;
 
 const ENTITY_MAP = {
   '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'",

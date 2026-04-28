@@ -97,6 +97,95 @@ def _convert_inline(text: str) -> str:
     return text
 
 
+_PLACEHOLDER_RE = re.compile(r"\x01\d+\x01")
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+)$")
+_LIST_LINE_RE = re.compile(r"^[ \t]*(?:[-*]|\d+\.)[ \t]+")
+_LIST_BULLET_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+")
+_TABLE_SEP_RE = re.compile(r"^[ \t]*\|?[ \t]*[-:]+")
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"^\s*>\s?")
+
+
+def _try_placeholder_block(block: str, fenced_blocks: list[str]) -> str | None:
+    """Restore fenced-code placeholder if `block` is one. Returns the XML or None."""
+    if _PLACEHOLDER_RE.fullmatch(block):
+        return fenced_blocks[int(block.strip("\x01"))]
+    return None
+
+
+def _try_heading(block: str) -> str | None:
+    m = _HEADING_RE.match(block)
+    if not m:
+        return None
+    inner = _convert_inline(escape_text(m.group(1).rstrip()))
+    return f"<h1>{inner}</h1>"
+
+
+def _try_list(lines: list[str]) -> str | None:
+    if not all(_LIST_LINE_RE.match(ln) for ln in lines if ln.strip()):
+        return None
+    items = []
+    for ln in lines:
+        if not ln.strip():
+            continue
+        item_text = _LIST_BULLET_RE.sub("", ln).rstrip()
+        items.append(f"<li>{_convert_inline(escape_text(item_text))}</li>")
+    return f"<ul>{''.join(items)}</ul>"
+
+
+def _try_blockquote(lines: list[str]) -> str | None:
+    if not all(ln.strip().startswith(">") for ln in lines if ln.strip()):
+        return None
+    inner_lines = [_BLOCKQUOTE_PREFIX_RE.sub("", ln) for ln in lines]
+    inner = _convert_inline(escape_text(" ".join(inner_lines).strip()))
+    return f"<p><i>{inner}</i></p>"
+
+
+def _try_table(lines: list[str]) -> str | None:
+    if not (any("|" in ln for ln in lines) and any(_TABLE_SEP_RE.match(ln) for ln in lines)):
+        return None
+    rows: list[str] = []
+    for ln in lines:
+        if _TABLE_SEP_RE.match(ln):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|") if c.strip()]
+        if cells:
+            rows.append(f"<p>{_convert_inline(escape_text(' '.join(cells)))}</p>")
+    return "".join(rows) if rows else None
+
+
+def _try_standalone_image(block: str) -> str | None:
+    m = _IMAGE_RE.fullmatch(block.strip())
+    if not m:
+        return None
+    return f'<img src="{escape_attr(m.group(2))}" alt="{escape_attr(m.group(1))}"/>'
+
+
+def _convert_block(block: str, fenced_blocks: list[str]) -> str | None:
+    """Apply each block-type rule in order; first non-None wins. Returns None to drop the block."""
+    placeholder = _try_placeholder_block(block, fenced_blocks)
+    if placeholder is not None:
+        return placeholder
+    if _HORIZONTAL_RULE_RE.match(block):
+        return None  # drop horizontal rules
+
+    heading = _try_heading(block)
+    if heading is not None:
+        return heading
+
+    lines = block.split("\n")
+    for converter in (_try_list, _try_blockquote, _try_table):
+        result = converter(lines)
+        if result is not None:
+            return result
+
+    image = _try_standalone_image(block)
+    if image is not None:
+        return image
+
+    # Default: paragraph
+    return f"<p>{_convert_inline(escape_text(block))}</p>"
+
+
 def markdown_to_xml(md: str) -> str:
     """Convert markdown string to allowlisted XML.
 
@@ -121,81 +210,16 @@ def markdown_to_xml(md: str) -> str:
     md = _FENCED_CODE_RE.sub(stash_fenced, md)
 
     # Step 2: split into block-level units separated by blank lines.
-    raw_blocks = re.split(r"\n\s*\n", md.strip())
     out: list[str] = []
-    for raw in raw_blocks:
+    for raw in re.split(r"\n\s*\n", md.strip()):
         block = raw.rstrip()
         if not block:
             continue
+        converted = _convert_block(block, fenced_blocks)
+        if converted is not None:
+            out.append(converted)
 
-        # Restore fenced code if this block IS a fenced placeholder
-        if re.fullmatch(r"\x01\d+\x01", block):
-            idx = int(block.strip("\x01"))
-            out.append(fenced_blocks[idx])
-            continue
-
-        # Horizontal rule — drop entirely
-        if _HORIZONTAL_RULE_RE.match(block):
-            continue
-
-        # Heading (any level → h1).  Greedy capture + rstrip avoids the
-        # ambiguous \s* trailer that triggered a Sonar ReDoS hotspot.
-        heading_match = re.match(r"^\s*#{1,6}\s+(.+)$", block)
-        if heading_match:
-            inner = _convert_inline(escape_text(heading_match.group(1).rstrip()))
-            out.append(f"<h1>{inner}</h1>")
-            continue
-
-        # List (unordered or ordered).  Anchored prefix with no nested
-        # quantifiers — single \s* at start, single \s+ separator, no trailer.
-        lines = block.split("\n")
-        if all(re.match(r"^[ \t]*(?:[-*]|\d+\.)[ \t]+", ln) for ln in lines if ln.strip()):
-            items = []
-            for ln in lines:
-                if not ln.strip():
-                    continue
-                item_text = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", ln).rstrip()
-                inner = _convert_inline(escape_text(item_text))
-                items.append(f"<li>{inner}</li>")
-            out.append(f"<ul>{''.join(items)}</ul>")
-            continue
-
-        # Blockquote — best-effort italic paragraph
-        if all(ln.strip().startswith(">") for ln in lines if ln.strip()):
-            inner_lines = [re.sub(r"^\s*>\s?", "", ln) for ln in lines]
-            inner = _convert_inline(escape_text(" ".join(inner_lines).strip()))
-            out.append(f"<p><i>{inner}</i></p>")
-            continue
-
-        # Table (markdown pipe table) — flatten each row to a paragraph.
-        # Tightened separator regex: tab/space char class + single optional
-        # `|` + tab/space class + 1-or-more dash/colon. No nested \s* groups.
-        if any("|" in ln for ln in lines) and any(re.match(r"^[ \t]*\|?[ \t]*[-:]+", ln) for ln in lines):
-            for ln in lines:
-                if re.match(r"^[ \t]*\|?[ \t]*[-:]+", ln):
-                    continue  # skip separator
-                cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-                cells = [c for c in cells if c]
-                if cells:
-                    inner = _convert_inline(escape_text(" ".join(cells)))
-                    out.append(f"<p>{inner}</p>")
-            continue
-
-        # Standalone image — emit bare <img/> without <p> wrapper
-        _img_only = _IMAGE_RE.fullmatch(block.strip())
-        if _img_only:
-            out.append(
-                f'<img src="{escape_attr(_img_only.group(2))}" '
-                f'alt="{escape_attr(_img_only.group(1))}"/>'
-            )
-            continue
-
-        # Default: paragraph
-        inner = _convert_inline(escape_text(block))
-        out.append(f"<p>{inner}</p>")
-
-    # Step 3: restore any remaining fenced code placeholders that ended up
-    # adjacent to text (rare — they're usually in their own block).
+    # Step 3: restore any fenced placeholders adjacent to text.
     result = "".join(out)
     for idx, code_xml in enumerate(fenced_blocks):
         result = result.replace(f"\x01{idx}\x01", code_xml)

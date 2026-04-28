@@ -17,7 +17,7 @@ const DROP_TAGS = new Set(['actions']);
 // numeric character entity decoding to the browser — including `&#9731;`,
 // `&#x2603;`, `&hearts;`, etc. Manual maps would silently miss numerics and
 // every named entity outside the obvious five.
-const _parser = (typeof DOMParser !== 'undefined') ? new DOMParser() : null;
+const _parser = typeof DOMParser === 'undefined' ? null : new DOMParser();
 
 function _fallbackDecode(text) {
   return text
@@ -28,15 +28,13 @@ function _fallbackDecode(text) {
 function decodeEntities(text) {
   if (!text.includes('&')) return text;
   if (_parser) {
-    let decoded = null;
     try {
       // Wrap in <body> so leading whitespace is preserved verbatim.
       const doc = _parser.parseFromString(`<!doctype html><body>${text}`, 'text/html');
-      decoded = doc.body.textContent || '';
-    } catch (_e) {
-      decoded = null; // parser failed, use fallback below
+      return doc.body.textContent || '';
+    } catch (e) {
+      console.warn('[markup-extract] DOMParser failed, using fallback:', e);
     }
-    if (decoded !== null) return decoded;
   }
   // Fallback (no DOM available — Node test env). Covers the common five.
   return _fallbackDecode(text);

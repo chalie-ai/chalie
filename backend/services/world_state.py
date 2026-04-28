@@ -99,6 +99,22 @@ def _format_telemetry_value(value) -> str | None:
     return str(value)
 
 
+def _is_hidden_telemetry_key(key: str) -> bool:
+    return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
+
+
+def _render_dict_subfields(d: dict) -> list[str]:
+    """Render the visible fields of a nested telemetry dict as ``key:value`` strings."""
+    sub_fields = []
+    for sub_key, sub_value in d.items():
+        if _is_hidden_telemetry_key(sub_key):
+            continue
+        rendered = _format_telemetry_value(sub_value)
+        if rendered is not None:
+            sub_fields.append(f"{sub_key}:{rendered}")
+    return sub_fields
+
+
 def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
     """Group a nested telemetry dict into ``[(group_label, [k:v, ...])]`` entries.
 
@@ -111,22 +127,16 @@ def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
     grouped: dict[str, list[str]] = {}
 
     for key, value in ctx.items():
-        if key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_"):
+        if _is_hidden_telemetry_key(key):
             continue
         if isinstance(value, dict):
-            sub_fields = []
-            for sub_key, sub_value in value.items():
-                if sub_key in _TELEMETRY_HIDDEN_KEYS or sub_key.startswith("_"):
-                    continue
-                rendered = _format_telemetry_value(sub_value)
-                if rendered is not None:
-                    sub_fields.append(f"{sub_key}:{rendered}")
+            sub_fields = _render_dict_subfields(value)
             if sub_fields:
                 grouped[key] = sub_fields
-        else:
-            rendered = _format_telemetry_value(value)
-            if rendered is not None:
-                user_fields.append(f"{key}:{rendered}")
+            continue
+        rendered = _format_telemetry_value(value)
+        if rendered is not None:
+            user_fields.append(f"{key}:{rendered}")
 
     out: list[tuple[str, list[str]]] = []
     if user_fields:
@@ -167,6 +177,48 @@ def _schedule_recurrence_field(recurrence_str) -> str | None:
         logger.debug("[WorldState] unparseable recurrence dropped: %r", recurrence_str)
         return None
     return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
+
+
+def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
+    """Split rows into pending-by-message (earliest due_at) and fired-by-message (latest last_fired_at)."""
+    pending_by_msg: dict[str, dict] = {}
+    fired_by_msg: dict[str, dict] = {}
+    for row in rows:
+        message = row.get("message") or ""
+        status = row.get("status")
+        if status == "pending":
+            current = pending_by_msg.get(message)
+            if current is None or (row.get("due_at") or "") < (current.get("due_at") or ""):
+                pending_by_msg[message] = row
+        elif status == "fired":
+            current = fired_by_msg.get(message)
+            if current is None or (row.get("last_fired_at") or "") > (current.get("last_fired_at") or ""):
+                fired_by_msg[message] = row
+    return pending_by_msg, fired_by_msg
+
+
+def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
+    """Pending entries first (by due_at asc), then fired-only entries (by last_fired_at desc)."""
+    ordered = sorted(pending.keys(), key=lambda m: pending[m].get("due_at") or "")
+    seen = set(ordered)
+    ordered.extend(sorted(
+        (m for m in fired if m not in seen),
+        key=lambda m: fired[m].get("last_fired_at") or "",
+        reverse=True,
+    ))
+    return ordered
+
+
+def _render_schedule_fields(row: dict, now) -> str:
+    """Build the comma-separated field string for one schedule entry."""
+    fields = [_schedule_due_field(row.get("due_at") or "", now)]
+    last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
+    if last_fired_field:
+        fields.append(last_fired_field)
+    recurrence_field = _schedule_recurrence_field(row.get("recurrence"))
+    if recurrence_field:
+        fields.append(recurrence_field)
+    return ",".join(fields)
 
 
 @dataclass(frozen=True)
@@ -348,44 +400,14 @@ class WorldState:
         if not rows:
             return []
 
-        pending_by_msg: dict[str, dict] = {}
-        fired_by_msg: dict[str, dict] = {}
-        for row in rows:
-            message = row.get("message") or ""
-            if row.get("status") == "pending":
-                current = pending_by_msg.get(message)
-                if current is None or (row.get("due_at") or "") < (current.get("due_at") or ""):
-                    pending_by_msg[message] = row
-            elif row.get("status") == "fired":
-                current = fired_by_msg.get(message)
-                if current is None or (row.get("last_fired_at") or "") > (current.get("last_fired_at") or ""):
-                    fired_by_msg[message] = row
-
-        # Display order: pending entries first (by due_at asc), then fired-only entries (by last_fired_at desc).
-        ordered_messages = sorted(
-            pending_by_msg.keys(),
-            key=lambda m: pending_by_msg[m].get("due_at") or "",
-        )
-        seen = set(ordered_messages)
-        ordered_messages.extend(sorted(
-            (m for m in fired_by_msg if m not in seen),
-            key=lambda m: fired_by_msg[m].get("last_fired_at") or "",
-            reverse=True,
-        ))
+        pending_by_msg, fired_by_msg = _bucket_schedule_rows(rows)
+        ordered = _order_schedule_messages(pending_by_msg, fired_by_msg)
 
         now = utc_now()
         lines = []
-        for message in ordered_messages:
+        for message in ordered:
             row = pending_by_msg.get(message) or fired_by_msg[message]
-            fields = [_schedule_due_field(row.get("due_at") or "", now)]
-            last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
-            if last_fired_field:
-                fields.append(last_fired_field)
-            recurrence_field = _schedule_recurrence_field(row.get("recurrence"))
-            if recurrence_field:
-                fields.append(recurrence_field)
-            lines.append(f"* {message} ({','.join(fields)})")
-
+            lines.append(f"* {message} ({_render_schedule_fields(row, now)})")
         return lines
 
     def _render_bg_process(self) -> list[str]:

@@ -97,9 +97,9 @@ _MAX_CONTENT_LEN = 5_000_000
 # eliminating the ambiguity between trailing \s* inside the repetition and
 # the outer \s* before (/)?>.  Sonar polynomial-runtime hotspot mitigated.
 _TAG_RE = re.compile(
-    r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*\s*=\s*\"[^\"]*\")*)\s*(/)?\s*>"
+    r"<\s*(/)?\s*(\w+)((?:\s+[\w-]+\s*=\s*\"[^\"]*\")*)\s*(/)?\s*>"
 )
-_ATTR_RE = re.compile(r'([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"')
+_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 _ENTITY_MAP = {_ENTITY_AMP: "&", _ENTITY_LT: "<", _ENTITY_GT: ">", _ENTITY_QUOT: '"', _ENTITY_APOS: "'"}
 
 
@@ -107,6 +107,40 @@ def _decode_entities(text: str) -> str:
     for ent, char in _ENTITY_MAP.items():
         text = text.replace(ent, char)
     return text
+
+
+def _parse_attrs(attr_blob: str) -> dict[str, str]:
+    """Parse a tag's attribute blob into a name → decoded-value dict."""
+    return {
+        am.group(1).lower(): _decode_entities(am.group(2))
+        for am in _ATTR_RE.finditer(attr_blob)
+    }
+
+
+def _classify_tag_match(match: re.Match) -> Token:
+    """Convert a tag regex match into a single Token (open/close/void/text)."""
+    is_close = bool(match.group(1))
+    name = match.group(2).lower()
+    is_void = bool(match.group(4))
+    if name not in ALLOWED_TAGS:
+        return Token("text", match.group(0), {})
+    if is_close:
+        return Token("close", name, {})
+    attrs = _parse_attrs(match.group(3) or "")
+    if is_void or name in VOID_TAGS:
+        return Token("void", name, attrs)
+    return Token("open", name, attrs)
+
+
+def _merge_adjacent_text(tokens: list[Token]) -> list[Token]:
+    """Merge runs of consecutive text tokens (produced by adjacent unknown tags + raw text)."""
+    merged: list[Token] = []
+    for tok in tokens:
+        if merged and merged[-1].kind == "text" and tok.kind == "text":
+            merged[-1] = Token("text", merged[-1].name + tok.name, {})
+        else:
+            merged.append(tok)
+    return merged
 
 
 def tokenize(content: str) -> list[Token]:
@@ -120,69 +154,48 @@ def tokenize(content: str) -> list[Token]:
         return []
     if len(content) > _MAX_CONTENT_LEN:
         content = content[:_MAX_CONTENT_LEN]
+
     tokens: list[Token] = []
     pos = 0
     for match in _TAG_RE.finditer(content):
-        # text before this tag
         if match.start() > pos:
-            text_chunk = content[pos : match.start()]
-            tokens.append(Token("text", _decode_entities(text_chunk), {}))
-        is_close = bool(match.group(1))
-        name = match.group(2).lower()
-        attr_blob = match.group(3) or ""
-        is_void = bool(match.group(4))
-
-        if name not in ALLOWED_TAGS:
-            # Unknown tag — keep raw text (escaped allowlist enforcement)
-            tokens.append(Token("text", match.group(0), {}))
-        else:
-            attrs: dict[str, str] = {}
-            for am in _ATTR_RE.finditer(attr_blob):
-                attrs[am.group(1).lower()] = _decode_entities(am.group(2))
-            if is_close:
-                tokens.append(Token("close", name, {}))
-            elif is_void or name in VOID_TAGS:
-                tokens.append(Token("void", name, attrs))
-            else:
-                tokens.append(Token("open", name, attrs))
+            tokens.append(Token("text", _decode_entities(content[pos : match.start()]), {}))
+        tokens.append(_classify_tag_match(match))
         pos = match.end()
-    # trailing text
     if pos < len(content):
         tokens.append(Token("text", _decode_entities(content[pos:]), {}))
-    # Merge consecutive text tokens (produced by adjacent unknown tags + raw text)
-    merged: list[Token] = []
-    for tok in tokens:
-        if merged and merged[-1].kind == "text" and tok.kind == "text":
-            merged[-1] = Token("text", merged[-1].name + tok.name, {})
-        else:
-            merged.append(tok)
-    return merged
+
+    return _merge_adjacent_text(tokens)
 
 
 _DROP_TAGS = frozenset({"actions"})  # contents not voiced
+
+
+def _consume_token_for_plaintext(tok: Token, skip_depth: int, out: list[str]) -> int:
+    """Per-token state machine for `extract_plaintext`. Returns the new skip_depth."""
+    if skip_depth > 0:
+        if tok.kind == "open" and tok.name in _DROP_TAGS:
+            return skip_depth + 1
+        if tok.kind == "close" and tok.name in _DROP_TAGS:
+            return skip_depth - 1
+        return skip_depth
+    if tok.kind == "open" and tok.name in _DROP_TAGS:
+        return 1
+    if tok.kind == "void" and tok.name == "img":
+        alt = tok.attrs.get("alt", "").strip()
+        if alt:
+            out.append(alt)
+    elif tok.kind == "text":
+        out.append(tok.name)
+    return skip_depth
 
 
 def extract_plaintext(content: str) -> str:
     """Strip tags for TTS / speak button. Drops <actions> entirely. Uses <img alt>."""
     if not content:
         return ""
-    tokens = tokenize(content)
     out: list[str] = []
     skip_depth = 0
-    for tok in tokens:
-        if skip_depth > 0:
-            if tok.kind == "open" and tok.name in _DROP_TAGS:
-                skip_depth += 1
-            elif tok.kind == "close" and tok.name in _DROP_TAGS:
-                skip_depth -= 1
-            continue
-        if tok.kind == "open" and tok.name in _DROP_TAGS:
-            skip_depth = 1
-        elif tok.kind == "void" and tok.name == "img":
-            alt = tok.attrs.get("alt", "").strip()
-            if alt:
-                out.append(alt)
-        elif tok.kind == "text":
-            out.append(tok.name)
-    raw = " ".join(out)
-    return re.sub(r"\s+", " ", raw).strip()
+    for tok in tokenize(content):
+        skip_depth = _consume_token_for_plaintext(tok, skip_depth, out)
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
