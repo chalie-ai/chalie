@@ -7,7 +7,7 @@ Protocol:
   → Client sends:  {"type": "act_steer", "text": "..."}
   → Client sends:  {"type": "resume", "last_seq": N}
   ← Server sends:  {"type": "status", "stage": "...", "seq": N}
-  ← Server sends:  {"type": "message", "blocks": [...], ..., "seq": N}
+  ← Server sends:  {"type": "message", "content": "...", ..., "seq": N}
   ← Server sends:  {"type": "act_narration", "text": "...", "step": N, "seq": N}
   ← Server sends:  {"type": "done", "duration_ms": N, "seq": N}
   ← Server sends:  {"type": "drift|task|reminder|escalation|notification", ..., "seq": N}
@@ -23,8 +23,7 @@ from collections import deque
 
 from utils.logger import set_correlation_id
 
-from services.blocks_render_service import BlocksRenderService
-_blocks_svc = BlocksRenderService()
+from services.markup import wrap_text_xml, actions_to_xml, is_xml_content
 
 logger = logging.getLogger(__name__)
 
@@ -404,15 +403,17 @@ def _handle_action(ws, store, msg):
 
         elapsed_ms = int((time.time() - start) * 1000)
 
-        # Convert to blocks — sole output format
-        blocks = _blocks_svc.from_markdown(result or "Done.")
+        # LLM / skill result → XML content string
+        content = (result or "Done.")
+        if not is_xml_content(content):
+            content = wrap_text_xml(content)
         if reply_actions:
-            blocks.extend(_blocks_svc.from_actions(reply_actions))
+            content += actions_to_xml(reply_actions)
 
         seq = _next_seq()
         message_evt = {
             "type": "message",
-            "blocks": blocks,
+            "content": content,
             "topic": "",
             "mode": "ACT",
             "confidence": 0.95,
@@ -597,11 +598,12 @@ def _handle_chat(ws, store, msg, active_request=None):
             # Store result at output:{request_id} so the fallback path can
             # find it if the pub/sub message was missed.
             try:
+                _fb_content = response if is_xml_content(response) else wrap_text_xml(response)
                 fallback_output = {
                     "type": "TEXT",
                     "topic": 'user',
                     "metadata": {
-                        "blocks": _blocks_svc.from_markdown(response),
+                        "content": _fb_content,
                         "mode": "UNIFIED",
                         "confidence": 1.0,
                         "metadata": metadata,
@@ -707,7 +709,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "blocks": metadata.get("blocks", []),
+                    "content": metadata.get("content", ""),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -750,7 +752,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "blocks": metadata.get("blocks", []),
+                    "content": metadata.get("content", ""),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),

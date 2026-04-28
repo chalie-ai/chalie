@@ -60,8 +60,8 @@ def append(
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal, xml_migrated)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
                 """,
                 (channel, role, content, tool_call_id, tool_name, 1 if internal else 0),
             )
@@ -628,7 +628,7 @@ def write_input_row(channel: str, role: str, content: str) -> int:
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
             (channel, role, content),
         )
         row_id = cursor.lastrowid
@@ -647,7 +647,7 @@ def write_assistant_row(channel: str, content: str) -> int:
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
             (channel, 'assistant', content),
         )
         row_id = cursor.lastrowid

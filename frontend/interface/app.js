@@ -139,14 +139,7 @@ class ChalieApp {
           topic: 'curiosity',
           mode: 'proactive',
           confidence: 0.82,
-          blocks: [
-            {
-              type: 'thought',
-              id: 'mock-thought-1',
-              content: 'You might enjoy reading about octopus cognition — it connects to things we discussed about distributed intelligence.',
-              context: 'Based on your recent conversation about AI architectures',
-            },
-          ],
+          content: '<p>You might enjoy reading about octopus cognition — it connects to things we discussed about distributed intelligence.</p>',
         });
       }, 2000);
     }
@@ -307,7 +300,7 @@ class ChalieApp {
       if (!lsGet('chalie_welcomed')) {
         lsSet('chalie_welcomed', '1');
         this.renderer.appendChalieForm(
-          [{ type: 'text', content: "Hello. I'm Chalie." }],
+          "<p>Hello. I'm Chalie.</p>",
           { mode: 'UNIFIED', confidence: 1 },
         );
       }
@@ -482,12 +475,12 @@ class ChalieApp {
 
       this.ws.sendAction(payload, {
         onMessage: (data) => {
-          const blocks = data.blocks || [];
+          const content = data.content || '';
           const meta = {
             mode: data.mode || 'ACT',
             confidence: data.confidence || 0.95,
           };
-          this.renderer.replaceActWithResponse(actEl, blocks, meta);
+          this.renderer.replaceActWithResponse(actEl, content, meta);
         },
         onError: (data) => {
           this.renderer.replaceActWithError(actEl, data.message);
@@ -497,26 +490,6 @@ class ChalieApp {
           this.presence.setState('resting');
         },
       });
-    });
-
-    // Proactive thought-card action (expand / dismiss)
-    // Dispatched by blocks.js _renderThought() when the user clicks a card button.
-    document.addEventListener('chalie:thought-action', (e) => {
-      const { action, blockId } = e.detail;
-      console.log('[chalie:thought-action]', { action, blockId });
-
-      if (action === 'expand') {
-        if (this._chat.isSending) return;
-        // Pre-fill the textarea so sendMessage() picks up the text, then send.
-        const textarea = document.getElementById('messageInput');
-        if (textarea) {
-          textarea.value = 'Tell me more about that';
-          // Sync the send-button enabled state with the new value.
-          textarea.dispatchEvent(new Event('input'));
-        }
-        this._chat.sendMessage();
-      }
-      // 'dismiss' — fade-out animation is handled in blocks.js; nothing else needed here.
     });
 
     // Pin moment event (from remember button on Chalie messages)

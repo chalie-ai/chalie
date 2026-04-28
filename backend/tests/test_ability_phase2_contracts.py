@@ -409,23 +409,6 @@ def test_review_tool_calls_registered():
 
 
 # ===========================================================================
-# rich_render
-# ===========================================================================
-
-
-def test_rich_render_contract():
-    """RichRenderAbility satisfies the ABC contract."""
-    from abilities.rich_render import RichRenderAbility
-    _assert_contract(RichRenderAbility, name="rich_render", timeout=10)
-
-
-def test_rich_render_registered():
-    """AbilityRegistry.get('rich_render') returns a RichRenderAbility."""
-    from abilities.rich_render import RichRenderAbility
-    _assert_registered("rich_render", RichRenderAbility)
-
-
-# ===========================================================================
 # schedule
 # ===========================================================================
 

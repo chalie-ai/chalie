@@ -335,15 +335,15 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
         for pair in clean_pairs:
             conn.execute(
                 """
-                INSERT INTO transcript (channel, role, content, internal, created_at)
-                VALUES (?, 'user', ?, 0, ?)
+                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                VALUES (?, 'user', ?, 0, ?, 1)
                 """,
                 (channel, pair["user_content"], pair["user_created_at"]),
             )
             conn.execute(
                 """
-                INSERT INTO transcript (channel, role, content, internal, created_at)
-                VALUES (?, 'assistant', ?, 0, ?)
+                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                VALUES (?, 'assistant', ?, 0, ?, 1)
                 """,
                 (channel, pair["asst_content"], pair["asst_created_at"]),
             )

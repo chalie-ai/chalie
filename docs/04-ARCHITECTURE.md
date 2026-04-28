@@ -146,7 +146,7 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 - `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `getTools()`.
 - `DISCOVERABLE` — ability names that `find_tools` may surface for this processor at runtime. The SQL query inside `find_tools` filters candidates to `WHERE name IN (DISCOVERABLE)`, so a processor can never discover anything outside its own list.
 
-`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the nine core cognitive abilities (`document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `rich_render`, `schedule`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`.
+`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the eight core cognitive abilities (`document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`.
 
 **Discoverable abilities** are never pre-injected. The `find_tools` ability performs semantic search against the abilities index at runtime. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
@@ -190,9 +190,9 @@ Tool scope (always-available vs discoverable) is **not** declared on the `Abilit
 
 The `execute(channel, params, telemetry)` method is the sole dispatch surface. `pre_dispatch` and `post_dispatch` hooks exist for subclass-level lifecycle work.
 
-### Concrete abilities (15 dispatchable)
+### Concrete abilities (14 dispatchable)
 
-`abilities/{browser, code_eval, document, find_tools, goal_pursuit, list, memory, news, programming_docs_search, read, review_tool_calls, rich_render, schedule, search, weather}.py`. `abilities.sqlite` indexes all 15 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
+`abilities/{browser, code_eval, document, find_tools, goal_pursuit, list, memory, news, programming_docs_search, read, review_tool_calls, schedule, search, weather}.py`. `abilities.sqlite` indexes all 14 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
 
 Per-ability implementation notes:
 
@@ -207,7 +207,6 @@ Per-ability implementation notes:
 - `programming_docs_search` — all 23 `_Source` subclasses and `_ALL_SOURCES`/`_ALIAS_MAP` at module level.
 - `read` — `requests` at module top; `_BLOCKED_NETS`, `_BROWSER_HEADERS`, `_BLOCKED_PATH_PREFIXES`, `_URL_FETCH_TIMEOUT` as `ClassVar`.
 - `review_tool_calls` — returns `dict` directly.
-- `rich_render` — `_BLOCK_REFERENCE` as `ClassVar[str]`.
 - `schedule` — atomic dedup `INSERT...WHERE NOT EXISTS` preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`.
 - `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`.
 - `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared.
@@ -253,7 +252,30 @@ Four independent single-page applications: the main chat interface, the brain ad
 
 The chat interface is built from focused ES6 modules wired together by a thin orchestrator (`app.js`). Modules communicate through constructor injection, callback registration, and custom DOM events. No module references another directly.
 
-**Block protocol:** all LLM-to-client content is JSON arrays of typed block objects. No HTML travels over the wire. The backend renderer produces blocks; `blocks.js` in the frontend renders them to DOM.
+**XML Markup Format:** all LLM-to-client content uses a strict XML markup format. The wire frame carries a single `content` string containing tags from a fixed allowlist. The renderer is tolerant: unknown tags are escaped to plaintext.
+
+**LLM-emittable tags (8):**
+- `<b>`, `<i>`, `<u>` — inline emphasis
+- `<h1>` — heading
+- `<code>` — code (inline or block, model decides)
+- `<p>` — paragraph
+- `<ul><li>` — list
+- `<a href="...">` — link
+
+**Programmatic-only tags (3):**
+- `<img src="..." alt="...">` — backend-emitted images (browser screenshots, generated assets)
+- `<actions>` / `<action label="..." value="..."/>` — backend-emitted interactive button rows
+
+The system prompt forbids the LLM from emitting programmatic tags.
+
+**Wire shape:**
+```json
+{"type": "message", "content": "<p>Hello <b>world</b></p>", ...}
+```
+
+**Backend module:** `backend/services/markup.py` — escape, tokenize, extract_plaintext, wrap_text_xml, actions_to_xml, is_xml_content.
+**Frontend module:** `frontend/interface/markup_renderer.js` (XML→DOM) + `markup_extract.js` (XML→plaintext for TTS).
+**Migration:** `backend/services/markdown_xml_migration.py` runs at boot — converts legacy markdown rows to XML in-place using the `xml_migrated` sentinel column on `transcript`. Idempotent.
 
 **Asset versioning:** every static asset reference in served HTML has the version string injected into its filename at response time (e.g. `app.js` becomes `app-0.3.3.js`). Static routes strip the version suffix before the disk lookup, so nothing is renamed on disk. Versioned filenames are used instead of query strings because some service workers and proxies ignore query strings when keying caches. HTML responses themselves are never cached.
 
@@ -288,7 +310,7 @@ These are invariants, not conventions. Violating them creates systemic problems.
 |------|---------|
 | **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
 | **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `goal_pursuit`). |
-| **Block Protocol** | Content format: JSON arrays of typed block objects, backend → frontend. No HTML over the wire. |
+| **XML Markup Format** | Content format: single `content` string of 11-tag XML, backend → frontend. LLM emits 8 tags; backend programmatically emits 3. Renderer tolerates unknown tags. |
 | **DMN** | Default Mode Network — timer-based proactive intelligence that fires during idle periods. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
 | **Data Graph** | Structured knowledge store with canonicalisation, typed edges, and per-kind decay. |

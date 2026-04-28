@@ -39,7 +39,6 @@ class DMNMessageProcessor(MessageProcessor):
         "memory",
         "read",
         "review_tool_calls",
-        "rich_render",
         "schedule",
     ]
     DISCOVERABLE: list[str] = [

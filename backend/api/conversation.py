@@ -4,9 +4,7 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
-from services.blocks_render_service import BlocksRenderService
 
-_blocks = BlocksRenderService()
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
 
@@ -23,12 +21,13 @@ def get_recent_history(limit=12, offset=0):
             (limit, offset),
         ).fetchall()
 
+    # Migration (Phase A boot hook) has already converted all rows to XML.
+    # Pass content through directly — no block conversion.
     messages = [
         {
             "id": str(row[0]),
             "role": row[1],
-            "content": row[2],
-            "blocks": _blocks.from_markdown(row[2]) if row[1] == 'assistant' else [],
+            "content": row[2] or "",
             "timestamp": row[3],
         }
         for row in reversed(rows)

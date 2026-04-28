@@ -6,9 +6,7 @@ from typing import Dict, Any, Optional, List
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .time_utils import utc_now
-from .blocks_render_service import BlocksRenderService
-
-_blocks_svc = BlocksRenderService()
+from .markup import wrap_text_xml, actions_to_xml, is_xml_content
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +67,12 @@ class OutputService:
         if metrics is not None:
             metadata_dict["metrics"] = metrics
 
-        # Convert response to blocks — the sole output format for all clients
-        blocks = _blocks_svc.from_markdown(response)
+        # LLM emits XML directly. If a plain string arrives (rare edge case),
+        # wrap it as <p>. Append programmatic action buttons as XML.
+        content = response if is_xml_content(response) else wrap_text_xml(response)
         if reply_actions:
-            blocks.extend(_blocks_svc.from_actions(reply_actions))
-        metadata_dict["blocks"] = blocks
+            content = (content or "") + actions_to_xml(reply_actions)
+        metadata_dict["content"] = content
 
         output = {
             "id": output_id,
@@ -107,7 +106,7 @@ class OutputService:
             'output_id': output_id,
             'type': event_type,
             'topic': _channel,
-            'blocks': blocks,
+            'content': content,
             'mode': mode,
             'confidence': confidence,
             'generated_at': output['created_at'],
