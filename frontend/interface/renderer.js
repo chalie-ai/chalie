@@ -238,7 +238,7 @@ export class Renderer {
     );
     if (!row) return;
 
-    const startedAt = parseInt(row.dataset.startedAt || '0', 10);
+    const startedAt = Number.parseInt(row.dataset.startedAt || '0', 10);
     const elapsed = startedAt ? Date.now() - startedAt : 200;
     const wait = Math.max(0, 150 - elapsed);
 
@@ -286,7 +286,7 @@ export class Renderer {
    * @param {{topic?: string, duration_ms?: number}} [meta]
    */
   replaceActWithResponse(actEl, content, meta = {}) {
-    if (actEl && actEl.isConnected) actEl.remove();
+    if (actEl?.isConnected) actEl.remove();
     return this.appendChalieForm(content, meta);
   }
 
@@ -296,7 +296,7 @@ export class Renderer {
    * @param {string} message
    */
   replaceActWithError(actEl, message) {
-    if (actEl && actEl.isConnected) actEl.remove();
+    if (actEl?.isConnected) actEl.remove();
     const el = this._createEl('div', 'speech-form speech-form--chalie speech-form--error');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = message;

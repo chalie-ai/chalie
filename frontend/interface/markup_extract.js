@@ -19,19 +19,42 @@ const DROP_TAGS = new Set(['actions']);
 // every named entity outside the obvious five.
 const _parser = (typeof DOMParser !== 'undefined') ? new DOMParser() : null;
 
+function _fallbackDecode(text) {
+  return text
+    .replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"').replaceAll('&#39;', "'");
+}
+
 function decodeEntities(text) {
-  if (text.indexOf('&') === -1) return text;
+  if (!text.includes('&')) return text;
   if (_parser) {
+    let decoded = null;
     try {
       // Wrap in <body> so leading whitespace is preserved verbatim.
       const doc = _parser.parseFromString(`<!doctype html><body>${text}`, 'text/html');
-      return doc.body.textContent || '';
-    } catch (_e) { /* fall through */ }
+      decoded = doc.body.textContent || '';
+    } catch (_e) {
+      decoded = null; // parser failed, use fallback below
+    }
+    if (decoded !== null) return decoded;
   }
   // Fallback (no DOM available — Node test env). Covers the common five.
-  return text
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return _fallbackDecode(text);
+}
+
+function _processTag(m, out, skipDepth, pos) {
+  const isClose = !!m[1];
+  const name = m[2].toLowerCase();
+  const isVoid = !!m[4];
+  let depth = skipDepth;
+  if (DROP_TAGS.has(name)) {
+    if (isClose) depth = Math.max(0, depth - 1);
+    else if (!isVoid) depth += 1;
+  } else if (depth === 0 && name === 'img' && isVoid) {
+    const altMatch = ALT_RE.exec(m[3]);
+    if (altMatch?.[1]) out.push(altMatch[1]);
+  }
+  return depth;
 }
 
 export function extractPlaintext(content) {
@@ -48,22 +71,13 @@ export function extractPlaintext(content) {
     if (skipDepth === 0 && m.index > pos) {
       out.push(content.slice(pos, m.index));
     }
-    const isClose = !!m[1];
-    const name = m[2].toLowerCase();
-    const isVoid = !!m[4];
-    if (DROP_TAGS.has(name)) {
-      if (isClose) skipDepth = Math.max(0, skipDepth - 1);
-      else if (!isVoid) skipDepth += 1;
-    } else if (skipDepth === 0 && name === 'img' && isVoid) {
-      const altMatch = m[3].match(ALT_RE);
-      if (altMatch && altMatch[1]) out.push(altMatch[1]);
-    }
+    skipDepth = _processTag(m, out, skipDepth, pos);
     pos = m.index + m[0].length;
   }
   if (skipDepth === 0 && pos < content.length) {
     out.push(content.slice(pos));
   }
   return decodeEntities(out.join(' '))
-    .replace(/\s+/g, ' ')
+    .replaceAll(/\s+/g, ' ')
     .trim();
 }
