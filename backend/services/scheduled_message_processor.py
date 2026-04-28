@@ -36,7 +36,6 @@ class ScheduledMessageProcessor(MessageProcessor):
         "memory",
         "read",
         "review_tool_calls",
-        "rich_render",
     ]
     DISCOVERABLE: list[str] = [
         "browser",

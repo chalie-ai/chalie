@@ -113,7 +113,6 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "programming_docs_search",
     "read",
     "review_tool_calls",
-    "rich_render",
     "save_graph",
     "save_pattern",
     "schedule",
@@ -122,8 +121,8 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_exactly_17_non_underscore_modules():
-    """abilities/ contains exactly the 17 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_16_non_underscore_modules():
+    """abilities/ contains exactly the 16 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -151,7 +150,7 @@ def test_abilities_directory_has_exactly_17_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 17
+    assert len(walked) == 16
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +173,7 @@ def test_abilities_directory_has_exactly_17_non_underscore_modules():
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "goal_pursuit", "list", "memory",
-    "read", "review_tool_calls", "rich_render", "schedule",
+    "read", "review_tool_calls", "schedule",
 })
 
 _DEFAULT_DISCOVERABLE = frozenset({
