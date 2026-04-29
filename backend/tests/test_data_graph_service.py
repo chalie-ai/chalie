@@ -1835,7 +1835,7 @@ class TestRecallCosScore:
 
     def test_high_cos_score_row_carries_cos_score_gte_07(self, svc_vec):
         """Row whose key embedding aligns with the query returns cos_score >= 0.7."""
-        service, vec_db, db_service = svc_vec
+        service, _, db_service = svc_vec
 
         # apple pie recipe key embedding ≈ query 'food recipe' (both [1,0,0,0] unit)
         self._insert_with_key_vec(
@@ -1863,7 +1863,7 @@ class TestRecallCosScore:
         were added to the FTS index).  The vec cursor computes real cosine between
         the orthogonal vectors → cos = 0.0.  cos_score = max(0.0, 0.0) = 0.0 < 0.4.
         """
-        service, vec_db, db_service = svc_vec
+        service, _, db_service = svc_vec
 
         # Row with orthogonal blob to the query direction [1,0,0,0].
         self._insert_with_key_vec(
@@ -1910,7 +1910,7 @@ class TestRecallCosScore:
         retrieval_weight=10.0 drives composite_score ranking but must NOT affect
         cos_score — this is the regression-protection case.
         """
-        service, vec_db, db_service = svc_vec
+        service, _, db_service = svc_vec
 
         # Orthogonal blob + high retrieval_weight
         self._insert_with_key_vec(

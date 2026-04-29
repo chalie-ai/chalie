@@ -150,8 +150,13 @@ class MetricsAccumulator:
             finally:
                 self._current_iter = prev
 
-    def record_llm_call(self, latency_ms: int) -> None:
-        """Add an LLM round-trip to the turn-level + per-iteration totals."""
+    def record_llm_call(self, latency_ms: int | None) -> None:
+        """Add an LLM round-trip to the turn-level + per-iteration totals.
+
+        Accepts ``None`` (silently ignored) so callers can wire the result
+        of an LLM provider call without pre-checking — the provider may
+        return ``None`` when telemetry is unavailable.
+        """
         if latency_ms is None or latency_ms < 0:
             return
         try:

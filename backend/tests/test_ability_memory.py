@@ -59,7 +59,7 @@ class TestMemoryRecallRelevanceLabel:
             "services.data_graph_service.get_data_graph_service",
             return_value=_mock_dgs([row]),
         ):
-            hits, summary = _search_data_graph("dentist", limit=5)
+            hits, _ = _search_data_graph("dentist", limit=5)
 
         assert hits, "Expected at least one hit"
         hit = hits[0]
@@ -83,7 +83,7 @@ class TestMemoryRecallRelevanceLabel:
             "services.data_graph_service.get_data_graph_service",
             return_value=_mock_dgs([row]),
         ):
-            hits, summary = _search_data_graph("home city location", limit=5)
+            hits, _ = _search_data_graph("home city location", limit=5)
 
         assert hits
         assert hits[0]["relevance"] == "high", (
@@ -103,7 +103,7 @@ class TestMemoryRecallRelevanceLabel:
             "services.data_graph_service.get_data_graph_service",
             return_value=_mock_dgs([row]),
         ):
-            hits, summary = _search_data_graph("language preference", limit=5)
+            hits, _ = _search_data_graph("language preference", limit=5)
 
         assert hits
         assert hits[0]["relevance"] == "medium", (

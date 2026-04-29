@@ -360,9 +360,10 @@ def _submit_for_inference(texts: List[str]) -> np.ndarray:
         proc = current_processor()
     except Exception:
         proc = None
-    if proc is None:
+    metrics = getattr(proc, '_metrics', None) if proc is not None else None
+    if metrics is None:
         return future.result()
-    with proc._metrics.stage('embedding_wait'):
+    with metrics.stage('embedding_wait'):
         return future.result()
 
 

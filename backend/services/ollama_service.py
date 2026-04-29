@@ -389,6 +389,44 @@ def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
 _INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
 
 
+def _parse_tool_call_payload(raw: str) -> dict | None:
+    """Decode one <tool_call>…</tool_call> block to a dict, or None on failure."""
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        # JSONDecodeError is a ValueError subclass; the broader catch is
+        # required by S5713 (no redundant exception classes).
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _resolve_tool_name(payload: dict, key: str) -> tuple[str | None, dict]:
+    """If ``payload[key]`` names a registered ability, return (name, args). Else (None, {})."""
+    candidate = payload.get(key)
+    if not isinstance(candidate, str):
+        return None, {}
+    try:
+        AbilityRegistry.get(candidate)
+    except KeyError:
+        return None, {}
+    if key == 'name':
+        args_val = payload.get('arguments', {})
+        if isinstance(args_val, dict):
+            return candidate, args_val
+        return candidate, {k: v for k, v in payload.items() if k != 'name'}
+    return candidate, {k: v for k, v in payload.items() if k != key}
+
+
+def _build_tool_entry(payload: dict, idx: int) -> dict | None:
+    """Resolve a parsed payload to one tool-call entry, or None if no name resolves."""
+    name, arguments = _resolve_tool_name(payload, 'name')
+    if name is None:
+        name, arguments = _resolve_tool_name(payload, 'action')
+    if name is None:
+        return None
+    return {'id': f"ollama_{name}_{idx}", 'name': name, 'input': arguments}
+
+
 def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
     """Extract <tool_call>...</tool_call> blocks from *text*.
 
@@ -397,45 +435,14 @@ def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
     are skipped silently. All matched blocks are stripped from the text
     regardless of whether they parsed successfully.
     """
-    entries = []
+    entries: list = []
     for idx, match in enumerate(_INLINE_TOOL_CALL_RE.finditer(text)):
-        raw = match.group(1).strip()
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        payload = _parse_tool_call_payload(match.group(1).strip())
+        if payload is None:
             continue
-        if not isinstance(payload, dict):
-            continue
-
-        name = None
-        arguments = {}
-
-        # Path A — explicit "name" key
-        candidate = payload.get('name')
-        if isinstance(candidate, str):
-            try:
-                AbilityRegistry.get(candidate)
-                name = candidate
-                args_val = payload.get('arguments', {})
-                arguments = args_val if isinstance(args_val, dict) else {k: v for k, v in payload.items() if k != 'name'}
-            except KeyError:
-                pass
-
-        # Path B — "action" key as name
-        if name is None:
-            action = payload.get('action')
-            if isinstance(action, str):
-                try:
-                    AbilityRegistry.get(action)
-                    name = action
-                    arguments = {k: v for k, v in payload.items() if k != 'action'}
-                except KeyError:
-                    pass
-
-        if name is None:
-            continue
-
-        entries.append({'id': f"ollama_{name}_{idx}", 'name': name, 'input': arguments})
+        entry = _build_tool_entry(payload, idx)
+        if entry is not None:
+            entries.append(entry)
 
     cleaned = _INLINE_TOOL_CALL_RE.sub('', text)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
