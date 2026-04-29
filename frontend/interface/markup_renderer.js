@@ -90,7 +90,8 @@ function _safeUrl(value, allowedProtocols) {
   let parsed;
   try {
     parsed = new URL(value);
-  } catch (_e) {
+  } catch (e) {
+    console.warn('[markup-renderer] dropping unparseable URL:', e);
     return null;
   }
   if (!allowedProtocols.has(parsed.protocol)) return null;

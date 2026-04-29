@@ -193,48 +193,35 @@ class OllamaService:
         raise e
 
     def _raise_payload_too_large(self, e: requests.exceptions.HTTPError) -> None:
-        # We do not log the request payload size or response body — both
-        # transitively trace back to user content (system prompt, user
-        # messages, tool args) and would trip the clear-text-logging gate.
-        # The 413 status itself is the diagnostic; Stage 2 ACT compaction
-        # is triggered downstream off the raised exception.
-        logging.warning(
-            "[OllamaService] HTTP 413 model=%s — raising PayloadTooLargeError to trigger Stage 2 compaction",
-            self.model,
-        )
+        # Static log message — every variable previously interpolated here
+        # (self.model, payload metadata, response body length) trips
+        # py/clear-text-logging-sensitive-data because CodeQL traces back
+        # through ``__init__``'s config-dict source. The PayloadTooLargeError
+        # raised below carries the model name in its formatted message, and
+        # operators correlate via timestamps; that's the right channel.
+        logging.warning("[OllamaService] HTTP 413 — raising PayloadTooLargeError to trigger Stage 2 compaction")
         raise PayloadTooLargeError(
             f"Ollama rejected payload with HTTP 413 (model={self.model})"
         ) from e
 
     def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int, status: int) -> None:
-        # Body length / content intentionally not logged — even the byte
-        # count of e.response.text traces back through CodeQL's taint
-        # tracker and trips py/clear-text-logging-sensitive-data. Status
-        # code + retry counts are sufficient for diagnostics.
+        # See _raise_payload_too_large for the static-string rationale.
+        # The exception ``e`` re-raised below carries the response, so
+        # callers / outer ``except`` blocks have full diagnostic data.
         if attempt < self.max_retries:
             backoff = 1.5 * (2 ** attempt)
-            logging.warning(
-                "[OllamaService] Retry %d/%d after HTTP %s — backoff %.1fs",
-                attempt + 1, self.max_retries, status, backoff,
-            )
+            logging.warning("[OllamaService] retrying after HTTP 5xx")
             time.sleep(backoff)
             return
-        logging.error(
-            "[OllamaService] All %d attempts failed (HTTP %s)",
-            1 + self.max_retries, status,
-        )
+        logging.error("[OllamaService] retries exhausted on HTTP 5xx")
         raise e
 
     def _log_4xx_error(self, status: int | None) -> None:
-        # Body content / payload metadata intentionally not logged — both
-        # taint-flow back to user input (system prompt, user messages,
-        # tool args) and trip the clear-text-logging gate. The status code
-        # is sufficient to disambiguate 4xx classes (400 / 401 / 403 / 404).
-        logging.error(
-            "[OllamaService] HTTP %s model=%s",
-            status if status is not None else '?',
-            self.model,
-        )
+        # Static log — same rationale as _raise_payload_too_large.
+        # The ``HTTPError`` re-raised by the caller carries the status code
+        # for any caller that wants to switch on it.
+        del status  # intentionally not logged — see comment above
+        logging.error("[OllamaService] HTTP 4xx error from upstream")
 
     def _model_supports_thinking(self) -> bool:
         """Return True if the configured model advertises thinking capability.
