@@ -3,195 +3,59 @@
 Runs at boot via run_if_needed(). Idempotent: a sentinel column on transcript
 records which rows have been converted.
 
-Conversion is regex-based and lossy. Markdown features without an XML
-equivalent (tables, horizontal rules, strikethrough, blockquotes, headings >h1)
-are flattened or dropped.
+Conversion is delegated to mistune (CommonMark + GFM-style strikethrough +
+GFM tables) and walked into Chalie's 11-tag allowlist. Markdown features
+without an XML equivalent (tables, horizontal rules, strikethrough, headings
+>h1, blockquotes' inner block structure) are flattened or dropped per the
+allowlist.
 """
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
+
+import mistune
 
 from services.markup import escape_attr, escape_text
 
 logger = logging.getLogger(__name__)
 
-# Bound input to avoid pathological regex backtracking on hostile input.
+# Bound input to keep mistune memory + time predictable on hostile input.
 # Real transcript rows are bounded by LLM token limits; 5 MB is generous.
 _MAX_CONTENT_LEN = 5_000_000
 
-_FENCED_CODE_RE = re.compile(r"```[a-zA-Z0-9_-]*\n(.*?)\n?```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
-_BOLD_ASTERISK_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
-_BOLD_UNDERSCORE_RE = re.compile(r"__([^_\n]+?)__")
-_ITALIC_ASTERISK_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
-_ITALIC_UNDERSCORE_RE = re.compile(r"(?<!_)_([^_\n]+?)_(?!_)")
-_STRIKE_RE = re.compile(r"~~([^~\n]+?)~~")
-_LINK_RE = re.compile(r"\[([^\]]+?)\]\(([^)\s]+?)\)")
-_IMAGE_RE = re.compile(r"!\[([^\]]*?)\]\(([^)\s]+?)\)")
-_HORIZONTAL_RULE_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+# Tags an LLM might emit at the start of a legitimate XML response. If we see
+# one of these, the row is already XML and passes through unchanged.
+_XML_SENTINELS = (
+    "<p>", "<h1>", "<ul>", "<li>",
+    "<b>", "<i>", "<u>",
+    "<code>", "<a ", "<a>",
+    "<img", "<actions",
+)
 
 
 def _looks_like_xml(text: str) -> bool:
     """Heuristic: starts with an allowlisted opening tag.
 
-    Covers all 11 allowlisted tags (LLM_TAGS + PROGRAMMATIC_TAGS). Without this,
-    rows that begin with inline-only tags (e.g. `<b>...`, `<a href=...>`) would
-    be re-processed on every boot once Phase C cuts over to XML-emitting
-    writers — silently corrupting valid XML.
+    Without this, rows that begin with inline-only tags (e.g. `<b>...`,
+    `<a href=...>`) would be re-processed on every boot — silently corrupting
+    valid XML emitted by the runtime.
     """
-    stripped = text.lstrip()
-    return stripped.startswith((
-        "<p>", "<h1>", "<ul>", "<li>",
-        "<b>", "<i>", "<u>",
-        "<code>", "<a ", "<a>",
-        "<img", "<actions",
-    ))
+    return text.lstrip().startswith(_XML_SENTINELS)
 
 
-def _convert_inline(text: str) -> str:
-    """Apply inline markdown conversions to a chunk of escaped text.
-
-    Order matters: code first (so its contents aren't touched), then bold (so
-    ** doesn't get parsed as nested *italic*), then italic, then strike, then
-    images (before links — image syntax is `![alt](url)` and starts with `!`),
-    then links.
-    """
-    # Inline code: protect contents from further parsing by replacing with a
-    # placeholder, restoring after all other conversions.
-    placeholders: list[str] = []
-
-    def stash_code(match: re.Match) -> str:
-        # NOTE: text has already been XML-escaped by the caller (markdown_to_xml).
-        # Re-escaping group(1) here would double-escape `&` `<` `>`. Use the
-        # captured group directly.
-        placeholders.append(f"<code>{match.group(1)}</code>")
-        return f"\x00{len(placeholders) - 1}\x00"
-
-    text = _INLINE_CODE_RE.sub(stash_code, text)
-
-    # Bold (must run before italic so ** isn't eaten as two *)
-    text = _BOLD_ASTERISK_RE.sub(r"<b>\1</b>", text)
-    text = _BOLD_UNDERSCORE_RE.sub(r"<b>\1</b>", text)
-    # Italic
-    text = _ITALIC_ASTERISK_RE.sub(r"<i>\1</i>", text)
-    text = _ITALIC_UNDERSCORE_RE.sub(r"<i>\1</i>", text)
-    # Strikethrough — no equivalent tag, drop the tildes, keep the text
-    text = _STRIKE_RE.sub(r"\1", text)
-    # Images first (so `!` doesn't get swallowed by link regex)
-    # escape_attr both groups — alt may contain quotes; src may contain &.
-    text = _IMAGE_RE.sub(
-        lambda m: f'<img src="{escape_attr(m.group(2))}" alt="{escape_attr(m.group(1))}"/>',
-        text,
-    )
-    # Links — href must be attr-escaped; label is already text-escaped.
-    text = _LINK_RE.sub(
-        lambda m: f'<a href="{escape_attr(m.group(2))}">{m.group(1)}</a>',
-        text,
-    )
-
-    # Restore code placeholders
-    for idx, code_xml in enumerate(placeholders):
-        text = text.replace(f"\x00{idx}\x00", code_xml)
-    return text
-
-
-_PLACEHOLDER_RE = re.compile(r"\x01\d+\x01")
-_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.+)$")
-_LIST_LINE_RE = re.compile(r"^[ \t]*(?:[-*]|\d+\.)[ \t]+")
-_LIST_BULLET_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+")
-_TABLE_SEP_RE = re.compile(r"^[ \t]*\|?[ \t]*[-:]+")
-_BLOCKQUOTE_PREFIX_RE = re.compile(r"^\s*>\s?")
-
-
-def _try_placeholder_block(block: str, fenced_blocks: list[str]) -> str | None:
-    """Restore fenced-code placeholder if `block` is one. Returns the XML or None."""
-    if _PLACEHOLDER_RE.fullmatch(block):
-        return fenced_blocks[int(block.strip("\x01"))]
-    return None
-
-
-def _try_heading(block: str) -> str | None:
-    m = _HEADING_RE.match(block)
-    if not m:
-        return None
-    inner = _convert_inline(escape_text(m.group(1).rstrip()))
-    return f"<h1>{inner}</h1>"
-
-
-def _try_list(lines: list[str]) -> str | None:
-    if not all(_LIST_LINE_RE.match(ln) for ln in lines if ln.strip()):
-        return None
-    items = []
-    for ln in lines:
-        if not ln.strip():
-            continue
-        item_text = _LIST_BULLET_RE.sub("", ln).rstrip()
-        items.append(f"<li>{_convert_inline(escape_text(item_text))}</li>")
-    return f"<ul>{''.join(items)}</ul>"
-
-
-def _try_blockquote(lines: list[str]) -> str | None:
-    if not all(ln.strip().startswith(">") for ln in lines if ln.strip()):
-        return None
-    inner_lines = [_BLOCKQUOTE_PREFIX_RE.sub("", ln) for ln in lines]
-    inner = _convert_inline(escape_text(" ".join(inner_lines).strip()))
-    return f"<p><i>{inner}</i></p>"
-
-
-def _try_table(lines: list[str]) -> str | None:
-    if not (any("|" in ln for ln in lines) and any(_TABLE_SEP_RE.match(ln) for ln in lines)):
-        return None
-    rows: list[str] = []
-    for ln in lines:
-        if _TABLE_SEP_RE.match(ln):
-            continue
-        cells = [c.strip() for c in ln.strip().strip("|").split("|") if c.strip()]
-        if cells:
-            rows.append(f"<p>{_convert_inline(escape_text(' '.join(cells)))}</p>")
-    return "".join(rows) if rows else None
-
-
-def _try_standalone_image(block: str) -> str | None:
-    m = _IMAGE_RE.fullmatch(block.strip())
-    if not m:
-        return None
-    return f'<img src="{escape_attr(m.group(2))}" alt="{escape_attr(m.group(1))}"/>'
-
-
-def _convert_block(block: str, fenced_blocks: list[str]) -> str | None:
-    """Apply each block-type rule in order; first non-None wins. Returns None to drop the block."""
-    placeholder = _try_placeholder_block(block, fenced_blocks)
-    if placeholder is not None:
-        return placeholder
-    if _HORIZONTAL_RULE_RE.match(block):
-        return None  # drop horizontal rules
-
-    heading = _try_heading(block)
-    if heading is not None:
-        return heading
-
-    lines = block.split("\n")
-    for converter in (_try_list, _try_blockquote, _try_table):
-        result = converter(lines)
-        if result is not None:
-            return result
-
-    image = _try_standalone_image(block)
-    if image is not None:
-        return image
-
-    # Default: paragraph
-    return f"<p>{_convert_inline(escape_text(block))}</p>"
+# Single-shared parser, reused across all conversions. Plugins registered:
+#   - strikethrough (GFM ~~text~~)
+#   - table         (GFM pipe tables)
+_md_parser = mistune.create_markdown(renderer=None, plugins=["strikethrough", "table"])
 
 
 def markdown_to_xml(md: str) -> str:
     """Convert markdown string to allowlisted XML.
 
     Idempotent: input that already looks like XML passes through unchanged.
-    Input is truncated at _MAX_CONTENT_LEN to bound regex execution time on
-    hostile input. Real transcript rows are bounded by LLM token limits.
+    Input is truncated at _MAX_CONTENT_LEN to bound parser execution time on
+    hostile input.
     """
     if not md:
         return ""
@@ -200,31 +64,224 @@ def markdown_to_xml(md: str) -> str:
     if _looks_like_xml(md):
         return md.strip()
 
-    # Step 1: extract fenced code blocks first so their contents are untouched.
-    fenced_blocks: list[str] = []
+    ast = _md_parser(md)
+    return "".join(_render_block(node) for node in ast)
 
-    def stash_fenced(match: re.Match) -> str:
-        fenced_blocks.append(f"<code>{escape_text(match.group(1))}</code>")
-        return f"\x01{len(fenced_blocks) - 1}\x01"
 
-    md = _FENCED_CODE_RE.sub(stash_fenced, md)
+# ── AST walker ────────────────────────────────────────────────────────────────
 
-    # Step 2: split into block-level units separated by blank lines.
-    out: list[str] = []
-    for raw in re.split(r"\n\s*\n", md.strip()):
-        block = raw.rstrip()
-        if not block:
-            continue
-        converted = _convert_block(block, fenced_blocks)
-        if converted is not None:
-            out.append(converted)
 
-    # Step 3: restore any fenced placeholders adjacent to text.
-    result = "".join(out)
-    for idx, code_xml in enumerate(fenced_blocks):
-        result = result.replace(f"\x01{idx}\x01", code_xml)
-    return result
+def _render_block(node: dict) -> str:
+    """Render a top-level (block) AST node to XML. Returns '' to drop the node."""
+    kind = node.get("type")
+    handler = _BLOCK_HANDLERS.get(kind)
+    if handler is None:
+        # Unknown block type — render the children as text, defensively. This
+        # keeps content surfaced rather than silently dropping it.
+        return _render_inline_children(node.get("children") or [])
+    return handler(node)
 
+
+def _render_paragraph(node: dict) -> str:
+    children = node.get("children") or []
+    # Standalone image — emit a bare <img/> rather than wrapping in <p>.
+    if len(children) == 1 and children[0].get("type") == "image":
+        return _render_image(children[0])
+    inner = _render_inline_children(children)
+    return f"<p>{inner}</p>" if inner else ""
+
+
+def _render_heading(node: dict) -> str:
+    # All heading levels collapse to <h1>; the allowlist has no <h2>+.
+    inner = _render_inline_children(node.get("children") or [])
+    return f"<h1>{inner}</h1>" if inner else ""
+
+
+def _render_list(node: dict) -> str:
+    items = "".join(_render_list_item(child) for child in node.get("children") or [])
+    return f"<ul>{items}</ul>" if items else ""
+
+
+def _render_list_item(node: dict) -> str:
+    """Flatten a list_item to a single <li>. Nested lists become peer <li> entries."""
+    own_inline_parts: list[str] = []
+    nested_items: list[str] = []
+    for child in node.get("children") or []:
+        ctype = child.get("type")
+        if ctype == "block_text":
+            own_inline_parts.append(_render_inline_children(child.get("children") or []))
+        elif ctype == "paragraph":
+            own_inline_parts.append(_render_inline_children(child.get("children") or []))
+        elif ctype == "list":
+            # Flatten nested list into peer <li>s alongside the parent's own item.
+            for nested_child in child.get("children") or []:
+                nested_items.append(_render_list_item(nested_child))
+    own = "".join(p for p in own_inline_parts if p)
+    return (f"<li>{own}</li>" if own else "") + "".join(nested_items)
+
+
+def _render_block_quote(node: dict) -> str:
+    """Blockquote → italic paragraph (best-effort flatten)."""
+    parts = []
+    for child in node.get("children") or []:
+        if child.get("type") == "paragraph":
+            parts.append(_render_inline_children(child.get("children") or []))
+    inner = " ".join(p for p in parts if p)
+    return f"<p><i>{inner}</i></p>" if inner else ""
+
+
+_NEWLINE = "\n"
+
+
+def _render_block_code(node: dict) -> str:
+    """Fenced or indented code block → <code>{escaped}</code> (no <p> wrap)."""
+    raw = node.get("raw") or ""
+    # mistune appends a trailing newline; strip it so output matches the
+    # original "<code>x = 1</code>" expectation rather than "<code>x = 1\n</code>".
+    body = escape_text(raw.rstrip(_NEWLINE))
+    return f"<code>{body}</code>"
+
+
+def _render_table(node: dict) -> str:
+    """Tables flatten: every row becomes a <p> with cells space-separated."""
+    parts: list[str] = []
+    for section in node.get("children") or []:
+        section_type = section.get("type")
+        if section_type == "table_head":
+            parts.append(_render_table_row_from_section(section, is_head=True))
+        elif section_type == "table_body":
+            for row in section.get("children") or []:
+                parts.append(_render_table_row_cells(row))
+    return "".join(p for p in parts if p)
+
+
+def _render_table_row_from_section(section: dict, *, is_head: bool) -> str:
+    """``table_head`` is a flat list of ``table_cell`` nodes (no inner row)."""
+    del is_head  # head/body shape is identical; kept for caller readability.
+    cells = [_render_inline_children(c.get("children") or []) for c in section.get("children") or []]
+    cells = [c for c in cells if c]
+    return f"<p>{' '.join(cells)}</p>" if cells else ""
+
+
+def _render_table_row_cells(row: dict) -> str:
+    cells = [_render_inline_children(c.get("children") or []) for c in row.get("children") or []]
+    cells = [c for c in cells if c]
+    return f"<p>{' '.join(cells)}</p>" if cells else ""
+
+
+def _render_dropped(node: dict) -> str:  # noqa: ARG001 — signature consistency with other handlers
+    """Drop the block entirely (thematic_break, blank_line, etc.)."""
+    return ""
+
+
+def _render_block_html(node: dict) -> str:
+    """Treat block-level raw HTML as plain text — escape to keep allowlist semantics."""
+    raw = node.get("raw") or ""
+    inner = escape_text(raw.strip())
+    return f"<p>{inner}</p>" if inner else ""
+
+
+_BLOCK_HANDLERS: dict[str, callable] = {
+    "paragraph": _render_paragraph,
+    "heading": _render_heading,
+    "list": _render_list,
+    "block_quote": _render_block_quote,
+    "block_code": _render_block_code,
+    "table": _render_table,
+    "thematic_break": _render_dropped,
+    "blank_line": _render_dropped,
+    "block_html": _render_block_html,
+    "block_error": _render_block_html,
+}
+
+
+# ── Inline rendering ──────────────────────────────────────────────────────────
+
+
+def _render_inline_children(children: list) -> str:
+    return "".join(_render_inline(c) for c in children)
+
+
+def _render_inline(node: dict) -> str:
+    """Render an inline AST node to XML."""
+    kind = node.get("type")
+    handler = _INLINE_HANDLERS.get(kind)
+    if handler is None:
+        # Unknown inline node — best-effort text recovery via children or raw.
+        if node.get("children"):
+            return _render_inline_children(node["children"])
+        return escape_text(node.get("raw") or "")
+    return handler(node)
+
+
+def _render_text(node: dict) -> str:
+    return escape_text(node.get("raw") or "")
+
+
+def _render_strong(node: dict) -> str:
+    inner = _render_inline_children(node.get("children") or [])
+    return f"<b>{inner}</b>" if inner else ""
+
+
+def _render_emphasis(node: dict) -> str:
+    inner = _render_inline_children(node.get("children") or [])
+    return f"<i>{inner}</i>" if inner else ""
+
+
+def _render_codespan(node: dict) -> str:
+    return f"<code>{escape_text(node.get('raw') or '')}</code>"
+
+
+def _render_strikethrough(node: dict) -> str:
+    """No <s> in our allowlist — drop the markers, keep the text."""
+    return _render_inline_children(node.get("children") or [])
+
+
+def _render_link(node: dict) -> str:
+    url = (node.get("attrs") or {}).get("url") or ""
+    label = _render_inline_children(node.get("children") or [])
+    if not label:
+        label = escape_text(url)
+    return f'<a href="{escape_attr(url)}">{label}</a>'
+
+
+def _render_image(node: dict) -> str:
+    attrs = node.get("attrs") or {}
+    url = attrs.get("url") or ""
+    alt_children = node.get("children") or []
+    # Image alt is always plain text — recover via raw to skip nested escape.
+    alt_text = "".join(c.get("raw", "") for c in alt_children)
+    return f'<img src="{escape_attr(url)}" alt="{escape_attr(alt_text)}"/>'
+
+
+def _render_softbreak(node: dict) -> str:  # noqa: ARG001
+    return " "
+
+
+def _render_linebreak(node: dict) -> str:  # noqa: ARG001
+    return " "
+
+
+def _render_inline_html(node: dict) -> str:
+    """Inline raw HTML → escaped text. Same rationale as block_html."""
+    return escape_text(node.get("raw") or "")
+
+
+_INLINE_HANDLERS: dict[str, callable] = {
+    "text": _render_text,
+    "strong": _render_strong,
+    "emphasis": _render_emphasis,
+    "codespan": _render_codespan,
+    "strikethrough": _render_strikethrough,
+    "link": _render_link,
+    "image": _render_image,
+    "softbreak": _render_softbreak,
+    "linebreak": _render_linebreak,
+    "inline_html": _render_inline_html,
+}
+
+
+# ── Boot-time batch migration ────────────────────────────────────────────────
 
 _BATCH_SIZE = 500
 
@@ -260,7 +317,7 @@ def run_if_needed(conn: sqlite3.Connection) -> int:
             # or mangle structured tool output. Skip content conversion for
             # non-assistant roles — just flip the sentinel so the migration is
             # not retried.
-            if content is None or role != 'assistant':
+            if content is None or role != "assistant":
                 conn.execute(
                     "UPDATE transcript SET xml_migrated = 1 WHERE id = ?",
                     (row_id,),

@@ -1,81 +1,61 @@
 // Extract plaintext from XML markup for the speak button (TTS).
 // Drops <actions> entirely. Uses <img alt> when present.
+//
+// Parsing is delegated to the browser's HTML parser via <template>; entity
+// decoding, attribute parsing, and nesting are all handled natively. The only
+// pre-processing is NUL-byte stripping + bounding the input length.
 
-// Bound input to avoid pathological regex backtracking on hostile input.
+// Bound input to keep parse memory + time predictable on hostile input.
 // Real content is bounded by LLM token limits; 5 MB is generous.
 const MAX_CONTENT_LEN = 5_000_000;
 
-// Greedy attribute capture (no nested optional whitespace) — the [^>]*? body
-// already handles all whitespace internally, so dropping the surrounding \s*
-// removes the ambiguity that triggers polynomial backtracking on hostile input.
-const TAG_RE = /<\s*(\/)?\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*?)(\/)?>/g;
-const ALT_RE = /\balt\s*=\s*"([^"]*)"/i;
-
 const DROP_TAGS = new Set(['actions']);
 
-// Single shared DOMParser. Parsing as text/html lets us delegate ALL XML and
-// numeric character entity decoding to the browser — including `&#9731;`,
-// `&#x2603;`, `&hearts;`, etc. Manual maps would silently miss numerics and
-// every named entity outside the obvious five.
-const _parser = typeof DOMParser === 'undefined' ? null : new DOMParser();
-
-function _fallbackDecode(text) {
-  return text
-    .replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"').replaceAll('&#39;', "'");
+function _normalizeContent(content) {
+  let out = content;
+  if (out.includes('\u0000')) {
+    out = out.split('\u0000').join('');
+  }
+  if (out.length > MAX_CONTENT_LEN) {
+    out = out.slice(0, MAX_CONTENT_LEN);
+  }
+  return out;
 }
 
-function decodeEntities(text) {
-  if (!text.includes('&')) return text;
-  if (_parser) {
-    try {
-      // Wrap in <body> so leading whitespace is preserved verbatim.
-      const doc = _parser.parseFromString(`<!doctype html><body>${text}`, 'text/html');
-      return doc.body.textContent || '';
-    } catch (e) {
-      console.warn('[markup-extract] DOMParser failed, using fallback:', e);
-    }
-  }
-  // Fallback (no DOM available — Node test env). Covers the common five.
-  return _fallbackDecode(text);
+function _parseToFragment(content) {
+  const template = document.createElement('template');
+  template.innerHTML = content;
+  return template.content;
 }
 
-function _processTag(m, out, skipDepth, pos) {
-  const isClose = !!m[1];
-  const name = m[2].toLowerCase();
-  const isVoid = !!m[4];
-  let depth = skipDepth;
-  if (DROP_TAGS.has(name)) {
-    if (isClose) depth = Math.max(0, depth - 1);
-    else if (!isVoid) depth += 1;
-  } else if (depth === 0 && name === 'img' && isVoid) {
-    const altMatch = ALT_RE.exec(m[3]);
-    if (altMatch?.[1]) out.push(altMatch[1]);
+function _walk(node, out) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    out.push(node.nodeValue);
+    return;
   }
-  return depth;
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return;
+  }
+  const tag = node.tagName.toLowerCase();
+  if (DROP_TAGS.has(tag)) {
+    return; // <actions>...</actions> is silenced for TTS
+  }
+  if (tag === 'img') {
+    const alt = (node.getAttribute('alt') || '').trim();
+    if (alt) out.push(alt);
+    return;
+  }
+  for (const child of node.childNodes) {
+    _walk(child, out);
+  }
 }
 
 export function extractPlaintext(content) {
   if (!content) return '';
-  if (content.length > MAX_CONTENT_LEN) {
-    content = content.slice(0, MAX_CONTENT_LEN);
-  }
+  const fragment = _parseToFragment(_normalizeContent(content));
   const out = [];
-  let skipDepth = 0;
-  let pos = 0;
-  TAG_RE.lastIndex = 0;
-  let m;
-  while ((m = TAG_RE.exec(content)) !== null) {
-    if (skipDepth === 0 && m.index > pos) {
-      out.push(content.slice(pos, m.index));
-    }
-    skipDepth = _processTag(m, out, skipDepth, pos);
-    pos = m.index + m[0].length;
+  for (const child of fragment.childNodes) {
+    _walk(child, out);
   }
-  if (skipDepth === 0 && pos < content.length) {
-    out.push(content.slice(pos));
-  }
-  return decodeEntities(out.join(' '))
-    .replaceAll(/\s+/g, ' ')
-    .trim();
+  return out.join(' ').replaceAll(/\s+/g, ' ').trim();
 }

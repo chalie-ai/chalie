@@ -9,8 +9,10 @@ auto-close at EOF. Nesting is not validated — model produces sensible structur
 """
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 
 LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li", "a"})
 PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
@@ -22,7 +24,6 @@ _ENTITY_AMP = "&amp;"
 _ENTITY_LT = "&lt;"
 _ENTITY_GT = "&gt;"
 _ENTITY_QUOT = "&quot;"
-_ENTITY_APOS = "&#39;"
 
 
 def escape_text(text: str) -> str:
@@ -89,47 +90,71 @@ class Token:
     attrs: dict[str, str] = field(default_factory=dict)
 
 
-# Bound input to avoid pathological regex backtracking on hostile input.
+# Bound input to keep parser memory + time predictable on hostile input.
 # Real content is bounded by LLM token limits; 5 MB is generous.
 _MAX_CONTENT_LEN = 5_000_000
 
-# Non-backtracking variant: each attribute requires a leading \s+ separator,
-# eliminating the ambiguity between trailing \s* inside the repetition and
-# the outer \s* before (/)?>.  Sonar polynomial-runtime hotspot mitigated.
-_TAG_RE = re.compile(
-    r"<\s*(/)?\s*(\w+)((?:\s+[\w-]+\s*=\s*\"[^\"]*\")*)\s*(/)?\s*>"
-)
-_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
-_ENTITY_MAP = {_ENTITY_AMP: "&", _ENTITY_LT: "<", _ENTITY_GT: ">", _ENTITY_QUOT: '"', _ENTITY_APOS: "'"}
 
+class _TokenAccumulator(HTMLParser):
+    """Tolerant HTML parser tuned for Chalie's allowlisted XML markup.
 
-def _decode_entities(text: str) -> str:
-    for ent, char in _ENTITY_MAP.items():
-        text = text.replace(ent, char)
-    return text
+    Behaviour:
+      - Tag names are case-folded by HTMLParser.
+      - Text data has character references auto-decoded (convert_charrefs=True).
+        Attribute values are decoded explicitly via ``html.unescape``.
+      - Tags outside ``ALLOWED_TAGS`` round-trip as raw text tokens, preserving
+        the original opening / closing markup so renderers can show them as-is.
+      - Tags in ``VOID_TAGS`` always emit ``Token('void', ...)`` regardless of
+        whether the source used ``<img>`` or ``<img/>``.
+      - Unclosed tags are NOT auto-closed here; the renderer is the auto-close
+        chokepoint.
+    """
 
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tokens: list[Token] = []
 
-def _parse_attrs(attr_blob: str) -> dict[str, str]:
-    """Parse a tag's attribute blob into a name → decoded-value dict."""
-    return {
-        am.group(1).lower(): _decode_entities(am.group(2))
-        for am in _ATTR_RE.finditer(attr_blob)
-    }
+    # ── Tag handlers ──────────────────────────────────────────────────────────
 
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in ALLOWED_TAGS:
+            self._emit_raw_tag()
+            return
+        decoded_attrs = self._decoded_attrs(attrs)
+        if tag in VOID_TAGS:
+            self.tokens.append(Token("void", tag, decoded_attrs))
+            return
+        self.tokens.append(Token("open", tag, decoded_attrs))
 
-def _classify_tag_match(match: re.Match) -> Token:
-    """Convert a tag regex match into a single Token (open/close/void/text)."""
-    is_close = bool(match.group(1))
-    name = match.group(2).lower()
-    is_void = bool(match.group(4))
-    if name not in ALLOWED_TAGS:
-        return Token("text", match.group(0), {})
-    if is_close:
-        return Token("close", name, {})
-    attrs = _parse_attrs(match.group(3) or "")
-    if is_void or name in VOID_TAGS:
-        return Token("void", name, attrs)
-    return Token("open", name, attrs)
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in ALLOWED_TAGS:
+            self._emit_raw_tag()
+            return
+        self.tokens.append(Token("void", tag, self._decoded_attrs(attrs)))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in ALLOWED_TAGS:
+            # Preserve the literal close marker so unknown-tag round-trips
+            # render correctly — _merge_adjacent_text will coalesce.
+            self.tokens.append(Token("text", f"</{tag}>", {}))
+            return
+        self.tokens.append(Token("close", tag, {}))
+
+    def handle_data(self, data: str) -> None:
+        if data:
+            self.tokens.append(Token("text", data, {}))
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _emit_raw_tag(self) -> None:
+        """Round-trip a non-allowlisted tag back to text, using the source slice."""
+        raw = self.get_starttag_text() or ""
+        self.tokens.append(Token("text", raw, {}))
+
+    @staticmethod
+    def _decoded_attrs(attrs: list[tuple[str, str | None]]) -> dict[str, str]:
+        # convert_charrefs only affects data; attribute values come back raw.
+        return {name: html.unescape(value or "") for name, value in attrs}
 
 
 def _merge_adjacent_text(tokens: list[Token]) -> list[Token]:
@@ -147,7 +172,7 @@ def tokenize(content: str) -> list[Token]:
     """Tokenize XML markup. Unknown tags become text tokens (escaped allowlist enforcement).
 
     Returns flat list. Nesting validity is the renderer's concern. Input is
-    truncated at _MAX_CONTENT_LEN to bound regex execution time on hostile
+    truncated at _MAX_CONTENT_LEN to bound parser execution time on hostile
     input.
     """
     if not content:
@@ -155,17 +180,10 @@ def tokenize(content: str) -> list[Token]:
     if len(content) > _MAX_CONTENT_LEN:
         content = content[:_MAX_CONTENT_LEN]
 
-    tokens: list[Token] = []
-    pos = 0
-    for match in _TAG_RE.finditer(content):
-        if match.start() > pos:
-            tokens.append(Token("text", _decode_entities(content[pos : match.start()]), {}))
-        tokens.append(_classify_tag_match(match))
-        pos = match.end()
-    if pos < len(content):
-        tokens.append(Token("text", _decode_entities(content[pos:]), {}))
-
-    return _merge_adjacent_text(tokens)
+    parser = _TokenAccumulator()
+    parser.feed(content)
+    parser.close()
+    return _merge_adjacent_text(parser.tokens)
 
 
 _DROP_TAGS = frozenset({"actions"})  # contents not voiced
