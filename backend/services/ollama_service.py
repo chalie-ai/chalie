@@ -381,7 +381,7 @@ def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
 
 
-_INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL)
+_INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
 
 
 def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
@@ -394,7 +394,7 @@ def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
     """
     entries = []
     for idx, match in enumerate(_INLINE_TOOL_CALL_RE.finditer(text)):
-        raw = match.group(1)
+        raw = match.group(1).strip()
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
