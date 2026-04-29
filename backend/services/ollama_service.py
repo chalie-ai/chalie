@@ -187,9 +187,9 @@ class OllamaService:
         if status == 413:
             self._raise_payload_too_large(e)
         if status is not None and status >= 500:
-            self._handle_5xx_error(e, attempt, status)
+            self._handle_5xx_error(e, attempt)
             return
-        self._log_4xx_error(status)
+        self._log_4xx_error()
         raise e
 
     def _raise_payload_too_large(self, e: requests.exceptions.HTTPError) -> None:
@@ -204,7 +204,7 @@ class OllamaService:
             f"Ollama rejected payload with HTTP 413 (model={self.model})"
         ) from e
 
-    def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int, status: int) -> None:
+    def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int) -> None:
         # See _raise_payload_too_large for the static-string rationale.
         # The exception ``e`` re-raised below carries the response, so
         # callers / outer ``except`` blocks have full diagnostic data.
@@ -216,11 +216,10 @@ class OllamaService:
         logging.error("[OllamaService] retries exhausted on HTTP 5xx")
         raise e
 
-    def _log_4xx_error(self, status: int | None) -> None:
+    def _log_4xx_error(self) -> None:
         # Static log — same rationale as _raise_payload_too_large.
         # The ``HTTPError`` re-raised by the caller carries the status code
         # for any caller that wants to switch on it.
-        del status  # intentionally not logged — see comment above
         logging.error("[OllamaService] HTTP 4xx error from upstream")
 
     def _model_supports_thinking(self) -> bool:
