@@ -16,9 +16,40 @@ const MAX_CONTENT_LEN = 5_000_000;
 
 // HTML5 doesn't recognise <action/> as a void element, so the self-closing
 // form leaves it open. Expand to an explicit pair before handing to the
-// parser. Bounded, anchored, no nested quantifiers — same predictable cost
-// as a string operation.
-const ACTION_SELF_CLOSE_RE = /<action\b([^>]*?)\s*\/>/g;
+// parser. Linear index scan instead of a regex to keep the pre-processor
+// ReDoS-clean.
+function _expandActionVoidTags(content) {
+  let result = '';
+  let i = 0;
+  while (i < content.length) {
+    const open = content.indexOf('<action', i);
+    if (open === -1) {
+      result += content.slice(i);
+      break;
+    }
+    // Char following `<action` must be whitespace, `/`, or `>` — anything
+    // else (e.g. `<actions>`) is a different tag and gets skipped.
+    const after = content[open + 7] || '';
+    if (after !== ' ' && after !== '\t' && after !== '\n' && after !== '/' && after !== '>') {
+      result += content.slice(i, open + 7);
+      i = open + 7;
+      continue;
+    }
+    const close = content.indexOf('>', open);
+    if (close === -1) {
+      result += content.slice(i);
+      break;
+    }
+    const tag = content.slice(open, close + 1);
+    if (tag.endsWith('/>')) {
+      result += content.slice(i, open) + tag.slice(0, -2) + '></action>';
+    } else {
+      result += content.slice(i, close + 1);
+    }
+    i = close + 1;
+  }
+  return result;
+}
 
 function _normalizeContent(content) {
   let out = content;
@@ -30,7 +61,7 @@ function _normalizeContent(content) {
   if (out.length > MAX_CONTENT_LEN) {
     out = out.slice(0, MAX_CONTENT_LEN);
   }
-  return out.replaceAll(ACTION_SELF_CLOSE_RE, '<action$1></action>');
+  return _expandActionVoidTags(out);
 }
 
 function _attrsOf(srcEl) {
