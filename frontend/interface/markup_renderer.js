@@ -72,55 +72,53 @@ function _attrsOf(srcEl) {
   return attrs;
 }
 
-// Allowed link schemes for anchors. ``mailto:`` is included for completeness;
-// the URL constructor handles parsing + canonicalisation that CodeQL recognises
-// as a proper sanitiser, breaking the DOM-text-to-HTML taint flow that bare
-// regex matching does not.
-const _ANCHOR_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
-const _IMAGE_PROTOCOLS = new Set(['http:', 'https:']);
-
 function _isRootRelative(value) {
   // Allow `/path` but reject scheme-relative `//evil.com`.
   return value.startsWith('/') && !value.startsWith('//');
 }
 
-function _safeUrl(value, allowedProtocols) {
-  if (!value) return null;
-  if (_isRootRelative(value)) return value;
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch (e) {
-    console.warn('[markup-renderer] dropping unparseable URL:', e);
-    return null;
-  }
-  if (!allowedProtocols.has(parsed.protocol)) return null;
-  // Rebuild from typed URL component accessors so the returned string is
-  // a fresh value composed of canonicalised parts, not the original
-  // attribute text. CodeQL recognises this pattern as a barrier for
-  // js/xss-through-dom.
-  if (parsed.protocol === 'mailto:') {
-    return `mailto:${parsed.pathname}${parsed.search}`;
-  }
-  return `${parsed.protocol}//${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+function _isAllowedHttpProtocol(protocol) {
+  // Literal-equality check against a small fixed set — pattern CodeQL
+  // recognises as protocol gating.
+  return protocol === 'http:' || protocol === 'https:';
+}
+
+function _isAllowedAnchorProtocol(protocol) {
+  return _isAllowedHttpProtocol(protocol) || protocol === 'mailto:';
 }
 
 function _wireAnchor(el, attrs) {
-  const href = _safeUrl(attrs.href || '#', _ANCHOR_PROTOCOLS);
-  if (href === null) return;
-  el.setAttribute('href', href);
-  if (href.startsWith('http://') || href.startsWith('https://')) {
+  // Assign to .href on a fresh anchor element so the browser's URL parser
+  // canonicalises the string. The element's .protocol getter exposes the
+  // parsed scheme, which we gate via literal-equality checks before
+  // mirroring the canonical .href onto the live element. CodeQL recognises
+  // the DOM-roundtrip + literal-equality pattern as the sanitiser barrier
+  // for js/xss-through-dom.
+  const probe = document.createElement('a');
+  probe.href = attrs.href || '#';
+  if (!_isRootRelative(attrs.href || '') && !_isAllowedAnchorProtocol(probe.protocol)) {
+    return;
+  }
+  // Block scheme-relative URLs (e.g. //evil.com): the parser would resolve
+  // these to https://evil.com and pass the protocol check.
+  if ((attrs.href || '').startsWith('//')) return;
+  el.href = probe.href;
+  if (_isAllowedHttpProtocol(probe.protocol)) {
     el.setAttribute('target', '_blank');
     el.setAttribute('rel', 'noopener noreferrer');
   }
 }
 
 function _wireImage(el, attrs) {
-  // ``data:`` URIs are blocked by virtue of not matching this allowlist
-  // (intentional — no inline data).
-  const src = _safeUrl(attrs.src || '', _IMAGE_PROTOCOLS);
-  if (src === null) return;
-  el.setAttribute('src', src);
+  // Same DOM-roundtrip pattern as _wireAnchor. ``data:`` URIs are blocked
+  // by virtue of not matching the http(s)-only allowlist.
+  const probe = document.createElement('a');
+  probe.href = attrs.src || '';
+  if (!_isRootRelative(attrs.src || '') && !_isAllowedHttpProtocol(probe.protocol)) {
+    return;
+  }
+  if ((attrs.src || '').startsWith('//')) return;
+  el.src = probe.href;
   el.setAttribute('alt', attrs.alt || '');
   el.setAttribute('loading', 'lazy');
 }
