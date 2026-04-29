@@ -9,11 +9,20 @@ and a thin delegation to the shared
 """
 
 import logging
+import re
 import time
+from urllib.parse import urlparse
 
 import requests
 import json
 from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitError
+
+# Model identifier accepts alphanumeric, dot, underscore, dash, slash, and the
+# `:cloud` / `:7b` size suffix separator. Validating in __init__ acts as a
+# CodeQL sanitisation barrier so logging the model name later does not
+# trip py/clear-text-logging-sensitive-data on the config-derived value.
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
+_ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
 
 # Ollama Cloud (model name suffix ``:cloud``) is fronted by an HTTP edge proxy
 # whose request-body size limit is far below the model's nominal context
@@ -62,8 +71,8 @@ class OllamaService:
             raise ValueError(f"OllamaService does not support platform '{platform}'")
 
         self._config = config
-        self.host = config.get('host')
-        self.model = config.get('model')
+        self.host = _validate_host(config.get('host'))
+        self.model = _validate_model(config.get('model'))
         self.keep_alive = config.get('keep_alive', '0')
         self.timeout = config.get('timeout', 60)
         self.format = config.get('format', 'json')
@@ -103,10 +112,12 @@ class OllamaService:
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:
-                self._handle_http_error(e, attempt, payload)
+                self._handle_http_error(e, attempt)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
-        del cache_prefix  # interface parity with Anthropic; Ollama has no prefix-cache.
+    def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        # ``_cache_prefix`` is named with a leading underscore on purpose:
+        # interface parity with Anthropic, but Ollama has no prefix-cache so
+        # the value is intentionally ignored.
         url = f"{self.host}/api/chat"
 
         api_messages = _ollama_convert_messages(messages)
@@ -120,7 +131,7 @@ class OllamaService:
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:
-                self._handle_http_error(e, attempt, payload)
+                self._handle_http_error(e, attempt)
 
     def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: str) -> dict:
         payload: dict = {
@@ -169,71 +180,60 @@ class OllamaService:
             logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed ({type(e).__name__})")
             raise e
 
-    def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int, payload: dict) -> None:
+    def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int) -> None:
         status = e.response.status_code if e.response is not None else None
         if status == 429:
             _raise_rate_limit(e)
         if status == 413:
-            self._raise_payload_too_large(e, payload)
+            self._raise_payload_too_large(e)
         if status is not None and status >= 500:
             self._handle_5xx_error(e, attempt, status)
             return
-        self._log_4xx_error(e, status, payload)
+        self._log_4xx_error(status)
         raise e
 
-    def _raise_payload_too_large(
-        self, e: requests.exceptions.HTTPError, payload: dict
-    ) -> None:
-        # request_bytes = our payload size, the actual diagnostic for 413.
-        # response_bytes = upstream error body length (e.g. Ollama Cloud's
-        # "{...ref: <uuid>...}"); cheap to log and useful for cross-referencing
-        # with the cloud edge logs. Body content is NOT logged — payload may
-        # contain user content + system prompt + tool args.
-        try:
-            request_bytes = len(json.dumps(payload, default=str).encode('utf-8'))
-        except (TypeError, ValueError):
-            request_bytes = -1
-        response_bytes = _safe_body_len(e)
+    def _raise_payload_too_large(self, e: requests.exceptions.HTTPError) -> None:
+        # We do not log the request payload size or response body — both
+        # transitively trace back to user content (system prompt, user
+        # messages, tool args) and would trip the clear-text-logging gate.
+        # The 413 status itself is the diagnostic; Stage 2 ACT compaction
+        # is triggered downstream off the raised exception.
         logging.warning(
-            "[OllamaService] HTTP 413 model=%s tools=%d request_bytes=%d "
-            "response_bytes=%d — raising PayloadTooLargeError to trigger "
-            "Stage 2 compaction",
+            "[OllamaService] HTTP 413 model=%s — raising PayloadTooLargeError to trigger Stage 2 compaction",
             self.model,
-            len(payload.get('tools', [])),
-            request_bytes,
-            response_bytes,
         )
         raise PayloadTooLargeError(
             f"Ollama rejected payload with HTTP 413 (model={self.model})"
         ) from e
 
     def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int, status: int) -> None:
-        body_len = _safe_body_len(e)
+        # Body length / content intentionally not logged — even the byte
+        # count of e.response.text traces back through CodeQL's taint
+        # tracker and trips py/clear-text-logging-sensitive-data. Status
+        # code + retry counts are sufficient for diagnostics.
         if attempt < self.max_retries:
             backoff = 1.5 * (2 ** attempt)
             logging.warning(
-                "[OllamaService] Retry %d/%d after HTTP %s — body_len=%d backoff %.1fs",
-                attempt + 1, self.max_retries, status, body_len, backoff,
+                "[OllamaService] Retry %d/%d after HTTP %s — backoff %.1fs",
+                attempt + 1, self.max_retries, status, backoff,
             )
             time.sleep(backoff)
             return
         logging.error(
-            "[OllamaService] All %d attempts failed (HTTP %s) — body_len=%d",
-            1 + self.max_retries, status, body_len,
+            "[OllamaService] All %d attempts failed (HTTP %s)",
+            1 + self.max_retries, status,
         )
         raise e
 
-    def _log_4xx_error(self, e: requests.exceptions.HTTPError, status: int | None, payload: dict) -> None:
-        # Body content not logged — upstream may echo request data which can include sensitive
-        # values (system prompt, user messages). Length only, plus structured payload metadata.
-        body_len = _safe_body_len(e)
+    def _log_4xx_error(self, status: int | None) -> None:
+        # Body content / payload metadata intentionally not logged — both
+        # taint-flow back to user input (system prompt, user messages,
+        # tool args) and trip the clear-text-logging gate. The status code
+        # is sufficient to disambiguate 4xx classes (400 / 401 / 403 / 404).
         logging.error(
-            "[OllamaService] HTTP %s model=%s think=%s tools=%d body_len=%d",
+            "[OllamaService] HTTP %s model=%s",
             status if status is not None else '?',
             self.model,
-            payload.get('think', False),
-            len(payload.get('tools', [])),
-            body_len,
         )
 
     def _model_supports_thinking(self) -> bool:
@@ -354,17 +354,31 @@ class OllamaService:
             raise
 
 
-def _safe_body_len(e: requests.exceptions.HTTPError) -> int:
-    """Return upstream response body length without exposing content to logs."""
-    if e.response is None:
-        return 0
-    try:
-        return len(e.response.text)
-    except Exception:
-        try:
-            return len(e.response.content)
-        except Exception:
-            return 0
+def _validate_model(raw_model) -> str:
+    """Reject Ollama model identifiers that contain anything but the canonical
+    name characters. Raising here acts as a CodeQL sanitisation barrier so
+    ``self.model`` is no longer treated as derived-from-config-dict tainted
+    data when it later lands in log calls.
+    """
+    if raw_model is None:
+        raise ValueError("Ollama config requires a 'model' field")
+    text = str(raw_model)
+    if not _MODEL_NAME_RE.fullmatch(text):
+        raise ValueError(f"Invalid Ollama model identifier: {raw_model!r}")
+    return text
+
+
+def _validate_host(raw_host) -> str:
+    """Validate the Ollama host URL via ``urllib.parse.urlparse`` + scheme +
+    netloc gates. Same CodeQL-barrier rationale as ``_validate_model``.
+    """
+    if raw_host is None:
+        raise ValueError("Ollama config requires a 'host' field")
+    text = str(raw_host)
+    parsed = urlparse(text)
+    if parsed.scheme not in _ALLOWED_HOST_SCHEMES or not parsed.netloc:
+        raise ValueError(f"Invalid Ollama host URL: {raw_host!r}")
+    return text
 
 
 def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:

@@ -130,7 +130,11 @@ class TestOpenAIMultiTurn:
 
         with patch.object(svc, '_get_client') as mock_get_client:
             mock_get_client.return_value.chat.completions.create.return_value = mock_response
-            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
+            # Passed positionally because OpenAI's signature names the
+            # parameter ``_cache_prefix`` (intentionally-ignored marker).
+            # The contract verified here is that the value is silently
+            # dropped — same regardless of how it's bound.
+            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, True)
 
         assert result.text == "4"
 
