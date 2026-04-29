@@ -1125,6 +1125,20 @@ class MessageProcessor:
                     self._uid, self._deliberation_ema,
                 )
                 self._thinking_exploration = None
+                if self._uid is not None:
+                    from services.database_service import get_shared_db_service
+                    try:
+                        db = get_shared_db_service()
+                        with db.connection() as conn:
+                            conn.execute(
+                                "UPDATE transcript SET deliberation_score = ? WHERE id = ?",
+                                (0.0, self._uid),
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "[DELIBERATION] fallback persist failed for uid=%s: %s",
+                            self._uid, exc,
+                        )
                 return
 
             ema, bucket = ema_svc.update_and_bucket(scalar)
