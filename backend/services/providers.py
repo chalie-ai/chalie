@@ -16,6 +16,7 @@ sends messages, and returns a raw LLMResponse. No response parsing here.
 import json
 import threading
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,10 @@ class Providers:
             tools = self._get_tools(job)
         provider = self._resolve(job)
         messages = [{"role": "user", "content": user_prompt}]
+        t0 = time.monotonic()
         response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        self._log_after_call(system_prompt, messages, tools, job, response)
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
         return response
 
     def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
@@ -62,11 +65,13 @@ class Providers:
         if tools is None:
             tools = self._get_tools(job)
         provider = self._resolve(job)
+        t0 = time.monotonic()
         response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        self._log_after_call(system_prompt, messages, tools, job, response)
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
         return response
 
-    def _log_after_call(self, system_prompt, messages, tools, job, response):
+    def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None):
         """Write the LLM request log file. Best-effort, never raises.
 
         Called by both :meth:`send` and :meth:`send_messages` so every LLM
@@ -79,7 +84,14 @@ class Providers:
             from services.message_processor import current_processor
             proc = current_processor()
             if proc is not None:
-                latency_ms = getattr(response, 'latency_ms', None)
+                # Prefer the gateway-level wall_ms so providers that forget to
+                # populate response.latency_ms (e.g. OllamaService prior to the
+                # parallel patch) still report accurately. Fall back to the
+                # provider-reported value if wall_ms wasn't passed (older
+                # in-tree callers).
+                latency_ms = wall_ms
+                if latency_ms is None:
+                    latency_ms = getattr(response, 'latency_ms', None)
                 if latency_ms is not None:
                     try:
                         proc._metrics.record_llm_call(latency_ms)
