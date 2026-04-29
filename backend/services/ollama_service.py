@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import requests
 import json
+from abilities._registry import AbilityRegistry
 from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitError
 
 # Model identifier accepts alphanumeric, dot, underscore, dash, slash, and the
@@ -380,6 +381,62 @@ def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
 
 
+_INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL)
+
+
+def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
+    """Extract <tool_call>...</tool_call> blocks from *text*.
+
+    Returns (cleaned_text, tool_call_entries). Blocks that fail JSON parsing,
+    contain no dict, or whose name/action does not resolve in AbilityRegistry
+    are skipped silently. All matched blocks are stripped from the text
+    regardless of whether they parsed successfully.
+    """
+    entries = []
+    for idx, match in enumerate(_INLINE_TOOL_CALL_RE.finditer(text)):
+        raw = match.group(1)
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        name = None
+        arguments = {}
+
+        # Path A — explicit "name" key
+        candidate = payload.get('name')
+        if isinstance(candidate, str):
+            try:
+                AbilityRegistry.get(candidate)
+                name = candidate
+                args_val = payload.get('arguments', {})
+                arguments = args_val if isinstance(args_val, dict) else {k: v for k, v in payload.items() if k != 'name'}
+            except KeyError:
+                pass
+
+        # Path B — "action" key as name
+        if name is None:
+            action = payload.get('action')
+            if isinstance(action, str):
+                try:
+                    AbilityRegistry.get(action)
+                    name = action
+                    arguments = {k: v for k, v in payload.items() if k != 'action'}
+                except KeyError:
+                    pass
+
+        if name is None:
+            continue
+
+        entries.append({'id': f"ollama_{name}_{idx}", 'name': name, 'input': arguments})
+
+    cleaned = _INLINE_TOOL_CALL_RE.sub('', text)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned, entries
+
+
 def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
     """Build an LLMResponse from a raw Ollama /api/chat response dict."""
     msg = data.get('message', {})
@@ -395,6 +452,10 @@ def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
             }
             for i, tc in enumerate(raw_tool_calls)
         ]
+    else:
+        text, inline_calls = _extract_inline_tool_calls(text)
+        if inline_calls:
+            tool_calls = inline_calls
     return LLMResponse(
         text=text,
         model=data.get('model', default_model),
