@@ -538,11 +538,12 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
 
         hits = []
         for row in rows:
+            cos = row.get("cos_score", 0.0)
             hits.append({
                 "id": row.get("key", ""),
                 "text": row.get("value", ""),
-                "relevance": _relevance_label(row.get("retrieval_weight", 1.0)),
-                "confidence": row.get("retrieval_weight", 1.0),
+                "relevance": _relevance_label(cos),
+                "confidence": cos,
             })
 
         return hits, f"{len(hits)} matches"

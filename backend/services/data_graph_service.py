@@ -1004,6 +1004,7 @@ class DataGraphService:
                     composite = base_score * d.get('retrieval_weight', 1.0) * (1 + 0.3 * _sigmoid(actr_boost))
 
                     d['composite_score'] = composite
+                    d['cos_score'] = max(sigs.get('key_cos', 0.0), sigs.get('value_cos', 0.0))
                     scored.append(d)
 
                 scored.sort(key=lambda x: x['composite_score'], reverse=True)
@@ -1051,6 +1052,7 @@ class DataGraphService:
                             neighbour_id = n_dict.get('id')
                             if neighbour_id not in expansion or expansion[neighbour_id]['composite_score'] < n_score:
                                 n_dict['composite_score'] = n_score
+                                n_dict['cos_score'] = seed.get('cos_score', 0.0) / 2.0
                                 expansion[neighbour_id] = n_dict
 
                     all_candidates = {d['id']: d for d in top_k}
@@ -1086,6 +1088,7 @@ class DataGraphService:
                         'retrieval_weight': d.get('retrieval_weight'),
                         'evidence_count': d.get('evidence_count'),
                         'composite_score': d.get('composite_score'),
+                        'cos_score': d.get('cos_score', 0.0),
                     }
                     for d in top_k
                 ]
