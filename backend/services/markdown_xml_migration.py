@@ -245,15 +245,22 @@ def run_if_needed(conn: sqlite3.Connection) -> int:
         pass
 
     cursor = conn.execute(
-        "SELECT id, content FROM transcript WHERE xml_migrated = 0"
+        "SELECT id, role, content FROM transcript WHERE xml_migrated = 0"
     )
     total = 0
     while True:
         batch = cursor.fetchmany(_BATCH_SIZE)
         if not batch:
             break
-        for row_id, content in batch:
-            if content is None:
+        for row_id, role, content in batch:
+            # Only assistant rows render through the XML markup pipeline; user,
+            # tool, proactive_thought, scheduled, etc. are rendered as plaintext
+            # (FE uses textContent) or fed back to the model verbatim. Wrapping
+            # them in <p>...</p> would either leak the literal tag into the UI
+            # or mangle structured tool output. Skip content conversion for
+            # non-assistant roles — just flip the sentinel so the migration is
+            # not retried.
+            if content is None or role != 'assistant':
                 conn.execute(
                     "UPDATE transcript SET xml_migrated = 1 WHERE id = ?",
                     (row_id,),

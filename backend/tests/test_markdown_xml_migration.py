@@ -148,7 +148,7 @@ class TestRunIfNeeded:
         conn = self._build_db()
         conn.execute(
             "INSERT INTO transcript (role, content, xml_migrated) VALUES (?, ?, 0)",
-            ("user", "hi"),
+            ("assistant", "hi"),
         )
         conn.commit()
 
@@ -159,6 +159,39 @@ class TestRunIfNeeded:
         second = conn.execute("SELECT content FROM transcript").fetchone()[0]
 
         assert first == second == "<p>hi</p>"
+
+    def test_non_assistant_rows_skip_content_conversion(self):
+        # Only assistant rows render through the XML markup pipeline. Other
+        # roles (user, tool, proactive_thought, scheduled, …) are rendered as
+        # plaintext or fed back to the model verbatim — wrapping them in <p>
+        # would leak literal tags into the UI or mangle structured tool output.
+        conn = self._build_db()
+        non_assistant_roles = (
+            ("user", "hello **world**"),
+            ("tool", '{"result": "ok"}'),
+            ("proactive_thought", "should I check this?"),
+            ("scheduled", "reminder: drink water"),
+            ("tool_synthesis", "summary line"),
+            ("goal_pursuit", "investigate X"),
+        )
+        for role, content in non_assistant_roles:
+            conn.execute(
+                "INSERT INTO transcript (role, content, xml_migrated) VALUES (?, ?, 0)",
+                (role, content),
+            )
+        conn.commit()
+
+        run_if_needed(conn)
+
+        rows = conn.execute(
+            "SELECT role, content, xml_migrated FROM transcript ORDER BY id"
+        ).fetchall()
+        for (role, original), (got_role, got_content, got_flag) in zip(
+            non_assistant_roles, rows, strict=True
+        ):
+            assert got_role == role
+            assert got_content == original  # untouched
+            assert got_flag == 1  # sentinel still flipped so we don't retry
 
     def test_handles_null_content(self):
         conn = self._build_db()
