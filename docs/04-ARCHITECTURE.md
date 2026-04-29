@@ -252,7 +252,7 @@ Four independent single-page applications: the main chat interface, the brain ad
 
 The chat interface is built from focused ES6 modules wired together by a thin orchestrator (`app.js`). Modules communicate through constructor injection, callback registration, and custom DOM events. No module references another directly.
 
-**XML Markup Format:** all LLM-to-client content uses a strict XML markup format. The wire frame carries a single `content` string containing tags from a fixed allowlist. The renderer is tolerant: unknown tags are escaped to plaintext.
+**HTML Markup Format:** all LLM-to-client content is a single `content` string of HTML tags from a fixed allowlist. Backend `services.markup.sanitize()` (nh3, the OWASP-aligned ammonia sanitiser) is the single chokepoint — every assistant response is sanitised before reaching the frontend. Tags / attributes outside the allowlist are stripped; the frontend renders the result via `innerHTML` and trusts the chokepoint.
 
 **LLM-emittable tags (8):**
 - `<b>`, `<i>`, `<u>` — inline emphasis
@@ -260,22 +260,23 @@ The chat interface is built from focused ES6 modules wired together by a thin or
 - `<code>` — code (inline or block, model decides)
 - `<p>` — paragraph
 - `<ul><li>` — list
-- `<a href="...">` — link
+
+The LLM is **NOT** allowed to emit `<a>`. Plain-text URLs are auto-linkified by the frontend via `linkifyjs` so the model cannot inject arbitrary anchors into the rendered DOM.
 
 **Programmatic-only tags (3):**
-- `<img src="..." alt="...">` — backend-emitted images (browser screenshots, generated assets)
-- `<actions>` / `<action label="..." value="..."/>` — backend-emitted interactive button rows
+- `<img src="..." alt="...">` — backend-emitted images (browser screenshots, generated assets). `src` restricted to `http(s):` by nh3.
+- `<actions>` / `<action label="..." value="..."/>` — backend-emitted interactive button rows. `<action>` carries chat-action attributes (`label`, `value`) and overlay-action attributes (`execute`, `collect`, `target`, `open-url`, `payload`, `style`).
 
-The system prompt forbids the LLM from emitting programmatic tags.
+The system prompt forbids the LLM from emitting programmatic tags or `<a>`.
 
 **Wire shape:**
 ```json
 {"type": "message", "content": "<p>Hello <b>world</b></p>", ...}
 ```
 
-**Backend module:** `backend/services/markup.py` — escape, tokenize, extract_plaintext, wrap_text_xml, actions_to_xml, is_xml_content.
-**Frontend module:** `frontend/interface/markup_renderer.js` (XML→DOM) + `markup_extract.js` (XML→plaintext for TTS).
-**Migration:** `backend/services/markdown_xml_migration.py` runs at boot — converts legacy markdown rows to XML in-place using the `xml_migrated` sentinel column on `transcript`. Idempotent.
+**Backend module:** `backend/services/markup.py` — `sanitize()` (nh3 chokepoint), `extract_plaintext()` (TTS — strips tags + drops `<actions>` subtree), `wrap_text_xml`, `actions_to_xml`, `is_xml_content`, `escape_text`, `escape_attr`. Zero hand-rolled tokenisation; nh3 owns all parsing.
+**Frontend module:** `frontend/interface/markup_renderer.js` (innerHTML + linkify + programmatic wiring) + `markup_extract.js` (DOM walk for TTS plaintext). `frontend/interface/vendor/linkify.es.mjs` (linkifyjs 4.3.2, vendored ESM, ~20 KB).
+**No boot migration:** legacy markdown→HTML migration was retired with `markdown_xml_migration.py` after the nh3 cutover. Existing transcripts retain their stored content — sanitisation runs on every render.
 
 **Asset versioning:** every static asset reference in served HTML has the version string injected into its filename at response time (e.g. `app.js` becomes `app-0.3.3.js`). Static routes strip the version suffix before the disk lookup, so nothing is renamed on disk. Versioned filenames are used instead of query strings because some service workers and proxies ignore query strings when keying caches. HTML responses themselves are never cached.
 
@@ -310,7 +311,7 @@ These are invariants, not conventions. Violating them creates systemic problems.
 |------|---------|
 | **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
 | **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `goal_pursuit`). |
-| **XML Markup Format** | Content format: single `content` string of 11-tag XML, backend → frontend. LLM emits 8 tags; backend programmatically emits 3. Renderer tolerates unknown tags. |
+| **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. |
 | **DMN** | Default Mode Network — timer-based proactive intelligence that fires during idle periods. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
 | **Data Graph** | Structured knowledge store with canonicalisation, typed edges, and per-kind decay. |
