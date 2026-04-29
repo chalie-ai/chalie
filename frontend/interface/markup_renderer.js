@@ -72,29 +72,49 @@ function _attrsOf(srcEl) {
   return attrs;
 }
 
+// Allowed link schemes for anchors. ``mailto:`` is included for completeness;
+// the URL constructor handles parsing + canonicalisation that CodeQL recognises
+// as a proper sanitiser, breaking the DOM-text-to-HTML taint flow that bare
+// regex matching does not.
+const _ANCHOR_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+const _IMAGE_PROTOCOLS = new Set(['http:', 'https:']);
+
+function _isRootRelative(value) {
+  // Allow `/path` but reject scheme-relative `//evil.com`.
+  return value.startsWith('/') && !value.startsWith('//');
+}
+
+function _safeUrl(value, allowedProtocols) {
+  if (!value) return null;
+  if (_isRootRelative(value)) return value;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (_e) {
+    return null;
+  }
+  if (!allowedProtocols.has(parsed.protocol)) return null;
+  return parsed.href;
+}
+
 function _wireAnchor(el, attrs) {
-  const href = attrs.href || '#';
-  // Sanitise href: only allow http(s)://, mailto:, or root-relative `/`
-  // that is NOT scheme-relative `//evil.com` (the browser would otherwise
-  // resolve `//x` to `https://x` — open-redirect / phishing surface).
-  if (/^(https?:\/\/|mailto:|\/(?!\/))/i.test(href)) {
-    el.setAttribute('href', href);
-    if (/^https?:\/\//i.test(href)) {
-      el.setAttribute('target', '_blank');
-      el.setAttribute('rel', 'noopener noreferrer');
-    }
+  const href = _safeUrl(attrs.href || '#', _ANCHOR_PROTOCOLS);
+  if (href === null) return;
+  el.setAttribute('href', href);
+  if (href.startsWith('http://') || href.startsWith('https://')) {
+    el.setAttribute('target', '_blank');
+    el.setAttribute('rel', 'noopener noreferrer');
   }
 }
 
 function _wireImage(el, attrs) {
-  const src = attrs.src || '';
-  // Same scheme-relative guard as <a>. Note: `data:` URIs are blocked by
-  // virtue of not matching this allowlist (intentional — no inline data).
-  if (/^(https?:\/\/|\/(?!\/))/i.test(src)) {
-    el.setAttribute('src', src);
-    el.setAttribute('alt', attrs.alt || '');
-    el.setAttribute('loading', 'lazy');
-  }
+  // ``data:`` URIs are blocked by virtue of not matching this allowlist
+  // (intentional — no inline data).
+  const src = _safeUrl(attrs.src || '', _IMAGE_PROTOCOLS);
+  if (src === null) return;
+  el.setAttribute('src', src);
+  el.setAttribute('alt', attrs.alt || '');
+  el.setAttribute('loading', 'lazy');
 }
 
 function _wireAction(el, attrs) {
