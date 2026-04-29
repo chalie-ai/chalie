@@ -49,7 +49,6 @@ SEVERITY_MISSING_PROVIDER = 0.8
 SEVERITY_DEAD_THREADS = 0.6
 SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
-SEVERITY_LOW_ACTIVATION = 0.2
 
 
 def _utc_now() -> datetime:
@@ -335,24 +334,16 @@ class SelfModelService:
                 )
                 trait_count = cursor.fetchone()[0]
 
-                cursor.execute(
-                    "SELECT AVG(retrieval_weight) FROM episodes "
-                    "WHERE retrieval_weight > 0"
-                )
-                row = cursor.fetchone()
-                avg_activation = round(row[0], 3) if row[0] else 1.0
-
                 cursor.close()
 
             return {
                 "episode_count": episode_count,
                 "concept_count": concept_count,
                 "trait_count": trait_count,
-                "avg_activation": avg_activation,
             }
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to get memory pressure: {e}", exc_info=True)
-            return {"episode_count": 0, "concept_count": 0, "trait_count": 0, "avg_activation": 1.0}
+            return {"episode_count": 0, "concept_count": 0, "trait_count": 0}
 
     def _is_bg_llm_stale(self) -> bool:
         """Check if background LLM worker heartbeat is stale (>30s)."""
@@ -434,10 +425,19 @@ class SelfModelService:
         try:
             db = self._get_db()
             with db.connection() as conn:
-                # 1. Compaction stale: topic with uncompacted content exceeding
-                # the fallback token threshold (chars/4 ≈ tokens, 36K token fallback).
-                # Uses the same fallback threshold as MessageProcessor compaction
-                # so this warning fires iff compaction would actually trigger.
+                # 1. Compaction stale: user-channel transcript with uncompacted
+                # content exceeding the fallback token threshold (chars/4 ≈
+                # tokens, 36K token fallback). Uses the same fallback threshold
+                # as MessageProcessor compaction so this warning fires iff
+                # compaction would actually trigger.
+                #
+                # Scoped to channel='user' because that is the only channel
+                # whose getUserPrompt() loads historical transcript into the
+                # prompt. Background channels (dmn, persistent_task_*, …) only
+                # pass the current turn's input, so their on-disk transcript
+                # size is irrelevant to context pressure. This signal also
+                # only surfaces in the user-channel prompt via
+                # SelfModelService.format_for_prompt().
                 _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
                     SELECT tt.channel,
@@ -445,7 +445,7 @@ class SelfModelService:
                            SUM(LENGTH(tt.content)) as total_chars
                     FROM transcript tt
                     LEFT JOIN compactions tc ON tc.channel = tt.channel
-                    WHERE tc.channel IS NULL
+                    WHERE tc.channel IS NULL AND tt.channel = 'user'
                     GROUP BY tt.channel
                     HAVING total_chars >= ?
                     ORDER BY total_chars DESC LIMIT 1
@@ -503,14 +503,6 @@ class SelfModelService:
             notes.append({
                 "signal": f"LLM queue congested ({bg_depth}/25)",
                 "severity": SEVERITY_QUEUE_CONGESTION,
-            })
-
-        # Low average memory activation (severity: 0.2)
-        avg_act = op.get("memory_pressure", {}).get("avg_activation", 1.0)
-        if avg_act < 0.3:
-            notes.append({
-                "signal": f"Overall memory activation is low ({avg_act:.2f}) — thin context",
-                "severity": SEVERITY_LOW_ACTIVATION,
             })
 
         return notes

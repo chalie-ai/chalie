@@ -153,7 +153,7 @@ class TestGetSnapshot:
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
         assert pressure["trait_count"] == 15
-        assert pressure["avg_activation"] == pytest.approx(1.0)
+        assert "avg_activation" not in pressure
 
     def test_queue_depth_from_store(self, mock_store):
         """Queue depths reflect actual list lengths in MemoryStore."""
@@ -320,7 +320,7 @@ class TestMemoryRichness:
             "epistemic": {"context_warmth": 0.3},
             "operational": {"memory_pressure": {
                 "episode_count": 5, "concept_count": 3,
-                "trait_count": 2, "avg_activation": 0.7,
+                "trait_count": 2,
             }},
             "capability": {},
             "noteworthy": [],
