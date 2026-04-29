@@ -351,7 +351,12 @@ class UserMessageProcessor(MessageProcessor):
         # value. Inspect only the opener line so a body containing the literal
         # substring `results=0` or `error=` cannot suppress a valid seed.
         header = block.split('\n', 1)[0] if block else ''
-        if block and 'results=0' not in header and 'error=' not in header:
+        if (
+            block
+            and 'results=0' not in header
+            and 'error=' not in header
+            and 'relevance:high' in block
+        ):
             self._memory_seed = block
 
         if self._uid is None:
