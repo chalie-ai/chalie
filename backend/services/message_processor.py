@@ -575,8 +575,10 @@ class MessageProcessor:
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService()
 
-            self.pre_act()
-            self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
+            with self._metrics.stage('pre_act'):
+                self.pre_act()
+            with self._metrics.stage('thinking_gate'):
+                self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
             # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
             # runs under its own THINKING_TIMEOUT envelope (independent budget),
@@ -606,139 +608,144 @@ class MessageProcessor:
                 self._current_iteration < self.MAX_ITERATIONS
                 and time.time() - loop_start < self.MAX_TIMEOUT
             ):
-                user_body = self.getUserPrompt()
-                user_body = _wrap_with_exploration(self.CHANNEL, user_body)
-                user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                with self._metrics.iteration(self._current_iteration):
+                    with self._metrics.stage('prompt_assembly'):
+                        user_body = self.getUserPrompt()
+                        user_body = _wrap_with_exploration(self.CHANNEL, user_body)
+                        user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
 
-                # Two-stage mid-ACT compaction: triggered when the rendered
-                # user-message body (including checkpoint envelope) exceeds
-                # 80% of the provider's context window.
-                #
-                # Stage 1: compress the accumulated tool-use trail in place.
-                # Stage 2 (fallback): full checkpoint compaction + loop restart.
-                # Stage 2 resets iteration to 0 but NOT loop_start — the
-                # wall-clock MAX_TIMEOUT guard is a safety net against runaway
-                # turns; compaction LLM calls count against it deliberately.
-                if self._check_threshold(user_body, context_limit):
-                    logger.warning(
-                        "[COMPACTION] %s: user body over 80%% threshold "
-                        "(ctx_limit=%d) — running Stage 1",
-                        self.CHANNEL, context_limit,
-                    )
-                    self._run_stage1_tool_compaction()
-                    # Re-render after Stage 1 trim and re-check threshold.
-                    user_body = self.getUserPrompt()
-                    user_body = _wrap_with_exploration(self.CHANNEL, user_body)
-                    user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                    # Two-stage mid-ACT compaction: triggered when the rendered
+                    # user-message body (including checkpoint envelope) exceeds
+                    # 80% of the provider's context window.
+                    #
+                    # Stage 1: compress the accumulated tool-use trail in place.
+                    # Stage 2 (fallback): full checkpoint compaction + loop restart.
+                    # Stage 2 resets iteration to 0 but NOT loop_start — the
+                    # wall-clock MAX_TIMEOUT guard is a safety net against runaway
+                    # turns; compaction LLM calls count against it deliberately.
                     if self._check_threshold(user_body, context_limit):
                         logger.warning(
-                            "[COMPACTION] %s: still over threshold after Stage 1 "
-                            "— running Stage 2 (ACT restart)",
-                            self.CHANNEL,
+                            "[COMPACTION] %s: user body over 80%% threshold "
+                            "(ctx_limit=%d) — running Stage 1",
+                            self.CHANNEL, context_limit,
                         )
+                        self._run_stage1_tool_compaction()
+                        # Re-render after Stage 1 trim and re-check threshold.
+                        with self._metrics.stage('prompt_assembly'):
+                            user_body = self.getUserPrompt()
+                            user_body = _wrap_with_exploration(self.CHANNEL, user_body)
+                            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                        if self._check_threshold(user_body, context_limit):
+                            logger.warning(
+                                "[COMPACTION] %s: still over threshold after Stage 1 "
+                                "— running Stage 2 (ACT restart)",
+                                self.CHANNEL,
+                            )
+                            if self._run_stage2_act_restart():
+                                self._current_iteration = 0
+                                continue
+                            # Stage 2 failed (compaction LLM error). Retrying the
+                            # main provider call against an over-threshold body
+                            # would almost certainly fail too — break to cap exit
+                            # and return final_text=''.
+                            logger.error(
+                                "[COMPACTION] %s: Stage 2 failed — breaking to "
+                                "cap exit (final_text='')",
+                                self.CHANNEL,
+                            )
+                            break
+
+                    with self._metrics.stage('prompt_assembly'):
+                        system_prompt = self.getSystemPrompt()
+                        tools = self.getTools()
+
+                    # Single-element messages[] so the provider sees one user turn
+                    # containing the full literal-text body (Previous Messages,
+                    # memory seed, raw input, ACT trail). The provider's multi-turn
+                    # interface is intentionally NOT used — history lives in the
+                    # getUserPrompt() text block, not in the messages array.
+                    messages = [{'role': 'user', 'content': user_body}]
+
+                    # Provider errors propagate here. store() is not called if
+                    # this raises — the turn leaves no trace in the DB.
+                    # PayloadTooLargeError (HTTP 413) is the one exception: the
+                    # provider's transport-level body cap was hit (e.g. Ollama
+                    # Cloud edge proxy), so we run a Stage 2 ACT restart once
+                    # to compact the trail and retry. A second 413 after that
+                    # means even the compacted body is too big — break to cap
+                    # exit rather than loop forever.
+                    try:
+                        llm_response = Providers.instance().send_messages(
+                            system_prompt, messages, job=self.JOB, tools=tools,
+                            thinking_mode=self._get_thinking_mode_for_send(),
+                        )
+                    except PayloadTooLargeError as exc:
+                        if self._payload_too_large_recovered:
+                            logger.error(
+                                "[COMPACTION] %s: PayloadTooLargeError after Stage 2 "
+                                "restart — breaking to cap exit (final_text=''): %s",
+                                self.CHANNEL, exc,
+                            )
+                            break
+                        logger.warning(
+                            "[COMPACTION] %s: PayloadTooLarge from provider — "
+                            "running Stage 2 ACT restart (%s)",
+                            self.CHANNEL, exc,
+                        )
+                        self._payload_too_large_recovered = True
                         if self._run_stage2_act_restart():
                             self._current_iteration = 0
                             continue
-                        # Stage 2 failed (compaction LLM error). Retrying the
-                        # main provider call against an over-threshold body
-                        # would almost certainly fail too — break to cap exit
-                        # and return final_text=''.
                         logger.error(
-                            "[COMPACTION] %s: Stage 2 failed — breaking to "
-                            "cap exit (final_text='')",
+                            "[COMPACTION] %s: Stage 2 failed after PayloadTooLarge "
+                            "— breaking to cap exit (final_text='')",
                             self.CHANNEL,
                         )
                         break
+                    self._metrics.accumulate(llm_response)
 
-                system_prompt = self.getSystemPrompt()
-                tools = self.getTools()
-
-                # Single-element messages[] so the provider sees one user turn
-                # containing the full literal-text body (Previous Messages,
-                # memory seed, raw input, ACT trail). The provider's multi-turn
-                # interface is intentionally NOT used — history lives in the
-                # getUserPrompt() text block, not in the messages array.
-                messages = [{'role': 'user', 'content': user_body}]
-
-                # Provider errors propagate here. store() is not called if
-                # this raises — the turn leaves no trace in the DB.
-                # PayloadTooLargeError (HTTP 413) is the one exception: the
-                # provider's transport-level body cap was hit (e.g. Ollama
-                # Cloud edge proxy), so we run a Stage 2 ACT restart once
-                # to compact the trail and retry. A second 413 after that
-                # means even the compacted body is too big — break to cap
-                # exit rather than loop forever.
-                try:
-                    llm_response = Providers.instance().send_messages(
-                        system_prompt, messages, job=self.JOB, tools=tools,
-                        thinking_mode=self._get_thinking_mode_for_send(),
-                    )
-                except PayloadTooLargeError as exc:
-                    if self._payload_too_large_recovered:
-                        logger.error(
-                            "[COMPACTION] %s: PayloadTooLargeError after Stage 2 "
-                            "restart — breaking to cap exit (final_text=''): %s",
-                            self.CHANNEL, exc,
-                        )
+                    if not llm_response.tool_calls:
+                        loop_exited_cleanly = True
                         break
-                    logger.warning(
-                        "[COMPACTION] %s: PayloadTooLarge from provider — "
-                        "running Stage 2 ACT restart (%s)",
-                        self.CHANNEL, exc,
-                    )
-                    self._payload_too_large_recovered = True
-                    if self._run_stage2_act_restart():
-                        self._current_iteration = 0
-                        continue
-                    logger.error(
-                        "[COMPACTION] %s: Stage 2 failed after PayloadTooLarge "
-                        "— breaking to cap exit (final_text='')",
-                        self.CHANNEL,
-                    )
-                    break
-                self._metrics.accumulate(llm_response)
 
-                if not llm_response.tool_calls:
-                    loop_exited_cleanly = True
-                    break
+                    # Narration text BEFORE tool dispatch — the LLM emitted the
+                    # narration in its response ahead of the tool_use block, so
+                    # the stored timeline must reflect that semantic order. The
+                    # transcript-timeline example in the north star § Storage
+                    # Model shows the narration DTO preceding the tool_call DTOs
+                    # for the same iteration.
+                    with self._metrics.stage('post_tool_records'):
+                        if llm_response.text:
+                            rendered = ToolRenderAndRecordService(
+                                tool_name='narration',
+                                params={},
+                                result=llm_response.text,
+                                ephemeral=True,
+                                transcript_id=self._uid,
+                            ).renderAndRecord()
+                            self._act_trail.append(rendered)
+                            try:
+                                self._emit_narration(llm_response.text, self._current_iteration)
+                            except Exception as exc:
+                                logger.error(
+                                    "[MessageProcessor.send] _emit_narration raised: %s",
+                                    exc, exc_info=True,
+                                )
 
-                # Narration text BEFORE tool dispatch — the LLM emitted the
-                # narration in its response ahead of the tool_use block, so
-                # the stored timeline must reflect that semantic order. The
-                # transcript-timeline example in the north star § Storage
-                # Model shows the narration DTO preceding the tool_call DTOs
-                # for the same iteration.
-                if llm_response.text:
-                    rendered = ToolRenderAndRecordService(
-                        tool_name='narration',
-                        params={},
-                        result=llm_response.text,
-                        ephemeral=True,
-                        transcript_id=self._uid,
-                    ).renderAndRecord()
-                    self._act_trail.append(rendered)
-                    try:
-                        self._emit_narration(llm_response.text, self._current_iteration)
-                    except Exception as exc:
-                        logger.error(
-                            "[MessageProcessor.send] _emit_narration raised: %s",
-                            exc, exc_info=True,
-                        )
+                        for tc in llm_response.tool_calls:
+                            self.handleTool(tc)  # never raises; appends DTO + trail
 
-                for tc in llm_response.tool_calls:
-                    self.handleTool(tc)  # never raises; appends DTO + trail
+                        for steer in self._drain_steering(request_id):
+                            rendered = ToolRenderAndRecordService(
+                                tool_name='user_steer',
+                                params={},
+                                result=steer,
+                                ephemeral=True,
+                                transcript_id=self._uid,
+                            ).renderAndRecord()
+                            self._act_trail.append(rendered)
 
-                for steer in self._drain_steering(request_id):
-                    rendered = ToolRenderAndRecordService(
-                        tool_name='user_steer',
-                        params={},
-                        result=steer,
-                        ephemeral=True,
-                        transcript_id=self._uid,
-                    ).renderAndRecord()
-                    self._act_trail.append(rendered)
-
-                self._current_iteration += 1
+                    self._current_iteration += 1
 
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
@@ -758,9 +765,11 @@ class MessageProcessor:
                 )
                 final_text = ''
 
-            self.store(final_text)
+            with self._metrics.stage('store'):
+                self.store(final_text)
             try:
-                self.postTurn()
+                with self._metrics.stage('post_turn'):
+                    self.postTurn()
             except Exception as e:
                 logger.error(
                     "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True

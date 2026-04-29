@@ -97,6 +97,7 @@ class OllamaService:
         if self.format != "text":
             payload["format"] = self.format
 
+        start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
@@ -108,6 +109,7 @@ class OllamaService:
                     provider='ollama',
                     tokens_input=data.get('prompt_eval_count'),
                     tokens_output=data.get('eval_count'),
+                    latency_ms=int((time.time() - start_time) * 1000),
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
@@ -123,11 +125,14 @@ class OllamaService:
         api_messages = _ollama_convert_messages(messages)
         payload = self._build_chat_payload(system_prompt, api_messages, tools, thinking_mode)
 
+        start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
                 response.raise_for_status()
-                return _parse_chat_response(response.json(), self.model)
+                parsed = _parse_chat_response(response.json(), self.model)
+                parsed.latency_ms = int((time.time() - start_time) * 1000)
+                return parsed
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:

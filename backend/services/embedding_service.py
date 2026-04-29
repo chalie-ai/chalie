@@ -346,11 +346,24 @@ def _submit_for_inference(texts: List[str]) -> np.ndarray:
     job for a cache-hit text would needlessly queue behind pending work and
     could cause reentrance if the worker itself ever needed to embed (it does
     not, but the guard keeps the contract explicit).
+
+    Records the queue+inference wait into the bound processor's
+    ``embedding_wait_ms`` stage so callers can see how much pre-LLM time
+    the single-threaded ONNX worker is costing them.
     """
     _ensure_worker_started()
     future: concurrent.futures.Future = concurrent.futures.Future()
     _embedding_queue.put((texts, future))
-    return future.result()
+    proc = None
+    try:
+        from services.message_processor import current_processor
+        proc = current_processor()
+    except Exception:
+        proc = None
+    if proc is None:
+        return future.result()
+    with proc._metrics.stage('embedding_wait'):
+        return future.result()
 
 
 # Singleton EmbeddingService instance

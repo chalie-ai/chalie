@@ -119,3 +119,108 @@ class TestMetricsAccumulator:
         acc.start_time = fixed
         snap = acc.snapshot()
         assert snap["response_time_s"] >= 10.0
+
+    # ── Timing extensions ────────────────────────────────────────────────
+
+    def test_snapshot_emits_timing_block(self):
+        acc = MetricsAccumulator()
+        snap = acc.snapshot()
+        assert "timing" in snap
+        t = snap["timing"]
+        for key in ("wall_ms", "pre_llm_ms", "llm_ms", "post_llm_ms",
+                    "llm_calls", "stages", "iterations"):
+            assert key in t
+
+    def test_stage_records_into_stages_dict(self):
+        acc = MetricsAccumulator()
+        with acc.stage("pre_act"):
+            time.sleep(0.01)
+        snap = acc.snapshot()
+        assert snap["timing"]["stages"]["pre_act"] >= 10
+        assert snap["timing"]["pre_llm_ms"] >= 10
+
+    def test_stage_accumulates_repeated_calls(self):
+        acc = MetricsAccumulator()
+        with acc.stage("prompt_assembly"):
+            time.sleep(0.005)
+        with acc.stage("prompt_assembly"):
+            time.sleep(0.005)
+        snap = acc.snapshot()
+        assert snap["timing"]["stages"]["prompt_assembly"] >= 10
+
+    def test_record_llm_call_sums_into_llm_ms(self):
+        acc = MetricsAccumulator()
+        acc.record_llm_call(120)
+        acc.record_llm_call(80)
+        snap = acc.snapshot()
+        assert snap["timing"]["llm_ms"] == 200
+        assert snap["timing"]["llm_calls"] == 2
+
+    def test_record_llm_call_negative_or_none_ignored(self):
+        acc = MetricsAccumulator()
+        acc.record_llm_call(None)
+        acc.record_llm_call(-5)
+        snap = acc.snapshot()
+        assert snap["timing"]["llm_ms"] == 0
+        assert snap["timing"]["llm_calls"] == 0
+
+    def test_iteration_attributes_llm_calls(self):
+        acc = MetricsAccumulator()
+        with acc.iteration(0):
+            acc.record_llm_call(150)
+        with acc.iteration(1):
+            acc.record_llm_call(75)
+            acc.record_llm_call(50)
+        snap = acc.snapshot()
+        iters = snap["timing"]["iterations"]
+        assert len(iters) == 2
+        assert iters[0]["iter"] == 0
+        assert iters[0]["llm_ms"] == 150
+        assert iters[0]["llm_calls"] == 1
+        assert iters[1]["iter"] == 1
+        assert iters[1]["llm_ms"] == 125
+        assert iters[1]["llm_calls"] == 2
+        assert snap["timing"]["llm_ms"] == 275
+
+    def test_iteration_captures_stages_per_iter(self):
+        acc = MetricsAccumulator()
+        with acc.iteration(0):
+            with acc.stage("prompt_assembly"):
+                time.sleep(0.005)
+        snap = acc.snapshot()
+        iter_stages = snap["timing"]["iterations"][0]["stages"]
+        assert "prompt_assembly" in iter_stages
+        assert iter_stages["prompt_assembly"] >= 5
+
+    def test_post_llm_ms_derived(self):
+        acc = MetricsAccumulator()
+        # Simulate 100ms wall, 30ms pre, 50ms llm → post = 20ms
+        acc.start_time = time.time() - 0.1
+        with acc.stage("pre_act"):
+            time.sleep(0.03)
+        acc.record_llm_call(50)
+        snap = acc.snapshot()
+        # Wall is now > 100ms because we slept inside the test, so post is whatever's left.
+        assert snap["timing"]["post_llm_ms"] >= 0
+        assert (
+            snap["timing"]["pre_llm_ms"]
+            + snap["timing"]["llm_ms"]
+            + snap["timing"]["post_llm_ms"]
+            == snap["timing"]["wall_ms"]
+        )
+
+    def test_add_stage_ms_external_record(self):
+        acc = MetricsAccumulator()
+        acc.add_stage_ms("file_tags_wait", 250)
+        snap = acc.snapshot()
+        assert snap["timing"]["stages"]["file_tags_wait"] == 250
+        assert snap["timing"]["pre_llm_ms"] == 250
+
+    def test_merge_absorbs_llm_time(self):
+        parent = MetricsAccumulator()
+        child = MetricsAccumulator()
+        child.record_llm_call(400)
+        parent.merge(child)
+        snap = parent.snapshot()
+        assert snap["timing"]["llm_ms"] == 400
+        assert snap["timing"]["llm_calls"] == 1

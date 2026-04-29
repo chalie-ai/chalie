@@ -529,7 +529,9 @@ def _handle_chat(ws, store, msg, active_request=None):
             # and injects a recent-upload document heuristic when applicable.
             # MUST run before UserMessageProcessor is constructed so that
             # getUserPrompt() picks up file_tags on its first call.
+            _file_tags_t0 = time.time()
             metadata['file_tags'] = _resolve_file_tags(image_ids, request_id)
+            _file_tags_wait_ms = int((time.time() - _file_tags_t0) * 1000)
 
             def _on_narration(text, step=0):
                 """Publish per-iteration synthesis text to the per-request SSE channel."""
@@ -579,6 +581,10 @@ def _handle_chat(ws, store, msg, active_request=None):
                 on_tool_event=_on_tool_event,
             )
             proc.set_turn_start(turn_start)
+            try:
+                proc._metrics.add_stage_ms('file_tags_wait', _file_tags_wait_ms)
+            except Exception:
+                pass
             response = proc.send(request_id=request_id)
 
             metrics = proc._metrics.snapshot()
