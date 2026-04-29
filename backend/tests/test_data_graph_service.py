@@ -5,6 +5,8 @@ decay_cycle, and LUT-based upsert paths.
 """
 
 import contextlib
+import math
+import struct
 import sqlite3
 
 import pytest
@@ -1582,3 +1584,369 @@ class TestBackfillMissingEmbeddings:
         # Must not raise — backfill swallows per-row errors
         results = svc.recall("peanuts allergy")
         assert isinstance(results, list)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TestRecallCosScore  (cycle-33: cos_score relevance labelling)
+# ══════════════════════════════════════════════════════════════════
+
+
+def _norm(v):
+    """Return unit-normalised copy of float list v."""
+    mag = math.sqrt(sum(x * x for x in v))
+    if mag == 0:
+        return v
+    return [x / mag for x in v]
+
+
+def _pack(v):
+    """Pack float list to 32-bit float blob (sqlite-vec format)."""
+    return struct.pack(f'{len(v)}f', *v)
+
+
+def _unpack(blob, n):
+    """Unpack n floats from a blob."""
+    return list(struct.unpack(f'{n}f', blob[:n * 4]))
+
+
+def _l2sq(a, b):
+    """Squared L2 distance between two equal-length float lists."""
+    return sum((x - y) ** 2 for x, y in zip(a, b))
+
+
+class _VecSimCursor:
+    """Wraps a real sqlite3.Cursor.
+
+    Intercepts ``SELECT rowid, distance FROM data_graph_key_vec WHERE embedding
+    MATCH ? AND k = ?`` (and the value-vec equivalent), replacing them with a
+    real cosine-computation pass over the plain blob rows in the test tables.
+
+    All other queries are forwarded transparently.
+    """
+
+    _KEY_VEC_MATCH = "data_graph_key_vec"
+    _VAL_VEC_MATCH = "data_graph_value_vec"
+
+    def __init__(self, real_cursor, conn, dim):
+        self._cur = real_cursor
+        self._conn = conn
+        self._dim = dim
+        self._rows = None  # populated when a MATCH query is intercepted
+
+    def _intercept_match(self, sql, params):
+        """Return True if we should handle this query ourselves."""
+        s = sql.lower()
+        return (
+            "match" in s
+            and ("data_graph_key_vec" in s or "data_graph_value_vec" in s)
+        )
+
+    def _run_vec_sim(self, sql, params):
+        """Compute cosine distances manually from the plain blob table."""
+        s = sql.lower()
+        table = (
+            "data_graph_key_vec"
+            if "data_graph_key_vec" in s
+            else "data_graph_value_vec"
+        )
+        query_blob, k = params[0], params[1]
+        query_vec = _norm(_unpack(query_blob, self._dim))
+        # Use the real underlying connection cursor (not the wrapper) to avoid
+        # recursion when fetching the plain blob rows.
+        plain_cur = self._conn.cursor()
+        plain_cur.execute(f"SELECT rowid, embedding FROM {table}")
+        rows = plain_cur.fetchall()
+        plain_cur.close()
+        results = []
+        for rowid, blob in rows:
+            if not blob:
+                continue
+            row_vec = _norm(_unpack(blob, self._dim))
+            dist_sq = _l2sq(query_vec, row_vec)
+            # sqlite-vec returns sqrt of dist² for L2; production code uses
+            # _l2_dist_to_cosine(distance) = max(0, 1 - distance^2/2)
+            # which expects the raw L2 distance (not squared).
+            dist = math.sqrt(max(0.0, dist_sq))
+            results.append((rowid, dist))
+        results.sort(key=lambda x: x[1])
+        self._rows = results[:k]
+
+    def execute(self, sql, params=()):
+        if self._intercept_match(sql, params):
+            self._run_vec_sim(sql, params)
+        else:
+            self._rows = None
+            self._cur.execute(sql, params)
+        return self
+
+    def fetchall(self):
+        if self._rows is not None:
+            r = self._rows
+            self._rows = None
+            return r
+        return self._cur.fetchall()
+
+    def fetchone(self):
+        if self._rows is not None:
+            r = self._rows[0] if self._rows else None
+            self._rows = None
+            return r
+        return self._cur.fetchone()
+
+    def close(self):
+        self._cur.close()
+
+    def __iter__(self):
+        if self._rows is not None:
+            yield from self._rows
+            self._rows = None
+        else:
+            yield from self._cur
+
+
+class _VecSimConn:
+    """Thin proxy around a real sqlite3.Connection that intercepts MATCH queries.
+
+    sqlite3.Connection.cursor is a read-only C-level slot, so we cannot monkey-
+    patch it directly.  Instead we expose a full connection-like interface and
+    override only cursor() to return a _VecSimCursor.
+    """
+
+    def __init__(self, real_conn, dim):
+        self._conn = real_conn
+        self._dim = dim
+
+    # -- cursor interception ------------------------------------------------
+
+    def cursor(self):
+        return _VecSimCursor(self._conn.cursor(), self._conn, self._dim)
+
+    # -- transaction forwarding ---------------------------------------------
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+    # -- convenience pass-throughs (production code calls these directly on conn)
+
+    def execute(self, sql, params=()):
+        """Forward direct conn.execute() calls through a VecSimCursor."""
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def __getattr__(self, name):
+        """Proxy any attribute not explicitly overridden to the real connection."""
+        return getattr(self._conn, name)
+
+
+class _VecSimDb:
+    """Wraps a db_service fixture to make data_graph_key/value_vec tables
+    behave like sqlite-vec virtual tables for unit tests.
+
+    The embedding dimension is fixed at construction time so the cursor can
+    unpack stored blobs consistently.
+    """
+
+    def __init__(self, real_db, dim):
+        self._db = real_db
+        self._dim = dim
+        # Expose attributes the service reads directly.
+        self.db_path = real_db.db_path
+        self._db_path = real_db.db_path
+        self._init_complete = real_db._init_complete
+
+    @contextlib.contextmanager
+    def connection(self):
+        with self._db.connection() as conn:
+            yield _VecSimConn(conn, self._dim)
+
+
+@pytest.fixture
+def svc_vec(db_service):
+    """DataGraphService with a vec-simulating DB wrapper (dim=4).
+
+    _generate_embedding is replaced with a real Python callable that returns
+    controlled 4-dimensional float vectors for specific text tokens.
+
+    Vector assignments (unit-normalised):
+        'food recipe'             → [1, 0, 0, 0]   (query direction)
+        'apple pie recipe'        → [1, 0, 0, 0]   (aligned with query)
+        'dentist appointment'     → [1, 0, 0, 0]   (query direction for test 3)
+        'dentist dental appt'     → [0, 1, 0, 0]   (orthogonal row key embedding)
+        'dentist appt high'       → [0, 1, 0, 0]   (orthogonal, high-weight row)
+
+    Row key embeddings (stored as blobs) vs query embedding → cosine scores:
+        apple pie recipe vs food recipe            → cos ≈ 1.0  (aligned)
+        dentist dental appt vs food recipe         → cos ≈ 0.0  (orthogonal)
+        dentist appt high vs dentist appointment   → cos ≈ 0.0  (orthogonal)
+    """
+    DIM = 4
+
+    _VEC_MAP = {
+        'food recipe':              _norm([1.0, 0.0, 0.0, 0.0]),
+        'apple pie recipe':         _norm([1.0, 0.0, 0.0, 0.0]),
+        'dentist appointment':      _norm([1.0, 0.0, 0.0, 0.0]),
+        'dentist dental appt':      _norm([0.0, 1.0, 0.0, 0.0]),
+        'dentist appt high':        _norm([0.0, 1.0, 0.0, 0.0]),
+    }
+
+    def _fake_emb(text):
+        return _VEC_MAP.get(text, _norm([0.5, 0.5, 0.0, 0.0]))
+
+    vec_db = _VecSimDb(db_service, DIM)
+    service = DataGraphService(vec_db)
+    service._generate_embedding = _fake_emb
+    # Suppress backfill embedding calls for rows not in our map
+    service._backfill_missing_embeddings = lambda: None
+    return service, vec_db, db_service
+
+
+@pytest.mark.unit
+class TestRecallCosScore:
+    """cos_score is computed from semantic similarity, not retrieval_weight."""
+
+    def _insert_with_key_vec(self, db_service, rowid, key_vec, *, kind='user_specific',
+                             key, value, retrieval_weight=1.0):
+        """Insert a data_graph row and seed its key embedding blob."""
+        _insert_row(db_service, kind=kind, key=key, value=value,
+                    retrieval_weight=retrieval_weight)
+        with db_service.connection() as conn:
+            # Retrieve the actual rowid just inserted (last_insert_rowid is
+            # not reliable here since _insert_row commits separately; use key).
+            cur = conn.execute(
+                "SELECT id FROM data_graph WHERE key=? AND active=1 ORDER BY id DESC LIMIT 1",
+                (key,)
+            )
+            row = cur.fetchone()
+            db_id = row[0] if row else None
+        if db_id is not None:
+            with db_service.connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO data_graph_key_vec(rowid, embedding) VALUES (?, ?)",
+                    (db_id, _pack(key_vec))
+                )
+        return db_id
+
+    def test_high_cos_score_row_carries_cos_score_gte_07(self, svc_vec):
+        """Row whose key embedding aligns with the query returns cos_score >= 0.7."""
+        service, vec_db, db_service = svc_vec
+
+        # apple pie recipe key embedding ≈ query 'food recipe' (both [1,0,0,0] unit)
+        self._insert_with_key_vec(
+            db_service, None,
+            _norm([1.0, 0.0, 0.0, 0.0]),
+            key='apple pie recipe',
+            value='mix flour butter sugar',
+        )
+
+        results = service.recall('food recipe')
+        matching = [r for r in results if r['key'] == 'apple pie recipe']
+        assert matching, "Expected 'apple pie recipe' row in recall results"
+        assert matching[0]['cos_score'] >= 0.7, (
+            f"cos_score should be ≥ 0.7 for a nearly-identical embedding, "
+            f"got {matching[0]['cos_score']}"
+        )
+
+    def test_low_cos_score_row_carries_cos_score_lt_04(self, svc_vec):
+        """Row found via FTS but whose key embedding is orthogonal to the query returns cos_score < 0.4.
+
+        Row key: 'dentist dental appt'  → blob [0,1,0,0]
+        Query:   'food recipe'          → embedding [1,0,0,0]
+
+        FTS surfaces the row (the key text contains 'dentist' and 'dental' which
+        were added to the FTS index).  The vec cursor computes real cosine between
+        the orthogonal vectors → cos = 0.0.  cos_score = max(0.0, 0.0) = 0.0 < 0.4.
+        """
+        service, vec_db, db_service = svc_vec
+
+        # Row with orthogonal blob to the query direction [1,0,0,0].
+        self._insert_with_key_vec(
+            db_service, None,
+            _norm([0.0, 1.0, 0.0, 0.0]),
+            key='dentist dental appt',
+            value='appointment next tuesday',
+        )
+
+        # Ensure FTS also finds this row when query='food recipe' by injecting
+        # 'food' and 'recipe' into its search_queries FTS column, which is
+        # included in the FTS5 schema.
+        with db_service.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM data_graph WHERE key='dentist dental appt' AND active=1"
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "INSERT OR REPLACE INTO data_graph_fts(rowid, key, value, kind, search_queries) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (row[0], 'dentist dental appt', 'appointment next tuesday',
+                     'user_specific', 'food recipe')
+                )
+
+        # query embedding [1,0,0,0] vs stored blob [0,1,0,0] → cosine = 0.0
+        results = service.recall('food recipe')
+        matching = [r for r in results if r['key'] == 'dentist dental appt']
+        assert matching, (
+            "Expected 'dentist dental appt' row to surface via FTS (search_queries='food recipe')"
+        )
+        assert matching[0]['cos_score'] < 0.4, (
+            f"cos_score should be < 0.4 for an orthogonal embedding, "
+            f"got {matching[0]['cos_score']}"
+        )
+
+    def test_high_retrieval_weight_does_not_inflate_cos_score(self, svc_vec):
+        """cos_score must NOT be contaminated by retrieval_weight.
+
+        Row key: 'dentist appt high'  → blob [0,1,0,0], retrieval_weight=10.0
+        Query:   'dentist appointment' → embedding [1,0,0,0]
+
+        FTS surfaces the row (search_queries seeded with 'dentist appointment').
+        Vec cursor computes cos = 0.0 (orthogonal vectors).  cos_score = 0.0.
+        retrieval_weight=10.0 drives composite_score ranking but must NOT affect
+        cos_score — this is the regression-protection case.
+        """
+        service, vec_db, db_service = svc_vec
+
+        # Orthogonal blob + high retrieval_weight
+        self._insert_with_key_vec(
+            db_service, None,
+            _norm([0.0, 1.0, 0.0, 0.0]),
+            key='dentist appt high',
+            value='weekly checkup',
+            retrieval_weight=10.0,
+        )
+
+        with db_service.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM data_graph WHERE key='dentist appt high' AND active=1"
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "INSERT OR REPLACE INTO data_graph_fts(rowid, key, value, kind, search_queries) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (row[0], 'dentist appt high', 'weekly checkup',
+                     'user_specific', 'dentist appointment')
+                )
+
+        # Verify the raw DB retrieval_weight before recall (recall's touch_accessed
+        # clamps the returned value to 1.0, but the pre-recall DB row holds 10.0).
+        with db_service.connection() as conn:
+            raw = conn.execute(
+                "SELECT retrieval_weight FROM data_graph WHERE key='dentist appt high' AND active=1"
+            ).fetchone()
+        assert raw and raw[0] == pytest.approx(10.0), (
+            f"Sanity: DB retrieval_weight should be 10.0 before recall, got {raw}"
+        )
+
+        results = service.recall('dentist appointment')
+        matching = [r for r in results if r['key'] == 'dentist appt high']
+        assert matching, "Expected row to surface via FTS (search_queries='dentist appointment')"
+        assert matching[0]['cos_score'] < 0.4, (
+            f"cos_score must be low even for a heavily-accessed row (high retrieval_weight), "
+            f"got cos_score={matching[0]['cos_score']}"
+        )
