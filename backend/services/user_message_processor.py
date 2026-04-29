@@ -18,9 +18,8 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-Implements the full postTurn() eight-service fan-out, memory seeding, narration
-callback, and getSystemPrompt() override weaving {{adaptive_directives}} into the
-UnifiedSystemMessagePrompt template.
+Implements the full postTurn() four-step fan-out, memory seeding, narration
+callback, and getSystemPrompt() override.
 """
 
 import logging
@@ -29,7 +28,6 @@ from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import UnifiedSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
@@ -41,7 +39,6 @@ logger = logging.getLogger(__name__)
 # failed, or raised — re-arms the guard cleanly.
 _lazy_fire_lock = threading.Lock()
 _lazy_fire_in_flight = False
-
 
 def _fire_lazy_synthesis() -> None:
     """Spawn a one-shot daemon thread to synthesise the user_summary row.
@@ -81,7 +78,7 @@ class UserMessageProcessor(MessageProcessor):
 
     Hardcodes CHANNEL='user', ROLE='user', uses UnifiedSystemMessagePrompt.
     Adds on_narration callback for real-time ACT narration streaming.
-    Overrides postTurn() with the eight-service fan-out.
+    Overrides postTurn() with the four-step fan-out.
     """
 
     CHANNEL = 'user'
@@ -89,9 +86,27 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # All innate skills available for user turns.
-    # Sorted for deterministic ordering — ALL_SKILL_NAMES is a frozenset.
-    NATIVE_TOOLS: list[str] = sorted(ALL_SKILL_NAMES)
+    # 9 innate abilities — pre-injected on every ACT iteration. The 6 in
+    # DISCOVERABLE are surfaced at runtime via find_tools and never
+    # pre-injected.
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "goal_pursuit",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "schedule",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "code_eval",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
 
     # ── Constructor ───────────────────────────────────────────────────────────
 
@@ -100,19 +115,29 @@ class UserMessageProcessor(MessageProcessor):
         raw_input: str,
         metadata: dict | None = None,
         on_narration: Callable[[str, int], None] | None = None,
+        on_tool_event: Callable[[dict], None] | None = None,
     ):
         super().__init__(raw_input, metadata)
         self._on_narration = on_narration
-        # Set by _run_memory_seed() — stores the numeric radius used so
-        # getUserPrompt() can render `[memory(radius=X)] ...` correctly.
+        self._on_tool_event = on_tool_event
+        # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
         # Set by store() — the final LLM response text, needed by postTurn()
         # for interaction logging and phase updates (call AFTER store()).
         self._last_response: str = ''
         # Cached user synthesis string. getSystemPrompt() runs every ACT iteration;
-        # without this cache each iteration would re-read KnowledgeService DB rows.
+        # without this cache each iteration would re-read user_summary from data_graph.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
+        # Per-turn ModeGate instance + cached state vector. Populated by
+        # _get_mode_gate() on first access; the gate is ticked exactly once
+        # per turn (classify + state update + persist), and the resulting
+        # state dict is cached so converse-driven branching in
+        # getUserDefinition() does not re-read MemoryStore on every ACT
+        # iteration. The instance is reused for get_system_prompt_additions()
+        # in getSystemPrompt().
+        self._mode_gate_cached = None  # ModeGateService | None — lazy import
+        self._mode_state_cached: dict[str, float] | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
@@ -128,8 +153,9 @@ class UserMessageProcessor(MessageProcessor):
         one-shot background synthesis is fired via the lazy-fallback path below so
         that future turns find the row populated.
 
-        Writer path: ``UserSummaryProcessor`` (30-min cadence worker +
-        ``getUserDefinition()`` lazy fallback).  Traits are written continuously by
+        Writer path: ``UserSummaryProcessor`` (driven by SubconsciousWorker
+        idle tick, plus ``getUserDefinition()`` lazy fallback).  Traits are
+        written continuously by
         the LLM-native memory skill (``memory_skill._handle_store`` →
         ``DataGraphService.store(kind='user_specific', …)``) whenever the user
         discloses a personal fact.
@@ -141,12 +167,29 @@ class UserMessageProcessor(MessageProcessor):
 
         if self._user_definition_cached is not None:
             return self._user_definition_cached
+
+        # Pick which row to read: when the converse mode is strongly active
+        # (state >= ModeGateService.STEER_THRESHOLD) prefer
+        # ``user_summary_long`` for a richer identity anchor; otherwise stay
+        # on the short ``user_summary``. If the long row is missing fall back
+        # to the short one before the static peer-to-peer fallback.
+        from services.mode_gate_service import STEER_THRESHOLD
+        prefer_long = (
+            self._get_mode_state().get('converse', 0.0) >= STEER_THRESHOLD
+        )
+
         try:
             from services.data_graph_service import get_data_graph_service
 
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=['system'], order_by='retrieval_weight DESC')
-            entry = next((r for r in rows if r.get('key') == 'user_summary'), None)
+            by_key = {r.get('key'): r for r in rows if r.get('key')}
+
+            preferred_key = 'user_summary_long' if prefer_long else 'user_summary'
+            entry = by_key.get(preferred_key)
+            if (not entry or not entry.get('value')) and prefer_long:
+                # Long row missing — fall back to short before the static fallback.
+                entry = by_key.get('user_summary')
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
                 return self._user_definition_cached
@@ -166,21 +209,30 @@ class UserMessageProcessor(MessageProcessor):
     def getUserPrompt(self) -> str:
         """Build the user-message body for one ACT iteration.
 
-        Section order (north star §"Body structure of getUserPrompt()"):
-          1. World State block
-          2. System Awareness block
-          3. ## Previous Messages block (via getPreviousMessages())
+        Section order:
+          1. User definition (user_summary short) — placed at the top of the
+             user prompt so the model sees identity in the same recency window
+             as the current turn line. The base-class system-prompt slot for
+             user_definition is suppressed in getSystemPrompt() below.
+          2. World State block
+          3. System Awareness block
+          4. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
-          4. Memory seed line: [memory(radius=X)] ...
-          5. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
-          6. ACT loop trail (empty string on iteration 1)
+          5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
+          6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
+          7. ACT loop trail (empty string on iteration 1)
 
         Note: The ## Checkpoint / ## Current State envelope is NOT emitted
         here — send() wraps this output with it.
         """
         parts = []
 
-        # 1. World State — injected verbatim (already contains its own header)
+        # 1. User definition (identity anchor)
+        user_def = self.getUserDefinition()
+        if user_def:
+            parts.append(user_def)
+
+        # 2. World State — injected verbatim (already contains its own header)
         rendered_world_state = world_state.render()
         if rendered_world_state:
             logger.info(
@@ -202,15 +254,20 @@ class UserMessageProcessor(MessageProcessor):
         # Blank separator before current turn content
         parts.append('')
 
-        # 4. Memory seed (set by _run_memory_seed at turn start)
-        if self._memory_seed and self._memory_seed_radius is not None:
-            parts.append(f"[memory(radius={self._memory_seed_radius})] {self._memory_seed}")
+        # 4. Memory seed (set by pre_act() — canonical tag block, injected verbatim)
+        if self._memory_seed:
+            parts.append(self._memory_seed)
 
         # 5. Current turn line with optional file tags and nudge
         turn_line = f"user: {self._raw_input}"
         file_tags = self._metadata.get('file_tags', [])
         nudge_tag = self._metadata.get('nudge_tag')
         if file_tags:
+            kinds = [t.split(' ', 1)[0].lstrip('[') for t in file_tags]
+            logger.info(
+                f"[UMP] file_tags present uuid={self._uid} "
+                f"count={len(file_tags)} kinds={kinds}"
+            )
             turn_line += ' ' + ' '.join(file_tags)
         if nudge_tag:
             turn_line += ' ' + nudge_tag
@@ -232,10 +289,13 @@ class UserMessageProcessor(MessageProcessor):
           1. Voice line — ``"When responding; <personality voice paragraph>"``
              drawn fresh from PersonalityService (O(1) dict lookup + one
              SQLite SELECT).
-          2. getUserDefinition() — the user synthesis line prepended below the
-             voice line.
-          3. Template — UnifiedSystemMessagePrompt body with
-             ``{{adaptive_directives}}`` filled in.
+          2. Template — UnifiedSystemMessagePrompt body.
+
+        The user_definition (user_summary short) is intentionally NOT emitted
+        here — it is prepended at the top of getUserPrompt() instead so it
+        sits in the same recency window as the current turn line. This
+        overrides the base-class behaviour which would otherwise prepend the
+        user_definition to the system prompt body.
 
         The voice line sits at the very top so the LLM sees it first.  The
         stable Identity/Boundaries/Principles prefix follows, keeping the bulk
@@ -244,45 +304,70 @@ class UserMessageProcessor(MessageProcessor):
         from services.personality.personality_service import get_current_voice
 
         template = self.SYSTEM_PROMPT_CLASS().getPrompt()
-        template = template.replace('{{adaptive_directives}}', self._get_adaptive_directives())
 
         voice_line = f"When responding; {get_current_voice()}"
-        return f"{voice_line}\n\n{self.getUserDefinition()}\n\n{template}"
+        prompt = f"{voice_line}\n\n{template}"
 
-    def _run_memory_seed(self) -> None:
-        """Auto-seed memory once at turn start. Runs before getUserPrompt()."""
-        from services.innate_skills.memory_skill import (
-            recall_episodes, SEED_RADIUS_BASELINE, _format_results,
-        )
+        # Mode-state-driven steering directives. The mode gate owns the
+        # mapping from active modes → directive text — UMP just appends the
+        # rendered string. ``_get_mode_state()`` ensures ``tick()`` has fired
+        # before the additions are read.
+        self._get_mode_state()
+        additions = self._get_mode_gate().get_system_prompt_additions()
+        if additions:
+            prompt = f"{prompt}\n\n{additions}"
+        return prompt
+
+    def pre_act(self) -> None:
+        """Memory auto-seed via canonical tool dispatch path.
+
+        Runs once at turn start (after self._uid is populated by write_input_row).
+        Calls handle_memory directly so the result is a canonical tag block,
+        records the row via ToolRenderAndRecordService (ephemeral=False) — same
+        storage path as any other durable tool call — and stores the block on
+        self._memory_seed for getUserPrompt() to inject verbatim.
+        """
+        from abilities._registry import AbilityRegistry
+        from abilities.memory import MemoryAbility
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
-        radius = SEED_RADIUS_BASELINE
+        radius = MemoryAbility.SEED_RADIUS_BASELINE
+        query = self._raw_input
 
-        try:
-            hits, _status = recall_episodes(
-                channel=self.CHANNEL,
-                query=self._raw_input,
-                caller='seed',
-                baseline_radius=radius,
-                return_raw=False,
+        # Expose query separately so recall_episodes() can embed the raw text
+        # for drift calculation without embedding the tag block string.
+        self._memory_seed_query = query
+        self._memory_seed_radius = radius
+
+        block = AbilityRegistry.get('memory').execute(self.CHANNEL, {
+            'action': 'recall',
+            'query': query,
+        }, None).get('text', '')
+
+        # Row is recorded every turn — the seed dispatch is part of the ACT
+        # trail whether or not it returned matches. Inject into the prompt
+        # only when the recall produced real content; empty (`results=0`) and
+        # error (`error=...`) header args yield blocks that add noise without
+        # value. Inspect only the opener line so a body containing the literal
+        # substring `results=0` or `error=` cannot suppress a valid seed.
+        header = block.split('\n', 1)[0] if block else ''
+        if block and 'results=0' not in header and 'error=' not in header:
+            self._memory_seed = block
+
+        if self._uid is None:
+            logger.warning(
+                "[UMP] pre_act skipped seed-row write: _uid is None "
+                "(SKIP_TRANSCRIPT_WRITE subclass?)"
             )
-            seed_text = _format_results(hits) if hits else ''
-        except Exception as exc:
-            logger.warning(f"[USER MSG] Memory auto-seed failed: {exc}")
-            seed_text = ''
+            return
 
-        if seed_text:
-            self._memory_seed = seed_text
-            self._memory_seed_radius = radius
-            ToolRenderAndRecordService(
-                tool_name='memory',
-                params={'action': 'recall', 'radius': radius},
-                result=seed_text,
-                ephemeral=False,
-                transcript_id=self._uid,
-            ).renderAndRecord()
-        else:
-            logger.debug("[USER MSG] Memory auto-seed: no result returned")
+        ToolRenderAndRecordService(
+            tool_name='memory',
+            params={'action': 'recall', 'query': query, 'radius': radius},
+            result=block,
+            ephemeral=False,
+            transcript_id=self._uid,
+        ).renderAndRecord()
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.
@@ -297,6 +382,19 @@ class UserMessageProcessor(MessageProcessor):
             self._on_narration(text, iteration)
         except Exception as e:
             logger.debug(f"[USER MSG] Narration callback failed: {e}")
+
+    def _emit_tool_event(self, event: dict) -> None:
+        """Push tool start/end events to the per-request SSE channel.
+
+        Mirrors _emit_narration: fires self._on_tool_event if set, swallows
+        callback exceptions, never kills the ACT loop.
+        """
+        if not self._on_tool_event or not event:
+            return
+        try:
+            self._on_tool_event(event)
+        except Exception as e:
+            logger.debug(f"[USER MSG] Tool event callback failed: {e}")
 
     def _drain_steering(self, request_id: str | None) -> list[str]:
         """Drain mid-loop user steering messages from MemoryStore.
@@ -335,21 +433,22 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Seven-service fan-out, each individually error-isolated.
+        """Three-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
-          2. SituationModelService
-          3. SaveSuggestionService — user-side trigger THEN response-side detect
-          4. _detect_fork_response + _store_adaptive_signals
-          5. DMNService.on_turn() — R10 critical
-          6. MetricsService — last ("turn closed" signal)
-          7. compaction_service.check_and_compact — end-turn backstop
+          2. DMNService.on_turn() — R10 critical
+          3. MetricsService — last ("turn closed" signal)
+
+        Compaction is intentionally NOT here: per the north star
+        (message-processing.md § "What does NOT go in postTurn()"),
+        compaction is a send()-loop responsibility driven by context
+        pressure, not a post-turn consequence. Mid-ACT Stage 1/2 in
+        send() owns it.
         """
         channel = self.CHANNEL   # 'user'
         text = self._raw_input
         response = self._last_response
-        metadata = self._metadata
 
         # 1. Conversation phase — TWO calls (user text + assistant response).
         # Skip the assistant-side update on empty response (cap-exit turns):
@@ -364,53 +463,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 2. Situation model (sync, MemoryStore-only write)
-        try:
-            from services.situation_model_service import get_situation_model_service
-            get_situation_model_service().update_on_message(channel)
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Situation update failed: {e}", exc_info=True)
-
-        # 3. Save suggestion scan — TWO paths in correct order:
-        #    3a: user-side trigger must fire BEFORE 3b detect (ordering constraint #3)
-        try:
-            from services.save_suggestion_service import SaveSuggestionService
-            save_svc = SaveSuggestionService()
-
-            # 3a: User-side completion/deferral trigger — clears existing flag
-            save_flag = save_svc.get_saveable_flag()
-            if save_flag:
-                trigger = save_svc.detect_save_trigger(text)
-                if trigger:
-                    save_svc.emit_save_card(save_flag['content_type'])
-                    save_svc.clear_flag()
-
-            # 3b: Response-side saveable content detection — sets new flag.
-            # NOTE: flag_saveable expects exchange_id (UUID string) for window
-            # correlation, not the integer transcript row id (self._uid). Prefer
-            # the UUID from metadata; fall back to a stringified row id if absent.
-            saveable = save_svc.detect_saveable_content(response, channel)
-            if saveable:
-                exchange_id_for_flag = (
-                    metadata.get('exchange_id')
-                    or metadata.get('uuid')
-                    or str(self._uid)
-                )
-                save_svc.flag_saveable(
-                    channel, saveable['content_type'], exchange_id_for_flag
-                )
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Save suggestion failed: {e}", exc_info=True)
-
-        # 4. Adaptive layer — fork detection + signal write (sync, MemoryStore)
-        try:
-            from workers.post_exchange_hooks import _store_adaptive_signals, _detect_fork_response
-            _detect_fork_response(text)
-            _store_adaptive_signals(text)
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Adaptive signals failed: {e}", exc_info=True)
-
-        # 5. DMN idle reset — CRITICAL (R10): must fire on every user turn
+        # 2. DMN idle reset — CRITICAL (R10): must fire on every user turn
         # so the DMN idle timer is deferred while the user is active.
         # WARNING level — failure here means DMN can fire mid-conversation
         # (Commit 8 critic P1-2).
@@ -420,7 +473,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
 
-        # 6. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 3. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -431,30 +484,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 7. End-turn compaction backstop (safety net; mid-loop compaction in send()
-        # should handle most cases).
-        # WARNING level — silent compaction failure leads to context overflow
-        # (Commit 8 critic P1-2).
-        try:
-            from services import compaction_service
-            compaction_service.check_and_compact(channel, self._context_budget())
-        except Exception as e:
-            logger.warning(f"[POSTTURN] End-turn compaction failed: {e}", exc_info=True)
-
     # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _context_budget(self) -> int:
-        """Estimate the context budget for end-turn compaction check.
-
-        Reads the context limit from the provider for JOB, caps at 60% of that
-        limit or 150,000 tokens, falls back to 32,000 on error.
-        """
-        try:
-            from services.providers import Providers
-            ctx_limit = Providers.instance().get_context_limit(job=self.JOB)
-            return min(int(ctx_limit * 0.6), 150_000)
-        except Exception:
-            return 32_000
 
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.
@@ -469,38 +499,40 @@ class UserMessageProcessor(MessageProcessor):
             logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
             return ''
 
-    def _get_adaptive_directives(self) -> str:
-        """Get adaptive response directives for system prompt placeholder injection.
+    def _get_mode_gate(self):
+        """Return a ticked ModeGateService instance, cached per turn.
 
-        The {{adaptive_directives}} placeholder in the UNIFIED template receives
-        this value. Reads adaptive signals from MemoryStore.
+        First call constructs the service and fires ``tick()`` (classify +
+        state update + persist) against the current raw input. Subsequent
+        calls within the same turn return the same instance so consumers
+        share one classification result.
         """
+        if self._mode_gate_cached is not None:
+            return self._mode_gate_cached
+
+        from services.mode_gate_service import ModeGateService
+        gate = ModeGateService()
         try:
-            from services.adaptive_layer_service import AdaptiveLayerService
-            from services.database_service import get_shared_db_service
+            gate.tick(self._raw_input, turn_id=self._uid)
+        except Exception as exc:
+            logger.warning("[MODE-GATE] tick failed: %s", exc)
+        self._mode_gate_cached = gate
+        return gate
 
-            db = get_shared_db_service()
-            service = AdaptiveLayerService(db)
+    def _get_mode_state(self) -> dict[str, float]:
+        """Return the per-mode activation state for this turn (cached).
 
-            current_signals = {
-                'prompt_token_count': len(self._raw_input.split()),
-            }
-            try:
-                from services.memory_client import MemoryClientService
-                import json as _json
-                store = MemoryClientService.create_connection()
-                snapshot_raw = store.get('adaptive_signals')
-                if snapshot_raw:
-                    snapshot = _json.loads(snapshot_raw)
-                    current_signals.update(snapshot)
-            except Exception:
-                pass
+        Wraps ``_get_mode_gate().get_state()`` with a per-turn cache so
+        getUserDefinition() does not re-read MemoryStore on every ACT
+        iteration. On any failure an empty dict is cached so callers see a
+        deterministic miss without retry storms.
+        """
+        if self._mode_state_cached is not None:
+            return self._mode_state_cached
+        try:
+            self._mode_state_cached = self._get_mode_gate().get_state()
+        except Exception as exc:
+            logger.warning("[MODE-GATE] get_state failed: %s", exc)
+            self._mode_state_cached = {}
+        return self._mode_state_cached
 
-            return service.generate_directives(
-                working_memory_turns=[],
-                current_signals=current_signals,
-                current_message=self._raw_input,
-            ) or ''
-        except Exception as e:
-            logger.warning(f"[USER MSG] Adaptive directives unavailable: {e}")
-            return ''

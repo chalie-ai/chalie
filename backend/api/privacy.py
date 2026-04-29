@@ -1,5 +1,11 @@
 """
 Privacy blueprint — /privacy/data-summary, /privacy/export, /privacy/delete-all.
+
+User data tables covered: episodes, transcript, tool_calls, compactions,
+goal_evidence, list_items, list_events, data_graph_edges, data_graph, goals,
+lists, scheduled_items, documents, watched_folders, place_fingerprints,
+user_tool_preferences, memory_recall_log, llm_call_log,
+concept_lut_misses, browser_snapshots, browser_credentials.
 """
 
 import json
@@ -14,6 +20,42 @@ from .auth import require_session
 logger = logging.getLogger(__name__)
 
 privacy_bp = Blueprint('privacy', __name__)
+
+# Ordered list of user-data tables for the nuclear delete operation.
+# Children must appear before parents to satisfy FK constraints.
+# System / auth / config tables are deliberately excluded.
+_DELETE_ALL_TABLES = (
+    # ── FK children first ─────────────────────────────────────────────────
+    "tool_calls",          # FK → transcript(id)
+    "compactions",         # FK → transcript(id)
+    "goal_evidence",       # FK → goals(id) ON DELETE CASCADE
+    "list_items",          # FK → lists(id)
+    "list_events",         # FK → lists(id)
+    "data_graph_edges",    # FK → data_graph(id) ON DELETE CASCADE
+    # ── Parents / independents ────────────────────────────────────────────
+    "transcript",
+    "episodes",
+    "data_graph",
+    "goals",
+    "lists",
+    "scheduled_items",
+    "documents",
+    "watched_folders",
+    "place_fingerprints",
+    "user_tool_preferences",
+    "memory_recall_log",
+    "llm_call_log",
+    "concept_lut_misses",
+    "browser_snapshots",
+    "browser_credentials",
+)
+
+# MemoryStore key patterns that belong to the user and must be cleared.
+_DELETE_ALL_STORE_PATTERNS = (
+    "working_memory:*",
+    "mode_gate:*",
+    "deliberation_score:*",
+)
 
 
 def _serialize_row(row: dict) -> dict:
@@ -55,10 +97,11 @@ def data_summary():
         # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
-                "episodes", "knowledge", "transcript",
+                "episodes", "transcript",
                 "scheduled_items",
-                "lists", "list_items", "place_fingerprints",
+                "lists", "list_items",
                 "documents",
+                "data_graph",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -92,13 +135,13 @@ def export_data():
     """Export all user data as a streaming JSON download."""
 
     user_data_tables = [
-        "episodes", "knowledge",
+        "episodes",
         "transcript",
         "scheduled_items", "lists", "list_items",
         "list_events",
-        "place_fingerprints",
         "user_tool_preferences",
         "documents", "watched_folders",
+        "data_graph",
     ]
 
     store_patterns = [
@@ -209,26 +252,48 @@ def export_data():
 @privacy_bp.route('/privacy/delete-all', methods=['DELETE'])
 @require_session
 def delete_all():
-    """Nuclear option — clear all stored user data."""
+    """Nuclear option — clear all stored user data.
+
+    Wipes every user-owned table (episodes, transcript, tool_calls,
+    compactions, goal_evidence, list_items, list_events, data_graph_edges,
+    data_graph, goals, lists, scheduled_items, documents,
+    watched_folders, place_fingerprints, user_tool_preferences,
+    memory_recall_log, llm_call_log,
+    concept_lut_misses, browser_snapshots, browser_credentials)
+    and clears MemoryStore working_memory keys.
+
+    System / auth / config tables are deliberately excluded.
+    """
     confirm = request.headers.get("X-Confirm-Delete", "")
     if confirm != "yes":
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
 
     try:
         from services.database_service import get_shared_db_service
+        from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
         truncate_failures = []
+
         with db.connection() as conn:
             cursor = conn.cursor()
-            # FK order: tool_calls → transcript (tool_calls.transcript_id FK)
-            for table in ["tool_calls", "episodes", "transcript"]:
+            for table in _DELETE_ALL_TABLES:
                 try:
                     cursor.execute(f"DELETE FROM {table}")
                 except Exception as e:
                     logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                     truncate_failures.append(table)
             cursor.close()
+
+        # Clear user-owned MemoryStore keys
+        try:
+            store = MemoryClientService.create_connection()
+            for pattern in _DELETE_ALL_STORE_PATTERNS:
+                matched = store.keys(pattern)
+                if matched:
+                    store.delete(*matched)
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to clear memory store: {e}")
 
         result = {"deleted": True, "timestamp": utc_now().isoformat()}
         if truncate_failures:

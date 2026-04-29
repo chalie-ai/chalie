@@ -68,7 +68,10 @@ class ChalieApp {
     this._notifications = new Notifications({ getHost: () => this._backendHost });
 
     // Image attach module
-    this._imageAttach = new ImageAttach({ getHost: () => this._backendHost });
+    this._imageAttach = new ImageAttach({
+      getHost: () => this._backendHost,
+      onDocumentDrop: (file) => this._docUpload?.uploadFile(file),
+    });
     this._imageAttach.init();
 
     // Voice recorder (mic → STT → paste into input)
@@ -136,14 +139,7 @@ class ChalieApp {
           topic: 'curiosity',
           mode: 'proactive',
           confidence: 0.82,
-          blocks: [
-            {
-              type: 'thought',
-              id: 'mock-thought-1',
-              content: 'You might enjoy reading about octopus cognition — it connects to things we discussed about distributed intelligence.',
-              context: 'Based on your recent conversation about AI architectures',
-            },
-          ],
+          content: '<p>You might enjoy reading about octopus cognition — it connects to things we discussed about distributed intelligence.</p>',
         });
       }, 2000);
     }
@@ -304,7 +300,7 @@ class ChalieApp {
       if (!lsGet('chalie_welcomed')) {
         lsSet('chalie_welcomed', '1');
         this.renderer.appendChalieForm(
-          [{ type: 'text', content: "Hello. I'm Chalie." }],
+          "<p>Hello. I'm Chalie.</p>",
           { mode: 'UNIFIED', confidence: 1 },
         );
       }
@@ -475,49 +471,25 @@ class ChalieApp {
       if (!payload || this._chat.isSending) return;
 
       this._chat.isSending = true;
-      const pendingForm = this.renderer.createPendingForm();
+      const actEl = this.renderer.createActCycle();
 
       this.ws.sendAction(payload, {
         onMessage: (data) => {
-          const blocks = data.blocks || [];
+          const content = data.content || '';
           const meta = {
             mode: data.mode || 'ACT',
             confidence: data.confidence || 0.95,
           };
-          if (pendingForm.isConnected) {
-            this.renderer.resolvePendingForm(pendingForm, blocks, meta);
-          } else {
-            this.renderer.appendChalieForm(blocks, meta);
-          }
+          this.renderer.replaceActWithResponse(actEl, content, meta);
         },
         onError: (data) => {
-          this.renderer.resolvePendingFormError(pendingForm, data.message);
+          this.renderer.replaceActWithError(actEl, data.message);
         },
         onDone: () => {
           this._chat.isSending = false;
           this.presence.setState('resting');
         },
       });
-    });
-
-    // Proactive thought-card action (expand / dismiss)
-    // Dispatched by blocks.js _renderThought() when the user clicks a card button.
-    document.addEventListener('chalie:thought-action', (e) => {
-      const { action, blockId } = e.detail;
-      console.log('[chalie:thought-action]', { action, blockId });
-
-      if (action === 'expand') {
-        if (this._chat.isSending) return;
-        // Pre-fill the textarea so sendMessage() picks up the text, then send.
-        const textarea = document.getElementById('messageInput');
-        if (textarea) {
-          textarea.value = 'Tell me more about that';
-          // Sync the send-button enabled state with the new value.
-          textarea.dispatchEvent(new Event('input'));
-        }
-        this._chat.sendMessage();
-      }
-      // 'dismiss' — fade-out animation is handled in blocks.js; nothing else needed here.
     });
 
     // Pin moment event (from remember button on Chalie messages)
@@ -638,6 +610,70 @@ class ChalieApp {
     this._chat.onSendComplete(() => {
       document.getElementById('messageInput').focus();
     });
+
+    // Drop targets — input-dock and textarea paste
+    this._imageAttach.enableDropTargets({
+      dropzone: document.querySelector('.input-dock'),
+      pasteTarget: textarea,
+    });
+
+    // Global drop overlay — shown when any file is dragged over the viewport
+    this._initGlobalDropOverlay();
+  }
+
+  _initGlobalDropOverlay() {
+    if (document.querySelector('.global-drop-overlay')) return; // idempotent
+    const overlay = document.createElement('div');
+    overlay.className = 'global-drop-overlay';
+    overlay.innerHTML = '<span class="global-drop-overlay__label">Drop image or document here</span>';
+    document.body.appendChild(overlay);
+
+    let enterCount = 0;
+    const hideOverlay = () => {
+      enterCount = 0;
+      overlay.classList.remove('active');
+    };
+
+    document.addEventListener('dragenter', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+      enterCount++;
+      overlay.classList.add('active');
+    });
+
+    document.addEventListener('dragover', (ev) => {
+      if (!ev.dataTransfer?.types?.includes('Files')) return;
+      ev.preventDefault();
+    });
+
+    document.addEventListener('dragleave', (ev) => {
+      // Only decrement on real exits (relatedTarget is null when leaving the viewport)
+      if (ev.relatedTarget) return;
+      enterCount--;
+      if (enterCount <= 0) hideOverlay();
+    });
+
+    // Safety net — dragend always fires even if the drop is cancelled,
+    // preventing a stuck overlay on drag-out-of-window.
+    document.addEventListener('dragend', hideOverlay);
+    window.addEventListener('blur', hideOverlay);
+
+    overlay.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      hideOverlay();
+      const files = ev.dataTransfer?.files;
+      if (!files?.length) return;
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          this._imageAttach.handleFile(file);
+        } else {
+          this._docUpload.uploadFile(file);
+        }
+      }
+    });
+
+    // Hide overlay when drop is handled elsewhere (e.g. input-dock)
+    document.addEventListener('drop', hideOverlay);
   }
 
   // ---------------------------------------------------------------------------

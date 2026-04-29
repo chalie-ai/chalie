@@ -4,7 +4,6 @@ Tests cover:
 - append()
 - get_recent() with and without since_id
 - get_latest_id()
-- _keyword_search() (keyword fallback path, cross-topic, date range)
 - TestDbStateExtractionTrigger: DB-state-driven extraction trigger
 
 All tests use the real production stack against the shared `db` fixture
@@ -12,10 +11,6 @@ All tests use the real production stack against the shared `db` fixture
 acceptable boundary: patch('_trigger_episode_extraction') in
 TestDbStateExtractionTrigger, which stubs the daemon-thread spawn only —
 the query logic itself is real.
-
-Short content strings (< 50 estimated tokens) are used throughout so that
-_embed_entry is never invoked — its embedding-service dependency is
-irrelevant to the transcript storage and retrieval behaviours under test.
 """
 
 from unittest.mock import patch
@@ -127,59 +122,6 @@ class TestGetLatestId:
     def test_returns_none_for_empty_topic(self, db):
         from services.transcript_service import get_latest_id
         assert get_latest_id('nonexistent') is None
-
-
-class TestKeywordSearch:
-    def test_keyword_search_finds_content(self, db):
-        from services.transcript_service import _keyword_search, append
-
-        append('test', 'user', 'Malta sunny')
-        append('test', 'user', 'Groceries')
-
-        results = _keyword_search('test', 'Malta', limit=5)
-        assert len(results) == 1
-        assert 'Malta' in results[0]['content']
-
-    def test_keyword_search_filters_by_topic(self, db):
-        from services.transcript_service import _keyword_search, append
-
-        append('topic-a', 'user', 'Python programming')
-        append('topic-b', 'user', 'Python snakes')
-
-        results = _keyword_search('topic-a', 'Python', limit=5)
-        assert len(results) == 1
-        assert 'programming' in results[0]['content']
-
-    def test_keyword_search_global(self, db):
-        from services.transcript_service import _keyword_search, append
-
-        append('topic-a', 'user', 'Python programming')
-        append('topic-b', 'user', 'Python snakes')
-
-        results = _keyword_search(None, 'Python', limit=5)
-        assert len(results) == 2
-
-    def test_keyword_search_with_topic_field(self, db):
-        from services.transcript_service import _keyword_search, append
-
-        append('topic-a', 'user', 'Malta weather')
-
-        results = _keyword_search('topic-a', 'Malta', limit=5)
-        assert results[0]['channel'] == 'topic-a'
-
-    def test_keyword_search_date_range(self, db):
-        from services.transcript_service import _keyword_search, append
-
-        append('test', 'user', 'Old Python')
-        append('test', 'user', 'New Python')
-
-        # All results (no date filter)
-        results = _keyword_search('test', 'Python', limit=5)
-        assert len(results) == 2
-
-        # With a future date_from — should exclude everything
-        results = _keyword_search('test', 'Python', limit=5, date_from='2099-01-01')
-        assert len(results) == 0
 
 
 class TestDbStateExtractionTrigger:

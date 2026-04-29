@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def document_purge_worker(shared_state):
+def document_purge_worker():
     """
     Background service that purges expired documents every 6 hours.
 

@@ -122,16 +122,12 @@ export class Chat {
     // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
     this._renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
 
-    // Create pending form and store reference for potential early resolution
-    const pendingForm = this._renderer.createPendingForm();
-    this._pendingForm = pendingForm;
+    // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
+    // Persists for the entire turn; replaced wholesale by the final response.
+    const actEl = this._renderer.createActCycle();
+    this._pendingForm = actEl;
 
-    // After 2 seconds, upgrade the "..." dots to a brief placeholder phrase
-    const pendingUpgradeTimer = setTimeout(() => {
-      this._renderer.upgradePendingText(pendingForm);
-    }, 2000);
-
-    let responseBlocks = [];
+    let responseContent = '';
     let responseMeta = {};
 
     this._ws.send(text || '[Image attached]', source, {
@@ -139,20 +135,23 @@ export class Chat {
         this._presence.setState(stage);
       },
       onNarration: (data) => {
-        // Live ACT narration: remove thinking dots, show narration bubble instead
-        clearTimeout(pendingUpgradeTimer);
-        // Remove the pending form entirely — narration bubbles replace it
-        if (pendingForm.isConnected) pendingForm.remove();
+        // Each new narration REPLACES the previous one — no stacking.
         this._presence.setState('narrating');
-        this._renderer.appendNarrationBubble(data.text, data.step);
+        this._renderer.setActNarrative(actEl, data.text, data.step);
+      },
+      onToolStart: (msg) => {
+        // Tools accumulate in a single flat list spanning the whole ACT loop.
+        this._renderer.appendToolPill(actEl, msg.call_id, msg.name);
+      },
+      onToolEnd: (msg) => {
+        this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
       },
       onSteerSent: (steerText) => {
         // User sent a redirect while ACT is running — show inline
         this._renderer.appendSteerBubble(steerText);
       },
       onMessage: (data) => {
-        clearTimeout(pendingUpgradeTimer);
-        responseBlocks = data.blocks || [];
+        responseContent = data.content || '';
         responseMeta = {
           topic: data.topic,
           exchange_id: data.exchange_id,
@@ -162,36 +161,30 @@ export class Chat {
         this._presence.setState('responding');
       },
       onError: (data) => {
-        clearTimeout(pendingUpgradeTimer);
-        this._renderer.resolvePendingFormError(pendingForm, data.message);
+        this._renderer.replaceActWithError(actEl, data.message);
         if (!data.recoverable) {
           this._onAuthFailureCb?.();
         }
       },
       onDone: (data) => {
-        clearTimeout(pendingUpgradeTimer);
         this._onResponseReceivedCb?.();
-        if (responseBlocks.length) {
+        if (responseContent) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          if (pendingForm.isConnected) {
-            this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
-          } else {
-            // pendingForm was removed by narration — append fresh
-            this._renderer.appendChalieForm(responseBlocks, responseMeta);
-          }
+          // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
+          this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
-            const notifText = responseBlocks
-              .filter(b => b.type === 'text' || b.type === 'header')
-              .map(b => b.content || '')
-              .join(' ');
-            if (notifText) this._notifications.notifyBackground(notifText);
+            // Import extractPlaintext lazily for background notification text
+            import('./markup_extract.js').then(({ extractPlaintext }) => {
+              const notifText = extractPlaintext(responseContent);
+              if (notifText) this._notifications.notifyBackground(notifText);
+            }).catch(() => {});
           }
         } else {
-          // No blocks response — remove the pending bubble
-          pendingForm.remove();
+          // No content response — remove the ACT placeholder
+          if (actEl.isConnected) actEl.remove();
           this._pendingForm = null;
         }
         this._presence.setState('resting');
@@ -277,16 +270,16 @@ export class Chat {
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.blocks?.length) {
-      this._renderer.appendChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content) {
+      this._renderer.appendChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 
   _prependMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.blocks?.length) {
-      this._renderer.prependChalieForm(msg.blocks, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content) {
+      this._renderer.prependChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
     }
   }
 

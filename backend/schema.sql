@@ -47,46 +47,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
 
--- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
+-- semantic_concepts, semantic_relationships removed — replaced by data_graph table.
 -- semantic_schemas table removed — never used by any service.
 
--- procedural_memory removed — replaced by unified knowledge table.
+-- procedural_memory removed — replaced by data_graph table.
 
--- ────────────────────────────────────────────────────────────────
--- KNOWLEDGE — unified knowledge store (traits, procedures, concepts, relationships)
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS knowledge (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind        TEXT NOT NULL,
-    entity      TEXT NOT NULL DEFAULT 'user',
-    key         TEXT NOT NULL,
-    value       TEXT,
-    data        TEXT,
-    decay_class TEXT NOT NULL DEFAULT 'standard',
-    confidence  REAL NOT NULL DEFAULT 0.5,
-    reliability TEXT NOT NULL DEFAULT 'reliable',  -- dropped by migration 026; kept here for migration compat
-    source      TEXT,
-    evidence_count INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    last_accessed_at TEXT,
-    deleted_at  TEXT,
-    search_queries TEXT DEFAULT NULL,
-    UNIQUE(entity, key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind);
-CREATE INDEX IF NOT EXISTS idx_knowledge_entity ON knowledge(entity);
-CREATE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge(key);
-CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC);
-CREATE INDEX IF NOT EXISTS idx_knowledge_decay_class ON knowledge(decay_class);
-CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_knowledge_kind_entity_active ON knowledge(kind, entity) WHERE deleted_at IS NULL;
-
-CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-    key, value, kind, entity, search_queries, content='knowledge', content_rowid='rowid',
-    tokenize='porter unicode61'
-);
+-- knowledge table removed — all trait/concept/procedure storage routes through DataGraphService.
 
 -- topics table removed — dropped by migration 035_channel_migration.sql
 
@@ -320,52 +286,9 @@ CREATE TABLE IF NOT EXISTS list_events (
 
 CREATE INDEX IF NOT EXISTS idx_list_events_list ON list_events(list_id, created_at DESC);
 
--- ────────────────────────────────────────────────────────────────
--- TOOL CAPABILITY PROFILES
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS tool_capability_profiles (
-    id TEXT PRIMARY KEY,
-    tool_name TEXT NOT NULL UNIQUE,
-    tool_type TEXT NOT NULL DEFAULT 'tool',
-    short_summary TEXT NOT NULL,
-    full_profile TEXT NOT NULL,
-    usage_scenarios TEXT NOT NULL DEFAULT '[]',    -- JSONB
-    anti_scenarios TEXT NOT NULL DEFAULT '[]',     -- JSONB
-    complementary_skills TEXT DEFAULT '[]',        -- JSONB
-    triage_triggers TEXT DEFAULT '[]',             -- JSONB
-    manifest_hash TEXT,
-    enrichment_episode_ids TEXT DEFAULT '[]',      -- JSONB
-    enrichment_count INTEGER DEFAULT 0,
-    last_enriched_at TEXT,
-    avg_latency_ms REAL DEFAULT 0,
-    cost_tier TEXT DEFAULT 'free',
-    reliability_score REAL DEFAULT 1.0,
-    domain TEXT DEFAULT 'Other',
-    effort TEXT DEFAULT 'moderate',
-    skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
-    descriptor TEXT,                                -- compact discovery label: 'name (synonym1, synonym2, ...)'
-    keywords TEXT DEFAULT '',                       -- comma-separated search keywords for 2-axis scoring
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tcp_tool_name ON tool_capability_profiles(tool_name);
-
--- ────────────────────────────────────────────────────────────────
--- TOOL PERFORMANCE METRICS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS tool_performance_metrics (
-    id TEXT PRIMARY KEY,
-    tool_name TEXT NOT NULL,
-    exchange_id TEXT,
-    invocation_success INTEGER NOT NULL,      -- BOOLEAN
-    latency_ms REAL,
-    cost_estimate REAL DEFAULT 0,
-    user_correction INTEGER DEFAULT 0,        -- BOOLEAN
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tpm_tool_created ON tool_performance_metrics(tool_name, created_at DESC);
+-- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
+-- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs
+-- both the table and its index on next boot.
 
 -- ────────────────────────────────────────────────────────────────
 -- USER TOOL PREFERENCES
@@ -382,32 +305,16 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
 );
 
 
--- NOTE: moments are stored in the knowledge table as kind='moment' (parent)
+-- NOTE: moments are stored in data_graph as kind='moment' (parent)
 -- and kind='moment_context' (enrichment context rows). The old dedicated
 -- moments table and documents-table path (source_type='moment') are removed.
-
--- ────────────────────────────────────────────────────────────────
--- PLACE FINGERPRINTS — learned place patterns
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS place_fingerprints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fingerprint_hash TEXT UNIQUE NOT NULL,
-    device_class TEXT NOT NULL,
-    hour_bucket INTEGER NOT NULL,
-    location_hash TEXT,
-    connection_type TEXT,
-    place_label TEXT NOT NULL,
-    count INTEGER DEFAULT 1,
-    last_seen_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_hash);
 
 -- Note: tables that disappear from this schema are dropped automatically by
 -- SchemaConvergenceService on the next boot.  No explicit DROP statements
 -- needed here.  Past examples: cortex_iterations, persistent_tasks,
 -- cognitive_reflexes, triage_calibration_events, document_chunks,
--- knowledge_vec, scheduled_items_vec, lists_vec, goals_vec.
+-- knowledge, knowledge_vec, knowledge_fts, scheduled_items_vec, lists_vec,
+-- goals_vec, place_fingerprints, ambient_inferences, situation_states.
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -512,67 +419,13 @@ CREATE TABLE IF NOT EXISTS concept_lut_misses (
 CREATE INDEX IF NOT EXISTS idx_lut_misses_kind ON concept_lut_misses(kind, count DESC);
 
 -- ────────────────────────────────────────────────────────────────
--- GOALS — persistent goal lifecycle (stated, inferred, emergent, developmental)
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS goals (
-    id TEXT PRIMARY KEY,
-    description TEXT NOT NULL,                -- natural language goal description
-    type TEXT NOT NULL DEFAULT 'emergent'
-        CHECK (type IN ('stated', 'inferred', 'emergent', 'developmental')),
-    status TEXT NOT NULL DEFAULT 'candidate'
-        CHECK (status IN ('candidate', 'strengthening', 'actionable', 'active', 'completed', 'decayed', 'evolved')),
-    salience REAL NOT NULL DEFAULT 0.0,       -- 0.0–1.0 current strength
-    confidence REAL NOT NULL DEFAULT 0.1,     -- 0.0–1.0 prediction confidence
-    commitment REAL DEFAULT 0.0,              -- 0.0–1.0 commitment level
-    evidence_count INTEGER DEFAULT 0,         -- number of supporting signals
-    outcome_feedback TEXT DEFAULT '[]',       -- JSON array: engagement history
-    is_muted INTEGER DEFAULT 0,               -- fast column: 1 if user has muted this goal
-    urgency REAL DEFAULT 0.0,                 -- 0.0–1.0 time pressure
-    timescale TEXT DEFAULT 'medium_term',     -- immediate, short_term, medium_term, long_term
-    strategy TEXT,                            -- generated approach for actionable goals
-    strategy_hash INTEGER,                    -- hash mod 10000 for tracking strategy versions
-    parent_motives TEXT DEFAULT '[]',         -- JSON: aligned CORE_MOTIVES
-    identity_links TEXT DEFAULT '[]',         -- JSON: aligned identity dimensions
-    lineage_parent_id TEXT,                   -- parent goal for hierarchy
-    channel TEXT,                             -- associated conversation channel (optional)
-    last_reinforced_at TEXT,                  -- when goal last received evidence
-    last_acted_at TEXT,                       -- when goal was last acted upon
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    derived_from TEXT DEFAULT '[]'         -- JSON array of episode IDs that formed this goal
-);
-
-CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
-CREATE INDEX IF NOT EXISTS idx_goals_salience ON goals(salience, status);
-CREATE INDEX IF NOT EXISTS idx_goals_type ON goals(type, status);
-CREATE INDEX IF NOT EXISTS idx_goals_active_salience ON goals(salience DESC) WHERE status IN ('candidate', 'strengthening', 'actionable');
-
--- ────────────────────────────────────────────────────────────────
--- GOAL EVIDENCE — accumulated signals supporting goals
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS goal_evidence (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-    signal_type TEXT NOT NULL,                -- 'topic_mention', 'trait_update', 'explicit', etc.
-    content TEXT NOT NULL,                    -- the raw signal text
-    source TEXT,                              -- which service emitted the signal
-    strength REAL NOT NULL DEFAULT 0.5,       -- 0.0–1.0 how strongly this supports the goal
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_goal_evidence_goal_id ON goal_evidence(goal_id);
-CREATE INDEX IF NOT EXISTS idx_goal_evidence_type ON goal_evidence(signal_type);
-
--- ────────────────────────────────────────────────────────────────
 -- WORLD STATE VECTOR TABLES — salience-based retrieval
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS tool_capability_profiles_vec USING vec0(embedding float[768]);
+-- tool_capability_profiles_vec removed — replaced by abilities.sqlite.
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS goals_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
@@ -657,16 +510,13 @@ CREATE TABLE IF NOT EXISTS transcript (
     tool_call_id TEXT,
     tool_name   TEXT,
     internal    INTEGER DEFAULT 0,
-    thinking_level TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    deliberation_score REAL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    xml_migrated INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS transcript_vec USING vec0(
-    embedding float[768]
-);
 
 -- ────────────────────────────────────────────────────────────────
 -- COMPACTIONS — incremental conversation summarization
@@ -788,12 +638,12 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_edges_to   ON data_graph_edges(to_id, 
 -- Populated by SearchExpanderService (search_expander_service.py) after
 -- every knowledge / data_graph write. Each row is one doc2query variant
 -- whose embedding lives in the companion vec0 table, keyed by this row's id.
--- Callers: knowledge_service.recall() and data_graph_service.recall() join
+-- Callers: data_graph_service.recall() joins
 --          expanded_semantic_vec → expanded_semantic to surface variant hits.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS expanded_semantic (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    relates_to_table TEXT NOT NULL,   -- 'knowledge' or 'data_graph'
+    relates_to_table TEXT NOT NULL,   -- 'data_graph'
     related_to_id   INTEGER NOT NULL, -- rowid of the source row
     str             TEXT NOT NULL     -- the variant query string
 );
@@ -803,13 +653,6 @@ CREATE INDEX IF NOT EXISTS idx_expanded_semantic_lookup
 
 -- One vec row per expanded_semantic row; rowid matches expanded_semantic.id.
 CREATE VIRTUAL TABLE IF NOT EXISTS expanded_semantic_vec USING vec0(embedding float[768]);
-
--- Cascade: DELETE knowledge row → purge its expanded_semantic rows.
-CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_knowledge
-    AFTER DELETE ON knowledge BEGIN
-    DELETE FROM expanded_semantic
-        WHERE relates_to_table = 'knowledge' AND related_to_id = OLD.rowid;
-END;
 
 -- Cascade: DELETE data_graph row → purge its expanded_semantic rows.
 CREATE TRIGGER IF NOT EXISTS expanded_semantic_cascade_data_graph
@@ -823,3 +666,17 @@ CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
     AFTER DELETE ON expanded_semantic BEGIN
     DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
 END;
+
+-- ============================================================================
+-- TELEMETRY — flat key/value store for the latest client heartbeat.
+-- ============================================================================
+-- Populated by /health POST. The frontend (heartbeat.js) is the source of
+-- truth for which keys are collected; the backend persists whatever is sent.
+-- Nested payload keys are flattened with dots, e.g.
+--   {"device": {"name": "iPhone"}}  →  key='device.name', value='iPhone'
+-- One row per key; UPSERT on every push. WorldState renders by reading the
+-- whole table and grouping by the top-level prefix.
+CREATE TABLE IF NOT EXISTS telemetry (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);

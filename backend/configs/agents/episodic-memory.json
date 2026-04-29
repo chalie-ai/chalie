@@ -22,7 +22,6 @@
   "inactivity_timeout": 600,
   "freshness_decay_rate": 0.05,
   "reconsolidation_boost": 0.2,
-  "decay_interval_seconds": 1800,
   "retrieval_decay_exponent": 0.5,
   "semantic_decay_rate": 0.03,
   "comments": {

@@ -14,9 +14,6 @@ from flask import Flask
 from api.updates import updates_bp
 from services.memory_store import MemoryStore
 
-# Context key used by the /api/updates/context endpoint.
-_CONTEXT_KEY = "client_context:primary"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -194,7 +191,7 @@ class TestUpdateBelief:
 @pytest.mark.unit
 class TestUpdateMemory:
     def test_cookie_auth_stores_memory(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
+        with patch("abilities.memory._handle_store",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'work'.") as mock_mem:
             resp = cookie_client.post(
                 "/api/updates/memory",
@@ -223,8 +220,8 @@ class TestUpdateMemory:
         assert resp.status_code == 400
 
     def test_memorize_error_returns_422(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Error: no traits specified."):
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, error=no-traits-specified)]"):
             resp = cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Something"},
@@ -233,8 +230,8 @@ class TestUpdateMemory:
         assert resp.status_code == 422
 
     def test_default_topic_is_general(self, cookie_client):
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'.") as mock_mem:
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, key=general)]\nStored 1 trait(s).") as mock_mem:
             cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Something important happened today"},
@@ -245,8 +242,8 @@ class TestUpdateMemory:
 
     def test_salience_clamped(self, cookie_client):
         """Salience values outside 1–10 should be clamped silently."""
-        with patch("services.innate_skills.memory_skill.handle_memory",
-                   return_value="[MEMORIZE] Stored 1 trait(s) for topic 'test'."):
+        with patch("abilities.memory._handle_store",
+                   return_value="[memory(action=store, key=test)]\nStored 1 trait(s)."):
             resp = cookie_client.post(
                 "/api/updates/memory",
                 json={"content": "Very important note", "salience": 999},
@@ -279,7 +276,7 @@ class TestUpdateMemory:
             permissions={"update": ["memory"]}
         )
         with patch_session, patch_auth, \
-             patch("services.innate_skills.memory_skill.handle_memory",
+             patch("abilities.memory._handle_store",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'."):
             with app.test_client() as client:
                 resp = client.post(
@@ -288,148 +285,6 @@ class TestUpdateMemory:
                     headers={"Authorization": "Bearer faketoken"},
                     content_type="application/json",
                 )
-        assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
-# POST /api/updates/context
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestUpdateContext:
-    def _store(self, initial_ctx=None):
-        """Return a real MemoryStore pre-populated with initial_ctx at the context key.
-
-        Args:
-            initial_ctx: Optional dict to seed as the current context JSON.  If
-                ``None`` the context starts as an empty object ``{}``.
-
-        Returns:
-            A :class:`~services.memory_store.MemoryStore` instance ready for
-            injection via ``MemoryClientService.create_connection``.
-        """
-        store = MemoryStore()
-        store.set(_CONTEXT_KEY, json.dumps(initial_ctx or {}))
-        return store
-
-    def test_updates_place_field(self, cookie_client):
-        store = self._store()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/context",
-                json={"place": "office"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-        assert resp.get_json()["ok"] is True
-        stored = json.loads(store.get(_CONTEXT_KEY))
-        assert stored["place"] == "office"
-
-    def test_updates_energy_field(self, cookie_client):
-        store = self._store()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/context",
-                json={"energy": "high"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-        stored = json.loads(store.get(_CONTEXT_KEY))
-        assert stored["energy"] == "high"
-
-    def test_updates_custom_signals(self, cookie_client):
-        store = self._store()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/context",
-                json={"custom": {"meeting_room": "B3", "sprint": "42"}},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-        stored = json.loads(store.get(_CONTEXT_KEY))
-        assert stored["external_signals"]["meeting_room"] == "B3"
-        assert stored["external_signals"]["sprint"] == "42"
-
-    def test_merges_custom_with_existing(self, cookie_client):
-        """New custom signals should merge into, not replace, existing ones."""
-        store = self._store({"external_signals": {"existing_key": "existing_val"}})
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            cookie_client.post(
-                "/api/updates/context",
-                json={"custom": {"new_key": "new_val"}},
-                content_type="application/json",
-            )
-        stored = json.loads(store.get(_CONTEXT_KEY))
-        assert stored["external_signals"]["existing_key"] == "existing_val"
-        assert stored["external_signals"]["new_key"] == "new_val"
-
-    def test_no_fields_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/context",
-            json={},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
-    def test_custom_not_dict_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/context",
-            json={"custom": ["not", "a", "dict"]},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
-    def test_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.post(
-            "/api/updates/context",
-            json={"place": "home"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self):
-        app, patch_session, patch_auth = _bearer_client(permissions={})
-        with patch_session, patch_auth:
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/updates/context",
-                    json={"place": "cafe"},
-                    headers={"Authorization": "Bearer faketoken"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 403
-
-    def test_bearer_with_permission_allowed(self):
-        app, patch_session, patch_auth = _bearer_client(
-            permissions={"update": ["context"]}
-        )
-        store = self._store()
-        with patch_session, patch_auth, \
-             patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/updates/context",
-                    json={"energy": "low"},
-                    headers={"Authorization": "Bearer faketoken"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 200
-
-    def test_cookie_auth_bypasses_permission_check(self, cookie_client):
-        """Cookie-authenticated users can always update context."""
-        store = self._store()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/context",
-                json={"place": "home", "energy": "medium"},
-                content_type="application/json",
-            )
         assert resp.status_code == 200
 
 

@@ -17,7 +17,7 @@ POLL_INTERVAL = 21600       # 6 hours
 LOOKBACK_HOURS = 6
 
 
-def moment_context_worker(shared_state=None):
+def moment_context_worker():
     """Entry point for run.py. Runs one immediate pass, then polls every 6h."""
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {POLL_INTERVAL}s)")
 

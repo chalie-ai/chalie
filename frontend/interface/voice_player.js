@@ -19,6 +19,8 @@
  * previous stream via `_openGeneration`.
  */
 
+import { createWakeLock } from './utils.js';
+
 const _TTS_PATH = '/voice/synthesize';
 const _SKIP_SECONDS = 10;
 
@@ -66,6 +68,7 @@ export class VoicePlayer {
     this._pausedOffset = 0;
     this._decodeChain = Promise.resolve();
     this._progressTimer = null;
+    this._wakeLock = createWakeLock();
   }
 
   /** Bind overlay DOM + listeners. Must be called after DOM ready. */
@@ -211,6 +214,7 @@ export class VoicePlayer {
     if (this._progress) { this._progress.max = 0; this._progress.value = 0; }
     if (this._timeEl) this._timeEl.textContent = '0:00 / 0:00';
     this._showLoading(false);
+    this._wakeLock.release();
   }
 
   // ---------------------------------------------------------------------------
@@ -272,6 +276,7 @@ export class VoicePlayer {
       if (this._progress && this._currentBuffer) {
         this._progress.value = this._currentBuffer.duration || 0;
       }
+      this._wakeLock.release();
     }
   }
 
@@ -329,6 +334,7 @@ export class VoicePlayer {
     this._paused = false;
     this._setPlayIcon(true);
     this._startProgressTimer();
+    this._wakeLock.acquire();
   }
 
   _stopCurrentSource() {
@@ -366,6 +372,7 @@ export class VoicePlayer {
     this._paused = true;
     this._setPlayIcon(false);
     this._stopProgressTimer();
+    this._wakeLock.release();
   }
 
   _skipForward() {

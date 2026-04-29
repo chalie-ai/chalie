@@ -19,6 +19,8 @@ import threading
 
 from flask import Blueprint, request, jsonify
 
+from services.markup import extract_plaintext
+
 logger = logging.getLogger(__name__)
 
 voice_bp = Blueprint("voice", __name__)
@@ -114,16 +116,12 @@ def _ensure_models():
         logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
         model_file, voices_file = _download_kokoro_models()
         from kokoro_onnx import Kokoro
-        import onnxruntime as ort
+        from services.onnx_session import build_session
 
-        # Kokoro's default __init__ hardcodes CPUExecutionProvider unless the
-        # separate `onnxruntime-gpu` wheel is installed. Chalie ships standard
-        # `onnxruntime`, which auto-exposes CUDA/CoreML when available — same
-        # path used by embedding_service. Build the session ourselves and hand
-        # it to Kokoro.from_session so accelerated EPs are actually used.
-        providers = ort.get_available_providers()
-        kokoro_sess = ort.InferenceSession(model_file, providers=providers)
-        logger.info("[Voice] Kokoro EP providers: %s", kokoro_sess.get_providers())
+        # Kokoro's default __init__ hardcodes CPUExecutionProvider. The installer
+        # lands the right wheel (CPU/CUDA/ROCm) for the host; build_session picks
+        # the matching EP and falls back to CPU if session construction fails.
+        kokoro_sess = build_session(model_file, log_prefix="[Voice/Kokoro]")
         tts = Kokoro.from_session(kokoro_sess, voices_file)
 
         with _load_lock:
@@ -170,118 +168,17 @@ def _wav_duration_seconds(data: bytes) -> float:
 
 
 def _clean_for_tts(text: str) -> str:
-    """Convert markdown to natural spoken text for TTS synthesis.
+    """Convert response content to TTS-safe plaintext.
 
-    Transforms structured markdown into fluid speech while preserving meaning:
-    - Code blocks  → "See code in chat message."
-    - Numbered lists → kept numbered as sentences
-    - Bullet lists  → individual sentences
-    - Tables        → row-by-row natural reading
-    - Headers       → spoken as topic sentences
-    - Links         → label only, URLs dropped
+    Inputs may be raw plaintext (legacy callers) or XML markup. Both produce
+    a clean speakable string. XML tags are stripped, <actions> contents
+    dropped entirely, <img> alt text used.
     """
-    # ── Phase 1: Block-level replacements (before line processing) ──────
-
-    # Code blocks → spoken placeholder
-    text = re.sub(r"```[\s\S]*?```", "\nSee code in chat message.\n", text)
-
-    # Inline code — keep the content, drop backticks
-    text = re.sub(r"`([^`]*)`", r"\1", text)
-
-    # Remove markdown emphasis — keep the content
-    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
-    text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
-
-    # Markdown links — keep the label
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-
-    # Bare URLs — not speakable
-    text = re.sub(r"https?://\S+", "", text)
-
-    # Horizontal rules
-    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
-
-    # ── Phase 2: Tables → natural row reading ───────────────────────────
-
-    def _speak_table(match: re.Match) -> str:
-        """Convert a markdown table to speakable row descriptions."""
-        table_text = match.group(0)
-        rows = [r.strip() for r in table_text.strip().split("\n") if r.strip()]
-        # Extract header row
-        headers = [c.strip() for c in rows[0].strip("|").split("|")] if rows else []
-        # Skip separator row (---|---) and process data rows
-        spoken = []
-        for row in rows[1:]:
-            if re.match(r"^\|?[\s:|-]+\|?$", row):
-                continue  # separator row
-            cells = [c.strip() for c in row.strip("|").split("|")]
-            parts = []
-            for i, cell in enumerate(cells):
-                if not cell:
-                    continue
-                if i < len(headers) and headers[i]:
-                    parts.append(f"{headers[i]}: {cell}")
-                else:
-                    parts.append(cell)
-            if parts:
-                spoken.append(", ".join(parts) + ".")
-        return "\n".join(spoken) if spoken else ""
-
-    text = re.sub(
-        r"(?:^\|.+\|$\n?){2,}",
-        _speak_table,
-        text,
-        flags=re.MULTILINE,
-    )
-
-    # ── Phase 3: Line-by-line processing ────────────────────────────────
-
-    lines = []
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Headers → spoken as topic intro
-        header_match = re.match(r"^#{1,6}\s+(.+)$", line)
-        if header_match:
-            content = header_match.group(1).rstrip(".!?")
-            lines.append(content + ".")
-            continue
-
-        # Blockquote markers — strip, keep content
-        line = re.sub(r"^>\s?", "", line)
-
-        # Numbered list items — keep the number, ensure sentence ending
-        num_match = re.match(r"^(\d+)[.)]\s+(.+)$", line)
-        if num_match:
-            num, content = num_match.group(1), num_match.group(2)
-            content = content.rstrip(".!?,;:")
-            lines.append(f"{num}, {content}.")
-            continue
-
-        # Bullet list items — convert to sentence
-        bullet_match = re.match(r"^[-*+]\s+(.+)$", line)
-        if bullet_match:
-            content = bullet_match.group(1)
-            if content and content[-1] not in ".!?":
-                content += "."
-            lines.append(content)
-            continue
-
-        # Regular line — ensure sentence ending
-        if line and line[-1] not in ".!?,;:":
-            line += "."
-        lines.append(line)
-
-    text = " ".join(lines)
-
-    # ── Phase 4: Final cleanup ──────────────────────────────────────────
-
-    text = re.sub(r"\.{2,}", ".", text)           # repeated periods
-    text = re.sub(r"\s+([.!?,;:])", r"\1", text)  # space before punctuation
-    text = re.sub(r"\s+", " ", text).strip()       # collapse whitespace
-    return text
+    if not text:
+        return ""
+    if "<" in text and ">" in text:
+        return extract_plaintext(text)
+    return " ".join(text.split())
 
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")

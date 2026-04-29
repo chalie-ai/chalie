@@ -153,7 +153,7 @@ class TestGetSnapshot:
         assert pressure["episode_count"] == 42
         assert pressure["concept_count"] == 15
         assert pressure["trait_count"] == 15
-        assert pressure["avg_activation"] == pytest.approx(1.0)
+        assert "avg_activation" not in pressure
 
     def test_queue_depth_from_store(self, mock_store):
         """Queue depths reflect actual list lengths in MemoryStore."""
@@ -320,7 +320,7 @@ class TestMemoryRichness:
             "epistemic": {"context_warmth": 0.3},
             "operational": {"memory_pressure": {
                 "episode_count": 5, "concept_count": 3,
-                "trait_count": 2, "avg_activation": 0.7,
+                "trait_count": 2,
             }},
             "capability": {},
             "noteworthy": [],
@@ -359,27 +359,30 @@ class TestCapabilityCategories:
     """Tool categorization from manifest keywords."""
 
     def test_tools_categorized_by_keywords(self, mock_store):
-        mock_registry = MagicMock()
-        mock_registry.get_tool_names.return_value = ["weather", "news_reader"]
-        mock_registry.get_tool_full_description.side_effect = lambda name: {
-            "weather": {
-                "documentation": "Search the web for information and find answers",
-                "description": "Web search tool",
-            },
-            "news_reader": {
-                "documentation": "Read news articles and headlines from feeds",
-                "description": "News aggregator",
-            },
-        }.get(name)
+        """Capabilities are bucketed into the correct CATEGORY_KEYWORDS categories.
 
-        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
-            svc = _make_service()
-            cats = svc._refresh()["capability"]["capability_categories"]
+        Uses the real AbilityRegistry — no mocks.  The assertions are grounded in
+        actual SUMMARY strings on live Ability subclasses:
 
-        assert "search" in cats
-        assert "weather" in cats["search"]
-        assert "news" in cats
-        assert "news_reader" in cats["news"]
+        - 'search' ability SUMMARY contains "search" → lands in 'search' category
+        - 'news' ability SUMMARY contains "news" → lands in 'news' category
+        - 'schedule' ability SUMMARY contains "schedule" → lands in 'productivity'
+        - 'code_eval' ability SUMMARY contains "code" → lands in 'development'
+        """
+        svc = _make_service()
+        cats = svc._refresh()["capability"]["capability_categories"]
+
+        assert "search" in cats, "Expected 'search' category from abilities with search/find/query keywords"
+        assert "search" in cats["search"], "'search' ability must appear in search category"
+
+        assert "news" in cats, "Expected 'news' category from 'news' ability"
+        assert "news" in cats["news"], "'news' ability must appear in news category"
+
+        assert "productivity" in cats, "Expected 'productivity' category (schedule ability has 'schedule' keyword)"
+        assert "schedule" in cats["productivity"], "'schedule' ability must appear in productivity category"
+
+        assert "development" in cats, "Expected 'development' category (code_eval ability has 'code' keyword)"
+        assert "code_eval" in cats["development"], "'code_eval' ability must appear in development category"
 
     def test_innate_skills_from_registry(self, mock_store):
         """Capability section includes innate skills from authoritative registry."""

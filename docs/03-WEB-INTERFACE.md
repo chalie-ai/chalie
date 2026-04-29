@@ -34,6 +34,41 @@ The chat interface uses three fixed regions:
 - **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
 - **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
 
+## ACT Cycle UI
+
+When the user sends a message, Chalie immediately renders a **chrome-less ACT cycle** — no bubble, no border, no background. Just a small blinking violet logo that signals "Chalie is working". Narrations and tool calls accumulate beside and below the logo until the ACT loop completes; on completion, the entire ACT UI vanishes and is replaced by a normal Chalie speech-form bubble carrying the final response.
+
+The shape:
+
+```
+While the ACT loop runs:                    Final:
+●  Got it — checking the weather…           ┌──────────────┐
+   Search          1.5s                     │ <response>   │
+   Read            2.2s                     │              │
+   weather         error                    └──────────────┘
+   find_tools      2.4s
+   Read            ⟳
+```
+
+- **Logo** (`act-logo`) — 12 px violet disc, 1.4 s sine pulse. It IS the placeholder; there is no "Working on it…" text.
+- **Narrative** (`act-narrative`) — italic text at 75 % opacity sitting on the same row as the logo. **Each new narration replaces the previous one** — narratives do not stack.
+- **Tool list** (`act-tools`) — cumulative across the entire ACT loop (NOT per-iteration). Indented 24 px under the logo so it visually belongs to the row.
+- **Final response**: `replaceActWithResponse` removes the `act-cycle` node and appends a fresh `.speech-form--chalie` bubble in its place.
+
+Tool rows are minimal monospace lines — name LEFT, state RIGHT — with no chrome:
+
+| State | Class | Color | Status slot |
+|---|---|---|---|
+| Running | `act-tool--running` | white @ 75 % | small white spinner |
+| Done | `act-tool--done` | `var(--success)` (#34d399) @ 90 % | duration in seconds (e.g. `1.5s`) |
+| Error | `act-tool--error` | `var(--error)` (#fb7185) @ 50 % | literal `error` (the actual error string is not surfaced) |
+
+Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Rows are display-only — no click-to-expand, no tooltips.
+
+**CSS classes:** `act-cycle` (chrome-less host), `act-row` (logo + narrative line), `act-logo` (blinking disc), `act-narrative` (italic text), `act-tools` (cumulative list), `act-tool` + `act-tool--running` / `--done` / `--error`, `act-tool__name`, `act-tool__status`, `act-spinner`. Animations: `@keyframes act-logo-pulse` (1.4 s opacity + box-shadow), `@keyframes act-spinner-spin` (0.9 s linear).
+
+**Frontend wiring:** `renderer.js` exposes `createActCycle()`, `setActNarrative(actEl, text, step)`, `appendToolPill(actEl, callId, name)`, `resolveToolPill(callId, ms, ok)`, `replaceActWithResponse(actEl, blocks, meta)`, `replaceActWithError(actEl, message)`. `chat.js` calls `createActCycle()` once on send and stores the element for the whole turn — `onNarration` calls `setActNarrative` (which mutates the single text slot in-place), `onToolStart` calls `appendToolPill(actEl, …)` (single flat list, no nesting under narrations), `onDone` calls `replaceActWithResponse` to swap the ACT UI for the final bubble. The action flow in `app.js` (deterministic skill invocation) shares the same primitives.
+
 ## Presence Dot
 
 A small dot beneath the chat input communicates what Chalie is doing:
@@ -63,6 +98,14 @@ Voice is optional. If the voice service is unavailable, the mic button and all s
 **Microphone (speech-to-text)** — the mic button sits left of the prompt box. Click to record, click again to stop. The transcript is pasted into the prompt box; the user reviews it and sends. The mic track is released immediately after each recording.
 
 **Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. Playback streams: `/voice/synthesize` returns `{ok, total}` immediately and the backend publishes each sentence-sized WAV chunk on the `output:events` pub/sub channel (as `tts_chunk`, terminated by `tts_done`). The WebSocket forwards those frames to the client; VoicePlayer decodes each chunk into an `AudioBuffer` and chains playback via `AudioBufferSourceNode.onended`, so audio starts as soon as the first chunk is ready rather than waiting for the full blob. `AudioContext.resume()` runs synchronously inside the click handler, satisfying iOS Safari's autoplay policy.
+
+## File Attachments
+
+Images (max 3 per message) attach via three equivalent paths: the `+` menu file picker, **drag-and-drop** onto the input dock or anywhere on the viewport (a full-page overlay lights up on `dragenter`), or **paste** from the clipboard into the prompt box. Non-image files dropped anywhere fall through to the document upload endpoint.
+
+Each attached image renders as a thumbnail in a strip above the prompt box with a cyan spinner and `analyzing` class while the backend runs OCR and scene analysis. The send button unblocks as soon as the upload returns an `image_id` — the user is never made to wait for analysis. A WebSocket `image_ready` event clears the spinner; a 90-second safety timeout replaces it with a warning badge if analysis never completes (the image stays attached, context may be incomplete). Analysis failure surfaces as a red badge.
+
+The global drop overlay uses a refcount on `dragenter` / `dragleave` with `dragend` and `window.blur` fallbacks, so it always clears — even if the browser swallows the `drop` event.
 
 ## Applications
 

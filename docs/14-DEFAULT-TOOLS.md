@@ -1,6 +1,8 @@
-# First-Party Tools
+# First-Party Abilities
 
-These tools ship with Chalie and are invoked in-process via the ACT loop. The LLM discovers them through `find_tools` (semantic search) — they are not pre-loaded into context. A `browser` tool is also available when Playwright dependencies are installed.
+These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. They form the **discoverable** tier for `UserMessageProcessor` — they are never pre-injected and reach the LLM only when `find_tools` surfaces them for the current turn. A `browser` ability is also present when Playwright dependencies are installed.
+
+See `docs/09-TOOLS.md` for how the always-available and discoverable tiers stack and when each fires.
 
 ## Weather
 

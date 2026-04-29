@@ -1,0 +1,19 @@
+# Mode Gate — runtime knobs for per-turn tool promotion/demotion.
+# Calibrated fire thresholds live in classifier_meta.json (burned in by training).
+
+decay_factor: 0.75
+activation_threshold: 0.30
+state_floor: 0.01
+state_ceiling: 1.0
+
+bootstrap_on_cold_start: true
+
+fire_threshold_overrides:      # null = use classifier_meta.json value
+  research:   null
+  coding:     null
+  brainstorm: null
+  analyze:    null
+  plan:       0.5      # baked 0.8 too high — schedule/goal_pursuit gated out of natural prompts (run 314 scenario 033)
+  write:      null
+  math:       null
+  converse:   null

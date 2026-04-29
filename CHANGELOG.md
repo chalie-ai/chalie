@@ -9,6 +9,51 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ### In Progress
 - **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`.
 
+### Changed
+- Compaction unified into `CompactionMessageProcessor` family — mid-ACT Stage 1 and Stage 2 compaction now dispatch through `TrailCompactionProcessor` and `FullCompactionProcessor` (subclasses of `_CompactionProcessorBase` → `MessageProcessor`) instead of inline `Providers.send_messages()` calls. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard. System-prompt bodies live as `CompactionFullSystemPrompt` / `CompactionTrailSystemPrompt` constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` (new method) folds sub-processor token + tool counts into the parent turn's metrics. Pure SQL helpers extracted to `compaction_persistence.py`.
+- Pattern matcher rewrite — `pattern_extractor.py` (694 LOC, 6-vertical × 4-class flow) replaced by `PatternMatchProcessor`, a single-pass LLM matcher that runs every ≥50 new transcripts. The model emits `save_pattern` / `save_graph` tool calls in parallel (`MAX_ITERATIONS=30`). Decay (−0.005 per pass, soft-delete at 0) moved from `DecayEngine` to `PatternMatchProcessor.postTurn()`.
+- `SubconsciousWorker.run_once()` — gate check moved into `run_once` (was previously inside `_tick`). No-arg signature; idle-gate and already-fired gate are always honoured.
+- `ToolRenderAndRecordService._record()` — short-circuits with DEBUG log when `transcript_id is None` (prevents IntegrityError for `SKIP_TRANSCRIPT_WRITE=True` processors that dispatch tools).
+
+### Removed
+- `services/compaction_service.py` — standalone post-turn backstop deleted. The mid-ACT gate (80% threshold) is the only compaction trigger; `UserMessageProcessor.postTurn()` no longer calls a separate backstop.
+- `configs/agents/compaction.json` — dedicated compaction agent config no longer needed; compaction routes through `frontal-cortex-unified` via the new processor family.
+- `compaction` entry removed from `configs/cognitive_jobs.json` (4 → 3 jobs). `SchemaConvergenceService` sweeps orphan `job_provider_assignments` rows on next boot.
+- `services/pattern_extractor.py` and `tests/test_pattern_extractor.py`.
+- `DecayEngineService._decay_behavioral_patterns()` — pattern decay is now owned by `PatternMatchProcessor.postTurn()`.
+- `_step_patterns` / `patterns` step name on `SubconsciousWorker`; replaced by `_step_pattern_match` / `pattern_match`.
+- Old `behavioral_pattern` content fields: `vertical / class / slots / recurrence / sigma_confidence / status / decay_days`. New shape: `name / frequency / time_anchor / summary / confidence / last_seen_at / evidence_transcript_ids`.
+
+---
+
+## rc-0.4.0
+
+### v0.5.0 §5 SubconsciousWorker — idle-gated 5-minute cognition tick (Phase 2 final)
+
+- **`SubconsciousWorker`** (new — `backend/services/subconscious_worker.py`) — single daemon thread `subconscious-worker` that owns latent cognition. Tick interval `SUBCONSCIOUS_TICK_SEC` (default 300). Two gates: user-active (`last_user_message_at` within `SUBCONSCIOUS_IDLE_WINDOW_SEC`, default 1800), already-fired (`subconscious_last_fired_at > last_user_message_at`). When both pass, runs four steps in order, each isolated in its own `try/except`: (1) consolidate apex episodes per channel via `SuperEpisodeEncoderProcessor`, (2) `DecayEngineService.run_once()`, (3) `PatternExtractor.run_once()`, (4) `UserSummaryProcessor.send()`.
+- Backpressure: when `bg_llm:queue` depth ≥ `SUBCONSCIOUS_BG_QUEUE_THRESHOLD` (default 20, headroom under `MAX_QUEUE_DEPTH=25`), steps 3 + 4 (LLM-heavy) are skipped; steps 1 + 2 still run.
+- Re-entrancy: a non-blocking `threading.Lock` guards against overlapping ticks; concurrent `run_once()` returns `skipped='re_entrant'` without doing work.
+- State persistence (`subconscious_last_fired_at`): MemoryStore key `subconscious:last_fired_at` for fast read; mirrored to `data_graph` (`kind='system'`, `key='subconscious_last_fired_at'`) for durability across restarts. Hydrated into the cached property on construction.
+- Wiring: `WorkerManager.register_service('subconscious-worker', subconscious_worker)` in `backend/run.py`, between `background-llm-worker` and the optional services block.
+- Tests (`backend/tests/test_subconscious_worker.py`, 12 unit, real `WorldState`, monkeypatched step methods): cold-boot fires; user-active gate skips; already-fired gate skips; fresh user message resets gate; one step raising does not block the others; bg-LLM saturated → only steps 1+2 run; concurrent `run_once()` returns `skipped='re_entrant'`; hydrate from durable store loads cached value across simulated restart; persist bumps timestamp to ~now; `_is_bg_llm_saturated` defaults to `False` on a poisoned `MemoryClientService`; synthesis self-skip detail propagates to `step.detail`.
+
+### v0.5.0 §5 SubconsciousWorker — arbiter pass refinements
+
+- **Hydrated already-fired gate** — when `_cached_last_fired` is loaded from durable storage but `WorldState.last_user_message_at` is still `None` (cold boot, no traffic since restart), `_check_gates()` now returns `"already_fired"` instead of falling through. Previously the worker would fire every tick after a process restart until the first user message arrived.
+- **Backpressure import canary** — top-level `from services.background_llm_queue import QUEUE_KEY` added so a future module move surfaces at import time. Inside `_is_bg_llm_saturated` an `ImportError` now logs at `WARNING` (silent swallow would permanently bypass backpressure); other connection errors stay at `DEBUG`.
+- **Decay engine cached on the worker instance** — `DecayEngineService` is built once on first decay step and reused. Previously a fresh instance was created every 5-minute tick, which reread `episodic-memory` config every cycle.
+- **Persist log levels** — `_persist_last_fired` now logs `WARNING` on either MemoryStore or data_graph failure (was asymmetric: data_graph at `DEBUG`, MemoryStore at `WARNING`). Split-brain divergence is real state to surface.
+- **Monotonic cadence** — `next_tick = monotonic() + interval` is now anchored after `run_once()` returns, not before. Long ticks (> 5 min) used to land `next_tick` in the past and immediately re-fire.
+- **Gate-skip log** — bumped from `DEBUG` to `INFO` for operator visibility.
+- **Dead-code cleanup tied to §4.4 daemon rip** — `DecayEngineService(decay_interval=…)` parameter and attribute removed (only consumer was the deleted daemon's sleep cadence); `decay_interval_seconds` orphan key dropped from `configs/agents/episodic-memory.json`; "Follows IdleConsolidationService pattern" docstring rewritten (class no longer exists); two dead constructor tests removed from `test_decay_engine_service.py`. Production prose updates in `user_summary_processor.py`, `user_message_processor.py`, `tests/test_super_episode_pipeline.py`, and `tests/test_episodic_redesign.py` route references to the live SubconsciousWorker step path.
+
+### GPU-aware ORT install + runtime EP fallback
+
+- `installer/install.sh` now detects the host GPU (NVIDIA via `nvidia-smi`; AMD via `/dev/kfd` + `amdgpu` module) and installs the matching `onnxruntime` wheel (`onnxruntime-gpu`, `onnxruntime-rocm`, or CPU) after venv setup. The GPU wheel is only swapped in after `pip install --dry-run` confirms it is reachable — CPU wheel always remains as fallback. ORT version pinned at `1.20.1` as a single source of truth in the installer. `ROCM_PIP_INDEX` env var overrides the AMD package index for air-gapped installs.
+- `backend/requirements.txt`: `onnxruntime==1.20.1` pin dropped; `rapidocr_onnxruntime` transitively pulls the CPU wheel for dev workflows that bypass the installer.
+- `backend/services/onnx_session.py` (new): single chokepoint for all `ort.InferenceSession` construction in the process. `choose_providers(model_path)` returns the ordered provider list and strips `CoreMLExecutionProvider` when any initializer dimension exceeds the Metal 16384 2D-texture ceiling. `build_session(path, opts, providers, log_prefix)` retries with CPU-only on construction failure. Metal texture-limit check previously lived in `embedding_service.py`; it now lives here.
+- `EmbeddingService`, `VoiceService` (`api/voice.py`), and `Doc2QueryService` all route through `build_session` — no service constructs `ort.InferenceSession` directly.
+
 ---
 
 ## Recent
@@ -29,7 +74,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 - `memory_skill.handle_memory()` now handles `forget` action; `store` returns one of 12 structured response templates so the LLM can self-correct on canonicalization surprises
 - `memory_skill.TOOL_SCHEMA` description injects all 27 canonical keys + 5 store rules + niche-fact fallback so the LLM canonicalizes at extraction time, not only at write time
 - `pending_contradictions` table and `PendingContradictionService` deleted (no call sites outside the cleanup loop; immutable conflicts surface via the returned conflict dict)
-- `("contradiction", "contradiction")` removed from `onnx_inference_service.MODEL_REGISTRY`; contradiction `.npz` head no longer loaded or downloaded; `thinking_level` head unaffected
+- `("contradiction", "contradiction")` removed from `onnx_inference_service.MODEL_REGISTRY`; contradiction `.npz` head no longer loaded or downloaded; deliberation-score head unaffected
 - Generator script `backend/utils/generate_concept_lut.py`: reads YAML, embeds canonical keys via gte-modernbert, writes `lut_concepts` + `lut_embeddings` vec0 virtual table into `concept_lut.sqlite`; run with `python -m utils.generate_concept_lut` after YAML changes
 - One-shot migration `backend/utils/migrate_canonicalize_user_keys.py`: backfills existing `user_specific` rows to canonical keys; idempotent
 - Cosine formula: `cos = max(0.0, 1.0 - distance ** 2 / 2.0)` via `_l2_dist_to_cosine()`

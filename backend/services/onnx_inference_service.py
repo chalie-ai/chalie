@@ -10,35 +10,28 @@
 ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 
 Architecture:
-    1 shared ONNX encoder (gte-modernbert-base, already loaded by embedding_service)
-    N 2-layer MLP heads loaded from per-task .npz files → class logits
+    1 shared ONNX encoder (gte-modernbert-base, downloaded into backend/data/models/)
+    N 2-layer MLP heads loaded from per-task .npz files (shipped in
+    backend/data/pre-trained/<task>/)
 
-Release tag: resolved dynamically from GitHub's "latest release" API at boot
-(see ``_get_release_tag``). Hardcoding the tag caused a silent outage when
-the assets-only repo was retagged and every container 404'd on curl.
-
-The encoder session and tokenizer are borrowed from embedding_service's module-level
-singletons so the 596 MB model is loaded exactly once per process. Each classifier
-head is a tiny numpy MLP (~800 KB) loaded at task registration time.
+Pre-shipped classifier files (meta + .npz) live under backend/data/pre-trained/
+and are tracked in git. Runtime-downloaded models (encoders, voice, doc2query)
+stay under backend/data/models/ and are NOT tracked.
 
 Boot-time sha256 pin:
     Computed once (streaming) against backend/data/models/gte-modernbert-base/onnx/model.onnx.
     Must match classifier_meta.json::base_encoder_sha256 for every registered task.
     On mismatch: RuntimeError raised, task not registered.
 
-Thread-safe — multiple workers can call predict() concurrently.
+Thread-safe — multiple workers can call predict() / predict_scalar() concurrently.
 """
 
 import hashlib
 import json
 import logging
 import os
-import shutil
-import subprocess
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -48,105 +41,16 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[ONNX]"
 
-# Default GitHub repo for model releases
-DEFAULT_MODELS_REPO = "chalie-ai/models"
-
-# Release tag is resolved dynamically from GitHub's "latest release" API at first
-# use, then cached for the life of the process. Hardcoding a tag caused a silent
-# outage when the assets-only repo was retagged from v0.9.0 → v0.9.1 and every
-# container boot 404'd on curl. Auto-latest eliminates the drift by construction.
-_release_tag_cache: Optional[str] = None
-_release_tag_lock = threading.Lock()
-_RELEASE_TAG_API_TIMEOUT = 10  # seconds
-
-
-def _get_release_tag() -> str:
-    """Return the latest release tag on the models repo, cached per process.
-
-    On first call: GET https://api.github.com/repos/<repo>/releases/latest
-    and cache the tag_name. Subsequent calls return the cached value.
-
-    If the API is unreachable, scans backend/data/models/*/classifier_meta.json
-    for a previously installed version and falls back to it — better to run
-    with a slightly stale model than no model at all. If no prior install
-    exists either, raises RuntimeError so the caller logs and skips.
-    """
-    global _release_tag_cache
-    if _release_tag_cache is not None:
-        return _release_tag_cache
-
-    with _release_tag_lock:
-        if _release_tag_cache is not None:
-            return _release_tag_cache
-
-        api_url = f"https://api.github.com/repos/{DEFAULT_MODELS_REPO}/releases/latest"
-        try:
-            req = urllib.request.Request(
-                api_url,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "chalie-onnx-service"},
-            )
-            with urllib.request.urlopen(req, timeout=_RELEASE_TAG_API_TIMEOUT) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            tag = payload.get("tag_name")
-            if not tag or not isinstance(tag, str):
-                raise RuntimeError(f"release payload missing tag_name: {payload!r}")
-            _release_tag_cache = tag
-            logger.info(f"{LOG_PREFIX} latest release resolved: {tag}")
-            return tag
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as e:
-            logger.warning(
-                f"{LOG_PREFIX} latest-release API unreachable ({type(e).__name__}: {e}) — "
-                f"falling back to locally installed version if present"
-            )
-            fallback = _find_local_release_tag()
-            if fallback:
-                _release_tag_cache = fallback
-                logger.info(f"{LOG_PREFIX} using locally cached release tag: {fallback}")
-                return fallback
-            raise RuntimeError(
-                "cannot resolve release tag: GitHub API unreachable and no local install"
-            ) from e
-
-
-def _find_local_release_tag() -> Optional[str]:
-    """Scan backend/data/models/*/classifier_meta.json for a prior install version.
-
-    Returns the first non-empty ``version`` field found, or None if no task has
-    a local meta. Used as fallback when the GitHub API is unreachable.
-    """
-    try:
-        models_dir = Path(os.environ.get("CHALIE_MODELS_DIR", "backend/data/models"))
-        if not models_dir.exists():
-            return None
-        for task_dir in models_dir.iterdir():
-            if not task_dir.is_dir():
-                continue
-            meta_path = task_dir / _CLASSIFIER_META_FILENAME
-            if not meta_path.exists():
-                continue
-            try:
-                with open(meta_path) as f:
-                    version = json.load(f).get("version")
-                if version and isinstance(version, str):
-                    return version
-            except (json.JSONDecodeError, OSError):
-                continue
-    except Exception:
-        return None
-    return None
-
-# Tasks to auto-download and register on boot.
+# Tasks to register on boot.
 # Each entry: (task_name, asset_name_prefix)
-# - meta asset: <prefix>-classifier_meta.json → models/<task>/classifier_meta.json
-# - head asset: <prefix>_head.npz             → models/<task>/<head_asset from meta>
-# (note the mixed separator: hyphen before "classifier", underscore before "head")
+# - meta file:  pre-trained/<task>/<prefix>-classifier_meta.json
+# - head file:  pre-trained/<task>/<name from meta["head_asset"]>
 MODEL_REGISTRY = [
-    ("thinking_level", "thinking-level"),
+    ("deliberation_score", "deliberation-score"),
+    ("mode_detector", "mode-detector"),
 ]
 
-# Asset filename constants
-_CLASSIFIER_META_FILENAME = "classifier_meta.json"
-_CLASSIFIER_META_STAGING_FILENAME = "classifier_meta_dl.json"
+_TASK_PREFIXES: Dict[str, str] = dict(MODEL_REGISTRY)
 
 # sha256 of the shared encoder ONNX — computed once, cached here
 _encoder_sha256_cache: Optional[str] = None
@@ -196,7 +100,9 @@ class _ClassifierHead:
     """
 
     __slots__ = ("W1", "b1", "W2", "b2", "labels", "activation",
-                 "input_dim", "hidden_dim", "num_classes")
+                 "input_dim", "hidden_dim", "num_classes",
+                 "task_type", "output_activation", "num_outputs",
+                 "extra_feature_dim")
 
     def __init__(
         self,
@@ -206,6 +112,10 @@ class _ClassifierHead:
         b2: np.ndarray,
         labels: List[str],
         activation: str = "gelu",
+        task_type: str = "classification",
+        output_activation: str = "softmax",
+        num_outputs: int = 0,
+        extra_feature_dim: int = 0,
     ):
         self.W1 = w1.astype(np.float32)    # (hidden_dim, input_dim)
         self.b1 = b1.astype(np.float32)    # (hidden_dim,)
@@ -213,6 +123,10 @@ class _ClassifierHead:
         self.b2 = b2.astype(np.float32)    # (num_classes,)
         self.labels = labels
         self.activation = activation
+        self.task_type = task_type
+        self.output_activation = output_activation
+        self.num_outputs = num_outputs
+        self.extra_feature_dim = extra_feature_dim
         self.hidden_dim, self.input_dim = w1.shape
         self.num_classes = w2.shape[0]
 
@@ -225,13 +139,11 @@ class _ClassifierHead:
         Returns:
             logits: (batch, num_classes) float32
         """
-        # fc1: (batch, input_dim) @ (input_dim, hidden_dim) = (batch, hidden_dim)
         h = features @ self.W1.T + self.b1
         if self.activation == "gelu":
             h = _gelu(h)
         else:
             h = np.maximum(0.0, h)  # relu fallback
-        # fc2: (batch, hidden_dim) @ (hidden_dim, num_classes) = (batch, num_classes)
         return h @ self.W2.T + self.b2
 
 
@@ -249,31 +161,24 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     return embeddings / norms
 
 
-def _download_with_curl(url: str, dest: Path) -> None:
-    """Download a URL to dest, following redirects (GitHub 302s)."""
-    result = subprocess.run(
-        ["curl", "-sL", "--fail", "-o", str(dest), url],
-        capture_output=True,
-        timeout=600,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.decode(errors="replace")
-        raise OSError(f"curl failed (exit {result.returncode}): {stderr[:200]}")
-
-
 class OnnxInferenceService:
     """
     Shared gte-modernbert encoder + swappable 2-layer MLP classifier heads.
 
+    Classifier heads (meta + .npz) are pre-shipped under
+    backend/data/pre-trained/<task>/. The shared encoder ONNX is downloaded
+    into backend/data/models/gte-modernbert-base/. No network access for heads.
+
     Usage:
-        svc = OnnxInferenceService("/models")
-        svc.ensure_models()
-        label, confidence = svc.predict("thinking_level", input_text)
+        svc = get_onnx_inference_service()
+        scalar = svc.predict_scalar("deliberation_score", input_text)
+        label, confidence = svc.predict("mode_detector", input_text)
     """
 
-    def __init__(self, models_dir: str):
+    def __init__(self, models_dir: str, pretrained_dir: str):
         self._models_dir = Path(models_dir)
         self._models_dir.mkdir(parents=True, exist_ok=True)
+        self._pretrained_dir = Path(pretrained_dir)
 
         # Registered classifier heads (task_name → _ClassifierHead)
         self._heads: Dict[str, _ClassifierHead] = {}
@@ -281,28 +186,18 @@ class OnnxInferenceService:
 
         # Boot readiness — set to True after registration attempt completes
         self._ready = False
-        # Tasks whose boot-time registration failed (e.g. sha256 gate refused).
-        # If non-empty, the service is in a degraded state — predict() returns
-        # (None, 0.0) silently for those tasks. Health endpoint surfaces this.
+        # Tasks whose boot-time registration failed.
         # List of (task_name, error_message) tuples.
         self._failed_registrations: list[tuple[str, str]] = []
 
     @property
     def ready(self) -> bool:
-        """True only after registration attempt completed AND every task registered.
-
-        A degraded service (one or more tasks failed sha256 gate) reports NOT
-        ready so /api/system can fail-fast for monitoring. Use `degraded` to
-        distinguish "still loading" from "loaded but some tasks refused".
-        """
+        """True only after registration attempt completed AND every task registered."""
         return self._ready and not self._failed_registrations
 
     @property
     def degraded(self) -> bool:
-        """True if registration finished but at least one task failed.
-
-        Inspect `failed_registrations` for the per-task error messages.
-        """
+        """True if registration finished but at least one task failed."""
         return self._ready and bool(self._failed_registrations)
 
     @property
@@ -354,165 +249,139 @@ class OnnxInferenceService:
 
         return _l2_normalize(pooled).astype(np.float32)  # (1, 768)
 
-    # ── Download / update ─────────────────────────────────────────────────────
-
-    def ensure_models(self):
-        """Download missing or stale model assets from the latest GitHub release.
-
-        Release tag is resolved once at first use via the GitHub API (see
-        ``_get_release_tag``). Individual task assets may be absent from the
-        latest release — those failures are logged and isolated; they do not
-        stop other tasks from being installed.
-        """
-        try:
-            release_tag = _get_release_tag()
-        except RuntimeError as e:
-            logger.warning(f"{LOG_PREFIX} ensure_models skipped: {e}")
-            return
-        for task_name, asset_prefix in MODEL_REGISTRY:
-            try:
-                self._ensure_task(task_name, asset_prefix, release_tag)
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Failed to ensure {task_name}: {e}")
-
-    def _ensure_task(self, task_name: str, asset_prefix: str, release_tag: str):
-        """Download classifier_meta.json and head .npz for one task if missing/stale."""
-        task_dir = self._models_dir / task_name
-        meta_path = task_dir / _CLASSIFIER_META_FILENAME
-
-        # Check local version
-        local_version = None
-        if meta_path.exists():
-            try:
-                with open(meta_path) as f:
-                    local_version = json.load(f).get("version")
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        if local_version == release_tag:
-            logger.info(f"{LOG_PREFIX} {task_name}: up to date ({release_tag})")
-            return
-
-        action = "Updating" if local_version else "Downloading"
-        logger.info(f"{LOG_PREFIX} {action} {task_name}: {local_version or '(none)'} → {release_tag}")
-
-        base_url = f"https://github.com/{DEFAULT_MODELS_REPO}/releases/download/{release_tag}"
-        # Asset naming convention: `<prefix>-classifier_meta.json` and `<prefix>_head.npz`
-        # (hyphen before "classifier", underscore before "head" — confirmed against
-        # the release manifest; do NOT collapse these separators).
-        meta_url = f"{base_url}/{asset_prefix}-classifier_meta.json"
-        head_url = f"{base_url}/{asset_prefix}_head.npz"
-
-        staging = self._models_dir / f".{task_name}_installing"
-        try:
-            if staging.exists():
-                shutil.rmtree(staging)
-            staging.mkdir(parents=True)
-
-            # Download meta JSON
-            _download_with_curl(meta_url, staging / _CLASSIFIER_META_STAGING_FILENAME)
-            with open(staging / _CLASSIFIER_META_STAGING_FILENAME) as f:
-                meta = json.load(f)
-            meta["version"] = release_tag
-            with open(staging / _CLASSIFIER_META_FILENAME, "w") as f:
-                json.dump(meta, f, indent=2)
-            (staging / _CLASSIFIER_META_STAGING_FILENAME).unlink()
-
-            # Download head .npz
-            head_asset = meta.get("head_asset", f"{asset_prefix}_head.npz")
-            logger.info(f"{LOG_PREFIX} Downloading head for {task_name}...")
-            _download_with_curl(head_url, staging / head_asset)
-            size_kb = (staging / head_asset).stat().st_size / 1024
-            logger.info(f"{LOG_PREFIX} Head downloaded ({size_kb:.1f}KB)")
-
-            # Atomic swap
-            if task_dir.exists():
-                shutil.rmtree(task_dir)
-            staging.rename(task_dir)
-
-            # Evict cached head so next call re-registers from fresh files
-            with self._heads_lock:
-                self._heads.pop(task_name, None)
-
-            logger.info(f"{LOG_PREFIX} Installed {task_name} ({release_tag})")
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Download failed for {task_name}: {e}")
-            if staging.exists():
-                shutil.rmtree(staging, ignore_errors=True)
-
     # ── Task registration ─────────────────────────────────────────────────────
 
-    def _register_task(self, task_name: str) -> Optional[_ClassifierHead]:
-        """Load meta + head for one task, perform sha256 pin check, emit boot marker.
-
-        Returns the head on success. Raises RuntimeError on sha256 mismatch.
-        Returns None if the task directory or meta is missing.
-        """
-        task_dir = self._models_dir / task_name
-        meta_path = task_dir / _CLASSIFIER_META_FILENAME
-
+    def _load_task_meta(self, task_name: str):
+        """Locate and parse the task's meta JSON. Returns (meta_dict, task_dir) or None."""
+        task_dir = self._pretrained_dir / task_name
+        prefix = _TASK_PREFIXES.get(task_name, task_name)
+        meta_path = task_dir / f"{prefix}-classifier_meta.json"
         if not meta_path.exists():
-            logger.warning(f"{LOG_PREFIX} Missing {_CLASSIFIER_META_FILENAME} for task '{task_name}'")
+            logger.warning(f"{LOG_PREFIX} Missing {meta_path.name} for task '{task_name}' at {task_dir}")
             return None
-
         try:
             with open(meta_path) as f:
-                meta = json.load(f)
+                return json.load(f), task_dir
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"{LOG_PREFIX} Cannot read meta for '{task_name}': {e}")
             return None
 
-        # sha256 pin check — computed once per process, not per task
-        expected_sha = meta.get("base_encoder_sha256", "").lower()
+    def _verify_encoder_sha(self, task_name: str, expected_sha: str) -> str | None:
+        """Compute the encoder's sha256 and compare against `expected_sha`. Returns actual sha or None."""
         onnx_path = self._encoder_onnx_path()
         if not onnx_path.exists():
             logger.warning(f"{LOG_PREFIX} Encoder ONNX not found at {onnx_path}")
             return None
-
         actual_sha = _get_encoder_sha256(onnx_path)
         if actual_sha.lower() != expected_sha:
             raise RuntimeError(
                 f"[CLASSIFIER BOOT] sha256 mismatch: task={task_name} "
                 f"expected={expected_sha} got={actual_sha}"
             )
+        return actual_sha
 
-        # Load head .npz
+    def _load_head_arrays(self, task_name: str, task_dir, meta: dict):
+        """Load W1/b1/W2/b2 from the head .npz; returns the four arrays or None on failure."""
         head_asset = meta.get("head_asset")
         if not head_asset:
             logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
             return None
-
         npz_path = task_dir / head_asset
         if not npz_path.exists():
             logger.warning(f"{LOG_PREFIX} Head file not found: {npz_path}")
             return None
-
         try:
             with np.load(str(npz_path)) as f:
-                w1 = f["W1"].astype(np.float32)
-                b1 = f["b1"].astype(np.float32)
-                w2 = f["W2"].astype(np.float32)
-                b2 = f["b2"].astype(np.float32)
+                return (
+                    f["W1"].astype(np.float32),
+                    f["b1"].astype(np.float32),
+                    f["W2"].astype(np.float32),
+                    f["b2"].astype(np.float32),
+                )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to load head for '{task_name}': {e}")
             return None
 
+    def _register_task(self, task_name: str) -> Optional[_ClassifierHead]:
+        """Load meta + head for one task, perform sha256 pin check, emit boot marker.
+
+        Returns the head on success. Raises RuntimeError on:
+          - sha256 mismatch
+          - regression task contract violations (num_outputs != 1, extra_feature_dim != 0,
+            output_activation != sigmoid)
+        Returns None if the task directory or meta is missing.
+        """
+        loaded = self._load_task_meta(task_name)
+        if loaded is None:
+            return None
+        meta, task_dir = loaded
+
+        actual_sha = self._verify_encoder_sha(task_name, meta.get("base_encoder_sha256", "").lower())
+        if actual_sha is None:
+            return None
+
+        arrays = self._load_head_arrays(task_name, task_dir, meta)
+        if arrays is None:
+            return None
+        w1, b1, w2, b2 = arrays
+
         labels = meta.get("labels", [])
         activation = meta.get("activation", meta.get("mlp_activation", "gelu"))
+        task_type = meta.get("task_type", "classification")
+        output_activation = meta.get("output_activation", "softmax")
+        num_outputs = meta.get("num_outputs", meta.get("num_classes", w2.shape[0]))
+        extra_feature_dim = meta.get("extra_feature_dim", 0)
         input_dim = meta.get("input_dim", w1.shape[1])
         hidden_dim = meta.get("hidden_dim", w1.shape[0])
         num_classes = meta.get("num_classes", w2.shape[0])
 
-        head = _ClassifierHead(w1=w1, b1=b1, w2=w2, b2=b2,
-                               labels=labels, activation=activation)
+        # Boot-time assertions for regression tasks
+        if task_type == "regression":
+            if num_outputs != 1:
+                raise ValueError(
+                    f"deliberation-score head expected scalar regression (num_outputs=1); "
+                    f"got num_outputs={num_outputs} in meta for task '{task_name}'"
+                )
+            if extra_feature_dim != 0:
+                raise ValueError(
+                    f"deliberation-score head expected extra_feature_dim=0; "
+                    f"got extra_feature_dim={extra_feature_dim} for task '{task_name}'. "
+                    f"One-hot concatenation is forbidden for regression heads."
+                )
+            if output_activation != "sigmoid":
+                raise ValueError(
+                    f"deliberation-score head expected output_activation='sigmoid'; "
+                    f"got {output_activation!r} for task '{task_name}'"
+                )
+            if w2.shape[0] != 1:
+                raise ValueError(
+                    f"deliberation-score head W2 row count must be 1 for scalar regression; "
+                    f"got W2.shape={w2.shape} for task '{task_name}'"
+                )
+
+        head = _ClassifierHead(
+            w1=w1, b1=b1, w2=w2, b2=b2,
+            labels=labels,
+            activation=activation,
+            task_type=task_type,
+            output_activation=output_activation,
+            num_outputs=num_outputs,
+            extra_feature_dim=extra_feature_dim,
+        )
 
         # Emit boot marker — format is contractual (scenarios grep exact prefix)
-        logger.info(
-            "[CLASSIFIER BOOT] %s sha256=%s input_dim=%d hidden_dim=%d "
-            "num_classes=%d activation=%s",
-            task_name, actual_sha, input_dim, hidden_dim, num_classes, activation,
-        )
+        if task_type == "regression":
+            logger.info(
+                "[CLASSIFIER BOOT] %s sha256=%s input_dim=%d num_outputs=%d task=%s",
+                task_name, actual_sha, input_dim, num_outputs, task_type,
+            )
+        else:
+            logger.info(
+                "[CLASSIFIER BOOT] %s sha256=%s input_dim=%d hidden_dim=%d "
+                "num_classes=%d activation=%s",
+                task_name, actual_sha, input_dim, hidden_dim, num_classes, activation,
+            )
+
         return head
 
     def _get_head(self, task_name: str) -> Optional[_ClassifierHead]:
@@ -531,6 +400,67 @@ class OnnxInferenceService:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def predict_scalar(self, task_name: str, text: str) -> 'float | None':
+        """Regression inference: tokens → pooled → L2 → MLP → sigmoid → float.
+
+        Asserts at registration time (via _register_task) that the task's
+        classifier_meta.json has:
+            task_type == "regression"
+            num_outputs == 1
+            extra_feature_dim == 0
+            output_activation == "sigmoid"
+
+        Returns float in [0, 1], or None if the head is unavailable.
+        Never raises — any error is logged at WARNING and None is returned.
+
+        Args:
+            task_name: Registered task with task_type="regression"
+                       (e.g. 'deliberation_score').
+            text:      Raw text to encode and score.
+        """
+        head = self._get_head(task_name)
+        if head is None:
+            return None
+
+        if head.task_type != "regression":
+            raise ValueError(
+                f"predict_scalar called on non-regression task '{task_name}' "
+                f"(task_type={head.task_type!r}). Use predict() or predict_all_sigmoids() instead."
+            )
+
+        try:
+            start = time.perf_counter()
+            embedding = self._embed(text)  # (1, 768)
+
+            if not np.isfinite(embedding).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_scalar non-finite embedding for '{task_name}'"
+                )
+                return None
+
+            logits = head.forward(embedding)  # (1, 1)
+            logit = float(logits[0, 0])
+            scalar = float(1.0 / (1.0 + np.exp(-logit)))
+
+            # Guard the contract: regression heads must yield finite scalars in [0, 1].
+            # NaN/Inf weights or NaN embeddings would otherwise propagate silently.
+            if not np.isfinite(scalar) or scalar < 0.0 or scalar > 1.0:
+                logger.warning(
+                    f"{LOG_PREFIX} predict_scalar out-of-contract output for '{task_name}': "
+                    f"scalar={scalar!r} (must be finite in [0,1])"
+                )
+                return None
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug(
+                f"{LOG_PREFIX} {task_name}: scalar={scalar:.4f} in {elapsed_ms:.1f}ms"
+            )
+            return scalar
+
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} predict_scalar failed for '{task_name}': {e}")
+            return None
+
     def predict(
         self,
         task_name: str,
@@ -540,18 +470,27 @@ class OnnxInferenceService:
         """Run single-label MLP classification.
 
         Args:
-            task_name:      Registered task (e.g. 'thinking_level').
+            task_name:      Registered task (e.g. 'mode_detector').
             prompt:         Raw text to encode.
             extra_features: Optional (1, extra_dim) float32 array to concatenate
-                            after the embedding (e.g. prev_level one-hot).
+                            after the embedding.
 
         Returns:
             (label, confidence) — label is None if the model isn't available
             or if the feature shape doesn't match meta.input_dim.
+
+        Raises:
+            ValueError if called on a regression task (use predict_scalar instead).
         """
         head = self._get_head(task_name)
         if head is None:
             return None, 0.0
+
+        if head.task_type == "regression":
+            raise ValueError(
+                f"predict() called on regression task '{task_name}'. "
+                f"Use predict_scalar() for regression heads."
+            )
 
         try:
             start = time.perf_counter()
@@ -559,9 +498,9 @@ class OnnxInferenceService:
             embedding = self._embed(prompt)  # (1, 768)
 
             if extra_features is not None:
-                features = np.concatenate([embedding, extra_features], axis=-1)  # (1, input_dim)
+                features = np.concatenate([embedding, extra_features], axis=-1)
             else:
-                features = embedding  # (1, 768)
+                features = embedding
 
             expected_input_dim = head.input_dim
             if features.shape[-1] != expected_input_dim:
@@ -571,8 +510,20 @@ class OnnxInferenceService:
                 )
                 return None, 0.0
 
+            if not np.isfinite(features).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict non-finite features for '{task_name}'"
+                )
+                return None, 0.0
+
             logits = head.forward(features)           # (1, num_classes)
             probs = _softmax(logits.astype(np.float32))[0]  # (num_classes,)
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict non-finite probs for '{task_name}'"
+                )
+                return None, 0.0
 
             winner_idx = int(np.argmax(probs))
             confidence = float(probs[winner_idx])
@@ -596,8 +547,7 @@ class OnnxInferenceService:
     ) -> List[Tuple[str, float]]:
         """Multi-label classification via sigmoid per output, threshold per label.
 
-        Used by ConsequenceClassifierService. Returns list of (label, score) tuples
-        above threshold, sorted descending by score.
+        Returns list of (label, score) tuples above threshold, sorted descending by score.
         """
         head = self._get_head(model_name)
         if head is None:
@@ -615,8 +565,13 @@ class OnnxInferenceService:
 
             logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
 
-            # Sigmoid per output
             probs = 1.0 / (1.0 + np.exp(-logits))
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_multi_label non-finite probs for '{model_name}'"
+                )
+                return []
 
             default_threshold = 0.5
             results = []
@@ -633,6 +588,55 @@ class OnnxInferenceService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Multi-label inference failed for '{model_name}': {e}")
             return []
+
+    def predict_all_sigmoids(self, task: str, text: str) -> Dict[str, float]:
+        """Return sigmoid probabilities for every output head of a multi-label task.
+
+        Returns a ``{label: probability}`` dict with NO threshold filtering.
+        Intended for tasks whose ``classifier_meta.json`` sets
+        ``task_type = "multi_label"`` and ``output_activation = "sigmoid"``.
+
+        Args:
+            task: Registered task name (e.g. ``'mode_detector'``).
+            text: Raw user text to classify.
+
+        Returns:
+            Dict mapping each label to its sigmoid probability in [0, 1].
+            Returns ``{}`` when the task is unavailable, the head cannot be
+            loaded, feature dimensions do not match, or any other error occurs.
+            Never raises.
+        """
+        try:
+            head = self._get_head(task)
+            if head is None:
+                return {}
+
+            embedding = self._embed(text)  # (1, 768)
+            features = embedding
+
+            if features.shape[-1] != head.input_dim:
+                logger.warning(
+                    f"{LOG_PREFIX} {task}: feature dim mismatch "
+                    f"(got {features.shape[-1]}, expected {head.input_dim}) "
+                    f"in predict_all_sigmoids"
+                )
+                return {}
+
+            logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
+
+            probs = 1.0 / (1.0 + np.exp(-logits))
+
+            if not np.isfinite(probs).all():
+                logger.warning(
+                    f"{LOG_PREFIX} predict_all_sigmoids non-finite probs for '{task}'"
+                )
+                return {}
+
+            return {label: float(probs[i]) for i, label in enumerate(head.labels) if i < len(probs)}
+
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} predict_all_sigmoids failed for '{task}': {exc}")
+            return {}
 
     def is_available(self, model_name: str) -> bool:
         """Check if a model is loaded or loadable."""
@@ -657,12 +661,21 @@ def get_onnx_inference_service() -> OnnxInferenceService:
 
         import runtime_config
 
-        _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "models")
+        _backend_data = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        _default_models = os.path.join(_backend_data, "models")
+        _default_pretrained = os.path.join(_backend_data, "pre-trained")
         models_dir = runtime_config.get(
             "models_dir",
-            os.environ.get("MODELS_DIR", _default),
+            os.environ.get("MODELS_DIR", _default_models),
+        )
+        pretrained_dir = runtime_config.get(
+            "pretrained_dir",
+            os.environ.get("PRETRAINED_DIR", _default_pretrained),
         )
 
-        _instance = OnnxInferenceService(models_dir)
-        logger.info(f"{LOG_PREFIX} Initialized with models_dir={models_dir}")
+        _instance = OnnxInferenceService(models_dir, pretrained_dir)
+        logger.info(
+            f"{LOG_PREFIX} Initialized with models_dir={models_dir} "
+            f"pretrained_dir={pretrained_dir}"
+        )
         return _instance

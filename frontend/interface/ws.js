@@ -259,6 +259,12 @@ export class WSClient {
         case 'act_narration':
           this._chatCallbacks.onNarration?.(data);
           return;
+        case 'act_tool_start':
+          this._chatCallbacks.onToolStart?.(data);
+          return;
+        case 'act_tool_end':
+          this._chatCallbacks.onToolEnd?.(data);
+          return;
         case 'message':
           this._chatCallbacks.onMessage?.(data);
           return;

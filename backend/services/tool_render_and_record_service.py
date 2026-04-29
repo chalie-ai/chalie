@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class ToolRenderAndRecordService:
 
     def __init__(self, tool_name: str, params: dict, result: str,
-                 ephemeral: bool, transcript_id: int):
+                 ephemeral: bool, transcript_id: int | None):
         self._tool_name = tool_name
         self._params = params
         self._result = result
@@ -30,6 +30,19 @@ class ToolRenderAndRecordService:
         return f'[{self._tool_name}({param_str})] {self._result}'
 
     def _record(self) -> None:
+        # Internal processors with SKIP_TRANSCRIPT_WRITE=True never write a
+        # transcript row, so self._uid is None for the entire turn. The
+        # tool_calls.transcript_id column is NOT NULL; inserting a row would
+        # raise IntegrityError, which the broad except below would swallow
+        # silently — leaving operators believing tool calls are recorded
+        # when they are not. Guard early and log at DEBUG so the behaviour
+        # is observable without spamming logs.
+        if self._transcript_id is None:
+            logger.debug(
+                "[TOOL RENDER] Skipping record (no transcript_id): tool=%s",
+                self._tool_name,
+            )
+            return
         db = get_shared_db_service()
         params_json = json.dumps(self._params)
         now = utc_now().isoformat()

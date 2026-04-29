@@ -7,7 +7,7 @@ Protocol:
   → Client sends:  {"type": "act_steer", "text": "..."}
   → Client sends:  {"type": "resume", "last_seq": N}
   ← Server sends:  {"type": "status", "stage": "...", "seq": N}
-  ← Server sends:  {"type": "message", "blocks": [...], ..., "seq": N}
+  ← Server sends:  {"type": "message", "content": "...", ..., "seq": N}
   ← Server sends:  {"type": "act_narration", "text": "...", "step": N, "seq": N}
   ← Server sends:  {"type": "done", "duration_ms": N, "seq": N}
   ← Server sends:  {"type": "drift|task|reminder|escalation|notification", ..., "seq": N}
@@ -23,8 +23,7 @@ from collections import deque
 
 from utils.logger import set_correlation_id
 
-from services.blocks_render_service import BlocksRenderService
-_blocks_svc = BlocksRenderService()
+from services.markup import wrap_text_xml, actions_to_xml, is_xml_content, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +220,145 @@ def register_websocket(sock):
             ws_open.clear()
 
 
+def _parse_meta(meta) -> dict:
+    """Parse extracted_metadata which may be a JSON string or a dict."""
+    if isinstance(meta, str):
+        try:
+            return json.loads(meta)
+        except Exception:
+            return {}
+    return meta or {}
+
+
+def _poll_until_terminal(svc, doc_id: str, deadline: float) -> str:
+    """Poll a document until status is 'ready' / 'failed' or the deadline expires."""
+    import time as _time
+    doc = svc.get_document(doc_id)
+    status = doc.get('status', '') if doc else ''
+    while status not in ('ready', 'failed') and _time.monotonic() < deadline:
+        _time.sleep(0.2)
+        doc = svc.get_document(doc_id)
+        if doc:
+            status = doc.get('status', '')
+    return status
+
+
+def _image_ocr_tag(doc: dict, image_id: str) -> str:
+    """Format a ready-image tag with OCR text (or <none> sentinel)."""
+    ocr = (_parse_meta(doc.get('extracted_metadata')).get('ocr_text') or '').strip()
+    return f"[image id={image_id} ocr={ocr[:500]}]" if ocr else f"[image id={image_id} ocr=<none>]"
+
+
+def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> str:
+    """Resolve one image_id to a structured tag. Never silently drops context."""
+    doc = svc.get_document(image_id)
+    if not doc:
+        logger.warning(f"[WS] file_tags image not found image_id={image_id} request_id={request_id}")
+        return f"[image id={image_id} status=not_found]"
+
+    status = doc.get('status', '')
+    if status not in ('ready', 'failed'):
+        status = _poll_until_terminal(svc, image_id, deadline)
+
+    if status == 'ready':
+        return _image_ocr_tag(svc.get_document(image_id) or doc, image_id)
+    if status == 'failed':
+        logger.warning(f"[WS] file_tags image analysis failed image_id={image_id} request_id={request_id}")
+        return f"[image id={image_id} status=failed]"
+    logger.warning(f"[WS] file_tags image analysis timed out image_id={image_id} status={status} request_id={request_id}")
+    return f"[image id={image_id} status=timeout]"
+
+
+def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text: str, source_type: str) -> str:
+    """Format the tag for a ready recent-upload. Re-reads for the final committed row."""
+    final = svc.get_document(doc_id) or {}
+    if source_type == 'chat_image':
+        return _image_ocr_tag(final, doc_id)
+    final_text = (final.get('clean_text') or fallback_text or '').strip()
+    if final_text:
+        return f"[document id={doc_id} name={original_name} content={final_text[:2000]}]"
+    return f"[document id={doc_id} name={original_name} content=<empty>]"
+
+
+def _fetch_recent_upload_row(db):
+    """SELECT the most recent upload/chat_image within the last 120 seconds."""
+    with db.connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, original_name, status, clean_text, source_type
+            FROM documents
+            WHERE source_type IN ('upload', 'chat_image')
+              AND deleted_at IS NULL
+              AND created_at >= datetime('now', '-120 seconds')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+        ).fetchone()
+
+
+def _resolve_recent_upload(db, svc, request_id: str):
+    """Return (tag, doc_id_if_injected) for the recent-upload fallback, or (None, None)."""
+    import time as _time
+    try:
+        row = _fetch_recent_upload_row(db)
+    except Exception as e:
+        logger.warning(f"[WS] file_tags recent-upload heuristic error request_id={request_id}: {e}")
+        return None, None
+    if not row:
+        return None, None
+
+    doc_id, original_name, doc_status, clean_text, source_type = row
+    if doc_status not in ('ready', 'failed'):
+        doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + 10.0)
+
+    tag_kind = 'image' if source_type == 'chat_image' else 'document'
+    if doc_status == 'ready':
+        return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
+    if doc_status == 'failed':
+        logger.warning(f"[WS] file_tags recent upload failed doc_id={doc_id} source_type={source_type} request_id={request_id}")
+        return f"[{tag_kind} id={doc_id} status=failed]", None
+    logger.warning(f"[WS] file_tags recent upload timed out doc_id={doc_id} source_type={source_type} status={doc_status} request_id={request_id}")
+    return f"[{tag_kind} id={doc_id} status=timeout]", None
+
+
+def _resolve_file_tags(image_ids: list, request_id: str) -> list:
+    """
+    Build file_tags for a chat turn. Returns structured strings to be appended
+    to metadata['file_tags'] — consumed by UserMessageProcessor.getUserPrompt.
+
+    Images share a single 10 s deadline so N slow images cannot block a turn
+    for N × 10 s. When image_ids is empty, the most recent upload/chat_image
+    (within 120 s) falls back in — covers paste/drop where the chat turn is
+    sent before the upload XHR completes. Every failure path emits a tag.
+    """
+    import time as _time
+    from services.document_service import DocumentService
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    svc = DocumentService(db)
+
+    tags = []
+    doc_ids_injected = []
+
+    images_deadline = _time.monotonic() + 10.0
+    for image_id in image_ids:
+        tags.append(_resolve_image_tag(svc, image_id, images_deadline, request_id))
+
+    if not image_ids:
+        tag, injected_id = _resolve_recent_upload(db, svc, request_id)
+        if tag:
+            tags.append(tag)
+            if injected_id:
+                doc_ids_injected.append(injected_id)
+
+    logger.info(
+        f"[WS] file_tags injected request_id={request_id} "
+        f"tags={len(tags)} image_ids={image_ids} doc_ids={doc_ids_injected}"
+    )
+    return tags
+
+
 def _handle_resume(ws, msg):
     """Replay missed events on reconnect."""
     last_seq = msg.get('last_seq', 0)
@@ -244,9 +382,10 @@ def _handle_action(ws, store, msg):
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
     try:
-        from services.innate_skills import get_skill_handler
-        handler = get_skill_handler(skill)
-        if not handler:
+        from abilities._registry import AbilityRegistry
+        try:
+            ability = AbilityRegistry.get(skill)
+        except KeyError:
             seq = _next_seq()
             _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
             seq = _next_seq()
@@ -254,7 +393,7 @@ def _handle_action(ws, store, msg):
             return
 
         start = time.time()
-        result = handler('action_button', payload)
+        result = ability.execute('action_button', payload, None)
 
         # Handle structured results (text + reply_actions)
         reply_actions = None
@@ -264,15 +403,21 @@ def _handle_action(ws, store, msg):
 
         elapsed_ms = int((time.time() - start) * 1000)
 
-        # Convert to blocks — sole output format
-        blocks = _blocks_svc.from_markdown(result or "Done.")
+        # LLM / skill result → XML content string. Sanitize() is the single
+        # chokepoint: it strips every tag/attribute outside our allowlist
+        # before the FE ever sees the content. The LLM is told to never emit
+        # ``<a>``; the FE auto-linkifies any plain-text URLs it finds.
+        content = (result or "Done.")
+        if not is_xml_content(content):
+            content = wrap_text_xml(content)
         if reply_actions:
-            blocks.extend(_blocks_svc.from_actions(reply_actions))
+            content += actions_to_xml(reply_actions)
+        content = sanitize(content)
 
         seq = _next_seq()
         message_evt = {
             "type": "message",
-            "blocks": blocks,
+            "content": content,
             "topic": "",
             "mode": "ACT",
             "confidence": 0.95,
@@ -337,6 +482,13 @@ def _handle_chat(ws, store, msg, active_request=None):
     if not text and image_ids:
         text = '[Image attached]'
 
+    # Absorb typed signal so WorldState snapshot stays current.
+    try:
+        from services.world_state import world_state, Signal
+        world_state.absorb(Signal(source='ws', kind='user_message', payload={'text': text[:200]}))
+    except Exception as _ws_err:
+        logger.debug("[WS] world_state.absorb failed: %s", _ws_err)
+
     source = msg.get('source', 'text')
     request_id = str(uuid.uuid4())
 
@@ -377,6 +529,14 @@ def _handle_chat(ws, store, msg, active_request=None):
                 'channel': 'user',
             }
 
+            # Resolve file context tags — waits up to 10 s for image analysis
+            # and injects a recent-upload document heuristic when applicable.
+            # MUST run before UserMessageProcessor is constructed so that
+            # getUserPrompt() picks up file_tags on its first call.
+            _file_tags_t0 = time.time()
+            metadata['file_tags'] = _resolve_file_tags(image_ids, request_id)
+            _file_tags_wait_ms = int((time.time() - _file_tags_t0) * 1000)
+
             def _on_narration(text, step=0):
                 """Publish per-iteration synthesis text to the per-request SSE channel."""
                 if not request_id or not text:
@@ -397,12 +557,38 @@ def _handle_chat(ws, store, msg, active_request=None):
                 except Exception as e:
                     logger.debug(f"[WS] Narration publish failed: {e}")
 
+            def _on_tool_event(event):
+                """Publish per-tool start/end events to the per-request SSE channel.
+
+                event = {type: 'act_tool_start'|'act_tool_end', call_id, name?, iter?, ms?, ok?}
+                Mirrors _on_narration: stores blob to output:{evt_id}, publishes evt_id
+                on sse:{request_id}.
+                """
+                if not request_id or not isinstance(event, dict):
+                    return
+                evt_type = event.get('type')
+                if evt_type not in ('act_tool_start', 'act_tool_end'):
+                    return
+                try:
+                    from uuid import uuid4
+                    import json as _json
+                    evt_id = f"tool_{uuid4().hex[:12]}"
+                    store.set(f"output:{evt_id}", _json.dumps(event), ex=300)
+                    store.publish(f"sse:{request_id}", evt_id)
+                except Exception as e:
+                    logger.debug(f"[WS] Tool event publish failed: {e}")
+
             proc = UserMessageProcessor(
                 raw_input=text,
                 metadata=metadata,
                 on_narration=_on_narration,
+                on_tool_event=_on_tool_event,
             )
             proc.set_turn_start(turn_start)
+            try:
+                proc._metrics.add_stage_ms('file_tags_wait', _file_tags_wait_ms)
+            except Exception:
+                pass
             response = proc.send(request_id=request_id)
 
             metrics = proc._metrics.snapshot()
@@ -422,11 +608,12 @@ def _handle_chat(ws, store, msg, active_request=None):
             # Store result at output:{request_id} so the fallback path can
             # find it if the pub/sub message was missed.
             try:
+                _fb_content = sanitize(response if is_xml_content(response) else wrap_text_xml(response))
                 fallback_output = {
                     "type": "TEXT",
                     "topic": 'user',
                     "metadata": {
-                        "blocks": _blocks_svc.from_markdown(response),
+                        "content": _fb_content,
                         "mode": "UNIFIED",
                         "confidence": 1.0,
                         "metadata": metadata,
@@ -519,12 +706,20 @@ def _handle_chat(ws, store, msg, active_request=None):
                     _send_json(ws, narr_evt)
                     continue  # Keep listening — this isn't the final response
 
+                # Act tool events: forward pill start/end events to client
+                if output.get('type') in ('act_tool_start', 'act_tool_end'):
+                    seq = _next_seq()
+                    pill_evt = {**output, 'seq': seq}
+                    _buffer_event(pill_evt)
+                    _send_json(ws, pill_evt)
+                    continue
+
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "blocks": metadata.get("blocks", []),
+                    "content": metadata.get("content", ""),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -567,7 +762,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "blocks": metadata.get("blocks", []),
+                    "content": metadata.get("content", ""),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),

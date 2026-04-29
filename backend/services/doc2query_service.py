@@ -9,6 +9,7 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+LOG_PREFIX = "[DOC2QUERY]"
 _MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'models', 'doc2query-small')
 _IDLE_TIMEOUT = 600  # 10 minutes
 
@@ -42,6 +43,8 @@ class Doc2QueryService:
                 import onnxruntime as ort
                 from transformers import AutoTokenizer
 
+                from services.onnx_session import build_session
+
                 model_dir = os.path.abspath(_MODEL_DIR)
                 encoder_path = os.path.join(model_dir, 'encoder_model.onnx')
                 decoder_path = os.path.join(model_dir, 'decoder_model.onnx')
@@ -51,28 +54,30 @@ class Doc2QueryService:
                            if not os.path.exists(p)]
                 if missing:
                     names = [os.path.basename(p) for p in missing]
-                    logger.info("[DOC2QUERY] Missing model files at %s: %s", model_dir, ', '.join(names))
+                    logger.info(f"{LOG_PREFIX} Missing model files at %s: %s", model_dir, ', '.join(names))
                     self._available = False
                     return
 
-                opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 1
-                opts.inter_op_num_threads = 1
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                def _opts():
+                    o = ort.SessionOptions()
+                    o.intra_op_num_threads = 1
+                    o.inter_op_num_threads = 1
+                    o.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    return o
 
-                self._encoder = ort.InferenceSession(encoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
-                self._decoder = ort.InferenceSession(decoder_path, sess_options=opts, providers=["CPUExecutionProvider"])
-                self._decoder_past = ort.InferenceSession(decoder_past_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._encoder = build_session(encoder_path, sess_options=_opts(), log_prefix=LOG_PREFIX)
+                self._decoder = build_session(decoder_path, sess_options=_opts(), log_prefix=LOG_PREFIX)
+                self._decoder_past = build_session(decoder_past_path, sess_options=_opts(), log_prefix=LOG_PREFIX)
                 self._tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
                 self._available = True
                 self._last_used = time.time()
-                logger.info("[DOC2QUERY] Model loaded (3 ONNX sessions)")
+                logger.info(f"{LOG_PREFIX} Model loaded (3 ONNX sessions)")
             except (ImportError, ModuleNotFoundError) as e:
-                logger.warning("[DOC2QUERY] Permanently unavailable (missing dependency): %s", e)
+                logger.warning(f"{LOG_PREFIX} Permanently unavailable (missing dependency): %s", e)
                 self._available = False
             except Exception as e:
-                logger.warning("[DOC2QUERY] Load failed (will retry): %s", e)
+                logger.warning(f"{LOG_PREFIX} Load failed (will retry): %s", e)
                 # Reset partial state so retry can re-attempt from scratch
                 self._encoder = None
                 self._decoder = None
@@ -88,7 +93,7 @@ class Doc2QueryService:
         self._tokenizer = None
         self._available = None
         self._last_used = 0.0
-        logger.info("[DOC2QUERY] Unloaded (idle timeout)")
+        logger.info(f"{LOG_PREFIX} Unloaded (idle timeout)")
 
     def _unload(self):
         with self._lock:
@@ -126,7 +131,7 @@ class Doc2QueryService:
                     unique.append(q)
             return unique
         except Exception as e:
-            logger.warning("[DOC2QUERY] Generation failed: %s", e)
+            logger.warning(f"{LOG_PREFIX} Generation failed: %s", e)
             return []
 
     def _generate_one(self, encoder_hidden, attention_mask, max_length=64):

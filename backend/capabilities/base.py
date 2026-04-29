@@ -170,7 +170,7 @@ class AbstractCapability(ABC):
 
         Returns:
             list[dict]: Enriched/extracted knowledge dicts ready for storage
-            via KnowledgeService.
+            via DataGraphService.
         """
 
     @abstractmethod

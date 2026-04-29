@@ -49,14 +49,11 @@ class TestPrivacyAPI:
             data = response.get_json()
             # Table counts should be present (all 0 from empty test DB)
             assert "episodes" in data
-            assert "knowledge" in data
             assert "transcript" in data
             assert "scheduled_items" in data
-            assert "place_fingerprints" in data
 
             # Verify counts are 0 for an empty database
             assert data["episodes"] == 0
-            assert data["knowledge"] == 0
 
     # ------------------------------------------------------------------
     # DELETE /privacy/delete-all
@@ -100,3 +97,60 @@ class TestPrivacyAPI:
 
         assert db.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 0
+
+    def test_delete_all_clears_extended_tables(self, client, db):
+        """DELETE /privacy/delete-all wipes data_graph, lists, list_items,
+        scheduled_items, and documents."""
+        # ── Seed data_graph ───────────────────────────────────────────────────
+        db.execute(
+            "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
+            ("fact", "favourite_colour", "blue"),
+        )
+
+        # ── Seed lists + list_items (list_items FK → lists) ───────────────────
+        db.execute(
+            "INSERT INTO lists (id, name, list_type) VALUES (?, ?, ?)",
+            ("list-1", "Groceries", "checklist"),
+        )
+        db.execute(
+            "INSERT INTO list_items (id, list_id, content) VALUES (?, ?, ?)",
+            ("item-1", "list-1", "Milk"),
+        )
+
+        # ── Seed scheduled_items ──────────────────────────────────────────────
+        db.execute(
+            "INSERT INTO scheduled_items (id, message, due_at) VALUES (?, ?, ?)",
+            ("sched-1", "Buy groceries", "2026-05-01T10:00:00+00:00"),
+        )
+
+        # ── Seed documents ────────────────────────────────────────────────────
+        db.execute(
+            "INSERT INTO documents (id, original_name, mime_type, file_path) "
+            "VALUES (?, ?, ?, ?)",
+            ("doc-1", "notes.txt", "text/plain", "data/uploads/notes.txt"),
+        )
+
+        db.commit()
+
+        # Pre-conditions: every seeded table has >= 1 row
+        assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] >= 1
+        assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] >= 1
+        assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] >= 1
+        assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] >= 1
+        assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] >= 1
+
+        response = client.delete(
+            '/privacy/delete-all',
+            headers={"X-Confirm-Delete": "yes"},
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["deleted"] is True
+
+        # Post-conditions: every seeded table must be empty
+        assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0

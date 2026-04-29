@@ -6,6 +6,10 @@ by retrieval_weight DESC) and asks the LLM to return a JSON object with a
 ``short`` and a ``long`` synopsis.  ``postTurn()`` parses the response and
 writes both synopses back to data_graph as ``kind='system'`` rows.
 
+``send()`` self-skips via ``_should_synthesise()`` when no new traits have
+arrived since the last synthesis.  Triggered once per :class:`SubconsciousWorker`
+tick (v0.5.0 §5 step 4); the sentinel keeps repeated ticks idempotent.
+
 North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
@@ -18,6 +22,22 @@ from services.system_message_prompt import UserSummarySystemPrompt
 logger = logging.getLogger(__name__)
 
 _MAX_TRAIT_ROWS = 200
+_MAX_PATTERN_ROWS = 25
+
+
+def _format_pattern_line(content: dict) -> str:
+    """Render a single behavioral_pattern content dict as a compact one-liner."""
+    name = content.get("name", "unknown")
+    freq = content.get("frequency", "?")
+    anchor = content.get("time_anchor") or ""
+    summary = content.get("summary", "")
+    confidence = content.get("confidence", 0)
+    last_seen = (content.get("last_seen_at") or "")[:10] or "?"
+    anchor_part = f" @ {anchor}" if anchor else ""
+    return (
+        f"{name} ({freq}{anchor_part}): {summary} "
+        f"[confidence={confidence}, last {last_seen}]"
+    )
 
 
 class UserSummaryProcessor(MessageProcessor):
@@ -36,7 +56,8 @@ class UserSummaryProcessor(MessageProcessor):
     ROLE = 'user_summary'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UserSummarySystemPrompt
-    NATIVE_TOOLS: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
     MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True
@@ -46,14 +67,105 @@ class UserSummaryProcessor(MessageProcessor):
         # Capture the LLM response text so postTurn() can parse it.
         self._last_response: str = ''
 
+    def _should_synthesise(self) -> bool:
+        """Return True when re-synthesis is warranted.
+
+        Logic:
+        - ``latest_trait_ts`` = MAX(last_confirmed_at) WHERE kind IN
+          ('user_specific', 'behavioral_pattern') AND active=1
+        - ``current_summary`` = row WHERE kind='system' AND key='user_summary' AND active=1
+
+        Cases:
+        - No traits or patterns at all → False (nothing to synthesise).
+        - Traits/patterns exist, no summary → True (first synthesis needed).
+        - Both exist → True only when latest trait/pattern is newer than the summary row.
+
+        The ``kind IN ('user_specific', 'behavioral_pattern')`` filter on the MAX
+        query is CRITICAL: querying all kinds would include the ``user_summary`` row
+        itself, which is always confirmed more recently after synthesis, creating a
+        permanent re-synthesis loop.  Both user-stated traits AND derived behavioural
+        patterns are valid synthesis triggers.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.time_utils import parse_utc
+
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT MAX(last_confirmed_at)
+                    FROM data_graph
+                    WHERE kind IN ('user_specific', 'behavioral_pattern')
+                      AND active = 1
+                      AND deleted_at IS NULL
+                    """
+                ).fetchone()
+                latest_trait_ts = row[0] if row else None
+
+                if latest_trait_ts is None:
+                    return False
+
+                summary_row = conn.execute(
+                    """
+                    SELECT last_confirmed_at
+                    FROM data_graph
+                    WHERE kind = 'system'
+                      AND key = 'user_summary'
+                      AND active = 1
+                      AND deleted_at IS NULL
+                    LIMIT 1
+                    """
+                ).fetchone()
+
+            if summary_row is None:
+                return True
+
+            try:
+                trait_dt = parse_utc(latest_trait_ts)
+                summary_dt = parse_utc(summary_row[0])
+            except Exception as exc:
+                logger.error(
+                    "[USER SUMMARY] _should_synthesise: parse_utc failed on "
+                    "trait_ts=%r summary_ts=%r: %s",
+                    latest_trait_ts,
+                    summary_row[0],
+                    exc,
+                )
+                return False
+
+            return trait_dt > summary_dt
+
+        except Exception as exc:
+            logger.warning("[USER SUMMARY] _should_synthesise failed: %s", exc)
+            return False
+
+    def send(self, request_id: str | None = None) -> str:
+        """Run synthesis only when new traits exist since the last synopsis.
+
+        Delegates to the base ACT loop if synthesis is warranted.  Silently
+        returns the empty string (as if the turn produced no text) when the
+        synopsis is already current — matching the base-class cap-exit
+        convention for internal processors.
+        """
+        if not self._should_synthesise():
+            logger.info("[USER SUMMARY] No new traits since last synthesis; skipping")
+            return ''
+        return super().send(request_id=request_id)
+
     def getUserDefinition(self) -> str:
         return "You are a synthesiser. The user is a real human whose traits you are distilling."
 
     def getUserPrompt(self) -> str:
-        """Fetch up to 200 user_specific rows and render as ``key: value`` pairs.
+        """Assemble the synthesis prompt from user traits and active behavioural patterns.
 
-        Renders ONLY key and value — no weights, no source, no timestamps.
+        Section 1 — Facts (key: value pairs, up to _MAX_TRAIT_ROWS).
+        Section 2 — Behavioural patterns (compact digest, up to _MAX_PATTERN_ROWS).
+        Section 2 is omitted entirely when no active patterns exist.
+
+        Renders ONLY key and value for traits — no weights, no source, no timestamps.
         """
+        # ── Section 1: user_specific traits ──────────────────────────────────────
         try:
             from services.data_graph_service import get_data_graph_service
 
@@ -63,21 +175,60 @@ class UserSummaryProcessor(MessageProcessor):
                 order_by='retrieval_weight DESC',
             )
         except Exception as exc:
-            logger.warning("[USER SUMMARY] getUserPrompt: fetch failed: %s", exc)
+            logger.warning("[USER SUMMARY] getUserPrompt: trait fetch failed: %s", exc)
             rows = []
 
         if not rows:
-            return "Facts:\n(no facts available)"
+            facts_section = "Facts:\n(no facts available)"
+        else:
+            lines = [
+                f"{r['key']}: {r['value']}"
+                for r in rows
+                if r.get('key') and r.get('value')
+            ]
+            facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
 
-        lines = [
-            f"{r['key']}: {r['value']}"
-            for r in rows
-            if r.get('key') and r.get('value')
-        ]
-        if not lines:
-            return "Facts:\n(no facts available)"
+        # ── Section 2: active behavioural patterns ───────────────────────────────
+        active_patterns = []
+        try:
+            import json as _json
 
-        return "Facts:\n" + "\n".join(lines)
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                pattern_rows = conn.execute(
+                    """
+                    SELECT value
+                    FROM data_graph
+                    WHERE kind = 'behavioral_pattern'
+                      AND active = 1
+                      AND deleted_at IS NULL
+                    ORDER BY last_confirmed_at DESC
+                    LIMIT ?
+                    """,
+                    (_MAX_PATTERN_ROWS,),
+                ).fetchall()
+            for (value_json,) in pattern_rows:
+                try:
+                    content = _json.loads(value_json)
+                    if content:
+                        active_patterns.append(content)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.warning("[USER SUMMARY] active pattern fetch failed: %s", exc)
+
+        if not active_patterns:
+            return facts_section
+
+        pattern_lines = [_format_pattern_line(p) for p in active_patterns]
+        patterns_section = (
+            "## Behavioural patterns (frequency, last seen)\n"
+            + "\n".join(f"- {line}" for line in pattern_lines)
+        )
+
+        return facts_section + "\n\n" + patterns_section
 
     def store(self, llm_response: str) -> None:
         """Capture the LLM response for postTurn(), then call base (no-op for SKIP_TRANSCRIPT_WRITE)."""
@@ -134,14 +285,14 @@ class UserSummaryProcessor(MessageProcessor):
             from services.data_graph_service import get_data_graph_service
 
             dgs = get_data_graph_service()
-            # Write order matters for crash recovery. `_should_synthesise()` in
-            # user_summary_worker compares latest user_specific trait timestamp
-            # against the `user_summary` (short) row only. Writing `user_summary_long`
-            # FIRST means: if the process crashes between these two calls the short
-            # row's last_confirmed_at stays stale, _should_synthesise() returns True,
-            # and the next tick re-synthesises both. Reverse order would mark the
-            # short row fresh while user_summary_long was never written — a permanent
-            # split-brain with no retry trigger.
+            # Write order matters for crash recovery. `_should_synthesise()` compares
+            # latest user_specific trait timestamp against the `user_summary` (short)
+            # row only. Writing `user_summary_long` FIRST means: if the process
+            # crashes between these two calls the short row's last_confirmed_at stays
+            # stale, _should_synthesise() returns True, and the next caller
+            # re-synthesises both. Reverse order would mark the short row fresh while
+            # user_summary_long was never written — a permanent split-brain with no
+            # retry trigger.
             dgs.store(
                 kind='system',
                 key='user_summary_long',

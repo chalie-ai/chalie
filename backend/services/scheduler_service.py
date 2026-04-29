@@ -6,7 +6,7 @@ direct notifications (OutputService) or through ScheduledMessageProcessor
 for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
-Entry point: scheduler_worker(shared_state=None) registered in run.py.
+Entry point: scheduler_worker() registered in run.py.
 """
 
 import logging
@@ -80,7 +80,7 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
         logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
 
 
-def scheduler_worker(shared_state=None):
+def scheduler_worker():
     """Module-level entry point for run.py."""
     Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")

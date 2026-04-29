@@ -1,43 +1,25 @@
 """
-Decay Engine Service - Unified periodic decay scheduler across all memory types.
+Decay Engine Service — unified decay across all memory types.
 
-Background service that periodically decays episodic activation scores and
-semantic concept strength. Follows IdleConsolidationService pattern.
+Triggered once per :class:`SubconsciousWorker` tick (v0.5.0 §5).  The engine
+itself is stateless apart from the config-loaded ``retrieval_decay_exponent``;
+cadence is owned by the caller.
 """
 
-import time
 import math
 import logging
-from typing import Optional
 
 from .config_service import ConfigService
 
-try:
-    from services.telemetry_service import (
-        get_telemetry_collector,
-        GOAL_LIFECYCLE,
-    )
-    _TELEMETRY_AVAILABLE = True
-except Exception as e:  # pragma: no cover
-    _TELEMETRY_AVAILABLE = False
-    logging.getLogger(__name__).debug(f"Telemetry import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 
 
 class DecayEngineService:
-    """Background service that applies decay to all memory types periodically."""
+    """Applies decay to every memory type in one cycle."""
 
-    def __init__(self, decay_interval: int = 1800):
-        """
-        Initialize decay engine.
-
-        Args:
-            decay_interval: Seconds between decay cycles (default: 1800 = 30 minutes)
-        """
-        self.decay_interval = decay_interval
-
-        # Load decay rates from config
+    def __init__(self):
+        """Load the retrieval-decay exponent from ``episodic-memory`` config."""
         try:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
@@ -47,122 +29,49 @@ class DecayEngineService:
 
         logger.info(
             f"[DECAY ENGINE] Initialized "
-            f"(interval={decay_interval}s, "
-            f"retrieval_decay_exponent={self.retrieval_decay_exponent})"
+            f"(retrieval_decay_exponent={self.retrieval_decay_exponent})"
         )
 
-    def run(self, shared_state: Optional[dict] = None) -> None:
+    def run_once(self) -> None:
+        """Single tick for SubconsciousWorker. Delegates to run_decay_cycle with current richness.
+
+        Resolves richness from SelfModelService; falls back to 1.0 if unavailable.
+        Engine logic itself is unchanged — only the trigger surface is new.
         """
-        Main service loop - periodically runs decay cycles.
-
-        Args:
-            shared_state: Optional shared state dict (for consumer integration)
-        """
-        logger.info("[DECAY ENGINE] Service started")
-        self._cleanup_legacy_store_keys()
-
-        while True:
-            try:
-                time.sleep(self.decay_interval)
-
-                # Self-regulation: check memory richness before decaying
-                try:
-                    from services.self_model_service import SelfModelService
-                    richness = SelfModelService().get_memory_richness()
-                    if richness < 0.1:
-                        logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.1, skipping cycle")
-                        continue
-                except Exception as e:
-                    logger.warning(f"[DECAY ENGINE] Memory richness check failed, running decay anyway: {e}")
-                    richness = 1.0  # fail-open: run decay if telemetry unavailable
-
-                logger.info("[DECAY ENGINE] Running decay cycle...")
-                self.run_decay_cycle(richness=richness)
-
-            except KeyboardInterrupt:
-                logger.info("[DECAY ENGINE] Service shutting down...")
-                break
-            except Exception as e:
-                logger.error(f"[DECAY ENGINE] Error: {e}", exc_info=True)
-                logger.info("[DECAY ENGINE] Waiting 1 minute before retry...")
-                time.sleep(60)
+        try:
+            from services.self_model_service import SelfModelService
+            richness = SelfModelService().get_memory_richness()
+        except Exception as exc:
+            logger.warning(f"[DecayEngine] richness lookup failed, defaulting to 1.0: {exc}")
+            richness = 1.0
+        self.run_decay_cycle(richness=richness)
 
     def run_decay_cycle(self, richness: float = 1.0):
         """Run one full decay cycle across all memory types.
 
-        When richness < 0.3, only essential sub-cycles run (episodic + knowledge).
-        Non-essential sub-cycles (external knowledge) are skipped to conserve
-        resources on sparse memory systems.
+        Sub-cycles (run unconditionally):
+        1. ``_decay_episodic()`` — power-law decay on ``episodes.retrieval_weight``.
+        2. ``_decay_data_graph()`` — ``DataGraphService.decay_cycle()`` (generic
+           power-law for kinds with ``ttl_days != None``).
+        3. ``_cleanup_transcript()`` — old transcript row cleanup.
+        4. ``_purge_tool_calls()`` — old tool-call row purge.
 
         Args:
-            richness: Current memory richness score in [0.0, 1.0].  Values below
-                0.3 cause non-essential sub-cycles to be skipped.
+            richness: Current memory richness score in [0.0, 1.0]. Reserved for
+                future sub-cycle gating; all current sub-cycles run unconditionally.
         """
         episodic_count = self._decay_episodic()
-        knowledge_count = self._decay_knowledge()
         data_graph_count = self._decay_data_graph()
-        goal_decay_count = self._decay_goals()
         transcript_cleaned = self._cleanup_transcript()
         tool_calls_purged = self._purge_tool_calls()
-
-        # Non-essential sub-cycles gated on sufficient memory richness
-        if richness >= 0.3:
-            external_count = self._decay_external_knowledge()
-        else:
-            external_count = 0
-            logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
-            f"knowledge={knowledge_count} updated, "
             f"data_graph={data_graph_count} updated, "
             f"transcript_cleaned={transcript_cleaned}, "
-            f"tool_calls_purged={tool_calls_purged}, "
-            f"external_knowledge={external_count} accelerated, "
-            f"goals={goal_decay_count} decayed"
+            f"tool_calls_purged={tool_calls_purged}"
         )
-
-    def _decay_goals(self) -> int:
-        """Decay unreinforced goals via :class:`~services.goal_ecology_service.GoalEcologyService`.
-
-        Delegates to :meth:`~services.goal_ecology_service.GoalEcologyService.decay_unreinforced`
-        to identify goals whose salience has not been reinforced within their
-        configured timescale window.  After the sub-service returns, emits a
-        single ``GOAL_LIFECYCLE`` telemetry event summarising the number of goals
-        transitioned to *decayed* status during this cycle.
-
-        Returns:
-            Number of goals whose status was set to ``'decayed'``, or ``0`` on
-            any error (failure is non-fatal; the rest of the decay cycle
-            continues regardless).
-        """
-        try:
-            from services.goal_ecology_service import GoalEcologyService
-
-            service = GoalEcologyService()
-            decayed_count = service.decay_unreinforced()
-
-            if _TELEMETRY_AVAILABLE:
-                try:
-                    get_telemetry_collector().record(
-                        GOAL_LIFECYCLE,
-                        {
-                            "action": "decay",
-                            "decayed_count": decayed_count,
-                            "source": "decay_engine",
-                        },
-                    )
-                except Exception as _tel_err:
-                    logger.debug(
-                        "[DECAY ENGINE] GOAL_LIFECYCLE 'decay' telemetry emit failed (non-fatal): %s",
-                        _tel_err,
-                    )
-
-            return decayed_count
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Goal decay sub-cycle failed: {e}", exc_info=True)
-            return 0
 
     def _decay_episodic(self) -> int:
         """
@@ -231,30 +140,6 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
             return 0
 
-    def _decay_knowledge(self) -> int:
-        """Apply decay to unified knowledge table via KnowledgeService.
-
-        Delegates to :meth:`KnowledgeService.decay_cycle` which handles
-        per-decay-class rates, reliability multipliers, soft-deletion at
-        confidence floor, and memory_pressure signal emission.
-
-        Returns:
-            Number of knowledge entries updated, or 0 on any error.
-        """
-        try:
-            from .database_service import get_shared_db_service
-            from .knowledge_service import KnowledgeService
-
-            db = get_shared_db_service()
-            try:
-                svc = KnowledgeService(db)
-                return svc.decay_cycle()
-            finally:
-                db.close_pool()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
-            return 0
-
     def _decay_data_graph(self) -> int:
         """Apply decay to data_graph via DataGraphService."""
         try:
@@ -269,16 +154,6 @@ class DecayEngineService:
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}", exc_info=True)
             return 0
-
-    def _cleanup_legacy_store_keys(self) -> None:
-        """Remove stale MemoryStore keys left by previous pipeline versions."""
-        try:
-            from .memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            for key in store.keys("semantic_consolidation:*"):
-                store.delete(key)
-        except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Legacy store key cleanup non-fatal: {e}")
 
     def _cleanup_transcript(self) -> int:
         """Delete unlinked transcript entries below compaction watermark."""
@@ -310,83 +185,3 @@ class DecayEngineService:
             logger.debug(f"[DECAY ENGINE] Tool calls purge non-fatal: {e}")
             return 0
 
-    # Sources that qualify for accelerated external knowledge decay
-    EXTERNAL_KNOWLEDGE_PREFIXES = ("external_specialist:",)
-
-    def _decay_external_knowledge(self) -> int:
-        """
-        Apply accelerated decay to knowledge tagged as from external sources.
-
-        External knowledge (specialist facts, web search results) in MemoryStore get
-        their TTL reduced by the decay multiplier. This ensures external knowledge
-        decays 1.5x faster until reinforced by direct experience.
-
-        Returns:
-            Number of facts with accelerated decay
-        """
-        try:
-            from .memory_client import MemoryClientService
-
-            store = MemoryClientService.create_connection()
-
-            multiplier = 1.5
-
-            # Scan for fact keys with external source tags
-            count = 0
-            cursor = 0
-            while True:
-                cursor, keys = store.scan(cursor, match="fact:*", count=100)
-                for key in keys:
-                    try:
-                        fact_json = store.get(key)
-                        if not fact_json:
-                            continue
-
-                        import json
-                        fact = json.loads(fact_json)
-                        source = fact.get('source', '')
-
-                        if source and any(
-                            source.startswith(prefix)
-                            for prefix in self.EXTERNAL_KNOWLEDGE_PREFIXES
-                        ):
-                            ttl = store.ttl(key)
-                            if ttl > 0:
-                                # Reduce TTL by multiplier
-                                new_ttl = max(60, int(ttl / multiplier))
-                                if new_ttl < ttl:
-                                    store.expire(key, new_ttl)
-                                    count += 1
-                    except Exception as e:
-                        logger.debug(f"[DECAY ENGINE] Failed to process external knowledge key '{key}': {e}")
-                        continue
-
-                if cursor == 0:
-                    break
-
-            if count > 0:
-                logger.info(
-                    f"[DECAY ENGINE] Accelerated decay for {count} external knowledge facts "
-                    f"(multiplier={multiplier}x)"
-                )
-            return count
-
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] External knowledge decay failed: {e}")
-            return 0
-
-def decay_engine_worker(shared_state=None):
-    """
-    Module-level wrapper for threading.
-    Instantiates the service inside the child process.
-    """
-    # Read config inside child process
-    try:
-        episodic_config = ConfigService.get_agent_config("episodic-memory")
-        decay_interval = episodic_config.get('decay_interval_seconds', 1800)
-    except Exception as e:
-        logger.warning(f"[DECAY ENGINE] Failed to load decay_interval from config, using default 1800s: {e}")
-        decay_interval = 1800
-
-    service = DecayEngineService(decay_interval=decay_interval)
-    service.run(shared_state)

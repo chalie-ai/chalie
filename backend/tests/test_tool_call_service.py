@@ -157,17 +157,17 @@ class TestStoreBatch:
     def test_store_batch(self, svc, db_service, transcript_id):
         tool_calls = [
             {'id': 'tc1', 'name': 'memory', 'input': {'query': 'x'}},
-            {'id': 'tc2', 'name': 'goals', 'input': {'action': 'list'}},
+            {'id': 'tc2', 'name': 'schedule', 'input': {'action': 'list'}},
         ]
         results = [
             {'result': 'memory result', 'status': 'ok'},
-            {'result': 'goals result', 'status': 'ok'},
+            {'result': 'schedule result', 'status': 'ok'},
         ]
         svc.store_batch(transcript_id, tool_calls, results)
         rows = _all_rows(db_service)
         assert len(rows) == 2
         assert rows[0]['tool_name'] == 'memory'
-        assert rows[1]['tool_name'] == 'goals'
+        assert rows[1]['tool_name'] == 'schedule'
 
     def test_store_batch_empty_does_nothing(self, svc, db_service, transcript_id):
         svc.store_batch(transcript_id, [], [])
@@ -284,10 +284,10 @@ class TestGetByTimerange:
         center = utc_now()
         # Exactly 5 minutes before — should be included (>= boundary)
         boundary_ts = (center - timedelta(minutes=5)).isoformat()
-        svc.store(transcript_id, 'goals', {}, 'on boundary')
+        svc.store(transcript_id, 'schedule', {}, 'on boundary')
         with db_service.connection() as conn:
             conn.execute(
-                "UPDATE tool_calls SET created_at = ? WHERE tool_name = 'goals'",
+                "UPDATE tool_calls SET created_at = ? WHERE tool_name = 'schedule'",
                 (boundary_ts,),
             )
         rows = svc.get_by_timerange(center.isoformat())

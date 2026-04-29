@@ -7,13 +7,13 @@ Coverage:
     4.  parse_vcard — returns None for invalid vCard data
     5.  parse_vcard — returns None when card has neither FN nor emails
     6.  parse_vcard — ORG as list value is flattened
-    7.  index_contacts — calls KnowledgeService.store with confidence=0.9
+    7.  index_contacts — calls DataGraphService.store with salience_score=0.9
     8.  index_contacts — skips contacts with no emails
     9.  index_contacts — skips entries with no display name
     10. index_contacts — enriches data dict with org, title, name parts
     11. index_contacts — survives a store() exception
     12. list_contacts — delegates to contact_resolver.resolve when query given
-    13. list_contacts — queries KnowledgeService directly when no query
+    13. list_contacts — queries DataGraphService directly when no query
     14. list_contacts — caps limit at 50
     15. get_contact — returns contact dict when found
     16. get_contact — returns error dict when not found

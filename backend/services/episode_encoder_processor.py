@@ -30,7 +30,8 @@ class EpisodeEncoderProcessor(MessageProcessor):
     ROLE = 'episode_encoder'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = EpisodeEncoderSystemPrompt
-    NATIVE_TOOLS: list[str] = []
+    ALWAYS_AVAILABLE: list[str] = []
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
     MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True

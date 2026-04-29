@@ -24,9 +24,6 @@ Why tool calls are dropped:
   tool_calls[] — valid provider format, no orphaned tool/result sequences.
 
 Collateral tables:
-  - transcript_vec: old embedding rows are deleted; re-inserted rows start
-    without embeddings.  The app regenerates embeddings on the next semantic
-    search that touches those rows — this is acceptable.
   - episodes: transcript_id_start/end references in episodes become orphaned
     integer IDs. SQLite does not enforce this FK, and episode retrieval uses
     vector similarity, not transcript ID lookup — harmless.
@@ -180,7 +177,6 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
         "skipped_dedup": 0,
         "pairs_inserted": 0,
         "orphaned_tool_calls_deleted": 0,
-        "vec_entries_deleted": 0,
         "unrecoverable_details": [],
     }
 
@@ -334,32 +330,20 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
                 old_ids,
             )
 
-        # 5d. Delete transcript_vec entries for those IDs (orphaned embeddings)
-        try:
-            for old_id in old_ids:
-                conn.execute("DELETE FROM transcript_vec WHERE rowid = ?", (old_id,))
-            stats["vec_entries_deleted"] = len(old_ids)
-        except Exception as e:
-            # transcript_vec is a virtual table; deletion may fail on some sqlite-vec
-            # versions — non-fatal, just log
-            print(f"\n  WARNING: Could not clean transcript_vec: {e}")
-            print("           Orphaned vec entries will not affect build_messages() "
-                  "but may appear in semantic search until overwritten.")
-
         # ── 6. Re-insert clean pairs ─────────────────────────────────────
 
         for pair in clean_pairs:
             conn.execute(
                 """
-                INSERT INTO transcript (channel, role, content, internal, created_at)
-                VALUES (?, 'user', ?, 0, ?)
+                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                VALUES (?, 'user', ?, 0, ?, 1)
                 """,
                 (channel, pair["user_content"], pair["user_created_at"]),
             )
             conn.execute(
                 """
-                INSERT INTO transcript (channel, role, content, internal, created_at)
-                VALUES (?, 'assistant', ?, 0, ?)
+                INSERT INTO transcript (channel, role, content, internal, created_at, xml_migrated)
+                VALUES (?, 'assistant', ?, 0, ?, 1)
                 """,
                 (channel, pair["asst_content"], pair["asst_created_at"]),
             )
@@ -368,12 +352,9 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print(f"\n  Written {len(clean_pairs)} exchange pairs "
           f"({len(clean_pairs) * 2} transcript rows)")
     print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
-    print(f"  Deleted {stats['vec_entries_deleted']} transcript_vec embedding entries")
     print("  Compaction cleared (will rebuild naturally)")
     print()
-    print("  NOTE: Re-inserted rows have no vector embeddings. Semantic search")
-    print("        on this history won't work until new activity is logged.")
-    print("        build_messages() is unaffected — it reads by ID range.")
+    print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 
     return stats
 

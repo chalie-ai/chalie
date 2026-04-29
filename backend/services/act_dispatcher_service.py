@@ -8,6 +8,7 @@ Returns structured results with confidence and notes for downstream
 critic evaluation.
 """
 
+import contextvars
 import time
 from typing import Dict, Any
 from threading import Thread
@@ -74,23 +75,28 @@ def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) ->
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
-    def __init__(self, timeout: float = 10.0, execution_gate: bool = True):
-        """
-        Initialize dispatcher with innate skills.
+    def __init__(self, timeout: float = 10.0):
+        """Initialize dispatcher with ability handlers.
 
         Args:
             timeout: Maximum execution time per action (seconds)
-            execution_gate: Whether to apply the autonomous execution gate.
-                Set to False for user-initiated ACT loops (the user already
-                asked for this), True for autonomous/background execution.
         """
         self.timeout = timeout
-        self.execution_gate = execution_gate
         self.handlers = {}
 
-        # Register innate skills (new system + backward-compat aliases)
-        from services.innate_skills import register_innate_skills
-        register_innate_skills(self)
+        # Register every ability from the registry as a handler.
+        # Each handler calls ability.execute(channel, params, telemetry=None).
+        # The dispatcher unwraps the returned dict's 'text' key automatically.
+        from abilities._registry import AbilityRegistry
+        for ability in AbilityRegistry.all():
+            _ability = ability  # capture for closure
+            self.handlers[_ability.NAME] = (
+                lambda channel, action, _a=_ability: _a.execute(
+                    channel,
+                    {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
+                    None,
+                )
+            )
 
     def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -107,8 +113,6 @@ class ActDispatcherService:
         start_time = time.time()
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
-
-        _commit_warning = ''
 
         # Get handler
         handler = self.handlers.get(action_type)
@@ -128,52 +132,27 @@ class ActDispatcherService:
                 'notes': '',
             }
 
-        from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
-        if self.execution_gate and action_type not in _SAFE_ACTIONS:
-            try:
-                from services.autonomous_execution_gate import get_autonomous_execution_gate
-                gate = get_autonomous_execution_gate()
-                action_description = action.get('description', action.get('params', {}).get('query', action_type))
-                gate_result = gate.evaluate(
-                    str(action_description),
-                    domain=channel or 'general',
-                )
-                if not gate_result['auto_execute']:
-                    execution_time = time.time() - start_time
-                    logging.info(
-                        f"[ACT DISPATCH] Blocked by execution gate: "
-                        f"tier={gate_result['consequence_tier']}, "
-                        f"action={action_description!r:.100}"
-                    )
-                    return {
-                        'action_type': action_type,
-                        'status': 'requires_confirmation',
-                        'result': (
-                            f"This action requires user confirmation. "
-                            f"{gate_result['reasoning']}"
-                        ),
-                        'execution_time': execution_time,
-                        'confidence': 0.0,
-                        'notes': gate_result['reasoning'],
-                        'gate_decision': gate_result,
-                    }
-            except Exception:
-                pass
-
-        # Determine effective timeout: tool metadata can override the default.
-        # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
+        # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
+        # Falls back to self.timeout when the action type is not a registered ability.
         effective_timeout = self.timeout
+        from abilities._registry import AbilityRegistry
         try:
-            from services.tool_library_service import TOOL_METADATA
-            tool_timeout = TOOL_METADATA.get(action_type, {}).get('timeout')
-            if tool_timeout and tool_timeout > effective_timeout:
-                effective_timeout = float(tool_timeout)
-        except Exception:
-            pass
+            ability_timeout = AbilityRegistry.get(action_type).TIMEOUT
+        except KeyError:
+            ability_timeout = None
+        if ability_timeout and ability_timeout > effective_timeout:
+            effective_timeout = float(ability_timeout)
 
-        # Execute with timeout
+        # Execute with timeout. We copy the calling thread's contextvars into
+        # the worker so abilities can resolve current_processor() (and any
+        # other ContextVar-backed state bound by MessageProcessor.send()).
+        # Without this copy the spawned Thread starts with a fresh context
+        # and current_processor() returns None — silently breaking budget
+        # counters and decay-tracking on processor-innate abilities like
+        # save_pattern / save_graph.
         try:
             result_container = {'result': None, 'error': None}
+            ctx = contextvars.copy_context()
 
             def target():
                 """Thread target: invoke the action handler and capture the result."""
@@ -182,17 +161,15 @@ class ActDispatcherService:
                 except Exception as e:
                     result_container['error'] = str(e)
 
-            thread = Thread(target=target)
+            thread = Thread(target=ctx.run, args=(target,))
             thread.daemon = True
             thread.start()
             thread.join(timeout=effective_timeout)
 
             execution_time = time.time() - start_time
-            elapsed_ms = int(execution_time * 1000)
 
             # Check results
             if thread.is_alive():
-                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='timeout')
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
@@ -203,7 +180,6 @@ class ActDispatcherService:
                 }
 
             if result_container['error']:
-                self._track_skill(action_type, False, elapsed_ms, channel, failure_class='internal')
                 return {
                     'action_type': action_type,
                     'status': 'error',
@@ -225,11 +201,6 @@ class ActDispatcherService:
 
             confidence = _estimate_confidence(action_type, raw_result)
             notes = _extract_notes(action_type, action, raw_result)
-            # Append COMMIT-tier warning to notes so the ACT loop prompt sees it
-            if _commit_warning:
-                notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
-
-            self._track_skill(action_type, True, elapsed_ms, channel, result=str(raw_result)[:500])
 
             dispatch_result = {
                 'action_type': action_type,
@@ -247,7 +218,6 @@ class ActDispatcherService:
 
         except Exception as e:
             execution_time = time.time() - start_time
-            self._track_skill(action_type, False, int(execution_time * 1000), channel, failure_class='internal')
             logging.exception(f"[ACT DISPATCH] Unexpected error in {action_type}:")
             return {
                 'action_type': action_type,
@@ -258,28 +228,6 @@ class ActDispatcherService:
                 'notes': '',
             }
 
-    def _track_skill(self, action_type: str, success: bool, latency_ms: int,
-                     channel: str = '', failure_class: str | None = None, result: str = '') -> None:
-        """Track innate skill invocations via the unified tracker.
-
-        Tools are skipped here — they self-track inside ToolRegistryService.invoke().
-        This avoids double-counting while keeping a single tracker for all paths.
-        """
-        from services.innate_skills.registry import ALL_SKILL_NAMES
-        if action_type not in ALL_SKILL_NAMES:
-            return
-        try:
-            from services.invocation_tracker import track
-            track(
-                name=action_type,
-                success=success,
-                latency_ms=latency_ms,
-                topic=channel,
-                failure_class=failure_class,
-                result=result,
-            )
-        except Exception as e:
-            logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

@@ -25,14 +25,34 @@ compaction primitives.
 import contextlib
 import contextvars
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+from services.llm_service import PayloadTooLargeError
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
-from services.time_utils import parse_utc, utc_now
+from services.time_utils import utc_now
+from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
+
+_LLM_SENTINEL_PATTERNS = (
+    re.compile(r'<\|[^|<>]*\|>'),
+    re.compile(r'<\|[^|<>]*\|'),
+)
+
+
+def _sanitize_llm_args(value):
+    if isinstance(value, str):
+        for p in _LLM_SENTINEL_PATTERNS:
+            value = p.sub('', value)
+        return value.strip()
+    if isinstance(value, list):
+        return [_sanitize_llm_args(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _sanitize_llm_args(v) for k, v in value.items()}
+    return value
 
 
 # ── Current-processor context ─────────────────────────────────────────────────
@@ -88,7 +108,10 @@ class MessageProcessor:
 
     Subclasses may:
     - Override `SYSTEM_PROMPT_CLASS` with a concrete `SystemMessagePrompt` subclass.
-    - Override `NATIVE_TOOLS` with a filtered list of innate skill names.
+    - Override `ALWAYS_AVAILABLE` with a list of ability names injected as
+      innate tools every iteration.
+    - Override `DISCOVERABLE` with a list of ability names that ``find_tools``
+      may surface for this processor at runtime.
     - Override `getDynamicTools()` to filter or augment discovered tools.
     - Override `postTurn()` to fan out per-channel post-turn services.
     """
@@ -97,48 +120,15 @@ class MessageProcessor:
 
     JOB: str = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
-    NATIVE_TOOLS: list[str] = []
+    # Ability names pre-injected as native tools on every ACT iteration.
+    ALWAYS_AVAILABLE: list[str] = []
+    # Ability names ``find_tools`` may surface for this processor at runtime.
+    # ``find_tools`` itself is gated to ``WHERE name IN DISCOVERABLE`` so a
+    # processor can never discover anything outside this list.
+    DISCOVERABLE: list[str] = []
     MAX_ITERATIONS: int = 30
     MAX_TIMEOUT: int = 900    # seconds — ACT loop only
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
-    COMPACTION_PROMPT: str = (
-        "Summarize the following conversation context into a compact, actionable summary.\n"
-        "\n"
-        "Preserve:\n"
-        "- Decisions made and their reasoning\n"
-        "- Facts established (names, dates, numbers, specifics)\n"
-        "- User preferences expressed\n"
-        "- Key information gathered from tools or research\n"
-        "- Action items and their current status\n"
-        "- Any unresolved questions or pending items\n"
-        "\n"
-        "Do NOT preserve:\n"
-        "- Conversation flow (\"then we discussed...\", \"the user asked...\")\n"
-        "- Social pleasantries or greetings\n"
-        "- Redundant confirmations (\"yes\", \"ok\", \"got it\")\n"
-        "- Raw tool output — summarize the findings instead\n"
-        "- Reasoning that led to discarded options\n"
-        "\n"
-        "Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts."
-    )
-
-    TOOL_COMPACTION_PROMPT: str = (
-        "You are compressing a tool-use trail from an in-progress task.\n"
-        "\n"
-        "Preserve:\n"
-        "- Key findings surfaced by each tool call (data, names, IDs, URLs, results)\n"
-        "- Decisions the assistant has made based on those findings\n"
-        "- Outstanding questions or next steps implied by the trail\n"
-        "\n"
-        "Do NOT preserve:\n"
-        "- Literal tool argument JSON\n"
-        "- Redundant reasoning (\"I will now call X to find Y\")\n"
-        "- Errors the assistant already recovered from\n"
-        "\n"
-        "Write a single dense paragraph. This summary replaces the raw tool output in the "
-        "ongoing context — be accurate, be specific."
-    )
-
     # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
     # want compaction to kick in, not an unbounded fetch.
@@ -161,6 +151,13 @@ class MessageProcessor:
         self._raw_input = raw_input
         self._metadata = metadata or {}
         self._memory_seed: str | None = None
+        # Raw recall query used by pre_act(); kept separate from _memory_seed
+        # (which is the formatted tag block) so recall_episodes() can embed
+        # the original query for drift computation rather than the block string.
+        self._memory_seed_query: str | None = None
+        # Tracks the current ACT loop iteration so handleTool() can include
+        # it in emitted tool events without thread-local indirection.
+        self._current_iteration: int = 0
         # Per-turn log of memory recall queries (seed + llm_recall).
         # Populated by the memory skill recall path; consumed by the next
         # recall call for redundancy-narrow and drift-expand computation.
@@ -176,7 +173,14 @@ class MessageProcessor:
         # turn where the gate wasn't run (non-user channels) or crashed —
         # regressing benchmark behaviour on simple recall/chit-chat.
         self._thinking_level: str = 'low'
+        self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
+        self._deliberation_ema: float | None = None      # EMA after this turn's update
         self._thinking_exploration: str | None = None
+        # One-shot guard: a 413 from the provider triggers a Stage 2 ACT
+        # restart, but only once per turn. A second 413 after compaction
+        # means the compacted body is still over the transport-level cap;
+        # restarting again would loop forever.
+        self._payload_too_large_recovered: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
 
@@ -235,14 +239,12 @@ class MessageProcessor:
 
         **Zero-arg construction is the contract.** Every `SystemMessagePrompt`
         subclass takes no constructor parameters — its `getPrompt()` returns
-        either a static body or a template string with placeholder tokens
-        (e.g. `UnifiedSystemMessagePrompt` exposes `{{adaptive_directives}}`).
+        a static body string.
         That keeps this base-class call site pure — no knowledge of
         subclass-specific args leaks up. Subclasses of `MessageProcessor` that
-        need richer system-prompt inputs (adaptive directives bound to real
-        metadata, personality voice, …) override `getSystemPrompt()` themselves
-        and weave their own placeholder values into the template returned by
-        `SYSTEM_PROMPT_CLASS().getPrompt()`.
+        need richer system-prompt inputs (personality voice, …) override
+        `getSystemPrompt()` themselves and weave in the extra context around the
+        template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
@@ -252,19 +254,36 @@ class MessageProcessor:
     def getTools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
-        Resolution order:
-        1. Resolve NATIVE_TOOLS (list of skill name strings) via
-           tool_schema_service.get_skill_schemas().
-        2. Concatenate getDynamicTools() (schemas discovered at runtime).
-        3. Deduplicate by tool name, preserving first-seen order.
+        Resolution order (first-seen wins on duplicates):
+        1. ALWAYS_AVAILABLE — innate tier (resolved via AbilityRegistry).
+           Base is []; subclasses set the explicit list of ability names that
+           are pre-injected on every iteration.
+        2. getDynamicTools() — abilities discovered this turn via find_tools.
+           Gated by ``DISCOVERABLE`` inside ``find_tools`` itself.
 
-        If NATIVE_TOOLS is empty, skips step 1 and goes straight to dynamic.
+        Schema shape: {name, description, input_schema} — pulled from each
+        Ability's NAME, SUMMARY, and INPUT_SCHEMA ClassVars respectively.
+
+        Deduplication preserves first-seen order so the innate tier cannot
+        be shadowed by a dynamic entry of the same name.
         """
-        from services.tool_schema_service import get_skill_schemas
+        from abilities._registry import AbilityRegistry
 
         native: list[dict] = []
-        if self.NATIVE_TOOLS:
-            native = get_skill_schemas(self.NATIVE_TOOLS)
+        if self.ALWAYS_AVAILABLE:
+            for tool_name in self.ALWAYS_AVAILABLE:
+                try:
+                    ability = AbilityRegistry.get(tool_name)
+                    native.append({
+                        'name': ability.NAME,
+                        'description': ability.SUMMARY,
+                        'input_schema': ability.INPUT_SCHEMA,
+                    })
+                except KeyError:
+                    logger.warning(
+                        "[MessageProcessor.getTools] No ability registered for '%s'",
+                        tool_name,
+                    )
 
         dynamic = self.getDynamicTools()
 
@@ -323,11 +342,11 @@ class MessageProcessor:
         Returns '' when the channel has no transcript rows and no compaction.
         """
         del token_budget  # forward-compat placeholder; see docstring above
-        from services import compaction_service, transcript_service
+        from services import compaction_persistence, transcript_service
         from services.tool_call_service import ToolCallService
         from services.tool_render_and_record_service import ToolRenderAndRecordService
 
-        compaction = compaction_service.get_compaction(self.CHANNEL)
+        compaction = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = compaction['compacted_up_to_id'] if compaction else 0
 
         entries = transcript_service.get_recent(
@@ -393,16 +412,29 @@ class MessageProcessor:
 
         Never re-raises — errors become strings the LLM sees next iteration.
         """
+        import time as _time
+        from uuid import uuid4
         from services.tool_render_and_record_service import ToolRenderAndRecordService
-        from services.tool_schema_service import get_external_tool_schemas
 
         tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
+        tc_input = _sanitize_llm_args(tc_input)
 
         self._metrics.record_tool(tool_name)
 
+        # Stable call_id: prefer the id field from the LLM; mint one if absent.
+        call_id = (tc.get('id') if isinstance(tc, dict) else None) or uuid4().hex[:12]
+        t_start = _time.monotonic()
+        self._emit_tool_event({
+            'type': 'act_tool_start',
+            'call_id': call_id,
+            'name': tool_name,
+            'iter': self._current_iteration,
+        })
+
+        ok = True
         result_text = ''
         try:
             # 1. Dispatch via the per-turn dispatcher
@@ -420,26 +452,39 @@ class MessageProcessor:
             ):
                 discovered = dispatch.get('_discovered_tools', [])
                 if discovered:
-                    new_schemas = get_external_tool_schemas(discovered)
+                    from abilities._registry import AbilityRegistry
                     existing_names = {
                         t.get('name') for t in self._discovered_tools
                     }
-                    for s in new_schemas:
-                        name = s.get('name') if isinstance(s, dict) else None
-                        if name and name not in existing_names:
-                            self._discovered_tools.append(s)
-                            existing_names.add(name)
-
-                    # Register as dispatcher handlers so they dispatch
-                    # through the standard handler path (no fallback needed).
-                    self._register_discovered_tools(discovered)
+                    for name in discovered:
+                        if name in existing_names:
+                            continue
+                        try:
+                            a = AbilityRegistry.get(name)
+                            schema = {
+                                'name': a.NAME,
+                                'description': a.SUMMARY,
+                                'input_schema': a.INPUT_SCHEMA,
+                            }
+                        except KeyError:
+                            continue
+                        self._discovered_tools.append(schema)
+                        existing_names.add(name)
 
         except Exception as exc:
+            ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
             logger.error(
                 "[MessageProcessor.handleTool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
             )
+        finally:
+            self._emit_tool_event({
+                'type': 'act_tool_end',
+                'call_id': call_id,
+                'ms': int((_time.monotonic() - t_start) * 1000),
+                'ok': ok,
+            })
 
         # 2. Render + Record
         try:
@@ -460,33 +505,6 @@ class MessageProcessor:
         # 3. Add to context
         self._act_trail.append(rendered)
         return result_text
-
-    def _register_discovered_tools(self, tool_names: list[str]) -> None:
-        """Register discovered tool names as handlers on self._dispatcher.
-
-        Called after find_tools returns results. Uses registry.execute()
-        which returns {'text': ...} — same shape as innate skill handlers,
-        so the dispatcher unwraps them identically.
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            for tn in tool_names:
-                if tn in self._dispatcher.handlers:
-                    continue
-                self._dispatcher.handlers[tn] = (
-                    lambda topic, action, _tn=tn: registry.execute(
-                        _tn, topic,
-                        {k: v for k, v in action.items()
-                         if k not in ('type', 'exchange_id')},
-                        exchange_id=action.get('exchange_id', ''),
-                    )
-                )
-        except Exception as exc:
-            logger.warning(
-                "[MessageProcessor] Failed to register discovered tools: %s",
-                exc,
-            )
 
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.
@@ -555,10 +573,12 @@ class MessageProcessor:
             # Single dispatcher for the entire turn. Tools discovered
             # mid-turn via find_tools are registered as handlers on this
             # instance so all tools dispatch through the same path.
-            self._dispatcher = ActDispatcherService(execution_gate=False)
+            self._dispatcher = ActDispatcherService()
 
-            self._run_memory_seed()
-            self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
+            with self._metrics.stage('pre_act'):
+                self.pre_act()
+            with self._metrics.stage('thinking_gate'):
+                self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
             # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
             # runs under its own THINKING_TIMEOUT envelope (independent budget),
@@ -580,117 +600,152 @@ class MessageProcessor:
                 else 32_000
             )
 
-            iteration = 0
+            self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
 
             while (
-                iteration < self.MAX_ITERATIONS
+                self._current_iteration < self.MAX_ITERATIONS
                 and time.time() - loop_start < self.MAX_TIMEOUT
             ):
-                user_body = self.getUserPrompt()
-                user_body = _wrap_with_exploration(self.CHANNEL, user_body)
-                user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                with self._metrics.iteration(self._current_iteration):
+                    with self._metrics.stage('prompt_assembly'):
+                        user_body = self.getUserPrompt()
+                        user_body = _wrap_with_exploration(self.CHANNEL, user_body)
+                        user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
 
-                # Two-stage mid-ACT compaction: triggered when the rendered
-                # user-message body (including checkpoint envelope) exceeds
-                # 80% of the provider's context window.
-                #
-                # Stage 1: compress the accumulated tool-use trail in place.
-                # Stage 2 (fallback): full checkpoint compaction + loop restart.
-                # Stage 2 resets iteration to 0 but NOT loop_start — the
-                # wall-clock MAX_TIMEOUT guard is a safety net against runaway
-                # turns; compaction LLM calls count against it deliberately.
-                if self._check_threshold(user_body, context_limit):
-                    logger.warning(
-                        "[COMPACTION] %s: user body over 80%% threshold "
-                        "(ctx_limit=%d) — running Stage 1",
-                        self.CHANNEL, context_limit,
-                    )
-                    self._run_stage1_tool_compaction()
-                    # Re-render after Stage 1 trim and re-check threshold.
-                    user_body = self.getUserPrompt()
-                    user_body = _wrap_with_exploration(self.CHANNEL, user_body)
-                    user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                    # Two-stage mid-ACT compaction: triggered when the rendered
+                    # user-message body (including checkpoint envelope) exceeds
+                    # 80% of the provider's context window.
+                    #
+                    # Stage 1: compress the accumulated tool-use trail in place.
+                    # Stage 2 (fallback): full checkpoint compaction + loop restart.
+                    # Stage 2 resets iteration to 0 but NOT loop_start — the
+                    # wall-clock MAX_TIMEOUT guard is a safety net against runaway
+                    # turns; compaction LLM calls count against it deliberately.
                     if self._check_threshold(user_body, context_limit):
                         logger.warning(
-                            "[COMPACTION] %s: still over threshold after Stage 1 "
-                            "— running Stage 2 (ACT restart)",
-                            self.CHANNEL,
+                            "[COMPACTION] %s: user body over 80%% threshold "
+                            "(ctx_limit=%d) — running Stage 1",
+                            self.CHANNEL, context_limit,
                         )
+                        self._run_stage1_tool_compaction()
+                        # Re-render after Stage 1 trim and re-check threshold.
+                        with self._metrics.stage('prompt_assembly'):
+                            user_body = self.getUserPrompt()
+                            user_body = _wrap_with_exploration(self.CHANNEL, user_body)
+                            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                        if self._check_threshold(user_body, context_limit):
+                            logger.warning(
+                                "[COMPACTION] %s: still over threshold after Stage 1 "
+                                "— running Stage 2 (ACT restart)",
+                                self.CHANNEL,
+                            )
+                            if self._run_stage2_act_restart():
+                                self._current_iteration = 0
+                                continue
+                            # Stage 2 failed (compaction LLM error). Retrying the
+                            # main provider call against an over-threshold body
+                            # would almost certainly fail too — break to cap exit
+                            # and return final_text=''.
+                            logger.error(
+                                "[COMPACTION] %s: Stage 2 failed — breaking to "
+                                "cap exit (final_text='')",
+                                self.CHANNEL,
+                            )
+                            break
+
+                    with self._metrics.stage('prompt_assembly'):
+                        system_prompt = self.getSystemPrompt()
+                        tools = self.getTools()
+
+                    # Single-element messages[] so the provider sees one user turn
+                    # containing the full literal-text body (Previous Messages,
+                    # memory seed, raw input, ACT trail). The provider's multi-turn
+                    # interface is intentionally NOT used — history lives in the
+                    # getUserPrompt() text block, not in the messages array.
+                    messages = [{'role': 'user', 'content': user_body}]
+
+                    # Provider errors propagate here. store() is not called if
+                    # this raises — the turn leaves no trace in the DB.
+                    # PayloadTooLargeError (HTTP 413) is the one exception: the
+                    # provider's transport-level body cap was hit (e.g. Ollama
+                    # Cloud edge proxy), so we run a Stage 2 ACT restart once
+                    # to compact the trail and retry. A second 413 after that
+                    # means even the compacted body is too big — break to cap
+                    # exit rather than loop forever.
+                    try:
+                        llm_response = Providers.instance().send_messages(
+                            system_prompt, messages, job=self.JOB, tools=tools,
+                            thinking_mode=self._get_thinking_mode_for_send(),
+                        )
+                    except PayloadTooLargeError as exc:
+                        if self._payload_too_large_recovered:
+                            logger.error(
+                                "[COMPACTION] %s: PayloadTooLargeError after Stage 2 "
+                                "restart — breaking to cap exit (final_text=''): %s",
+                                self.CHANNEL, exc,
+                            )
+                            break
+                        logger.warning(
+                            "[COMPACTION] %s: PayloadTooLarge from provider — "
+                            "running Stage 2 ACT restart (%s)",
+                            self.CHANNEL, exc,
+                        )
+                        self._payload_too_large_recovered = True
                         if self._run_stage2_act_restart():
-                            iteration = 0
+                            self._current_iteration = 0
                             continue
-                        # Stage 2 failed (compaction LLM error). Retrying the
-                        # main provider call against an over-threshold body
-                        # would almost certainly fail too — break to cap exit
-                        # and return final_text=''.
                         logger.error(
-                            "[COMPACTION] %s: Stage 2 failed — breaking to "
-                            "cap exit (final_text='')",
+                            "[COMPACTION] %s: Stage 2 failed after PayloadTooLarge "
+                            "— breaking to cap exit (final_text='')",
                             self.CHANNEL,
                         )
                         break
+                    self._metrics.accumulate(llm_response)
 
-                system_prompt = self.getSystemPrompt()
-                tools = self.getTools()
+                    if not llm_response.tool_calls:
+                        loop_exited_cleanly = True
+                        break
 
-                # Single-element messages[] so the provider sees one user turn
-                # containing the full literal-text body (Previous Messages,
-                # memory seed, raw input, ACT trail). The provider's multi-turn
-                # interface is intentionally NOT used — history lives in the
-                # getUserPrompt() text block, not in the messages array.
-                messages = [{'role': 'user', 'content': user_body}]
+                    # Narration text BEFORE tool dispatch — the LLM emitted the
+                    # narration in its response ahead of the tool_use block, so
+                    # the stored timeline must reflect that semantic order. The
+                    # transcript-timeline example in the north star § Storage
+                    # Model shows the narration DTO preceding the tool_call DTOs
+                    # for the same iteration.
+                    with self._metrics.stage('post_tool_records'):
+                        if llm_response.text:
+                            rendered = ToolRenderAndRecordService(
+                                tool_name='narration',
+                                params={},
+                                result=llm_response.text,
+                                ephemeral=True,
+                                transcript_id=self._uid,
+                            ).renderAndRecord()
+                            self._act_trail.append(rendered)
+                            try:
+                                self._emit_narration(llm_response.text, self._current_iteration)
+                            except Exception as exc:
+                                logger.error(
+                                    "[MessageProcessor.send] _emit_narration raised: %s",
+                                    exc, exc_info=True,
+                                )
 
-                # Provider errors propagate here. store() is not called if
-                # this raises — the turn leaves no trace in the DB.
-                llm_response = Providers.instance().send_messages(
-                    system_prompt, messages, job=self.JOB, tools=tools,
-                    thinking_mode=self._get_thinking_mode_for_send(),
-                )
-                self._metrics.accumulate(llm_response)
+                        for tc in llm_response.tool_calls:
+                            self.handleTool(tc)  # never raises; appends DTO + trail
 
-                if not llm_response.tool_calls:
-                    loop_exited_cleanly = True
-                    break
+                        for steer in self._drain_steering(request_id):
+                            rendered = ToolRenderAndRecordService(
+                                tool_name='user_steer',
+                                params={},
+                                result=steer,
+                                ephemeral=True,
+                                transcript_id=self._uid,
+                            ).renderAndRecord()
+                            self._act_trail.append(rendered)
 
-                # Narration text BEFORE tool dispatch — the LLM emitted the
-                # narration in its response ahead of the tool_use block, so
-                # the stored timeline must reflect that semantic order. The
-                # transcript-timeline example in the north star § Storage
-                # Model shows the narration DTO preceding the tool_call DTOs
-                # for the same iteration.
-                if llm_response.text:
-                    rendered = ToolRenderAndRecordService(
-                        tool_name='narration',
-                        params={},
-                        result=llm_response.text,
-                        ephemeral=True,
-                        transcript_id=self._uid,
-                    ).renderAndRecord()
-                    self._act_trail.append(rendered)
-                    try:
-                        self._emit_narration(llm_response.text, iteration)
-                    except Exception as exc:
-                        logger.error(
-                            "[MessageProcessor.send] _emit_narration raised: %s",
-                            exc, exc_info=True,
-                        )
-
-                for tc in llm_response.tool_calls:
-                    self.handleTool(tc)  # never raises; appends DTO + trail
-
-                for steer in self._drain_steering(request_id):
-                    rendered = ToolRenderAndRecordService(
-                        tool_name='user_steer',
-                        params={},
-                        result=steer,
-                        ephemeral=True,
-                        transcript_id=self._uid,
-                    ).renderAndRecord()
-                    self._act_trail.append(rendered)
-
-                iteration += 1
+                    self._current_iteration += 1
 
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
@@ -703,16 +758,18 @@ class MessageProcessor:
                     "(iteration=%d, elapsed=%.1fs, max_iter=%d, max_timeout=%d) — "
                     "final_text set to '' to avoid persisting mid-loop narration "
                     "as assistant response",
-                    iteration,
+                    self._current_iteration,
                     time.time() - loop_start,
                     self.MAX_ITERATIONS,
                     self.MAX_TIMEOUT,
                 )
                 final_text = ''
 
-            self.store(final_text)
+            with self._metrics.stage('store'):
+                self.store(final_text)
             try:
-                self.postTurn()
+                with self._metrics.stage('post_turn'):
+                    self.postTurn()
             except Exception as e:
                 logger.error(
                     "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True
@@ -722,6 +779,12 @@ class MessageProcessor:
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Base no-op. UserMessageProcessor overrides in Commit 8 to push
         mid-loop text to the websocket via the on_narration callback."""
+        pass
+
+    def _emit_tool_event(self, event: dict) -> None:
+        """Subclasses MUST override BOTH this method AND the
+        ``_on_tool_event`` attribute. The base no-op never reads any
+        attribute."""
         pass
 
     def _drain_steering(self, request_id: str | None) -> list[str]:
@@ -752,19 +815,25 @@ class MessageProcessor:
     def _run_full_compaction(self) -> 'str | None':
         """Run a full checkpoint compaction for this channel.
 
+        Orchestrator: reads prior compaction + entries since watermark,
+        formats the LLM input, dispatches to ``FullCompactionProcessor``,
+        then writes the ``compactions`` row + ``tool_calls`` audit row from
+        the returned text.
+
         Returns the compacted text on success, None on failure.
         Records via ToolRenderAndRecordService (ephemeral=False).
         """
-        from services import compaction_service
+        from services import compaction_persistence
+        from services.compaction_message_processor import FullCompactionProcessor
         from services.database_service import get_shared_db_service
         from services.llm_service import estimate_tokens
         from services.providers import Providers
 
-        prior = compaction_service.get_compaction(self.CHANNEL)
+        prior = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = prior['compacted_up_to_id'] if prior else 0
         prev_text = (prior.get('compacted_text') or '').strip() if prior else ''
 
-        entries = list(compaction_service.get_entries_since(self.CHANNEL, watermark))
+        entries = list(compaction_persistence.get_entries_since(self.CHANNEL, watermark))
 
         # Nothing to compact — bail before hitting the LLM. Without this guard
         # we would send a bare "## New Conversation Turns" header to the
@@ -779,8 +848,10 @@ class MessageProcessor:
             return None
 
         # Refresh the context limit — Stage 2 is a rare path and the provider
-        # may have been reconfigured since send() cached the value.
-        raw_limit = Providers.instance().get_context_limit(job=self.JOB)
+        # may have been reconfigured since send() cached the value. Use the
+        # compaction processor's JOB (not self.JOB) so the cap matches the LLM
+        # that will actually service the call.
+        raw_limit = Providers.instance().get_context_limit(job=FullCompactionProcessor.JOB)
         context_limit = (
             int(raw_limit)
             if isinstance(raw_limit, (int, float)) and raw_limit > 0
@@ -792,11 +863,7 @@ class MessageProcessor:
             role = entry.get('role', 'unknown')
             content = entry.get('content', '')
             raw_ts = entry.get('created_at') or ''
-            try:
-                dt = parse_utc(raw_ts) if raw_ts else None
-                ts_label = dt.strftime('%Y-%m-%d %H:%M') if dt else _MISSING_TS_PLACEHOLDER
-            except Exception:
-                ts_label = _MISSING_TS_PLACEHOLDER
+            ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
             return f"[{ts_label}] {role}: {content}"
 
         def _build_input(rendered_entries: list[str]) -> str:
@@ -839,15 +906,19 @@ class MessageProcessor:
             )
             return None
 
+        proc = FullCompactionProcessor(raw_input=compaction_input)
         try:
-            response = Providers.instance().send_messages(
-                self.COMPACTION_PROMPT,
-                [{'role': 'user', 'content': compaction_input}],
-                job=self.JOB,
-                tools=None,
+            compacted_text = (proc.send() or '').strip()
+        except PayloadTooLargeError as exc:
+            # Compaction LLM itself rejected the body — payload was already
+            # over the transport cap before we could compact it. Distinct
+            # log so on-call doesn't conflate this with a generic LLM error.
+            logger.error(
+                "[COMPACTION] %s: compaction LLM hit HTTP 413 — cannot "
+                "compact further; turn will hit cap exit: %s",
+                self.CHANNEL, exc,
             )
-            self._metrics.accumulate(response)
-            compacted_text = (response.text or '').strip()
+            return None
         except Exception as exc:
             logger.error(
                 "[COMPACTION] %s: LLM call failed during _run_full_compaction: %s",
@@ -855,6 +926,8 @@ class MessageProcessor:
                 exc_info=True,
             )
             return None
+        finally:
+            self._metrics.merge(proc._metrics)
 
         if not compacted_text:
             logger.warning(
@@ -925,30 +998,27 @@ class MessageProcessor:
     def _run_stage1_tool_compaction(self) -> None:
         """Stage 1 mid-ACT compaction: compress the tool-use trail via LLM.
 
-        Resets _act_trail to a single summary line and records via
-        ToolRenderAndRecordService. On failure, returns without mutating state.
+        Orchestrator: dispatches to ``TrailCompactionProcessor``, then
+        replaces ``self._act_trail`` with the returned summary. On failure,
+        returns without mutating state.
         """
-        from services.providers import Providers
+        from services.compaction_message_processor import TrailCompactionProcessor
 
         trail_text = '\n'.join(self._act_trail)
         if not trail_text.strip():
             return
 
+        proc = TrailCompactionProcessor(raw_input=trail_text)
         try:
-            response = Providers.instance().send_messages(
-                self.TOOL_COMPACTION_PROMPT,
-                [{'role': 'user', 'content': trail_text}],
-                job=self.JOB,
-                tools=None,
-            )
-            self._metrics.accumulate(response)
-            summary_text = (response.text or '').strip()
+            summary_text = (proc.send() or '').strip()
         except Exception as exc:
             logger.warning(
                 "[COMPACTION] %s: Stage 1 tool compaction LLM call failed: %s",
                 self.CHANNEL, exc,
             )
             return
+        finally:
+            self._metrics.merge(proc._metrics)
 
         if not summary_text:
             logger.warning(
@@ -993,6 +1063,12 @@ class MessageProcessor:
 
         self._act_trail = []
         self._discovered_tools = []
+        # Exploration text was generated against the now-collapsed pre-restart
+        # context and has already been summarised into the checkpoint. Keeping
+        # it would re-inflate every subsequent user_body via
+        # _wrap_with_exploration() — directly defeating the recovery for the
+        # 413 path (large exploration block alone can exceed the cloud cap).
+        self._thinking_exploration = None
 
         return True
 
@@ -1012,44 +1088,53 @@ class MessageProcessor:
 
     # ── Overridable hooks ────────────────────────────────────────────────────
 
-    def _run_memory_seed(self) -> None:
-        """Pre-ACT-loop memory auto-seed hook. Base is a no-op.
+    def pre_act(self) -> None:
+        """Pre-ACT-loop hook. Default is a no-op.
 
-        UserMessageProcessor overrides to dispatch the memory skill once at
-        turn start, populate self._memory_seed, and record via
-        ToolRenderAndRecordService (ephemeral=False).
+        Called from send() after the input transcript row is written
+        (self._uid is populated) but before the ACT loop starts.
+        UserMessageProcessor overrides to run the memory seed via the
+        canonical tool dispatch path.
         """
         pass
 
     # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
 
     def _run_thinking_gate(self) -> None:
-        """Classify deliberation depth for this turn; persist on the input row.
+        """Regression-head deliberation scoring. Writes self._thinking_level.
 
         No-op for non-user channels (classifier is OOD for autonomous flows).
-        All exceptions trapped — gate failure must never kill the turn.
-        Result stored on self._thinking_level and, for high-mode turns,
-        self._thinking_exploration (persisted to tool_calls as ephemeral=0).
-        written to transcript.thinking_level for self._uid so future turns
-        can read it as prev_level.
+        Never raises. On failure → self._thinking_level = 'low', EMA untouched.
         """
         if self.CHANNEL != 'user':
             return
 
         try:
-            from services.thinking_level_classifier_service import (
-                ThinkingLevelClassifierService,
-            )
+            from services.deliberation_score_service import DeliberationScoreService
+            from services.deliberation_ema_service import DeliberationEmaService
 
-            prev_level = self._read_prev_thinking_level()
-            result = ThinkingLevelClassifierService().classify(
-                self._raw_input, prev_level=prev_level,
+            scalar = DeliberationScoreService().classify(self._raw_input)
+            ema_svc = DeliberationEmaService()
+
+            if scalar is None:
+                self._thinking_level = 'low'
+                self._deliberation_scalar = None
+                self._deliberation_ema = ema_svc.peek()
+                logger.info(
+                    "[DELIBERATION] turn=%s scalar=None ema=%s bucket=low fallback=true",
+                    self._uid, self._deliberation_ema,
+                )
+                self._thinking_exploration = None
+                return
+
+            ema, bucket = ema_svc.update_and_bucket(scalar)
+            self._thinking_level = bucket
+            self._deliberation_scalar = scalar
+            self._deliberation_ema = ema
+            logger.info(
+                "[DELIBERATION] turn=%s scalar=%.4f ema=%.4f bucket=%s fallback=false",
+                self._uid, scalar, ema, bucket,
             )
-            # Capture RAW classifier output. Persisted to the input row so the
-            # next turn's sticky-fallback sees what the classifier said, not a
-            # downstream failure. Prevents silent cascades across turns.
-            raw_level = result.get('level', 'low')
-            self._thinking_level = raw_level
 
             if self._thinking_level == 'high':
                 try:
@@ -1077,58 +1162,26 @@ class MessageProcessor:
             else:
                 self._thinking_exploration = None
 
-            self._persist_thinking_level_on_input_row(raw_level)
+            if self._uid is not None:
+                from services.database_service import get_shared_db_service
+                try:
+                    db = get_shared_db_service()
+                    with db.connection() as conn:
+                        conn.execute(
+                            "UPDATE transcript SET deliberation_score = ? WHERE id = ?",
+                            (scalar, self._uid),
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[DELIBERATION] persist failed for uid=%s: %s",
+                        self._uid, exc,
+                    )
 
-        except Exception as exc:
-            # Gate failure MUST default to 'low' — a no-op — not 'medium'.
-            logger.info(
-                "[THINKING] gate failed (%s) — defaulting to low (no-op)", exc
-            )
+        except Exception:
+            logger.exception("[DELIBERATION] gate failed; defaulting to 'low'")
             self._thinking_level = 'low'
+            self._deliberation_scalar = None
             self._thinking_exploration = None
-
-    def _read_prev_thinking_level(self) -> str:
-        """Read the most recent user-row thinking_level for this channel.
-
-        Returns 'none' on first turn or when nothing classified yet.
-        """
-        from services.database_service import get_shared_db_service
-
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT thinking_level FROM transcript "
-                    "WHERE channel = ? AND role = 'user' "
-                    "AND thinking_level IS NOT NULL "
-                    "ORDER BY id DESC LIMIT 1",
-                    (self.CHANNEL,),
-                ).fetchone()
-            if row and row[0] in ('low', 'medium', 'high'):
-                return row[0]
-        except Exception as exc:
-            logger.debug("[THINKING] prev-level read failed: %s", exc)
-        return 'none'
-
-    def _persist_thinking_level_on_input_row(self, level: str) -> None:
-        """Update transcript row self._uid with the given classifier level.
-
-        ``level`` is the RAW classifier prediction. The caller passes it
-        explicitly so that next-turn sticky-fallback reads the classifier's
-        intent, not a runtime-degraded value.
-        """
-        if self._uid is None:
-            return
-        from services.database_service import get_shared_db_service
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                conn.execute(
-                    "UPDATE transcript SET thinking_level = ? WHERE id = ?",
-                    (level, self._uid),
-                )
-        except Exception as exc:
-            logger.debug("[THINKING] persist failed: %s", exc)
 
     def _run_thinking_exploration(self) -> 'str | None':
         """One same-job exploration pass for high-mode turns.
@@ -1286,9 +1339,9 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     Called by ``send()`` on every ACT iteration, immediately after
     ``getUserPrompt()`` returns.
     """
-    from services import compaction_service
+    from services import compaction_persistence
 
-    row = compaction_service.get_compaction(channel)
+    row = compaction_persistence.get_compaction(channel)
     if not row:
         return user_body
     compacted = (row.get('compacted_text') or '').strip()
@@ -1371,7 +1424,12 @@ def _format_ts(
     row_kind: str = 'row',
     row_id: int | None = None,
 ) -> str:
-    """Format a raw SQLite/ISO timestamp into ``YYYY-MM-DD HH:MM`` (UTC, 24h).
+    """Format a raw SQLite/ISO timestamp into ``YYYY-MM-DD HH:MM`` in the user's
+    local timezone.
+
+    Storage is UTC (``utc_now().isoformat()``); the LLM only ever sees local
+    wall-clock time. Conversion runs through
+    :meth:`TimeFormatterService.local`, which handles tz lookup.
 
     If ``raw`` is ``None``, empty, or unparseable, return
     ``_MISSING_TS_PLACEHOLDER`` and emit a single warning log so the problem
@@ -1390,14 +1448,12 @@ def _format_ts(
         )
         return _MISSING_TS_PLACEHOLDER
 
-    dt = parse_utc(raw)
-    # parse_utc returns datetime.min on unparseable input. Treat that as
-    # missing too — the LLM must never see a 0001-01-01 timestamp.
-    if dt.year <= 1:
+    formatted = TimeFormatterService.local(raw)
+    if formatted is None:
         logger.warning(
             "[MessageProcessor._format_ts] unparseable created_at=%r on %s "
             "id=%s — rendering placeholder", raw, row_kind, row_id,
         )
         return _MISSING_TS_PLACEHOLDER
 
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return formatted

@@ -9,6 +9,8 @@
  * disables the button.
  */
 
+import { createWakeLock } from './utils.js';
+
 const _STT_PATH = '/voice/transcribe';
 const _MAX_RECORD_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -29,6 +31,7 @@ export class VoiceRecorder {
     this._audioChunks = [];
     this._isRecording = false;
     this._maxRecordTimer = null;
+    this._wakeLock = createWakeLock();
   }
 
   /** Bind the mic button and error label after DOM is ready. */
@@ -84,6 +87,7 @@ export class VoiceRecorder {
     this._mediaRecorder.start(250);
     this._isRecording = true;
     this._setButtonState('recording');
+    this._wakeLock.acquire();
 
     // Auto-stop at 10-minute limit
     this._maxRecordTimer = setTimeout(() => {
@@ -100,6 +104,7 @@ export class VoiceRecorder {
     const recorder = this._mediaRecorder;
     this._isRecording = false;
     this._setButtonState('uploading');
+    this._wakeLock.release();
 
     const chunks = await new Promise((resolve) => {
       recorder.onstop = () => {
@@ -236,6 +241,7 @@ export class VoiceRecorder {
     this._mediaRecorder = null;
     this._isRecording = false;
     this._setButtonState('idle');
+    this._wakeLock.release();
   }
 
   async _transcribe(blob) {

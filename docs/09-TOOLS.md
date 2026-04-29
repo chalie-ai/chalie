@@ -1,16 +1,23 @@
 # Tools System
 
-Three capability tiers exist in Chalie, each with a different scope and lifecycle.
+Every dispatchable capability in Chalie is an `Ability` subclass under `backend/abilities/`. Tool scope — which abilities are pre-injected and which are discoverable — is declared on each `MessageProcessor` subclass, not on the `Ability` ABC itself.
 
-**Innate skills** are core cognitive capabilities — memory, introspect, schedule, list, goal_pursuit, document, read, find_tools, goals, rich_render, and review_tool_calls. They are always loaded into LLM context and have direct access to Chalie's services and memory.
+**Innate abilities (ALWAYS_AVAILABLE)** are pre-injected on every ACT iteration for the current processor. For `UserMessageProcessor` this set is: `document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`. Other processors declare their own lists; the subconscious `PatternMatchProcessor`, for example, carries only `save_pattern` and `save_graph`.
 
-**First-party tools** are shipped with Chalie. Each is a simple Python module invoked directly in-process. They handle things the LLM cannot do alone: search, news, live weather, sandboxed code execution, and more. See [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) for the current set.
+**Discoverable abilities (DISCOVERABLE)** are never pre-injected. The `find_tools` ability performs semantic search against `abilities.sqlite` at runtime, restricted to the names listed in the calling processor's `DISCOVERABLE` class var. For `UserMessageProcessor` the discoverable set is: `browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
-**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They extend what Chalie can act on without being committed to this repo. See [15-INTERFACES.md](15-INTERFACES.md).
+**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They are projected into the abilities surface at boot via the same RRF discovery path. See [15-INTERFACES.md](15-INTERFACES.md).
 
-## How tools are used
+## How tools are loaded on a turn
 
-The LLM never has the full tool list in context. Instead, when it needs a capability it invokes the `find_tools` innate skill, which runs a semantic search over tool capability profiles and returns the closest matches. The LLM then decides whether to invoke one. The result comes back into context as structured output and the conversation continues. This keeps context lean and makes tool discovery robust to naming variation — matching is by meaning, not keyword.
+Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
+
+1. **Unconditional** — every ability in the processor's `ALWAYS_AVAILABLE` list. Always present.
+2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` ability's semantic search, gated to the processor's `DISCOVERABLE` list. Every non-innate ability (first-party + interface) is reachable exclusively through this path.
+
+`ModeGateService` runs once per user turn but **does not gate tool availability**. It classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`. The active mode set powers prompt-steering directives in `UserMessageProcessor` (long-summary swap on `converse`, brainstorm/research/analyze suffixes appended to the system prompt) and is reserved for future mode-driven features.
+
+Observability: every user turn emits one `[MODE-GATE]` INFO log line with the full probability vector, state before/after, and the active mode set. This is the grep-friendly anchor for nightly scenarios.
 
 ## Tool status
 
@@ -22,21 +29,66 @@ Three status values appear in the tools list:
 | `available` | Discovered but not yet configured (missing required secrets) |
 | `connected` | Fully configured and ready to use |
 
-## Adding a first-party tool
+## Adding a first-party ability
 
-A first-party tool is a Python module that exposes a single function:
+A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability` and implements a single dispatch method:
 
 ```python
-def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict
+from abilities._base import Ability
+
+class WeatherAbility(Ability):
+    NAME = "weather"
+    SUMMARY = "Live weather lookup by coordinates or city name."
+    EXAMPLES = [
+        "what is the weather in Valletta",
+        "is it raining in San Francisco",
+        # 6 to 8 entries total — enforced by __init_subclass__
+    ]
+    INPUT_SCHEMA = {"type": "object", "properties": {...}}
+    TIMEOUT = 10  # optional; default is 10
+
+    def execute(self, channel, params, telemetry):
+        ...
 ```
 
-`topic` is the current conversation topic, `params` are the LLM-extracted arguments, `config` contains any stored secrets or endpoints, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return dict can include a `text` key for a plain-text result, an `html` key for a UI card fragment, and an `error` key that signals failure and suppresses the other fields.
+`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability.
 
-Alongside the module, declare the tool's metadata: a description that the semantic search will embed, a parameter schema the LLM uses to extract arguments, and any constraints. The description is the most important field — it determines when `find_tools` surfaces this tool.
+After registering the ability, wire it into the appropriate processor(s). For a discoverable ability, add its `NAME` to `DISCOVERABLE` on the processors that should be able to find it (e.g. `UserMessageProcessor.DISCOVERABLE`). For an always-available ability, add it to `ALWAYS_AVAILABLE` instead. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
 ## Configuration
 
 Tools that require API keys or custom endpoints declare their required config keys in their metadata. Configure them through the Brain UI (Settings > Tools) or via the REST API — see the API reference for endpoints. Stored secrets are masked in all API responses.
+
+## Ability output format
+
+Every ability returns its result as a canonical tag block defined in `backend/services/innate_skills/_tag.py`. `_tag.py` is the single source of truth — no ability constructs its own format string. (The `services/innate_skills/` directory holds only this formatter after the Phase 4 cutover; every dispatchable ability lives under `backend/abilities/`.)
+
+```
+[<ability_name>(k1=v1, k2=v2)]
+<body>
+[end:<ability_name>]
+```
+
+If the body is empty (error path with no content), the body line is omitted:
+
+```
+[memory(action=recall, error=no-query)]
+[end:memory]
+```
+
+Errors are just arguments — `error=<slug>` in the opener, not a separate response format. Multi-line bodies (e.g. memory recall results, rich render reference) appear verbatim between opener and terminator.
+
+The `memory` ability preserves its inner per-row marker format inside the body so downstream services that parse `[id:X,relevance:Y]` continue to work:
+
+```
+[memory(query=Malta, results=3)]
+[id:residence,relevance:high] Valletta
+[id:partner,relevance:medium] Sarah
+[id:food_and_drink,relevance:low] pastizzi
+[end:memory]
+```
+
+`find_tools` and `review_tool_calls` return dicts (the orchestrator reads `_discovered_tools` as a side channel). Their `text` field is wrapped in a tag block; side-channel keys are untouched.
 
 ## Safety constraints
 

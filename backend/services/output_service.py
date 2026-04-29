@@ -6,9 +6,7 @@ from typing import Dict, Any, Optional, List
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .time_utils import utc_now
-from .blocks_render_service import BlocksRenderService
-
-_blocks_svc = BlocksRenderService()
+from .markup import wrap_text_xml, actions_to_xml, is_xml_content
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +67,12 @@ class OutputService:
         if metrics is not None:
             metadata_dict["metrics"] = metrics
 
-        # Convert response to blocks — the sole output format for all clients
-        blocks = _blocks_svc.from_markdown(response)
+        # LLM emits XML directly. If a plain string arrives (rare edge case),
+        # wrap it as <p>. Append programmatic action buttons as XML.
+        content = response if is_xml_content(response) else wrap_text_xml(response)
         if reply_actions:
-            blocks.extend(_blocks_svc.from_actions(reply_actions))
-        metadata_dict["blocks"] = blocks
+            content = (content or "") + actions_to_xml(reply_actions)
+        metadata_dict["content"] = content
 
         output = {
             "id": output_id,
@@ -107,7 +106,7 @@ class OutputService:
             'output_id': output_id,
             'type': event_type,
             'topic': _channel,
-            'blocks': blocks,
+            'content': content,
             'mode': mode,
             'confidence': confidence,
             'generated_at': output['created_at'],
@@ -141,10 +140,6 @@ class OutputService:
                 self.store.expire('notifications:recent', 86400)  # 24h TTL
             except Exception as e:
                 logger.warning(f"Notification buffer push failed: {e}")
-
-        # Notification tools (Telegram etc.) for drift and all background events
-        if source in ('reminder', 'task', 'goal_pursuit', 'scheduled_prompt'):
-            self._send_to_notification_tools(response)
 
         logger.info(
             f"Enqueued TEXT output {output_id} for topic '{_channel}' "
@@ -186,27 +181,6 @@ class OutputService:
             original_metadata=metadata,
             metrics=metrics,
         )
-
-    def _send_to_notification_tools(self, message: str) -> None:
-        """
-        Deliver proactive drift to all tools that declare notification support.
-
-        Discovers tools at call time via ToolRegistryService. Any tool with
-        "notification": {"default_enabled": true} in its manifest will receive
-        the message via registry.invoke() (routed through Docker container).
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            for tool in registry.get_notification_tools():
-                try:
-                    result_str = registry.invoke(tool["name"], "__notification__", {"message": message})
-                    if "Error:" in result_str:
-                        logger.warning(f"Notification tool '{tool['name']}' failed: {result_str}")
-                except Exception as e:
-                    logger.warning(f"Notification tool '{tool['name']}' error: {e}")
-        except Exception as e:
-            logger.warning(f"Notification dispatch error: {e}")
 
     def enqueue_act(
         self,

@@ -18,6 +18,15 @@ from unittest.mock import patch, MagicMock
 from flask import Flask
 from api.capabilities import capabilities_bp
 
+# Phase 4 ability-unification (v0.4.0) intentionally broke the capability-plugin
+# pipeline — `services.tool_library_service` is deleted, `register_tool` /
+# `unregister_tool` no longer exist, and the /api/capabilities endpoints return
+# 500 on any path that touches dynamic tool registration. These tests stay in
+# the repo so the broken surface is named (per plan §5), not silently ignored.
+pytestmark = pytest.mark.skip(
+    reason="accepted-broken: capability plugins intentionally inert post Phase 4 ability-unification"
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -280,7 +280,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send()
@@ -289,8 +288,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_is_callable(self, db):
         """store() is wired — calls DB, no longer raises NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
         # store() writes assistant row; no exception = pass
 
@@ -300,7 +298,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='done', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send()
@@ -309,8 +306,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_is_wired_in_commit_4(self, db):
         """store() calls DB, does not raise NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
         # store() writes assistant row; no exception = pass
 
@@ -320,7 +316,6 @@ class TestGetPreviousMessagesSendStoreWiring:
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._embed_entry'), \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
             result = p.send('req-id')
@@ -329,8 +324,7 @@ class TestGetPreviousMessagesSendStoreWiring:
     def test_store_not_caught_as_plain_exception(self, db):
         """store() calls DB, no longer raises NotImplementedError."""
         p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._embed_entry'), \
-             patch('services.transcript_service._trigger_episode_extraction'):
+        with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('response text')
         # store() writes assistant row; no exception = pass
 
@@ -1060,7 +1054,7 @@ class TestStage2ActRestartDbWrites:
         llm_resp = _make_compact_llm_response(text='fresh compaction summary')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t1_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
                  {'id': t2_id, 'role': 'assistant', 'content': 'hi', 'tool_name': None},
              ]):
@@ -1086,7 +1080,7 @@ class TestStage2ActRestartDbWrites:
         llm_resp = _make_compact_llm_response(text='updated compaction summary')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': new_t_id, 'role': 'user', 'content': 'new turn', 'tool_name': None},
              ]):
             mock_inst.return_value.send_messages.return_value = llm_resp
@@ -1112,7 +1106,7 @@ class TestStage2ActRestartDbWrites:
         llm_resp = _make_compact_llm_response(text='new compaction text')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': new_t_id, 'role': 'user', 'content': 'turn', 'tool_name': None},
              ]):
             mock_inst.return_value.send_messages.return_value = llm_resp
@@ -1137,8 +1131,8 @@ class TestRunFullCompaction:
 
         with caplog.at_level(_logging.WARNING):
             with patch('services.providers.Providers.instance') as mock_inst, \
-                 patch('services.compaction_service.get_entries_since', return_value=[]), \
-                 patch('services.compaction_service.get_compaction', return_value=None):
+                 patch('services.compaction_persistence.get_entries_since', return_value=[]), \
+                 patch('services.compaction_persistence.get_compaction', return_value=None):
                 result = p._run_full_compaction()
                 mock_inst.return_value.send_messages.assert_not_called()
 
@@ -1157,7 +1151,7 @@ class TestRunFullCompaction:
         llm_resp = _make_compact_llm_response(text='')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
              ]):
             mock_inst.return_value.send_messages.return_value = llm_resp
@@ -1174,7 +1168,7 @@ class TestRunFullCompaction:
 
         with caplog.at_level(_logging.ERROR):
             with patch('services.providers.Providers.instance') as mock_inst, \
-                 patch('services.compaction_service.get_entries_since', return_value=[
+                 patch('services.compaction_persistence.get_entries_since', return_value=[
                      {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
                  ]):
                 mock_inst.return_value.send_messages.side_effect = RuntimeError('LLM down')
@@ -1193,7 +1187,7 @@ class TestRunFullCompaction:
         llm_resp = _make_compact_llm_response(text='happy path summary')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
              ]):
             mock_inst.return_value.send_messages.return_value = llm_resp
@@ -1231,19 +1225,22 @@ class TestRunFullCompaction:
         llm_resp = _make_compact_llm_response(text='compacted')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=entries):
+             patch('services.compaction_persistence.get_entries_since', return_value=entries):
             mock_inst.return_value.send_messages.return_value = llm_resp
             p._run_full_compaction()
 
         row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
         assert row['compacted_up_to_id'] == id7
 
-    def test_e6_upsert_uses_self_job_for_llm_call(self, db):
-        """LLM call uses job=self.JOB (not a hardcoded legacy job string)."""
+    def test_e6_compaction_always_uses_frontal_cortex_unified(self, db):
+        """Compaction LLM call always uses 'frontal-cortex-unified' regardless of
+        the host processor's JOB. This is the unified-compaction invariant —
+        FullCompactionProcessor hardcodes JOB so all compaction work is logged
+        and provider-routed under one cognitive job."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
 
         class CustomJobProcessor(_make_compact_processor().__class__):
-            JOB = 'custom-job-name'
+            JOB = 'custom-job-name'  # host JOB must NOT leak into compaction
 
         p = CustomJobProcessor('hi')
 
@@ -1255,10 +1252,11 @@ class TestRunFullCompaction:
             return llm_resp
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_service.get_entries_since', return_value=[
+             patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
              ]):
             mock_inst.return_value.send_messages.side_effect = fake_send
             p._run_full_compaction()
 
-        assert 'custom-job-name' in captured_jobs
+        assert captured_jobs == ['frontal-cortex-unified']
+        assert 'custom-job-name' not in captured_jobs

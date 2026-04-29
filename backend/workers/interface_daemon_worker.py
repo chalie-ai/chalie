@@ -161,7 +161,7 @@ def _restart_delay(state: dict) -> float:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-def interface_daemon_worker(shared_state=None):
+def interface_daemon_worker():
     """Worker function — monitors _interfaces/ and manages daemon lifecycle."""
     import runtime_config
 

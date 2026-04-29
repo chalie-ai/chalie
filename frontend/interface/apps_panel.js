@@ -1,5 +1,5 @@
 import { escHtml } from './utils.js';
-import { BlockRenderer } from './blocks.js';
+import { renderMarkupTo } from './markup_renderer.js';
 
 /**
  * Apps (interface daemons) — side panel, scope approval, overlay, detail dialog.
@@ -15,7 +15,6 @@ export class AppsPanel {
     this._currentScopeApp = null;
     this._overlayPollTimers = [];
     this._overlayGateway = null;
-    this._blockRenderer = new BlockRenderer();
     this._appsInterval = null;
   }
 
@@ -289,12 +288,11 @@ export class AppsPanel {
       const ct = resp.headers.get('Content-Type') || '';
 
       if (ct.includes('application/json')) {
-        // SDK v2: blocks response
+        // SDK v2: XML content response
         const data = await resp.json();
         this._overlayGateway = data.gateway || `/gw/${app.id}`;
         content.textContent = '';
-        const fragment = this._blockRenderer.render(data.blocks || []);
-        content.appendChild(fragment);
+        renderMarkupTo(content, data.content || '');
         this._wireOverlayActions(content);
         this._startOverlayPolling(content);
       } else {
@@ -369,18 +367,18 @@ export class AppsPanel {
             window.open(data.openUrl, '_blank');
           }
 
-          // Render response blocks into target container
-          if (targetId && data.blocks) {
+          // Render response content into target container
+          if (targetId && data.content) {
             const target = root.querySelector(`[data-container-id="${targetId}"]`);
             if (target) {
               target.textContent = '';
-              target.appendChild(this._blockRenderer.render(data.blocks));
+              renderMarkupTo(target, data.content);
               this._wireOverlayActions(target);
             }
-          } else if (!targetId && data.blocks) {
+          } else if (!targetId && data.content) {
             // No target — replace entire overlay content
             root.textContent = '';
-            root.appendChild(this._blockRenderer.render(data.blocks));
+            renderMarkupTo(root, data.content);
             this._wireOverlayActions(root);
             this._startOverlayPolling(root);
           }
@@ -413,9 +411,9 @@ export class AppsPanel {
             body: JSON.stringify({ capability, params }),
           });
           const data = await resp.json();
-          if (data.blocks) {
+          if (data.content) {
             container.textContent = '';
-            container.appendChild(this._blockRenderer.render(data.blocks));
+            renderMarkupTo(container, data.content);
             this._wireOverlayActions(container);
           }
           // Stop polling if response says so

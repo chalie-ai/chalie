@@ -15,10 +15,12 @@ Model downloads automatically from HuggingFace on first run (~300MB, cached
 at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 """
 
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
+import queue
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -26,6 +28,7 @@ from typing import List, Optional
 import numpy as np
 
 from services.config_service import ConfigService
+from services.onnx_session import CPU_PROVIDER, build_session, choose_providers
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,17 @@ _model_lock = threading.Lock()
 # Cache TTL — 1 hour covers all request-scoped reuse and short-term repeats
 _CACHE_TTL = 3600
 _CACHE_PREFIX = 'emb:'
+
+# Execution providers that compile graph subgraphs into backend-specific binaries
+# and therefore cannot round-trip back to ONNX — the optimized-graph serializer
+# bails out on any compiled node. When one of these is in the chosen EP list,
+# the optimized cache must be written via a CPU-only prime pass instead.
+_COMPILING_EPS = frozenset({
+    "CoreMLExecutionProvider",
+    "CUDAExecutionProvider",
+    "TensorrtExecutionProvider",
+    "ROCMExecutionProvider",
+})
 
 
 def _model_dir() -> Path:
@@ -81,11 +95,11 @@ def _resolve_thread_count() -> int:
 
 
 def _build_session(providers: Optional[List[str]] = None):
-    """Construct an ONNX InferenceSession with the chosen providers.
+    """Construct an ONNX InferenceSession for the embedding encoder.
 
-    If ``providers`` is None, uses ``ort.get_available_providers()`` — the
-    runtime returns accelerators (CUDA/CoreML/ROCm/…) first and CPU last, so
-    whatever is installed gets picked automatically.
+    Provider selection is delegated to ``onnx_session.choose_providers``, which
+    reads the installed wheel's accelerators and strips CoreML when the model
+    trips the Metal 16384-dim texture ceiling.
 
     The pre-optimized graph is cached with the ORT version baked into the filename
     (``model.optimized.<ort_version>.onnx``). Optimized graphs are not forward-
@@ -110,6 +124,27 @@ def _build_session(providers: Optional[List[str]] = None):
             logger.error(f"[EMBEDDING] Failed to download model: {e}")
             raise
 
+    chosen = list(providers) if providers is not None else choose_providers(onnx_path)
+
+    # ORT refuses to serialize a graph once a compiling EP (CoreML/CUDA/TRT/ROCm)
+    # has claimed nodes — session construction crashes mid-way when
+    # ``optimized_model_filepath`` is set. Prime the cache with a throwaway
+    # CPU-only session first, then open the real session from the written graph.
+    # One-off cost on first boot per ORT version; no-op on CPU-only hosts.
+    if not optimized_path.exists() and any(ep in _COMPILING_EPS for ep in chosen):
+        logger.info(
+            f"[EMBEDDING] Priming optimized graph via CPU-only pass (ORT {ort.__version__})"
+        )
+        prime_opts = ort.SessionOptions()
+        prime_opts.intra_op_num_threads = _resolve_thread_count()
+        prime_opts.inter_op_num_threads = 1
+        prime_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+        prime_opts.optimized_model_filepath = str(optimized_path)
+        prime_sess = ort.InferenceSession(
+            str(onnx_path), sess_options=prime_opts, providers=[CPU_PROVIDER]
+        )
+        del prime_sess
+
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = _resolve_thread_count()
     opts.inter_op_num_threads = 1
@@ -125,11 +160,8 @@ def _build_session(providers: Optional[List[str]] = None):
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
         opts.optimized_model_filepath = str(optimized_path)
 
-    chosen = providers if providers is not None else ort.get_available_providers()
-    session = ort.InferenceSession(str(load_path), sess_options=opts, providers=chosen)
-    logger.info(
-        f"[EMBEDDING] Providers: {session.get_providers()}, "
-        f"intra_op_num_threads={opts.intra_op_num_threads}"
+    session = build_session(
+        load_path, sess_options=opts, providers=chosen, log_prefix="[EMBEDDING]"
     )
     return session, onnx_path
 
@@ -138,7 +170,7 @@ def _rebuild_session_cpu_only():
     """Rebuild the module-level session as CPU-only. Called when an accelerator fails at runtime."""
     global _session
     with _model_lock:
-        session, _ = _build_session(providers=["CPUExecutionProvider"])
+        session, _ = _build_session(providers=[CPU_PROVIDER])
         _session = session
         return session
 
@@ -201,6 +233,10 @@ def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
 def _encode_batch(texts: List[str]) -> np.ndarray:
     """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized.
 
+    Called ONLY from the module-level embedding worker. External callers go
+    through the queue via generate_embedding* — direct calls bypass the
+    serialization contract and risk concurrent ORT inference.
+
     Sequence length is set dynamically by the tokenizer (padding=True pads each
     batch to its longest item). _MODEL_MAX_TOKENS only bites for truly
     oversized inputs — it prevents position_ids from exceeding the model's
@@ -258,6 +294,79 @@ def _get_store():
     return MemoryClientService.create_connection()
 
 
+# ── Inference queue ─────────────────────────────────────────────────────────
+#
+# A single daemon worker serializes ALL ORT inference calls.  Multiple
+# EmbeddingService instances (list_service, search router, api/chat_image, …)
+# all share this one queue via the module-level globals, preventing concurrent
+# session.run() calls that otherwise allocate 500 MB+ each and OOM under bulk
+# ingestion.
+#
+# Worker is started lazily on the first job submission so that importing this
+# module in tests never spawns a real ONNX thread.
+
+_embedding_queue: queue.Queue = queue.Queue()
+_embedding_worker_started = threading.Lock()
+_embedding_worker_running = False
+
+
+def _run_embedding_worker() -> None:
+    """Process inference jobs from the module-level queue, one at a time.
+
+    Each job is a (texts, future) pair.  Results are delivered via the future
+    so callers block until their job completes.  Exceptions are forwarded to
+    the future so the caller receives them via future.result().
+    """
+    while True:
+        texts, future = _embedding_queue.get()
+        try:
+            result = _encode_batch(texts)
+            future.set_result(result)
+        except Exception as exc:
+            future.set_exception(exc)
+
+
+def _ensure_worker_started() -> None:
+    """Start the embedding worker thread on first call. Idempotent."""
+    global _embedding_worker_running
+    if _embedding_worker_running:
+        return
+    with _embedding_worker_started:
+        if _embedding_worker_running:
+            return
+        t = threading.Thread(target=_run_embedding_worker, name="embedding-worker", daemon=True)
+        t.start()
+        _embedding_worker_running = True
+
+
+def _submit_for_inference(texts: List[str]) -> np.ndarray:
+    """Submit texts to the inference queue and block until the result is ready.
+
+    Cache checks must be done BEFORE calling this function — submitting a
+    job for a cache-hit text would needlessly queue behind pending work and
+    could cause reentrance if the worker itself ever needed to embed (it does
+    not, but the guard keeps the contract explicit).
+
+    Records the queue+inference wait into the bound processor's
+    ``embedding_wait_ms`` stage so callers can see how much pre-LLM time
+    the single-threaded ONNX worker is costing them.
+    """
+    _ensure_worker_started()
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    _embedding_queue.put((texts, future))
+    proc = None
+    try:
+        from services.message_processor import current_processor
+        proc = current_processor()
+    except Exception:
+        proc = None
+    metrics = getattr(proc, '_metrics', None) if proc is not None else None
+    if metrics is None:
+        return future.result()
+    with metrics.stage('embedding_wait'):
+        return future.result()
+
+
 # Singleton EmbeddingService instance
 _embedding_service_instance = None
 
@@ -309,15 +418,20 @@ class EmbeddingService:
     def generate_embedding(self, text: str) -> list:
         """Generate a single L2-normalized embedding vector as a list. Cached.
 
+        Cache hit returns immediately without touching the queue — this also
+        prevents reentrance deadlock if an embedding is requested from within
+        the worker thread (impossible today, but guarded explicitly).
+
         Returns:
             Embedding as a plain Python list of floats suitable for SQLite storage.
         """
+        # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return cached
 
         try:
-            embedding = _encode_batch([text])[0].tolist()
+            embedding = _submit_for_inference([text])[0].tolist()
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
@@ -327,15 +441,20 @@ class EmbeddingService:
     def generate_embedding_np(self, text: str) -> np.ndarray:
         """Generate a single L2-normalized embedding vector as a numpy array. Cached.
 
+        Cache hit returns immediately without touching the queue — this also
+        prevents reentrance deadlock if an embedding is requested from within
+        the worker thread (impossible today, but guarded explicitly).
+
         Returns:
             Embedding as a float32 numpy array for cosine similarity math.
         """
+        # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return np.array(cached, dtype=np.float32)
 
         try:
-            embedding = _encode_batch([text])[0]
+            embedding = _submit_for_inference([text])[0]
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
@@ -345,9 +464,11 @@ class EmbeddingService:
     def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
         """Generate L2-normalized embeddings for a batch of texts.
 
-        Batch operations (document chunking, bulk consolidation) bypass per-text
-        caching — the overhead of N cache lookups + JSON serialization would negate
-        the benefit for large batches.
+        Each chunk is submitted as a single queue job so the worker processes
+        chunks sequentially — enforcing the same OOM-prevention contract as
+        single-text calls.  Per-text caching is bypassed for batch operations;
+        the overhead of N cache lookups + JSON serialization negates the
+        benefit for large batches.
 
         Returns:
             List of float32 numpy arrays, one per input text.
@@ -357,11 +478,11 @@ class EmbeddingService:
 
         try:
             results = []
-            # Process in chunks of 32 to bound memory usage
+            # Process in chunks of 32 to bound memory usage per job.
             chunk_size = 32
             for i in range(0, len(texts), chunk_size):
                 chunk = texts[i:i + chunk_size]
-                embeddings = _encode_batch(chunk)
+                embeddings = _submit_for_inference(chunk)
                 results.extend(embeddings)
             return results
         except Exception as e:

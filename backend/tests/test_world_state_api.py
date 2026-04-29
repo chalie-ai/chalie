@@ -3,7 +3,7 @@ Feature tests for the WorldState API surface.
 
   - GET /system/observability/world-state  (Cognition endpoint)
   - Signal push via world_state.push_signal() reflected in rendered output
-  - Telemetry push via world_state.set("telemetry") reflected in rendered output
+  - Telemetry rows in the ``telemetry`` table reflected in rendered output
   - Schedule items seeded into DB appear in rendered output + inputs
   - bg_process rows seeded into DB appear in rendered output + inputs
   - Full-lifecycle integration test (@pytest.mark.integration)
@@ -12,6 +12,7 @@ All tests use real production code + real SQLite from schema.sql.
 Zero mocks of Chalie services.
 """
 
+import json
 import uuid
 from datetime import timedelta
 
@@ -33,10 +34,37 @@ def _recent_iso(seconds: int = 30) -> str:
     return (utc_now() - timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _reset_world_state():
-    """Wipe all in-memory fragments so each test starts from a clean singleton."""
-    world_state.set("telemetry", {})
+def _reset_world_state(db_conn=None):
+    """Wipe all in-memory fragments so each test starts from a clean singleton.
+
+    When ``db_conn`` is supplied the telemetry table is cleared too — the
+    /health and observability endpoints both read it.
+    """
     world_state.set("signals", {})
+    if db_conn is not None:
+        db_conn.execute("DELETE FROM telemetry")
+        db_conn.commit()
+
+
+def _seed_telemetry(db_conn, ctx: dict) -> None:
+    """Persist a flat key/value snapshot into the telemetry table.
+
+    Mirrors what ClientContextService.save() does on a /health POST.
+    """
+    def _flatten(payload, prefix=""):
+        for key, value in payload.items():
+            full = f"{prefix}{key}"
+            if isinstance(value, dict) and value:
+                yield from _flatten(value, prefix=f"{full}.")
+            else:
+                yield full, json.dumps(value)
+
+    db_conn.execute("DELETE FROM telemetry")
+    db_conn.executemany(
+        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
+        list(_flatten(ctx)),
+    )
+    db_conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -49,22 +77,22 @@ class TestWorldStateObservabilityEmpty:
     and four correctly-keyed inputs with zero entries."""
 
     def test_empty_state_returns_200(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
 
         resp = client.get("/system/observability/world-state")
         assert resp.status_code == 200
 
     def test_empty_state_rendered_is_empty_string(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
 
         data = client.get("/system/observability/world-state").get_json()
         assert data["rendered"] == ""
 
     def test_empty_state_inputs_has_four_required_keys(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
         assert "telemetry" in inputs
@@ -73,8 +101,8 @@ class TestWorldStateObservabilityEmpty:
         assert "bg_processes" in inputs
 
     def test_empty_state_inputs_all_zero_or_empty(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
         assert inputs["telemetry"] == {}
@@ -92,29 +120,29 @@ class TestWorldStateTelemetryRendering:
     """Telemetry pushed to the singleton appears verbatim in the rendered block."""
 
     def test_telemetry_section_header_present(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
-        world_state.set("telemetry", {"local_time": "10:00", "location": "Valletta"})
+        client, db_conn, _ = authed_client
+        _seed_telemetry(db_conn, {"local_time": "10:00", "location_name": "Valletta"})
+        world_state.set("signals", {})
 
         data = client.get("/system/observability/world-state").get_json()
         assert "### Background Telemetry,Processes & Signals" in data["rendered"]
         assert "[telemetry]" in data["rendered"]
 
     def test_telemetry_location_appears_in_rendered(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
-        world_state.set("telemetry", {"location": "Sliema, MT"})
+        client, db_conn, _ = authed_client
+        _seed_telemetry(db_conn, {"location_name": "Sliema, MT"})
+        world_state.set("signals", {})
 
         data = client.get("/system/observability/world-state").get_json()
-        assert "location:Sliema, MT" in data["rendered"]
+        assert "location_name:Sliema, MT" in data["rendered"]
 
     def test_telemetry_reflected_in_inputs(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
-        world_state.set("telemetry", {"location": "Valletta", "mobility": "stationary"})
+        client, db_conn, _ = authed_client
+        _seed_telemetry(db_conn, {"location_name": "Valletta", "mobility": "stationary"})
+        world_state.set("signals", {})
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
-        assert inputs["telemetry"]["location"] == "Valletta"
+        assert inputs["telemetry"]["location_name"] == "Valletta"
         assert inputs["telemetry"]["mobility"] == "stationary"
 
 
@@ -129,7 +157,7 @@ class TestWorldStateScheduleRendering:
 
     def test_pending_scheduled_item_appears_in_inputs_schedule(self, authed_client):
         client, db_conn, _ = authed_client
-        _reset_world_state()
+        _reset_world_state(db_conn)
 
         item_id = str(uuid.uuid4())
         db_conn.execute(
@@ -145,7 +173,7 @@ class TestWorldStateScheduleRendering:
 
     def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
-        _reset_world_state()
+        _reset_world_state(db_conn)
 
         item_id = str(uuid.uuid4())
         db_conn.execute(
@@ -172,7 +200,7 @@ class TestWorldStateBgProcessRendering:
 
     def test_goal_pursuit_row_appears_in_inputs_bg_processes(self, authed_client):
         client, db_conn, _ = authed_client
-        _reset_world_state()
+        _reset_world_state(db_conn)
 
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -187,7 +215,7 @@ class TestWorldStateBgProcessRendering:
 
     def test_goal_pursuit_row_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
-        _reset_world_state()
+        _reset_world_state(db_conn)
 
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -210,8 +238,8 @@ class TestWorldStateSignalRendering:
     """push_signal() on the singleton produces a [signal:…] line in rendered output."""
 
     def test_signal_appears_in_rendered_block(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
         world_state.push_signal("weather", "Thunderstorm at 18:00")
 
         data = client.get("/system/observability/world-state").get_json()
@@ -219,8 +247,8 @@ class TestWorldStateSignalRendering:
         assert "Thunderstorm at 18:00" in data["rendered"]
 
     def test_signal_reflected_in_inputs_signals(self, authed_client):
-        client, _, _ = authed_client
-        _reset_world_state()
+        client, db_conn, _ = authed_client
+        _reset_world_state(db_conn)
         world_state.push_signal("inbox", "3 unread emails")
 
         inputs = client.get("/system/observability/world-state").get_json()["inputs"]
@@ -239,10 +267,10 @@ class TestWorldStateFullLifecycle:
 
     def test_all_four_sections_in_render_and_inputs(self, authed_client):
         client, db_conn, _ = authed_client
-        _reset_world_state()
+        _reset_world_state(db_conn)
 
         # Telemetry
-        world_state.set("telemetry", {"location": "Sliema, MT", "local_time": "14:00"})
+        _seed_telemetry(db_conn, {"location_name": "Sliema, MT", "local_time": "14:00"})
 
         # Signal
         world_state.push_signal("news_service", "Malta heatwave warning")
@@ -279,7 +307,7 @@ class TestWorldStateFullLifecycle:
         assert "Malta heatwave warning" in rendered
 
         inputs = data["inputs"]
-        assert inputs["telemetry"]["location"] == "Sliema, MT"
+        assert inputs["telemetry"]["location_name"] == "Sliema, MT"
         assert "news_service" in inputs["signals"]
         assert any(r["message"] == "Call Mum" for r in inputs["schedule"])
         assert any(r["content"] == "Booking holiday flights" for r in inputs["bg_processes"])

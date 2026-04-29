@@ -33,12 +33,6 @@ query_bp = Blueprint("query", __name__, url_prefix="/api/query")
 # Defined at module level so tests can patch them by name.
 # ---------------------------------------------------------------------------
 
-def _get_situation_model_service():
-    """Return SituationModelService class (lazy, fail-open)."""
-    from services.situation_model_service import SituationModelService
-    return SituationModelService
-
-
 def _get_retrieval_module():
     """Return the episodic retrieval module (lazy, fail-open)."""
     from services import episodic_retrieval_service
@@ -110,62 +104,26 @@ def _permission_denied(slice_name: str):
 # Slice handlers (each returns a plain dict, never a Flask response)
 # ---------------------------------------------------------------------------
 
-def _slice_situation() -> dict:
-    """Collect current situation assessment from SituationModelService.
-
-    Returns:
-        dict with keys ``scores``, ``directive``, ``phase``.
-        Falls back to empty defaults if the service is unavailable.
-    """
-    try:
-        SituationModelService = _get_situation_model_service()
-        sms = SituationModelService()
-        state = sms.get_current()
-        directive = sms.get_directive()
-
-        # Flatten scores: return just the ``value`` float per dimension
-        raw_scores = state.get("scores", {})
-        scores = {k: v.get("value") for k, v in raw_scores.items() if isinstance(v, dict)}
-
-        phase = state.get("phase", {})
-        phase_out = {
-            "current": phase.get("current"),
-            "momentum": phase.get("momentum"),
-        }
-
-        return {
-            "scores": scores,
-            "directive": directive,
-            "phase": phase_out,
-        }
-    except Exception as e:
-        logger.debug("[Query API] situation slice failed: %s", e)
-        return {"scores": {}, "directive": None, "phase": {}}
-
-
 def _slice_relevance(query: str) -> dict:
     """Score relevance of a text snippet against the current cognitive context.
 
-    Uses episodic_retrieval_service for semantic similarity and the cached
-    world model for goal/task matching.
+    Uses episodic_retrieval_service for semantic similarity.
 
     Args:
         query: Text to score relevance for.
 
     Returns:
-        dict with keys ``relevance``, ``related_goals``, ``related_traits``,
-        ``recommendation``.  Falls back to neutral defaults on any error.
+        dict with keys ``relevance``, ``related_traits``, ``recommendation``.
+        Falls back to neutral defaults on any error.
     """
     if not query or not query.strip():
         return {
             "relevance": 0.0,
-            "related_goals": [],
             "related_traits": [],
             "recommendation": "no_query",
         }
 
     relevance = 0.0
-    related_goals: list = []
     related_traits: list = []
 
     # Semantic similarity via episodic retrieval
@@ -182,20 +140,6 @@ def _slice_relevance(query: str) -> dict:
     except Exception as e:
         logger.debug("[Query API] relevance episodic lookup failed: %s", e)
 
-    # Goal matching via goals table
-    try:
-        db = _get_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT description FROM goals WHERE status = 'active' LIMIT 20"
-            )
-            for (description,) in cursor.fetchall():
-                if description and query.lower() in description.lower():
-                    related_goals.append(description[:120])
-    except Exception as e:
-        logger.debug("[Query API] relevance goals lookup failed: %s", e)
-
     # Derive recommendation
     if relevance >= 0.7:
         recommendation = "surface_now"
@@ -206,7 +150,6 @@ def _slice_relevance(query: str) -> dict:
 
     return {
         "relevance": round(relevance, 3),
-        "related_goals": related_goals[:5],
         "related_traits": related_traits,
         "recommendation": recommendation,
     }
@@ -269,9 +212,7 @@ def _dispatch_slice(slice_name: str) -> dict:
     name, _, param = slice_name.partition(":")
     name = name.strip().lower()
 
-    if name == "situation":
-        return _slice_situation()
-    elif name == "relevance":
+    if name == "relevance":
         return _slice_relevance(param.strip())
     elif name == "memory":
         parts = param.split("&k=", 1)
@@ -280,30 +221,6 @@ def _dispatch_slice(slice_name: str) -> dict:
         return _slice_memory(q, k)
     else:
         return {"error": f"Unknown slice: {slice_name!r}"}
-
-
-# ---------------------------------------------------------------------------
-# GET /api/query/situation
-# ---------------------------------------------------------------------------
-
-@query_bp.route("/situation", methods=["GET"])
-@require_auth
-def get_situation():
-    """Return the current situation assessment.
-
-    Response JSON:
-        scores (dict): Composite scores — float per dimension.
-        directive (str|None): Plain-language behavioral directive.
-        phase (dict): Conversation phase with ``current`` and ``momentum``.
-
-    Returns:
-        200 with situation dict.
-        403 if the bearer token does not include ``"situation"`` in query permissions.
-    """
-    if not _check_query_permission("situation"):
-        return _permission_denied("situation")
-
-    return jsonify(_slice_situation()), 200
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +237,6 @@ def get_relevance():
 
     Response JSON:
         relevance (float): 0.0–1.0 relevance score.
-        related_goals (list[str]): Matching goals from the world model.
         related_traits (list): Matching user traits (reserved; always empty for now).
         recommendation (str): ``"surface_now"``, ``"surface_soon"``,
             ``"defer"``, or ``"no_query"``.

@@ -549,7 +549,7 @@ class TestSuperEpisodeWriteContract:
     def test_set_consolidated_into_applied_to_all_sources_in_cluster(
         self, db, episodic_svc,
     ):
-        """End-to-end contract of the loop in _maybe_trigger_super_episode:
+        """End-to-end contract of the loop in SuperEpisodeEncoderProcessor.send():
 
             for src_id in cluster_ids:
                 episodic_svc.set_consolidated_into(src_id, new_id)

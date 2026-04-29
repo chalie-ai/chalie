@@ -48,7 +48,8 @@ def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    parser.add_argument("--models-dir", default=None, help="ONNX models directory (default: /models or MODELS_DIR env)")
+    parser.add_argument("--models-dir", default=None, help="ONNX models directory (default: backend/data/models or MODELS_DIR env)")
+    parser.add_argument("--pretrained-dir", default=None, help="Pre-shipped classifier directory (default: backend/data/pre-trained or PRETRAINED_DIR env)")
     args = parser.parse_args()
 
     port = args.port
@@ -59,6 +60,8 @@ def main():
     config = {"port": port, "host": host}
     if args.models_dir:
         config["models_dir"] = args.models_dir
+    if args.pretrained_dir:
+        config["pretrained_dir"] = args.pretrained_dir
     runtime_config.set(config)
 
     # Preload models in a single background thread so Flask starts immediately.
@@ -76,11 +79,11 @@ def main():
             logger.warning(f"[System] Embedding model preload failed: {e}")
             logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
+        svc = None
         try:
-            logger.info("[System] Checking ONNX models (background)...")
+            logger.info("[System] Registering ONNX classifier heads (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            svc.ensure_models()
             # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
             # fire before any user request arrives. The encoder session is already
             # warm (loaded by embedding preload above), so registration is fast.
@@ -110,7 +113,13 @@ def main():
             else:
                 logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
-            logger.warning(f"[System] ONNX preload failed: {e}")
+            # Surface failure metadata on the singleton so /health can explain the
+            # degraded state. If get_onnx_inference_service() itself raised, svc
+            # is None and there is no singleton to annotate — skip in that case.
+            if svc is not None:
+                svc._failed_registrations = [("preload", str(e))]
+                svc._ready = True
+            logger.exception("[System] ONNX preload failed")
 
     import threading as _threading
     _threading.stack_size(2 * 1024 * 1024)
@@ -130,13 +139,6 @@ def main():
         run_once_on_boot(db_path=database_service.db_path)
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
-
-    # Seed data_graph from legacy knowledge table (runs once — idempotent check inside)
-    try:
-        from services.data_graph_service import seed_from_legacy_knowledge
-        seed_from_legacy_knowledge(database_service)
-    except Exception as _seed_err:
-        logger.warning(f"[Startup] data_graph seed skipped: {_seed_err}")
 
     # Drop zombie `invoked_by` column from tool_calls (NOT NULL, never populated by new code)
     try:
@@ -170,6 +172,24 @@ def main():
             logger.info("[Startup] episodes_fts rebuilt from content table")
     except Exception as _fts_err:
         logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
+
+    # Purge stale AdaptiveLayer data_graph rows (v0.5.0 §4.3 — idempotent)
+    # AdaptiveLayerService was removed in v0.5.0. These keys have no remaining
+    # consumer and become stale rows after the rip.
+    try:
+        _adaptive_keys = (
+            'prefers_concise', 'prefers_depth', 'enjoys_challenge',
+            'prefers_bullet_format', 'challenge_tolerance',
+        )
+        with database_service.connection() as _conn:
+            _placeholders = ','.join('?' * len(_adaptive_keys))
+            _conn.execute(
+                f"DELETE FROM data_graph WHERE kind='user_specific' AND key IN ({_placeholders})",
+                _adaptive_keys,
+            )
+            _conn.commit()
+    except Exception as _adl_err:
+        logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
     # Clean up expired auth sessions from SQLite
     try:
@@ -215,7 +235,6 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -225,7 +244,6 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
@@ -252,6 +270,11 @@ def main():
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
+    # Subconscious worker (v0.5.0 §5 — idle-gated 5-minute cognition tick:
+    # super-episode consolidation → decay → pattern extraction → user synthesis).
+    from services.subconscious_worker import subconscious_worker
+    manager.register_service("subconscious-worker", subconscious_worker)
+
     # Capability sync — bootstrap connected capabilities into scheduler system handlers
     _bootstrap_capability_sync()
 
@@ -262,47 +285,11 @@ def main():
                   "services.routing_stability_regulator_service", "routing_stability_regulator_worker")
     _try_register(manager, "triage-calibration-service",
                   "services.triage_calibration_service", "triage_calibration_worker")
-    _try_register(manager, "profile-enrichment-service",
-                  "services.profile_enrichment_service", "profile_enrichment_worker")
     # SearchExpanderService: centralised doc2query + embedding daemon.
     # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
-    # in KnowledgeService and DataGraphService. Falls back gracefully when the
-    # doc2query ONNX model files are absent.
+    # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
-    # Load tool registry
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        tool_count = len(ToolRegistryService().get_tool_names())
-        if tool_count > 0:
-            logger.info(f"[Startup] Tool registry loaded: {tool_count} tools")
-    except Exception as e:
-        logger.warning(f"[Startup] Tool registry load failed: {e}")
-
-    # Bootstrap tool profiles (background thread)
-    try:
-        import threading
-        from services.tool_profile_service import ToolProfileService
-        def _run_bootstrap():
-            try:
-                ToolProfileService().bootstrap_all()
-                logger.info("[Startup] Tool profile bootstrap complete")
-            except Exception as e:
-                logger.warning(f"[Startup] Tool profile bootstrap failed: {e}")
-        threading.Thread(target=_run_bootstrap, daemon=True, name="profile-bootstrap").start()
-    except Exception as e:
-        logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
-
-    # User-summary cadence worker — 30-min tick; lazy cold-start handled
-    # by UserMessageProcessor.getUserDefinition() fallback instead of boot hook.
-    try:
-        from workers.user_summary_worker import run as _user_summary_run
-        threading.Thread(
-            target=_user_summary_run, daemon=True, name="user-summary-worker"
-        ).start()
-        logger.info("[Startup] User summary worker started")
-    except Exception as e:
-        logger.warning(f"[Startup] User summary worker start failed: {e}")
 
     # Verify search routing embeddings are present
     try:
@@ -343,7 +330,7 @@ def main():
         logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
     # Register the Flask API worker (this is the main thread's HTTP server)
-    def _flask_worker(shared_state=None):
+    def _flask_worker():
         from api import create_app
         app = create_app()
         logger.info(f"[Chalie] Starting on http://{host}:{port}")
@@ -385,17 +372,6 @@ def _bootstrap_capability_sync():
                             logger.warning("[bootstrap] Failed to register tool '%s': %s", tool_name, reg_exc)
             except Exception as exc:
                 logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
-        # If ToolRegistryService was already initialised before this bootstrap ran,
-        # its in-memory tools dict is stale. Reload so find_tools can discover
-        # the freshly registered capability tools.
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            reg = ToolRegistryService()
-            if reg._initialized:
-                reg._load_tools()
-                logger.info("[bootstrap] Tool registry reloaded after capability tool registration")
-        except Exception as reg_exc:
-            logger.warning("[bootstrap] Tool registry reload failed: %s", reg_exc)
     except Exception as exc:
         logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 

@@ -1,5 +1,6 @@
 # Requires Python >= 3.11
 requests>=2.32.5
+brotli>=1.1.0
 sqlite-vec>=0.1.6
 flask-sock>=0.7.0
 transformers>=4.48.0
@@ -14,7 +15,11 @@ pywebpush>=2.0.0
 pdfplumber>=0.11.0
 python-docx>=1.1.0
 python-pptx>=1.0.0
-onnxruntime==1.20.1
+# onnxruntime is installed by installer/install.sh so the right wheel
+# (onnxruntime / onnxruntime-gpu / onnxruntime-rocm) is picked for the host.
+# Pulled in transitively by rapidocr-onnxruntime for dev workflows; the
+# installer swaps the wheel when a GPU is detected.
+onnx>=1.17.0
 rapidocr_onnxruntime>=1.4.0
 ddgs>=0.1.0
 RestrictedPython>=7.3
@@ -26,7 +31,7 @@ icalendar>=5.0.0
 PyYAML>=6.0
 vobject>=0.9.7
 nltk>=3.8
+nh3>=0.2.0
 
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0
-pytest-mock>=3.12.0

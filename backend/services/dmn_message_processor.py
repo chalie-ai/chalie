@@ -12,7 +12,6 @@ import logging
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import DMNSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +23,8 @@ class DMNMessageProcessor(MessageProcessor):
       MAX_ITERATIONS = 15  (vs. base 30)
       MAX_TIMEOUT    = 300 (5 minutes, vs. base 900)
 
-    NATIVE_TOOLS excludes 'goal_pursuit' to prevent spawning background
-    tasks from within a background process.
+    ALWAYS_AVAILABLE excludes 'goal_pursuit' to prevent a background
+    process from spawning further background work.
     """
 
     CHANNEL = 'dmn'
@@ -33,7 +32,23 @@ class DMNMessageProcessor(MessageProcessor):
     MAX_ITERATIONS = 15
     MAX_TIMEOUT = 300  # 5 minutes
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
-    NATIVE_TOOLS: list[str] = sorted(s for s in ALL_SKILL_NAMES if s != 'goal_pursuit')
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "schedule",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "code_eval",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
 
     def getUserDefinition(self) -> str:
         return (

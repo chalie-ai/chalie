@@ -18,27 +18,10 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def _auto_execute_gate():
-    """Mock the execution gate to always allow auto-execution in tests."""
-    mock_gate = MagicMock()
-    mock_gate.evaluate.return_value = {
-        'auto_execute': True,
-        'consequence_tier': 0,
-        'consequence_name': 'observe',
-        'domain': 'test',
-        'reasoning': 'test override',
-    }
-    with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-               return_value=mock_gate):
-        yield mock_gate
-
-
-@pytest.fixture
-def service(_auto_execute_gate):
-    """ActDispatcherService with innate-skill registration suppressed."""
-    with patch("services.innate_skills.register_innate_skills"):
-        svc = ActDispatcherService(timeout=2.0)
-        yield svc
+def service():
+    """ActDispatcherService for wrapper-intent routing tests."""
+    svc = ActDispatcherService(timeout=2.0)
+    yield svc
 
 
 def _make_wrapper(wrapper_id="wrp_ide", intent_types=None):

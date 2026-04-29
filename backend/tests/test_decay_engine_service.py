@@ -14,20 +14,6 @@ class TestDecayEngineService:
 
     # ── Constructor / Configuration ───────────────────────────────────
 
-    def test_constructor_loads_config_rates(self):
-        """Constructor should load decay rates from ConfigService."""
-        mock_config = {
-            'retrieval_decay_exponent': 0.08,
-        }
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value=mock_config,
-        ):
-            svc = DecayEngineService(decay_interval=600)
-
-        assert svc.retrieval_decay_exponent == 0.08
-        assert svc.decay_interval == 600
-
     def test_constructor_uses_defaults_on_config_failure(self):
         """When ConfigService raises, default decay rates should be used."""
         with patch(
@@ -38,23 +24,14 @@ class TestDecayEngineService:
 
         assert svc.retrieval_decay_exponent == 0.5
 
-    def test_default_decay_interval(self):
-        """Default decay interval should be 1800 seconds (30 minutes)."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        assert svc.decay_interval == 1800
-
     # ── run_decay_cycle — richness gating ────────────────────────────
 
-    def test_run_decay_cycle_low_richness_skips_identity_and_external(self):
-        """With richness < 0.3, identity inertia and external knowledge decay must not run.
+    def test_run_decay_cycle_invokes_all_subcycles(self):
+        """run_decay_cycle invokes every decay sub-cycle.
 
-        We verify actual gating behaviour — identity/external sub-cycles return 0
-        without being called — not just that internal helper methods were invoked.
+        After §4.4 the richness gate was removed (external knowledge decay was
+        deleted along with the daemon-thread driver). The remaining sub-cycles
+        all run unconditionally on each invocation.
         """
         with patch(
             'services.decay_engine_service.ConfigService.get_agent_config',
@@ -70,52 +47,15 @@ class TestDecayEngineService:
                 return retval
             return _fn
 
-        with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 2)), \
-             patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 1)), \
-             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
-             patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
-             patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
+        with patch.object(svc, '_decay_episodic',     side_effect=_record('episodic', 5)), \
+             patch.object(svc, '_decay_data_graph',   side_effect=_record('data_graph', 0)), \
+             patch.object(svc, '_cleanup_transcript', side_effect=_record('transcript', 0)), \
+             patch.object(svc, '_purge_tool_calls',   side_effect=_record('tool_calls', 0)):
 
-            svc.run_decay_cycle(richness=0.1)  # below 0.3 gate
+            svc.run_decay_cycle(richness=1.0)
 
-        # Essential cycles ran
-        assert 'episodic'  in call_log
-        assert 'knowledge' in call_log
-        assert 'goals'     in call_log
-        # Non-essential cycles were skipped
-        assert 'external' not in call_log
-
-    def test_run_decay_cycle_normal_richness_runs_all_cycles(self):
-        """With richness >= 0.3, all decay sub-cycles including identity must run."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        call_log = []
-
-        def _record(name, retval):
-            def _fn(*args, **kwargs):
-                call_log.append(name)
-                return retval
-            return _fn
-
-        with patch.object(svc, '_decay_episodic',                   side_effect=_record('episodic', 5)), \
-             patch.object(svc, '_decay_knowledge',                   side_effect=_record('knowledge', 3)), \
-             patch.object(svc, '_decay_data_graph',                  side_effect=_record('data_graph', 0)), \
-             patch.object(svc, '_decay_goals',                       side_effect=_record('goals', 0)), \
-             patch.object(svc, '_cleanup_transcript',                side_effect=_record('transcript', 0)), \
-             patch.object(svc, '_purge_tool_calls',                  side_effect=_record('tool_calls', 0)), \
-             patch.object(svc, '_decay_external_knowledge',          side_effect=_record('external', 1)):
-
-            svc.run_decay_cycle(richness=1.0)  # above 0.3 gate
-
-        # All cycles must have run
-        for name in ('episodic', 'knowledge', 'goals', 'external'):
-            assert name in call_log, f"Expected '{name}' to run at full richness"
+        for name in ('episodic', 'data_graph', 'transcript', 'tool_calls'):
+            assert name in call_log, f"Expected '{name}' sub-cycle to run"
 
     # ── Individual decay targets ──────────────────────────────────────
 
@@ -132,22 +72,6 @@ class TestDecayEngineService:
             side_effect=Exception('DB unavailable'),
         ):
             result = svc._decay_episodic()
-
-        assert result == 0
-
-    def test_decay_knowledge_returns_zero_on_db_failure(self):
-        """Knowledge decay should return 0 when DB is unavailable."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        with patch(
-            'services.database_service.get_shared_db_service',
-            side_effect=Exception('DB unavailable'),
-        ):
-            result = svc._decay_knowledge()
 
         assert result == 0
 
@@ -294,3 +218,4 @@ class TestDecayEngineService:
 
         purged = svc._purge_tool_calls(max_rows=1000)
         assert purged == 0
+

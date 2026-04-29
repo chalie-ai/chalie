@@ -49,9 +49,7 @@ class WorkerManager:
     """Master supervisor for managing worker threads."""
 
     def __init__(self):
-        """Initialise the WorkerManager with empty shared state and thread registry."""
-        self.shared_state: Dict = {}
-        self._state_lock = threading.Lock()
+        """Initialise the WorkerManager with an empty thread registry."""
         self.threads: Dict[str, threading.Thread] = {}
         self.service_definitions: List[Tuple[str, callable]] = []
         self.running = True
@@ -66,9 +64,7 @@ class WorkerManager:
         Args:
             worker_id: Unique string identifier for the worker, also used as
                 the daemon thread name (e.g., ``'decay-engine-service'``).
-            worker_func: Callable with signature
-                ``(shared_state: dict) -> None`` that implements the worker's
-                blocking run loop.
+            worker_func: Zero-arg callable implementing the worker's blocking run loop.
         """
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
@@ -77,22 +73,18 @@ class WorkerManager:
         """Spawn a worker as a daemon thread, skipping if one is already alive.
 
         If a thread with the given ``worker_id`` already exists and is alive,
-        this method returns immediately without creating a duplicate.  The
-        thread passes ``shared_state`` to ``worker_func`` and logs any
-        unhandled exception before terminating.
+        this method returns immediately without creating a duplicate.
 
         Args:
             worker_id: Unique identifier and daemon thread name for the worker.
-            worker_func: Callable with signature
-                ``(shared_state: dict) -> None`` that implements the worker's
-                blocking run loop.
+            worker_func: Zero-arg callable implementing the worker's blocking run loop.
         """
         if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
         def _run():
             try:
-                worker_func(self.shared_state)
+                worker_func()
             except Exception:
                 logging.exception(f"[Manager] Service {worker_id} crashed")
 
@@ -195,7 +187,6 @@ if __name__ == "__main__":
 
     # Deferred imports
     from workers import rest_api_worker
-    from services.decay_engine_service import decay_engine_worker
     from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -230,7 +221,6 @@ if __name__ == "__main__":
     manager = WorkerManager()
 
     # Register service workers (all run as daemon threads)
-    manager.register_service("decay-engine-service", decay_engine_worker)
     manager.register_service("dmn-service", dmn_worker)
     manager.register_service("rest-api-worker-1", rest_api_worker)
     manager.register_service("scheduler-service", scheduler_worker)
@@ -244,33 +234,5 @@ if __name__ == "__main__":
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
-    # Profile enrichment service
-    try:
-        from services.profile_enrichment_service import profile_enrichment_worker
-        manager.register_service("profile-enrichment-service", profile_enrichment_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
-
-    # Load tool registry
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        tool_count = len(ToolRegistryService().get_tool_names())
-        if tool_count > 0:
-            logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool registry load failed: {e}")
-
-    # Bootstrap tool profiles (background thread)
-    try:
-        from services.tool_profile_service import ToolProfileService
-        def _run_bootstrap():
-            try:
-                ToolProfileService().bootstrap_all()
-                logging.info("[Consumer] Tool profile bootstrap complete")
-            except Exception as e:
-                logging.warning(f"[Consumer] Tool profile bootstrap failed: {e}")
-        threading.Thread(target=_run_bootstrap, daemon=True, name="profile-bootstrap").start()
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool profile bootstrap start failed: {e}")
 
     manager.run()

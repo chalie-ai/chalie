@@ -1,10 +1,17 @@
 """
-Tests for document_skill.py — action dispatch, search, list, view, delete, restore, create.
+Tests for DocumentAbility — action dispatch, search, list, view, delete, restore, create.
 """
 
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+
+
+def _handle_document(topic: str, params: dict) -> str:
+    """Thin shim: invoke DocumentAbility.execute and return the text string."""
+    from abilities.document import DocumentAbility
+    result = DocumentAbility().execute(topic, params, None)
+    return result["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +98,7 @@ class TestDispatch:
 
     def test_unknown_action_returns_error(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "explode"})
+            result = _handle_document("topic", {"action": "explode"})
         assert "Unknown action" in result
         assert "explode" in result
 
@@ -101,18 +107,18 @@ class TestDispatch:
         with patch(_P_DB), patch(_P_DOC_SVC) as MockSvc:
             mock_svc = MagicMock()
             MockSvc.return_value = mock_svc
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {})
+            result = _handle_document("topic", {})
         # Should attempt search (and fail gracefully due to no query)
         assert "'query' is required" in result
 
     def test_db_error_returns_error_string(self):
-        """Database errors produce a clean error message."""
+        """Database errors produce a clean error tag."""
         with patch(_P_DB, side_effect=Exception("DB down")):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "list"})
-        assert "[DOCUMENT] Error:" in result
-        assert "DB down" in result
+            result = _handle_document("topic", {"action": "list"})
+        # New format: [document(action=list, error=DB down)]\n[end:document]
+        assert "[document(" in result
+        assert "error=DB down" in result
+        assert "[end:document]" in result
 
 
 @pytest.mark.unit
@@ -131,8 +137,7 @@ class TestSearchAction:
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DGS, return_value=mock_dgs):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "search", "query": "warranty coverage"})
+            result = _handle_document("topic", {"action": "search", "query": "warranty coverage"})
 
         assert "warranty.pdf" in result
         assert "id=doc00001" in result
@@ -140,8 +145,7 @@ class TestSearchAction:
 
     def test_search_empty_query_returns_error(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "search", "query": ""})
+            result = _handle_document("topic", {"action": "search", "query": ""})
         assert "'query' is required" in result
 
     def test_search_no_results(self):
@@ -152,8 +156,7 @@ class TestSearchAction:
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DGS, return_value=mock_dgs):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "search", "query": "unicorn"})
+            result = _handle_document("topic", {"action": "search", "query": "unicorn"})
 
         assert "No documents match" in result
 
@@ -171,8 +174,7 @@ class TestListAction:
         ]
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "list"})
+            result = _handle_document("topic", {"action": "list"})
 
         assert "warranty.pdf" in result
         assert "invoice.pdf" in result
@@ -184,8 +186,7 @@ class TestListAction:
         mock_svc.get_all_documents.return_value = []
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "list"})
+            result = _handle_document("topic", {"action": "list"})
 
         assert "No documents" in result
 
@@ -201,8 +202,7 @@ class TestViewAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "view", "id": "doc00001"})
+            result = _handle_document("topic", {"action": "view", "id": "doc00001"})
 
         assert "warranty.pdf" in result
         assert "Samsung" in result
@@ -218,8 +218,7 @@ class TestViewAction:
         mock_svc.search_documents_metadata.return_value = []
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "view", "id": "missing"})
+            result = _handle_document("topic", {"action": "view", "id": "missing"})
 
         assert "not found" in result.lower()
 
@@ -231,8 +230,7 @@ class TestViewAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "view", "name": "warranty"})
+            result = _handle_document("topic", {"action": "view", "name": "warranty"})
 
         assert "warranty.pdf" in result
 
@@ -251,8 +249,7 @@ class TestDeleteAction:
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DGS, return_value=mock_dgs):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "delete", "id": "doc00001"})
+            result = _handle_document("topic", {"action": "delete", "id": "doc00001"})
 
         assert "Deleted" in result
         assert "warranty.pdf" in result
@@ -264,8 +261,7 @@ class TestDeleteAction:
         mock_svc.search_documents_metadata.return_value = []
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "delete", "name": "nothing"})
+            result = _handle_document("topic", {"action": "delete", "name": "nothing"})
 
         assert "not found" in result.lower()
 
@@ -275,8 +271,7 @@ class TestDeleteAction:
         mock_svc.soft_delete.return_value = False
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "delete", "id": "doc00001"})
+            result = _handle_document("topic", {"action": "delete", "id": "doc00001"})
 
         assert "Failed" in result
 
@@ -293,8 +288,7 @@ class TestRestoreAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "restore", "id": "doc00001"})
+            result = _handle_document("topic", {"action": "restore", "id": "doc00001"})
 
         assert "Restored" in result
         assert "warranty.pdf" in result
@@ -304,15 +298,13 @@ class TestRestoreAction:
         mock_svc.get_document.return_value = _make_doc(deleted_at=None)
 
         with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "restore", "id": "doc00001"})
+            result = _handle_document("topic", {"action": "restore", "id": "doc00001"})
 
         assert "not deleted" in result.lower()
 
     def test_restore_missing_params(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "restore"})
+            result = _handle_document("topic", {"action": "restore"})
 
         assert "Specify" in result
 
@@ -324,8 +316,7 @@ class TestRestoreAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {"action": "restore", "name": "warranty"})
+            result = _handle_document("topic", {"action": "restore", "name": "warranty"})
 
         assert "Restored" in result
         mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
@@ -343,8 +334,7 @@ class TestCreateAction:
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DGS, return_value=mock_dgs):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {
+            result = _handle_document("topic", {
                 "action": "create",
                 "name": "research-notes.md",
                 "content": "# Research Notes\n\nSome findings here.",
@@ -363,8 +353,7 @@ class TestCreateAction:
 
     def test_create_missing_name(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {
+            result = _handle_document("topic", {
                 "action": "create",
                 "content": "some content",
             })
@@ -372,8 +361,7 @@ class TestCreateAction:
 
     def test_create_missing_content(self):
         with patch(_P_DB), patch(_P_DOC_SVC):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {
+            result = _handle_document("topic", {
                 "action": "create",
                 "name": "notes.md",
             })
@@ -387,8 +375,7 @@ class TestCreateAction:
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
              patch(_P_DGS, return_value=mock_dgs):
-            from services.innate_skills.document_skill import handle_document
-            handle_document("topic", {
+            _handle_document("topic", {
                 "action": "create",
                 "name": "my-notes",
                 "content": "content here",
@@ -405,8 +392,7 @@ class TestCreateAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc):
-            from services.innate_skills.document_skill import handle_document
-            result = handle_document("topic", {
+            result = _handle_document("topic", {
                 "action": "create",
                 "name": "notes.md",
                 "content": "content",
@@ -432,17 +418,17 @@ def _make_text(n_chars: int, word: str = "x") -> str:
 class TestSplitIntoArtifacts:
 
     def test_empty_text_returns_empty_list(self):
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         assert _split_into_artifacts("") == []
 
     def test_short_text_below_min_chars_returns_single_chunk(self):
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         text = "Short paragraph."
         result = _split_into_artifacts(text)
         assert result == [text]
 
     def test_text_exactly_at_min_chars_returns_single_chunk(self):
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         text = _make_text(512)
         result = _split_into_artifacts(text)
         assert len(result) == 1
@@ -450,7 +436,7 @@ class TestSplitIntoArtifacts:
 
     def test_text_slightly_over_min_chars_splits_at_paragraph_boundary(self):
         """Two paragraphs each just over 256 chars should produce at least one split."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         para_a = _make_text(550)
         para_b = _make_text(550)
         text = para_a + "\n\n" + para_b
@@ -462,7 +448,7 @@ class TestSplitIntoArtifacts:
 
     def test_two_large_paragraphs_produce_multiple_chunks(self):
         """Two paragraphs each >= min_chars produce at least 2 artifacts."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         para_a = _make_text(600)
         para_b = _make_text(600)
         text = para_a + "\n\n" + para_b
@@ -471,7 +457,7 @@ class TestSplitIntoArtifacts:
 
     def test_adjacent_chunks_share_48_char_overlap(self):
         """The last 48 chars of chunk[i] must appear as a prefix of chunk[i+1]."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         # Build text with four well-separated paragraphs so multiple chunks form
         paras = [_make_text(700, word=f"word{i}") for i in range(4)]
         text = "\n\n".join(paras)
@@ -485,7 +471,7 @@ class TestSplitIntoArtifacts:
 
     def test_no_chunk_exceeds_max_chars(self):
         """All produced chunks must be <= max_chars (1024)."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         # Long single paragraph to force sentence splitting
         sentence = "The photovoltaic cell converts solar energy into electrical power. "
         text = sentence * 30  # ~1980 chars, single paragraph
@@ -497,7 +483,7 @@ class TestSplitIntoArtifacts:
 
     def test_single_paragraph_over_max_chars_splits_at_sentence_boundary(self):
         """A single paragraph > max_chars is split at '. ' sentence boundaries."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         sentences = [f"Sentence number {i} describes a fact about solar energy." for i in range(30)]
         text = " ".join(sentences)  # ~1650 chars, no \n\n
         result = _split_into_artifacts(text)
@@ -508,7 +494,7 @@ class TestSplitIntoArtifacts:
 
     def test_sentence_over_max_chars_is_hard_cut(self):
         """A single sentence > max_chars is hard-cut at exactly max_chars characters."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         # One enormous "sentence" with no punctuation separator
         text = "a" * 2500
         result = _split_into_artifacts(text)
@@ -519,7 +505,7 @@ class TestSplitIntoArtifacts:
 
     def test_first_chunk_has_no_leading_overlap(self):
         """The very first chunk must not be prefixed with overlap from a previous chunk."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         paras = [_make_text(700, word=f"tok{i}") for i in range(3)]
         text = "\n\n".join(paras)
         result = _split_into_artifacts(text)
@@ -531,7 +517,7 @@ class TestSplitIntoArtifacts:
 
     def test_single_paragraph_with_no_separator_over_max_returns_list(self):
         """Text with no \n\n and no punctuation still produces a non-empty list."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         text = "word " * 300  # 1500 chars, no sentence separators
         result = _split_into_artifacts(text)
         assert isinstance(result, list)
@@ -539,19 +525,19 @@ class TestSplitIntoArtifacts:
         assert all(c.strip() for c in result)
 
     def test_returns_list_not_generator(self):
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         result = _split_into_artifacts("Hello world.")
         assert isinstance(result, list)
 
     def test_whitespace_only_text_returns_single_or_empty(self):
         """Whitespace-only input returns [] (empty after strip) or single chunk."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         result = _split_into_artifacts("   \n\n   ")
         assert isinstance(result, list)
 
     def test_custom_min_max_respected(self):
         """min_chars/max_chars parameters are honoured over the defaults."""
-        from services.innate_skills.document_skill import _split_into_artifacts
+        from abilities.document import _split_into_artifacts
         # With min=50, max=100, a 200-char text should produce multiple chunks
         text = "The quick brown fox jumps over the lazy dog. " * 5  # 225 chars
         result = _split_into_artifacts(text, min_chars=50, max_chars=100, overlap=10)
@@ -665,7 +651,7 @@ class TestCreateDocumentArtifacts:
 
     def test_short_text_stores_one_artifact(self, _dg_svc, _dg_db):
         """Text shorter than min_chars produces exactly one artifact."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
 
         with patch('services.data_graph_service.get_data_graph_service',
                    return_value=_dg_svc):
@@ -683,7 +669,7 @@ class TestCreateDocumentArtifacts:
 
     def test_key_format_is_doc_id_index_zero_padded(self, _dg_svc, _dg_db):
         """Keys use format doc:{doc_id}:{index:03d} — zero-padded to 3 digits."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
         # Build a text large enough for multiple artifacts
         text = "\n\n".join([_make_text(600, word=f"word{i}") for i in range(4)])
 
@@ -705,7 +691,7 @@ class TestCreateDocumentArtifacts:
 
     def test_source_is_document_doc_id(self, _dg_svc, _dg_db):
         """Every artifact stored has source='document:{doc_id}'."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
         text = "\n\n".join([_make_text(600, word=f"t{i}") for i in range(3)])
 
         with patch('services.data_graph_service.get_data_graph_service',
@@ -721,7 +707,7 @@ class TestCreateDocumentArtifacts:
 
     def test_all_artifacts_use_kind_document(self, _dg_svc, _dg_db):
         """All stored artifacts have kind=KIND_DOCUMENT."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
         text = "\n\n".join([_make_text(600, word=f"k{i}") for i in range(2)])
 
         with patch('services.data_graph_service.get_data_graph_service',
@@ -737,7 +723,7 @@ class TestCreateDocumentArtifacts:
 
     def test_returns_artifact_count(self, _dg_svc, _dg_db):
         """Return value equals the number of artifacts stored in data_graph."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
         text = "\n\n".join([_make_text(600, word=f"c{i}") for i in range(4)])
 
         with patch('services.data_graph_service.get_data_graph_service',
@@ -752,7 +738,7 @@ class TestCreateDocumentArtifacts:
 
     def test_empty_text_stores_nothing(self, _dg_svc, _dg_db):
         """Empty string produces 0 artifacts (empty list from _split_into_artifacts)."""
-        from services.innate_skills.document_skill import create_document_artifacts
+        from abilities.document import create_document_artifacts
 
         with patch('services.data_graph_service.get_data_graph_service',
                    return_value=_dg_svc):
@@ -782,17 +768,19 @@ class TestDocumentSkillSchemaTriggers:
     """
 
     def test_top_level_description_contains_trigger_verbs(self):
-        from services.innate_skills.document_skill import TOOL_SCHEMA
-        desc = TOOL_SCHEMA["description"].lower()
-        assert "create" in desc
-        assert "save" in desc
+        from abilities.document import DocumentAbility
+        # Trigger verbs "create" and "save" must appear somewhere in the schema so
+        # the model knows to call the tool when the user says "save" or "create".
+        action_desc = DocumentAbility.INPUT_SCHEMA["properties"]["action"]["description"].lower()
+        assert "create" in action_desc
+        assert "save" in action_desc
 
     def test_create_action_in_enum(self):
-        from services.innate_skills.document_skill import TOOL_SCHEMA
-        enum = TOOL_SCHEMA["input_schema"]["properties"]["action"]["enum"]
+        from abilities.document import DocumentAbility
+        enum = DocumentAbility.INPUT_SCHEMA["properties"]["action"]["enum"]
         assert "create" in enum
 
     def test_content_description_states_required_for_create(self):
-        from services.innate_skills.document_skill import TOOL_SCHEMA
-        content_desc = TOOL_SCHEMA["input_schema"]["properties"]["content"]["description"]
+        from abilities.document import DocumentAbility
+        content_desc = DocumentAbility.INPUT_SCHEMA["properties"]["content"]["description"]
         assert "required for" in content_desc.lower()

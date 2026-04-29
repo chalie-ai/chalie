@@ -4,7 +4,9 @@
 *.session_secret
 backend/.env
 backend/.key
-backend/data/
+backend/data/*
+!backend/data/pre-trained/
+!backend/data/pre-trained/**
 backend/*.db
 backend/*.db-journal
 backend/*.db-wal

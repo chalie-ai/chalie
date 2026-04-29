@@ -3,7 +3,7 @@ DMN Service — Default Mode Network (timer-based proactive intelligence).
 
 Fires proactive LLM calls after the user goes idle:
   - 60min idle → recent context (last 50 episodes)
-  - 6h cadence → salience context (high-confidence concepts + active goals + pending tasks)
+  - 6h cadence → salience context (high-confidence concepts + pending tasks)
 """
 
 import os
@@ -177,20 +177,6 @@ class DMNService:
             if ep_rows:
                 sections.append("Notable episodes:\n" + self._format_episodes(ep_rows))
 
-            # Active goals with confidence
-            cursor.execute(
-                "SELECT description, confidence FROM goals WHERE status = 'active' LIMIT 20"
-            )
-            goals = cursor.fetchall()
-            if goals:
-                lines = []
-                for description, confidence in goals:
-                    if confidence is not None:
-                        lines.append(f"- {description or ''} (confidence: {int(confidence * 100)}%)")
-                    else:
-                        lines.append(f"- {description or ''}")
-                sections.append("Active goals:\n" + '\n'.join(lines))
-
         return '\n\n'.join(sections)
 
     def _active_topic(self) -> str:
@@ -287,7 +273,7 @@ def get_dmn_service() -> DMNService:
     return _dmn_instance
 
 
-def dmn_worker(shared_state: dict = None):
+def dmn_worker():
     """Background worker — registered as a daemon thread in run.py."""
     logger.info("[DMN] Worker starting")
     time.sleep(30)  # Allow other services to boot first

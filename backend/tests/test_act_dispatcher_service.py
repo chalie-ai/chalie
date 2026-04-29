@@ -2,28 +2,11 @@
 
 import time
 import pytest
-from unittest.mock import patch, MagicMock
 
 from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
 
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def _auto_execute_gate():
-    """Mock the execution gate to always allow auto-execution in tests."""
-    mock_gate = MagicMock()
-    mock_gate.evaluate.return_value = {
-        'auto_execute': True,
-        'consequence_tier': 0,
-        'consequence_name': 'observe',
-        'domain': 'test',
-        'reasoning': 'test override',
-    }
-    with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-               return_value=mock_gate):
-        yield mock_gate
 
 
 @pytest.fixture
@@ -112,7 +95,7 @@ class TestHandlerException:
 
 class TestTimeout:
 
-    def test_slow_handler_returns_timeout(self, _auto_execute_gate):
+    def test_slow_handler_returns_timeout(self):
         """A handler that exceeds the timeout produces status=timeout."""
         svc = ActDispatcherService(timeout=0.1)
 
@@ -133,58 +116,43 @@ class TestTimeout:
 
 class TestConfidenceEstimation:
 
-    def test_memorize_confidence_is_deterministic(self, service):
-        """Deterministic actions like 'memorize' get 0.92 confidence."""
-        # Use the real memorize handler if available, or a lambda
-        # Since we want to pressure test the dispatcher's confidence logic:
-        service.handlers['memorize'] = lambda topic, action: 'stored'
+    def test_memory_confidence_is_deterministic(self, service):
+        """Deterministic actions like 'memory' get 0.92 confidence."""
+        service.handlers['memory'] = lambda topic, action: 'stored'
 
-        result = service.dispatch_action('topic', {'type': 'memorize'})
+        result = service.dispatch_action('topic', {'type': 'memory'})
 
         assert result['confidence'] == pytest.approx(0.92)
 
-    def test_introspect_confidence_is_deterministic(self, service):
-        """Deterministic actions like 'introspect' get 0.92 confidence."""
-        service.handlers['introspect'] = lambda topic, action: 'reflected'
+    def test_find_tools_long_result_confidence(self, service):
+        """A read action with a result longer than 100 chars gets 0.75 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'x' * 101
 
-        result = service.dispatch_action('topic', {'type': 'introspect'})
-
-        assert result['confidence'] == pytest.approx(0.92)
-
-    def test_recall_long_result_confidence(self, service):
-        """Recall with a result longer than 100 chars gets 0.75 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'x' * 101
-
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.75)
 
-    def test_recall_medium_result_confidence(self, service):
-        """Recall with a result between 21 and 100 chars gets 0.60 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'x' * 50
+    def test_find_tools_medium_result_confidence(self, service):
+        """A read action with a result between 21 and 100 chars gets 0.60 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'x' * 50
 
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.60)
 
-    def test_recall_short_result_confidence(self, service):
-        """Recall with a result of 20 chars or fewer gets 0.40 confidence."""
-        service.handlers['recall'] = lambda topic, action: 'short'
+    def test_find_tools_short_result_confidence(self, service):
+        """A read action with a result of 20 chars or fewer gets 0.40 confidence."""
+        service.handlers['find_tools'] = lambda topic, action: 'short'
 
-        result = service.dispatch_action('topic', {'type': 'recall'})
+        result = service.dispatch_action('topic', {'type': 'find_tools'})
 
         assert result['confidence'] == pytest.approx(0.40)
 
     def test_default_confidence_for_unknown_action_type(self, service):
         """An action type not in deterministic or read sets gets 0.50 confidence."""
-        # This action is not in SAFE_ACTIONS, so it will be blocked by the gate
-        # unless we mock the gate or provide a description that bypasses it.
-        # For a pure confidence test, we'll mock the gate for this specific call.
         service.handlers['custom_thing'] = lambda topic, action: 'result'
 
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate') as mock_gate:
-            mock_gate.return_value.evaluate.return_value = {'auto_execute': True, 'consequence_tier': 0}
-            result = service.dispatch_action('topic', {'type': 'custom_thing'})
+        result = service.dispatch_action('topic', {'type': 'custom_thing'})
 
         assert result['confidence'] == pytest.approx(0.50)
 
@@ -192,67 +160,14 @@ class TestConfidenceEstimation:
 # ── _estimate_confidence unit tests (direct) ──────────────────
 
 
-# ── Execution Gate ────────────────────────────────────────────
-
-
-class TestExecutionGate:
-
-    def test_gate_blocks_tier3_action(self):
-        """Tier 3 (COMMIT) actions return requires_confirmation, not success."""
-        mock_gate = MagicMock()
-        mock_gate.evaluate.return_value = {
-            'auto_execute': False,
-            'consequence_tier': 3,
-            'consequence_name': 'commit',
-            'domain': 'general',
-            'reasoning': 'Tier 3 (commit) — irreversible; always requires explicit user approval.',
-        }
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-                   return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'):
-            svc = ActDispatcherService(timeout=2.0)
-            svc.handlers['document'] = lambda topic, action: 'deleted'
-
-            result = svc.dispatch_action('topic', {
-                'type': 'document',
-                'description': 'delete all my documents permanently',
-            })
-
-        assert result['status'] == 'requires_confirmation'
-        assert result['confidence'] == 0.0
-        assert 'gate_decision' in result
-        assert result['gate_decision']['consequence_tier'] == 3
-
-    def test_safe_actions_bypass_gate(self):
-        """Safe innate skills (recall, memorize, etc.) bypass the gate entirely."""
-        mock_gate = MagicMock()
-        mock_gate.evaluate.return_value = {
-            'auto_execute': False,  # Would block if called
-            'consequence_tier': 2,
-            'consequence_name': 'act',
-            'domain': 'general',
-            'reasoning': 'Would block.',
-        }
-        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
-                   return_value=mock_gate), \
-             patch('services.innate_skills.register_innate_skills'):
-            svc = ActDispatcherService(timeout=2.0)
-            svc.handlers['recall'] = lambda topic, action: 'memory result'
-
-            result = svc.dispatch_action('topic', {'type': 'recall'})
-
-        assert result['status'] == 'success'
-        mock_gate.evaluate.assert_not_called()
-
-
 class TestEstimateConfidenceDirectly:
 
     def test_deterministic_ignores_result_content(self):
         """Deterministic confidence is fixed regardless of result."""
-        assert _estimate_confidence('memorize', '') == 0.92
-        assert _estimate_confidence('introspect', None) == 0.92
+        assert _estimate_confidence('memory', '') == pytest.approx(0.92)
+        assert _estimate_confidence('memory', None) == pytest.approx(0.92)
 
     def test_read_with_none_result(self):
         """Read action with None result gets the lowest read confidence."""
-        assert _estimate_confidence('recall', None) == 0.40
+        assert _estimate_confidence('find_tools', None) == pytest.approx(0.40)
 

@@ -44,34 +44,31 @@ class TestSystemAPI:
     # POST /health
     # ────────────────────────────────────────────
 
-    def test_post_health_saves_context_and_returns_attention(self, client):
-        """POST /health saves client context and returns inferred attention."""
+    def test_post_health_saves_context_and_returns_ok(self, client):
+        """POST /health saves client context and returns status ok (no attention field)."""
         mock_ctx_svc = MagicMock()
-        mock_ambient_svc = MagicMock()
-        mock_ambient_svc.infer.return_value = {'attention': 'focused'}
 
         with patch('consumer.APP_VERSION', '2.5.0'), \
              patch('services.client_context_service.ClientContextService', return_value=mock_ctx_svc), \
-             patch('services.ambient_inference_service.AmbientInferenceService', return_value=mock_ambient_svc):
+             patch('services.world_state.world_state'):
             resp = client.post('/health', json={'battery': 80, 'screen': 'on'})
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['status'] == 'ok'
         assert data['version'] == '2.5.0'
-        assert data['attention'] == 'focused'
+        assert 'attention' not in data
         mock_ctx_svc.save.assert_called_once_with({'battery': 80, 'screen': 'on'})
-        mock_ambient_svc.infer.assert_called_once_with({'battery': 80, 'screen': 'on'})
 
     def test_post_health_empty_body_returns_ok(self, client):
-        """POST /health with an empty JSON body still returns 200 ok with attention=None."""
+        """POST /health with an empty JSON body still returns 200 ok."""
         with patch('consumer.APP_VERSION', '1.0.0'):
             resp = client.post('/health', data='{}', content_type='application/json')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['status'] == 'ok'
-        assert data['attention'] is None
+        assert 'attention' not in data
 
     # ────────────────────────────────────────────
     # GET /metrics
@@ -309,44 +306,82 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_tools_returns_stats(self, client, db):
-        """GET /system/observability/tools returns per-tool performance stats."""
-        # Seed tool_capability_profiles rows
+        """GET /system/observability/tools returns per-tool usage counts from tool_calls.
+
+        Verifies: aggregation (COUNT, MAX), ORDER BY last_used_at DESC, and
+        exclusion of pseudo-tool audit rows (compaction/thinking).
+        """
+        # Seed a transcript row so FK constraint is satisfied
         db.execute(
-            "INSERT INTO tool_capability_profiles "
-            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
-            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
-            "triage_triggers, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ('tcp-1', 'weather', 'docker', 'Search', 'Full search profile',
-             'Search', 'low', 0.9, 'free', 1200, 1, '[]', '2025-01-01T00:00:00'),
+            "INSERT INTO transcript (role, content, channel) VALUES ('user', 'hi', 'test')"
+        )
+        transcript_id = db.execute(
+            "SELECT id FROM transcript ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        # weather: 2 calls
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'weather', 'sunny', '2025-01-01T00:00:00'),
         )
         db.execute(
-            "INSERT INTO tool_capability_profiles "
-            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
-            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
-            "triage_triggers, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ('tcp-2', 'code_exec', 'docker', 'Execute', 'Full exec profile',
-             'Dev', 'moderate', 0.95, 'free', 800, 1, '[]', '2025-01-01T00:00:00'),
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'weather', 'cloudy', '2025-01-03T00:00:00'),
+        )
+        # code_exec: 1 call
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'code_exec', 'ok', '2025-01-02T00:00:00'),
+        )
+        # Pseudo-tool rows must NOT surface in the panel
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'compaction', '{}', '2025-01-04T00:00:00'),
+        )
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, result, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (transcript_id, 'thinking', '{}', '2025-01-05T00:00:00'),
         )
         db.commit()
 
-        mock_perf = MagicMock()
-        mock_perf.get_all_tool_stats.return_value = []
-
-        # Mock the tool registry to include our two tool names so the WHERE IN filter matches
-        mock_registry = MagicMock()
-        mock_registry.tools = {'weather': {}, 'code_exec': {}}
-
-        with patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_perf), \
-             patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
-            resp = client.get('/system/observability/tools')
+        resp = client.get('/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert len(data['tools']) == 2
-        assert data['tools'][0]['tool_name'] in ('weather', 'code_exec')
         assert 'generated_at' in data
+        tools = data['tools']
+
+        # Pseudo-tool rows excluded
+        names = [t['tool_name'] for t in tools]
+        assert 'compaction' not in names
+        assert 'thinking' not in names
+
+        # Two real tools surfaced
+        assert {'weather', 'code_exec'} == set(names)
+
+        weather = next(t for t in tools if t['tool_name'] == 'weather')
+        code_exec = next(t for t in tools if t['tool_name'] == 'code_exec')
+
+        # COUNT aggregation
+        assert weather['count'] == 2
+        assert code_exec['count'] == 1
+
+        # MAX(last_used_at) — weather's latest is 2025-01-03
+        assert weather['last_used_at'] == '2025-01-03T00:00:00'
+        assert code_exec['last_used_at'] == '2025-01-02T00:00:00'
+
+        # ORDER BY last_used_at DESC — weather (Jan 3) before code_exec (Jan 2)
+        assert names.index('weather') < names.index('code_exec')
+
+        # Response shape: only tool_name, count, last_used_at
+        for tool in tools:
+            assert 'tool_name' in tool
+            assert 'count' in tool
+            assert 'last_used_at' in tool
 
 
 
@@ -354,14 +389,13 @@ class TestSystemAPI:
     # GET /system/observability/tasks
     # ────────────────────────────────────────────
 
-    def test_observability_tasks_returns_goal_ecology_stats(self, client):
-        """GET /system/observability/tasks returns goal_ecology_stats."""
+    def test_observability_tasks_returns_generated_at(self, client):
+        """GET /system/observability/tasks returns generated_at."""
         resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'generated_at' in data
-        assert 'goal_ecology_stats' in data
 
     def test_observability_tasks_handles_store_failures(self, client):
         """GET /system/observability/tasks returns 200 even if store query fails."""
@@ -376,31 +410,13 @@ class TestSystemAPI:
     # generated_at field on all observability endpoints
     # ────────────────────────────────────────────
 
-    @pytest.mark.parametrize('path,patches', [
-        (
-            '/system/observability/tools',
-            {
-                'services.tool_performance_service.ToolPerformanceService': MagicMock(
-                    return_value=MagicMock(get_all_tool_stats=MagicMock(return_value=[]))
-                ),
-                'services.tool_registry_service.ToolRegistryService': MagicMock(
-                    return_value=MagicMock(tools={})
-                ),
-            },
-        ),
-    ], ids=['tools'])
-    def test_observability_endpoints_include_generated_at(self, client, db, path, patches):
-        """All observability endpoints include a generated_at ISO timestamp."""
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for target, mock_val in patches.items():
-                stack.enter_context(patch(target, mock_val))
-            resp = client.get(path)
+    def test_observability_tools_includes_generated_at(self, client, db):
+        """GET /system/observability/tools includes a generated_at ISO timestamp."""
+        resp = client.get('/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert 'generated_at' in data
-        # Should be a valid ISO 8601 string
         parsed = datetime.fromisoformat(data['generated_at'])
         assert parsed.tzinfo is not None
 
@@ -515,3 +531,4 @@ class TestSystemAPI:
 
         data = resp.get_json()
         assert 'checks' not in data
+

@@ -13,7 +13,6 @@ import logging
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import GoalPursuitSystemMessagePrompt
-from services.innate_skills.registry import ALL_SKILL_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class GoalPursuitProcessor(MessageProcessor):
       MAX_ITERATIONS = 50   (vs. base 30)
       MAX_TIMEOUT    = 7200 (2 hours, vs. base 900)
 
-    NATIVE_TOOLS excludes 'goal_pursuit' itself to prevent recursive spawning.
+    ALWAYS_AVAILABLE excludes 'goal_pursuit' itself to prevent recursive spawning.
     """
 
     CHANNEL = 'goal_pursuit'   # flat — collapsed from goal_pursuit:{id}
@@ -33,7 +32,23 @@ class GoalPursuitProcessor(MessageProcessor):
     MAX_ITERATIONS = 50
     MAX_TIMEOUT = 7200  # 2 hours
     SYSTEM_PROMPT_CLASS = GoalPursuitSystemMessagePrompt
-    NATIVE_TOOLS: list[str] = sorted(s for s in ALL_SKILL_NAMES if s != 'goal_pursuit')
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "schedule",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "code_eval",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
 
     def getUserDefinition(self) -> str:
         return (

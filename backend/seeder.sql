@@ -17,27 +17,12 @@ WHERE NOT EXISTS (SELECT 1 FROM topic_transcript LIMIT 1)
 ORDER BY created_at ASC;
 
 -- 2. Backfill missing job→provider assignments for existing installs.
--- Covers all current cognitive jobs to prevent fallback warnings.
+-- Mirrors backend/configs/cognitive_jobs.json. Keep in lockstep when jobs
+-- are added or removed — SchemaConvergenceService prunes orphan rows on
+-- boot, so stale entries here are silently dropped, not warned.
 INSERT OR IGNORE INTO job_provider_assignments (job_name, provider_id)
 SELECT job_name, (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) AS provider_id
 FROM (
-    SELECT 'frontal-cortex'
-    UNION ALL SELECT 'frontal-cortex-unified'
-    UNION ALL SELECT 'cognitive-triage'
-    UNION ALL SELECT 'frontal-cortex-act'
-    UNION ALL SELECT 'plan-decomposition'
-    UNION ALL SELECT 'cognitive-drift'
-    UNION ALL SELECT 'episodic-memory'
-    UNION ALL SELECT 'frontal-cortex-proactive'
-    UNION ALL SELECT 'semantic-memory'
-    UNION ALL SELECT 'experience-assimilation'
-    UNION ALL SELECT 'autonomous-ambient-tool'
-    UNION ALL SELECT 'frontal-cortex-scheduled-tool'
-    UNION ALL SELECT 'moment-enrichment'
-    UNION ALL SELECT 'document-synthesis'
-    UNION ALL SELECT 'compaction'
-    UNION ALL SELECT 'goal-strategy'
-    UNION ALL SELECT 'reflect-skill'
-    UNION ALL SELECT 'failure-analysis'
+    SELECT 'frontal-cortex-unified'
 )
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;

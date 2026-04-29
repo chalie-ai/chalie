@@ -21,7 +21,11 @@ KIND_SYSTEM = 'system'
 KIND_MISC = 'misc'
 KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
-VALID_KINDS = frozenset({KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT, KIND_DOCUMENT})
+KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
+VALID_KINDS = frozenset({
+    KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
+    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN,
+})
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
     "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
@@ -39,11 +43,16 @@ class _StoreRequest:
 
 
 _KIND_POLICY = {
-    KIND_USER_SPECIFIC: {'ttl_days': 30,   'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
-    KIND_SYSTEM:        {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
-    KIND_MISC:          {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
-    KIND_MOMENT:        {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
-    KIND_DOCUMENT:      {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
+    KIND_USER_SPECIFIC:      {'ttl_days': 30,    'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
+    KIND_SYSTEM:             {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
+    KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
+    KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
+    KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
+    # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
+    # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
+    # soft-delete at 0) is handled by PatternMatchProcessor.postTurn() — DecayEngine
+    # does NOT touch this kind.
+    KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
 }
 
 # Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).
@@ -162,86 +171,6 @@ def get_data_graph_service() -> "DataGraphService":
             if _instance is None:
                 _instance = DataGraphService()
     return _instance
-
-
-# ── Seed function (module-level) ──────────────────────────────────────
-
-_USER_SPECIFIC_KEYS = {
-    'name', 'user_name', 'birthday', 'age', 'email', 'phone',
-    'address', 'location', 'timezone', 'language', 'spouse',
-    'children_names', 'job', 'occupation', 'pronouns',
-}
-
-
-def seed_from_legacy_knowledge(db_service):
-    """
-    One-time idempotent migration: copy rows from knowledge → data_graph.
-
-    Uses entity-based heuristics per plan D10. Skips procedure and moment_context.
-    Skips ambiguous rows. Direct INSERT for speed; schedules batch embeddings
-    in a background thread.
-    """
-    try:
-        with db_service.connection() as conn:
-            if conn.execute("SELECT 1 FROM data_graph LIMIT 1").fetchone():
-                return
-
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT entity, kind, key, value, source, evidence_count, created_at
-                FROM knowledge
-                WHERE deleted_at IS NULL
-                  AND kind NOT IN ('procedure', 'moment_context')
-            """)
-            rows = cursor.fetchall()
-
-            now_iso = utc_now().isoformat()
-            svc = DataGraphService(db_service)
-            inserted_ids = []
-
-            for row in rows:
-                entity = (row['entity'] or '').lower().strip()
-                kind_src = row['kind']
-                key = row['key']
-                value = row['value']
-                source = row['source']
-                evidence_count = row['evidence_count'] or 1
-                created_at = row['created_at'] or now_iso
-
-                if entity in ('', 'dylan', 'user') or any(
-                    target in key.lower() for target in _USER_SPECIFIC_KEYS
-                ):
-                    target_kind = KIND_USER_SPECIFIC
-                elif entity == 'chalie' and kind_src == 'rule':
-                    target_kind = KIND_SYSTEM
-                else:
-                    continue
-
-                seed_source = f"seed:from_knowledge:{source or 'unknown'}"
-                cursor.execute("""
-                    INSERT INTO data_graph
-                        (kind, key, value, source, evidence_count,
-                         first_seen_at, last_confirmed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (target_kind, key, value, seed_source, evidence_count,
-                      created_at, now_iso))
-                rid = cursor.lastrowid
-                svc._sync_fts(conn, rid, key, value, target_kind)
-                inserted_ids.append((rid, key, value))
-
-            cursor.close()
-            logger.info("[DATA GRAPH] Seed complete — %d rows migrated from knowledge", len(inserted_ids))
-
-            # Batch-enqueue seeded rows into SearchExpanderService (non-blocking).
-            # SES handles key_vec/value_vec backfill + doc2query + expanded_semantic.
-            if inserted_ids:
-                def _batch_enqueue():
-                    for rid, _k, _v in inserted_ids:
-                        _ses.enqueue("data_graph", rid)
-                threading.Thread(target=_batch_enqueue, daemon=True).start()
-
-    except Exception as e:
-        logger.warning("[DATA GRAPH] seed_from_legacy_knowledge failed: %s", e)
 
 
 # ── Service ───────────────────────────────────────────────────────────
@@ -1075,6 +1004,7 @@ class DataGraphService:
                     composite = base_score * d.get('retrieval_weight', 1.0) * (1 + 0.3 * _sigmoid(actr_boost))
 
                     d['composite_score'] = composite
+                    d['cos_score'] = max(sigs.get('key_cos', 0.0), sigs.get('value_cos', 0.0))
                     scored.append(d)
 
                 scored.sort(key=lambda x: x['composite_score'], reverse=True)
@@ -1122,6 +1052,7 @@ class DataGraphService:
                             neighbour_id = n_dict.get('id')
                             if neighbour_id not in expansion or expansion[neighbour_id]['composite_score'] < n_score:
                                 n_dict['composite_score'] = n_score
+                                n_dict['cos_score'] = seed.get('cos_score', 0.0) / 2.0
                                 expansion[neighbour_id] = n_dict
 
                     all_candidates = {d['id']: d for d in top_k}
@@ -1157,6 +1088,7 @@ class DataGraphService:
                         'retrieval_weight': d.get('retrieval_weight'),
                         'evidence_count': d.get('evidence_count'),
                         'composite_score': d.get('composite_score'),
+                        'cos_score': d.get('cos_score', 0.0),
                     }
                     for d in top_k
                 ]

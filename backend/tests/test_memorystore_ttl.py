@@ -290,27 +290,3 @@ class TestPushAPIVapidKeyTTL:
             f"{VAPID_KEYS_KEY} must have ex=86400 TTL after key generation"
 
 
-# ---------------------------------------------------------------------------
-# 12. api/system.py — store.set(f'active_channel:{channel_id}', ..., ex=604800)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestSystemAPIChannelResetTTL:
-    """Channel reset sets active_channel:{id} with ex=604800."""
-
-    def test_reset_thread_sets_ttl_on_channel_key(self, authed_client):
-        client, _db_conn, store = authed_client
-
-        channel_id = "default"
-        # Seed an existing channel so the reset branch fires
-        store.set(f"active_channel:{channel_id}", "web:default:1")
-
-        resp = client.post(
-            "/system/reset-thread",
-            json={"channel": channel_id},
-            content_type="application/json",
-        )
-        assert resp.status_code == 200
-
-        assert _has_ttl(store, f"active_channel:{channel_id}"), \
-            "active_channel:default must have ex=604800 TTL after reset"

@@ -23,10 +23,12 @@ Routes (all require session auth):
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
 import mimetypes
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -126,53 +128,82 @@ def _validate_file_path(full_path: str) -> bool:
     return real_path.startswith(real_root)
 
 
+def _read_existing_metadata(svc, doc_id: str) -> dict:
+    """Read prior extracted_metadata so concurrent writes are not clobbered."""
+    existing = svc.get_document(doc_id) or {}
+    meta = existing.get('extracted_metadata') or {}
+    if isinstance(meta, str):
+        try:
+            return json.loads(meta)
+        except Exception:
+            return {}
+    return meta
+
+
+def _derive_summary(text: str) -> str:
+    """Extract up to a 500-char summary, truncated at the last sentence boundary after 200 chars."""
+    summary = text[:500]
+    dot_pos = summary.rfind('. ')
+    if dot_pos > 200:
+        return summary[:dot_pos + 1]
+    return summary
+
+
+def _mark_upload_failed(doc_id: str, error: str):
+    """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
+    try:
+        from services.document_service import DocumentService
+        from services.database_service import get_shared_db_service
+        DocumentService(get_shared_db_service()).update_status(doc_id, 'failed', error[:500])
+    except Exception:
+        logger.exception(f"[DOCS API] Could not mark {doc_id} as failed")
+
+
+def _run_upload_extraction(doc_id: str):
+    """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
+    from services.document_service import DocumentService
+    from services.database_service import get_shared_db_service
+    from services.text_extractor import extract_text
+    from abilities.document import create_document_artifacts
+
+    svc = DocumentService(get_shared_db_service())
+    doc = svc.get_document(doc_id)
+    if not doc:
+        return
+
+    file_path = doc.get('file_path', '')
+    if not file_path:
+        svc.update_status(doc_id, 'failed', 'No file path')
+        return
+
+    text = extract_text(os.path.join(DOCUMENTS_ROOT, file_path))
+    if not text:
+        svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
+        return
+
+    artifact_count = create_document_artifacts(doc_id, text)
+
+    # Write clean_text so websocket._resolve_file_tags can inject content into
+    # the LLM prompt. Merge with prior metadata to avoid clobbering concurrent
+    # synthesis/classification writes.
+    svc.update_extracted_metadata(
+        doc_id,
+        metadata=_read_existing_metadata(svc, doc_id),
+        summary=_derive_summary(text),
+        clean_text=text,
+    )
+    svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
+    logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
+
+
 def _process_upload(doc_id: str):
     """Extract text from uploaded document and create data_graph artifacts."""
-    import threading
-
     def _run():
         try:
-            from services.document_service import DocumentService
-            from services.database_service import get_shared_db_service
-            from services.text_extractor import extract_text
-
-            db = get_shared_db_service()
-            svc = DocumentService(db)
-            doc = svc.get_document(doc_id)
-            if not doc:
-                return
-
-            file_path = doc.get('file_path', '')
-            if not file_path:
-                svc.update_status(doc_id, 'failed', 'No file path')
-                return
-
-            full_path = os.path.join(DOCUMENTS_ROOT, file_path)
-
-            text = extract_text(full_path)
-            if not text:
-                svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
-                return
-
-            from services.innate_skills.document_skill import create_document_artifacts
-            artifact_count = create_document_artifacts(doc_id, text)
-
-            summary = text[:500]
-            dot_pos = summary.rfind('. ')
-            if dot_pos > 200:
-                summary = summary[:dot_pos + 1]
-            svc.update_summary(doc_id, summary)
-            svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
-
-            logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
+            _run_upload_extraction(doc_id)
         except Exception as e:
             logger.error(f"[DOCS API] Failed to process upload {doc_id}: {e}")
-            try:
-                from services.document_service import DocumentService
-                from services.database_service import get_shared_db_service
-                DocumentService(get_shared_db_service()).update_status(doc_id, 'failed', str(e)[:500])
-            except Exception:
-                pass
+            _mark_upload_failed(doc_id, str(e))
 
     threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
 
@@ -576,52 +607,6 @@ def augment_document(doc_id):
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
-
-
-@documents_bp.route("/documents/create-from-conversation", methods=["POST"])
-@require_session
-def create_from_conversation():
-    """Create a document from conversation content (save suggestion accept)."""
-    data = request.get_json(silent=True) or {}
-    topic = (data.get('topic') or '').strip()
-    content_type = (data.get('content_type') or '').strip()
-
-    try:
-        from services.save_suggestion_service import SaveSuggestionService
-
-        save_svc = SaveSuggestionService()
-        doc_id = save_svc.create_document_from_conversation(
-            topic, content_type,
-        )
-        if not doc_id:
-            return jsonify({"error": "Failed to create document"}), 500
-
-        return jsonify({"id": doc_id, "status": "processing"}), 201
-
-    except Exception as e:
-        logger.error(f"[DOCS API] create_from_conversation error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to create document"}), 500
-
-
-@documents_bp.route("/documents/dismiss-save", methods=["POST"])
-@require_session
-def dismiss_save():
-    """Track save suggestion rejection for rate limiting."""
-    data = request.get_json(silent=True) or {}
-    topic = (data.get('topic') or '').strip()
-
-    try:
-        from services.save_suggestion_service import SaveSuggestionService
-
-        save_svc = SaveSuggestionService()
-        save_svc.clear_flag()
-        save_svc.record_rejection(topic)
-
-        return jsonify({"status": "dismissed"}), 200
-
-    except Exception as e:
-        logger.error(f"[DOCS API] dismiss_save error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 

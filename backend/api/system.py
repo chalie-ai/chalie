@@ -13,37 +13,52 @@ logger = logging.getLogger(__name__)
 
 system_bp = Blueprint('system', __name__)
 
+# Signal source for telemetry signals absorbed by WorldState from health pings.
+_SIGNAL_SOURCE_HEALTH = '/health'
+
+
+def _ok_response():
+    """Standard health response body — used by both GET and POST."""
+    from consumer import APP_VERSION
+    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+
+
+def _mirror_telemetry_to_world_state(svc, data: dict) -> None:
+    """Mirror persisted client telemetry into WorldState as Signals."""
+    from services.world_state import world_state, Signal
+    world_state.set("telemetry", svc.get() or data)
+    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
+    device_class = data.get('device_class') or (data.get('device') or {}).get('class')
+    if device_class:
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
+    local_time = data.get('local_time')
+    if local_time:
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
+
+
+def _persist_heartbeat(data: dict) -> None:
+    """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
+    from services.client_context_service import ClientContextService
+    svc = ClientContextService()
+    svc.save(data)
+    try:
+        _mirror_telemetry_to_world_state(svc, data)
+    except Exception as ws_err:
+        logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
+
 
 @system_bp.route('/health', methods=['GET', 'POST'])
 def health_check():
     """Health check endpoint (no auth required). POST saves client context."""
-    if request.method == 'POST':
-        attention = None
-        try:
-            from services.client_context_service import ClientContextService
-            data = request.get_json() or {}
-            if data:
-                svc = ClientContextService()
-                svc.save(data)
-                # Run ambient inference on the saved context
-                from services.ambient_inference_service import AmbientInferenceService
-                inference = AmbientInferenceService().infer(data)
-                attention = inference.get('attention') if inference else None
-                # Mirror the saved context into WorldState so the [telemetry]
-                # block surfaces in the user prompt and Cognition tab. /health
-                # is the primary telemetry push site (heartbeat.js every 5min);
-                # /api/updates/context is the secondary wrapper-facing path.
-                try:
-                    from services.world_state import world_state
-                    world_state.set("telemetry", svc.get() or data)
-                except Exception as ws_err:
-                    logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
-        except Exception as e:
-            logger.warning(f"[HEALTH] Failed to save client context: {e}")
-        from consumer import APP_VERSION
-        return jsonify({"status": "ok", "version": APP_VERSION, "attention": attention}), 200
-    from consumer import APP_VERSION
-    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+    if request.method != 'POST':
+        return _ok_response()
+    try:
+        data = request.get_json() or {}
+        if data:
+            _persist_heartbeat(data)
+    except Exception as e:
+        logger.warning(f"[HEALTH] Failed to save client context: {e}")
+    return _ok_response()
 
 
 @system_bp.route('/ready', methods=['GET'])
@@ -270,80 +285,26 @@ def observability_records():
 @system_bp.route('/system/observability/tools', methods=['GET'])
 @require_session
 def observability_tools():
-    """Tool capability profiles with effort annotations and performance stats."""
+    """Tool usage counts from tool_calls — count + last_used per tool."""
     try:
         from services.database_service import get_shared_db_service
-        from services.tool_performance_service import ToolPerformanceService
-        from services.innate_skills.registry import ALL_SKILL_NAMES
-
         db = get_shared_db_service()
-
-        # Build the set of currently valid names (registered tools + innate skills)
-        valid_names: set | None = None
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            valid_names = set(ToolRegistryService().tools.keys()) | ALL_SKILL_NAMES
-        except Exception as e:
-            logger.warning(f"[OBS] Tool registry unavailable, showing all profiles: {e}")
-
-        if valid_names is not None:
-            placeholders = ','.join('?' * len(valid_names))
-            rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, domain, effort, "
-                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
-                "triage_triggers, updated_at "
-                f"FROM tool_capability_profiles WHERE tool_name IN ({placeholders}) "
-                "ORDER BY domain, tool_name",
-                list(valid_names),
-            )
-        else:
-            rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, domain, effort, "
-                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
-                "triage_triggers, updated_at "
-                "FROM tool_capability_profiles ORDER BY domain, tool_name"
-            )
-
-        # Index performance stats by tool name for merging
-        perf_by_name = {}
-        try:
-            perf_stats = ToolPerformanceService().get_all_tool_stats(30)
-            for s in (perf_stats or []):
-                perf_by_name[s.get('tool_name', '')] = s
-        except Exception as e:
-            logger.warning(f"[OBS] Tool performance stats unavailable: {e}")
-
-        import json as _json
-        tools = []
-        for r in (rows or []):
-            triggers = r.get('triage_triggers') or []
-            if isinstance(triggers, str):
-                try:
-                    triggers = _json.loads(triggers)
-                except Exception as e:
-                    logger.debug(f"[OBS] Failed to parse triage_triggers JSON for tool '{r.get('tool_name', '?')}': {e}")
-                    triggers = []
-            entry = {
+        rows = db.fetch_all(
+            "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
+            "FROM tool_calls "
+            "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'thinking') "
+            "GROUP BY tool_name "
+            "ORDER BY last_used_at DESC"
+        )
+        tools = [
+            {
                 'tool_name': r['tool_name'],
-                'tool_type': r.get('tool_type', 'tool'),
-                'summary': f"{r.get('short_summary', '')} (effort: {r.get('effort') or 'moderate'})",
-                'domain': r.get('domain') or 'Other',
-                'effort': r.get('effort') or 'moderate',
-                'reliability_score': r.get('reliability_score', 1.0),
-                'cost_tier': r.get('cost_tier', 'free'),
-                'avg_latency_ms': r.get('avg_latency_ms', 0),
-                'enrichment_count': r.get('enrichment_count', 0),
-                'triage_triggers': triggers,
-                'updated_at': r.get('updated_at'),
+                'count': r['count'],
+                'last_used_at': r['last_used_at'],
             }
-            if r['tool_name'] in perf_by_name:
-                entry.update(perf_by_name[r['tool_name']])
-            tools.append(entry)
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'tools': tools,
-        }), 200
+            for r in (rows or [])
+        ]
+        return jsonify({'generated_at': _now_iso(), 'tools': tools}), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tools error: {e}")
         return jsonify({"error": "Failed to retrieve tool data"}), 500
@@ -353,27 +314,11 @@ def observability_tools():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Goal ecology stats."""
+    """Task observability stats."""
     try:
         result = {
             'generated_at': _now_iso(),
         }
-
-        # Goal ecology stats
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            result['goal_ecology_stats'] = {
-                'last_run': store.get('goal_ecology:last_run'),
-                'cycles_total': int(store.get('goal_ecology:cycles_total') or 0),
-                'goals_decayed_total': int(store.get('goal_ecology:goals_decayed_total') or 0),
-                'goals_created_total': int(store.get('goal_ecology:goals_created_total') or 0),
-                'proactive_attempts_total': int(store.get('goal_ecology:proactive_attempts_total') or 0),
-                'unmatched_signals': len(store.keys('goal:unmatched:*')),
-            }
-        except Exception as e:
-            logger.warning(f"[OBS] goal ecology stats error: {e}")
-
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")
@@ -385,12 +330,17 @@ def observability_tasks():
 @require_session
 def observability_world_state():
     """World state as seen by the ACT loop — rendered block + raw inputs."""
-    from services.world_state import world_state, _fetch_schedule_rows, _fetch_bg_process_rows
+    from services.world_state import (
+        world_state,
+        _fetch_schedule_rows,
+        _fetch_bg_process_rows,
+        _fetch_telemetry,
+    )
 
     return jsonify({
         "rendered": world_state.render(),
         "inputs": {
-            "telemetry": world_state.get("telemetry"),
+            "telemetry": _fetch_telemetry(),
             "signals": world_state.get("signals"),
             "schedule": _fetch_schedule_rows(),
             "bg_processes": _fetch_bg_process_rows(),
@@ -425,25 +375,6 @@ def observability_pipeline_health():
         logger.error(f"[REST API] observability/pipeline-health error: {e}")
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
 
-
-
-@system_bp.route('/system/observability/situation', methods=['GET'])
-@require_session
-def observability_situation():
-    """Returns the full situation model state for debugging/observability."""
-    try:
-        from services.situation_model_service import get_situation_model_service
-        svc = get_situation_model_service()
-        state = svc.get_current()
-        directive = svc.get_directive()
-        return jsonify({
-            'ok': True,
-            'situation': state,
-            'directive': directive,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/situation error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @system_bp.route('/system/observability/write-queue', methods=['GET'])
@@ -542,93 +473,6 @@ def update_apply():
     except Exception as e:
         logger.error(f"[REST API] update/apply error: {e}")
         return jsonify({"ok": False, "message": f"Update failed: {e}"}), 500
-
-
-# ──────────────────────────────────────────────
-# Thread reset (test harness support)
-# ──────────────────────────────────────────────
-
-@system_bp.route('/system/reset-thread', methods=['POST'])
-@require_session
-def reset_thread():
-    """Clear conversation context and advance the thread ID.
-
-    Does two things:
-    1. Deletes all transcript rows (and their linked tool_calls + compaction watermark)
-       for the given processor channel (default 'user'). This empties the Previous
-       Messages block so the next turn starts genuinely fresh — recall must come from
-       the memory pipeline, not conversation context.
-    2. Advances the active_channel MemoryStore key (web:default:N → N+1) so postTurn
-       services (adaptive directives, phase, situation model) scope their writes to the
-       new thread_id.
-
-    In the persistent-context architecture, getPreviousMessages() reads from the
-    transcript table filtered by the hardcoded CHANNEL value ('user'). The MemoryStore
-    active_channel key is separate — it scopes postTurn service state, not transcript
-    retrieval. Both must be updated for a correct reset.
-
-    Body (optional):
-        {"channel": "user"}  — processor CHANNEL to clear (default: "user")
-    """
-    try:
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
-
-        data = request.get_json(silent=True) or {}
-        channel = data.get('channel', 'user')
-
-        # ── 1. Clear transcript context ────────────────────────────────────────
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            # Compaction watermark has FK → transcript.id; delete it first
-            conn.execute('DELETE FROM compactions WHERE channel = ?', (channel,))
-
-            ids = [r[0] for r in conn.execute(
-                'SELECT id FROM transcript WHERE channel = ?', (channel,)
-            ).fetchall()]
-
-            cleared = 0
-            if ids:
-                placeholders = ','.join('?' * len(ids))
-                conn.execute(
-                    f'DELETE FROM tool_calls WHERE transcript_id IN ({placeholders})',
-                    ids,
-                )
-                conn.execute('DELETE FROM transcript WHERE channel = ?', (channel,))
-                cleared = len(ids)
-
-            conn.commit()
-
-        # ── 2. Advance MemoryStore thread_id ──────────────────────────────────
-        store = MemoryClientService.create_connection()
-        current = store.get('active_channel:default')
-        if isinstance(current, bytes):
-            current = current.decode()
-
-        new_thread = None
-        if current:
-            parts = current.rsplit(':', 1)
-            try:
-                seq = int(parts[-1]) + 1
-            except (ValueError, IndexError):
-                seq = 1
-            new_thread = f"{parts[0]}:{seq}" if len(parts) > 1 else f"web:default:{seq}"
-            store.set('active_channel:default', new_thread, ex=604800)
-
-        logger.info(
-            f"[RESET-THREAD] channel='{channel}': cleared {cleared} transcript rows, "
-            f"thread {current!r} → {new_thread!r}"
-        )
-        return jsonify({
-            'ok': True,
-            'channel': channel,
-            'transcript_rows_cleared': cleared,
-            'new_thread': new_thread,
-        }), 200
-
-    except Exception as e:
-        logger.error(f"[REST API] reset-thread error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # Settings endpoints

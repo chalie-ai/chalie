@@ -5,9 +5,11 @@ and static file serving (replaces nginx).
 
 import os
 import re
+import importlib
+import pkgutil
 import logging
 from pathlib import Path
-from flask import Flask, Response, redirect, send_from_directory
+from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask_cors import CORS
 
 from .auth import require_session as require_session
@@ -222,6 +224,28 @@ def _init_dashboard_gateway(app):
     logger.info("[Dashboard] Gateway + app management blueprints registered")
 
 
+def _register_blueprints(app: Flask) -> None:
+    """Auto-discover and register every Blueprint defined in this package.
+
+    Walks `backend/api/*.py`, imports each module, and registers any top-level
+    `Blueprint` instance it exposes. Modules without a Blueprint (e.g. `auth`,
+    `websocket`) are skipped silently. Drop a new `foo.py` exposing `foo_bp`
+    in this folder and it lights up on next boot — no edits here required.
+    """
+    package = importlib.import_module(__name__)
+    seen: set[int] = set()
+    for module_info in pkgutil.iter_modules(package.__path__):
+        if module_info.name.startswith('_'):
+            continue
+        module = importlib.import_module(f"{__name__}.{module_info.name}")
+        for attr_name, attr in vars(module).items():
+            if not isinstance(attr, Blueprint) or id(attr) in seen:
+                continue
+            app.register_blueprint(attr)
+            seen.add(id(attr))
+            logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+
+
 def create_app():
     """Create and configure Flask application with all blueprints."""
     app = Flask(__name__)
@@ -248,60 +272,7 @@ def create_app():
     # CORS — allow all origins (single-user personal assistant)
     CORS(app)
 
-    # Register blueprints
-    from .user_auth import user_auth_bp
-    from .system import system_bp
-    from .conversation import conversation_bp
-    from .memory import memory_bp
-    from .proactive import proactive_bp
-    from .privacy import privacy_bp
-    from .stubs import stubs_bp
-    from .push import push_bp
-    from .tools import tools_bp
-    from .providers import providers_bp
-    from .scheduler import scheduler_bp
-    from .lists import lists_bp
-    from .moments import moments_bp
-    from .documents import documents_bp
-    from .voice import voice_bp
-    from .chat_image import chat_image_bp
-    from .interfaces import interfaces_bp
-    from .signals import signals_bp
-    from .context import context_bp
-    from .wrappers import wrappers_bp
-    from .updates import updates_bp
-    from .query import query_bp
-    from .intents import intents_bp
-    from .browser import browser_bp
-    from .capabilities import capabilities_bp
-    from .personality import personality_bp
-
-    app.register_blueprint(user_auth_bp)
-    app.register_blueprint(system_bp)
-    app.register_blueprint(conversation_bp)
-    app.register_blueprint(memory_bp)
-    app.register_blueprint(proactive_bp)
-    app.register_blueprint(privacy_bp)
-    app.register_blueprint(stubs_bp)
-    app.register_blueprint(push_bp)
-    app.register_blueprint(tools_bp)
-    app.register_blueprint(providers_bp)
-    app.register_blueprint(scheduler_bp)
-    app.register_blueprint(lists_bp)
-    app.register_blueprint(moments_bp)
-    app.register_blueprint(documents_bp)
-    app.register_blueprint(voice_bp)
-    app.register_blueprint(chat_image_bp)
-    app.register_blueprint(interfaces_bp)
-    app.register_blueprint(signals_bp)
-    app.register_blueprint(context_bp)
-    app.register_blueprint(wrappers_bp)
-    app.register_blueprint(updates_bp)
-    app.register_blueprint(query_bp)
-    app.register_blueprint(intents_bp)
-    app.register_blueprint(browser_bp)
-    app.register_blueprint(capabilities_bp)
-    app.register_blueprint(personality_bp)
+    _register_blueprints(app)
 
     # ── Dashboard gateway (interface daemons) ─────────────────────
     _init_dashboard_gateway(app)

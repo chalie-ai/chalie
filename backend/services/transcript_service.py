@@ -1,12 +1,10 @@
 """
 Transcript Service — persistent conversation record.
 
-Stores every exchange turn (user, assistant, tool, internal) in SQLite
-with optional vector embeddings for semantic search.
+Stores every exchange turn (user, assistant, tool, internal) in SQLite.
 
 Key operations:
 - append(): Write a turn to the transcript
-- search(): Semantic search via transcript_vec (supports cross-topic)
 - get_recent(): Retrieve the most recent N entries for a topic
 - prune_old(): Delete entries older than TTL (90 days default)
 """
@@ -15,15 +13,8 @@ import logging
 import threading
 from typing import List, Dict, Optional
 
-from services.embedding_utils import pack_embedding
-
-from services.llm_service import estimate_tokens
-
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
-
-# Embedding threshold — entries with fewer estimated tokens are not embedded
-_EMBED_TOKEN_THRESHOLD = 50
 
 # Default TTL for pruning (90 days in seconds)
 _PRUNE_TTL_DAYS = 90
@@ -54,9 +45,6 @@ def append(
 ) -> Optional[int]:
     """Append a turn to the topic transcript.
 
-    Generates an embedding for substantive entries (>50 estimated tokens)
-    and inserts it into the companion vec table.
-
     Returns the rowid of the inserted entry, or None on failure.
     """
     if not channel:
@@ -72,17 +60,13 @@ def append(
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal, xml_migrated)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
                 """,
                 (channel, role, content, tool_call_id, tool_name, 1 if internal else 0),
             )
             rowid = cursor.lastrowid
             cursor.close()
-
-        # Generate embedding for substantive entries
-        if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-            _embed_entry(rowid, content)
 
         _maybe_trigger_extraction(channel, rowid)
 
@@ -92,96 +76,6 @@ def append(
         logger.warning(f"{LOG_PREFIX} Failed to append: {e}")
         return None
 
-
-
-def search(
-    channel: Optional[str],
-    query: str,
-    limit: int = 5,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-) -> List[Dict]:
-    """Semantic search over transcript entries.
-
-    Uses embedding similarity via transcript_vec.
-
-    Args:
-        channel: Filter to a specific channel, or None for cross-channel (global) search.
-        query: Search text.
-        limit: Max results (1-20).
-        date_from: ISO datetime lower bound (inclusive). Optional.
-        date_to: ISO datetime upper bound (inclusive). Optional.
-
-    Returns list of dicts with: id, role, content, tool_name, created_at, channel, similarity.
-    """
-    limit = min(max(limit, 1), 20)
-
-    try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
-        query_embedding = emb_service.generate_embedding(query)
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Embedding failed, falling back to keyword: {e}")
-        return _keyword_search(channel, query, limit, date_from, date_to)
-
-    blob = pack_embedding(query_embedding)
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        # Build WHERE clause dynamically
-        conditions = ["v.embedding MATCH ?", "k = ?"]
-        params: list = [blob, limit + 10]
-
-        if channel:
-            conditions.append("tt.channel = ?")
-            params.append(channel)
-
-        if date_from:
-            conditions.append("tt.created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("tt.created_at <= ?")
-            params.append(date_to)
-
-        where = " AND ".join(conditions)
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT tt.id, tt.role, tt.content, tt.tool_name, tt.created_at,
-                       v.distance, tt.channel
-                FROM transcript_vec v
-                JOIN transcript tt ON tt.rowid = v.rowid
-                WHERE {where}
-                ORDER BY v.distance
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        results = []
-        for row in rows[:limit]:
-            distance = row[5]
-            similarity = max(0.0, 1.0 - distance / 2.0)
-            results.append({
-                'id': row[0],
-                'role': row[1],
-                'content': row[2],
-                'tool_name': row[3],
-                'created_at': row[4],
-                'similarity': similarity,
-                'channel': row[6],
-            })
-        return results
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Vector search failed: {e}")
-        return _keyword_search(channel, query, limit, date_from, date_to)
 
 
 def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=None) -> List[Dict]:
@@ -322,10 +216,10 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
                     except Exception:
                         pass
 
-                # Find transcript rowids below watermark that are not referenced
+                # Find transcript IDs below watermark that are not referenced
                 cursor.execute(
                     """
-                    SELECT id, rowid FROM transcript
+                    SELECT id FROM transcript
                     WHERE channel = ? AND id < ?
                     """,
                     (t, watermark),
@@ -333,20 +227,13 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
                 candidate_rows = cursor.fetchall()
 
                 to_delete_ids = []
-                to_delete_rowids = []
-                for entry_id, entry_rowid in candidate_rows:
+                for (entry_id,) in candidate_rows:
                     if entry_id not in referenced_ids:
                         to_delete_ids.append(entry_id)
-                        to_delete_rowids.append(entry_rowid)
 
                 if not to_delete_ids:
                     continue
 
-                placeholders = ','.join('?' * len(to_delete_rowids))
-                cursor.execute(
-                    f"DELETE FROM transcript_vec WHERE rowid IN ({placeholders})",
-                    to_delete_rowids,
-                )
                 id_placeholders = ','.join('?' * len(to_delete_ids))
                 cursor.execute(
                     f"DELETE FROM transcript WHERE id IN ({id_placeholders})",
@@ -366,11 +253,7 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
 
 
 def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
-    """Delete transcript entries older than ttl_days.
-
-    Also removes corresponding vec table entries.
-    Returns the number of entries deleted.
-    """
+    """Delete transcript entries older than ttl_days. Returns the number deleted."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -378,7 +261,6 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Find entries to delete
             cursor.execute(
                 """
                 SELECT rowid FROM transcript
@@ -392,14 +274,7 @@ def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
                 cursor.close()
                 return 0
 
-            # Delete from vec table first (FK-safe)
             placeholders = ','.join('?' * len(old_rowids))
-            cursor.execute(
-                f"DELETE FROM transcript_vec WHERE rowid IN ({placeholders})",
-                old_rowids,
-            )
-
-            # Delete from main table
             cursor.execute(
                 f"DELETE FROM transcript WHERE rowid IN ({placeholders})",
                 old_rowids,
@@ -592,9 +467,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                 except Exception as ep_err:
                     logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
 
-            # After storing all snapshots, check for super-episode clusters.
-            _maybe_trigger_super_episode(channel, db, episodic_svc, emb_svc)
-
         except Exception as e:
             logger.warning(
                 f"{LOG_PREFIX} Episode extraction trigger failed "
@@ -748,256 +620,19 @@ def _is_delete_only(ep: dict) -> bool:
     return not any(ep.get(f) for f in meaningful)
 
 
-def _parse_transcript_ids_field(raw) -> list:
-    """Normalize an episode.transcript_ids field (JSON string or list) to a list."""
-    import json as _json
-    if isinstance(raw, str):
-        try:
-            return _json.loads(raw)
-        except Exception:
-            return []
-    if isinstance(raw, list):
-        return raw
-    return []
-
-
-def _collect_transcript_ids(episodes: list[dict]) -> set[int]:
-    """Return the union of all transcript IDs referenced by *episodes*.
-
-    Handles both JSON-string and list forms of the ``transcript_ids`` field,
-    and also expands the ``transcript_id_start``–``transcript_id_end`` range so
-    that overlap rows are always included.
-    """
-    ids: set[int] = set()
-    for ep in episodes:
-        for tid in _parse_transcript_ids_field(ep.get('transcript_ids')):
-            if tid is None:
-                continue
-            try:
-                ids.add(int(tid))
-            except (TypeError, ValueError):
-                pass
-
-    starts = [ep['transcript_id_start'] for ep in episodes if ep.get('transcript_id_start') is not None]
-    ends = [ep['transcript_id_end'] for ep in episodes if ep.get('transcript_id_end') is not None]
-    if starts and ends:
-        ids.update(range(min(starts), max(ends) + 1))
-
-    return ids
-
-
-def _fetch_transcript_spans(sources: list[dict], db) -> str:
-    """Fetch and format the raw transcript rows spanning all source episodes.
-
-    Collects the union of transcript IDs from the source episodes, then
-    fetches those rows and formats them in the same ``[id] (ts) role: content``
-    style used by the EpisodeEncoderProcessor prompt.
-
-    Args:
-        sources: List of episode dicts (from episodic_svc.get_episode_by_id).
-        db:      Shared DatabaseService instance.
-
-    Returns:
-        Formatted multi-line string of transcript entries, oldest first.
-        Returns empty string if no transcript IDs are found.
-    """
-    all_t_ids = _collect_transcript_ids(sources)
-    if not all_t_ids:
-        return ''
-
-    try:
-        placeholders = ','.join('?' * len(all_t_ids))
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, role, content, tool_name, created_at
-                FROM transcript
-                WHERE id IN ({placeholders})
-                ORDER BY id ASC
-                """,
-                list(all_t_ids),
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        entries = [
-            {'id': r[0], 'role': r[1], 'content': r[2], 'tool_name': r[3], 'created_at': r[4]}
-            for r in rows
-        ]
-        return _format_window_entries(entries)
-
-    except Exception as exc:
-        logger.warning(f"{LOG_PREFIX} _fetch_transcript_spans failed: {exc}")
-        return ''
-
-
-def _maybe_trigger_super_episode(channel: str, db, episodic_svc, emb_svc) -> None:
-    """Check for tight semantic clusters in the apex pool and create super-episodes.
-
-    Called at the end of each successful episode extraction run.  For each
-    cluster of 3+ apex episodes with all-pairwise cosine >= SUPER_EPISODE_THRESHOLD:
-
-    1. Fetches raw transcript spans for the cluster.
-    2. Calls super_episode_encoder_cls to synthesise a consolidated gist.
-    3. Embeds the gist, computes novelty + salience.
-    4. Stores the super-episode via EpisodicService.
-    5. Sets consolidated_into back-pointers on each source episode.
-
-    Any per-cluster failure is logged and skipped — the remaining clusters still run.
-    """
-    from services.episodic_service import find_super_candidates, _fetch_novelty_comparison_set, compute_novelty
-    from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER
-    from services.salience_service import compute_salience
-    from services.super_episode_encoder_processor import (
-        SuperEpisodeEncoderProcessor as super_episode_encoder_cls,
-    )
-
-    try:
-        clusters = find_super_candidates(channel)
-        if not clusters:
-            return
-    except Exception as exc:
-        logger.warning(f"{LOG_PREFIX} find_super_candidates failed: {exc}")
-        return
-
-    # Hoisted out of the loop: the comparison set is channel-scoped and does
-    # not need to be recomputed for every cluster in a single extraction run.
-    # Minor staleness (cluster N doesn't see cluster N-1's super as prior art)
-    # is acceptable — novelty is a soft bias on salience, not a correctness gate.
-    try:
-        prior_embeddings = _fetch_novelty_comparison_set(channel)
-    except Exception as exc:
-        logger.warning(f"{LOG_PREFIX} _fetch_novelty_comparison_set failed: {exc}")
-        prior_embeddings = []
-
-    for cluster_ids in clusters:
-        try:
-            _process_super_cluster(
-                cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
-                super_episode_encoder_cls, compute_novelty, compute_salience,
-                SUPER_EPISODE_MIN_CLUSTER,
-            )
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} Super-episode creation failed for cluster {cluster_ids}: {exc}"
-            )
-
-
-def _process_super_cluster(
-    cluster_ids, channel, db, episodic_svc, emb_svc, prior_embeddings,
-    super_episode_encoder_cls, compute_novelty, compute_salience, min_cluster,
-) -> None:
-    """Assemble sources, invoke encoder, compute salience, and persist one super-episode."""
-    sources = [ep for ep in (episodic_svc.get_episode_by_id(eid) for eid in cluster_ids) if ep]
-    if len(sources) < min_cluster:
-        return
-
-    transcript_spans = _fetch_transcript_spans(sources, db)
-    response = super_episode_encoder_cls(sources, transcript_spans).send()
-    if not response:
-        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response for cluster {cluster_ids}")
-        return
-
-    super_ep = _safe_json_load_object(response)
-    if not super_ep or not super_ep.get('gist'):
-        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty gist for cluster {cluster_ids}")
-        return
-
-    super_ep['channel'] = channel
-    unique_t_ids = sorted(_collect_transcript_ids(sources))
-    super_ep['transcript_ids'] = unique_t_ids
-    super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
-    super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
-    super_ep['consolidated_from'] = [ep['id'] for ep in sources]
-
-    gist = super_ep.get('gist', '')
-    embedding = emb_svc.generate_embedding(gist) if gist else None
-    novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-    super_ep['salience'] = compute_salience(
-        valence=float(super_ep.get('emotional_valence') or 0.0),
-        arousal=float(super_ep.get('emotional_arousal') or 0.0),
-        has_open_loop=bool(super_ep.get('has_open_loop', False)),
-        novelty=novelty,
-    )
-    super_ep.pop('has_open_loop', None)
-
-    new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-    for src_id in cluster_ids:
-        episodic_svc.set_consolidated_into(src_id, new_id)
-
-    logger.info(f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}")
-
-
-def _safe_json_load_object(text: str) -> dict:
-    """Parse a JSON object from LLM response text. Returns {} on any failure."""
-    import json as _json
-
-    if not text:
-        return {}
-    text = text.strip()
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        text = _strip_code_fence(text)
-    try:
-        parsed = _json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned non-dict JSON")
-        return {}
-    except ValueError:
-        logger.warning(f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable JSON")
-        return {}
-
-
-def _embed_entry(rowid: int, content: str) -> None:
-    """Generate and store embedding for a transcript entry."""
-    try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
-        embedding = emb_service.generate_embedding(content)
-        blob = pack_embedding(embedding)
-
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO transcript_vec (rowid, embedding) VALUES (?, ?)",
-                (rowid, blob),
-            )
-            cursor.close()
-
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Embedding failed for rowid {rowid}: {e}")
-
-
 def write_input_row(channel: str, role: str, content: str) -> int:
-    """Write the input transcript row. Returns the row ID.
-
-    Fires an embedding hook in a daemon thread if the content is long enough.
-    """
+    """Write the input transcript row. Returns the row ID."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
             (channel, role, content),
         )
         row_id = cursor.lastrowid
         cursor.close()
-
-    def _embed():
-        try:
-            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(row_id, content)
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} embed-input hook crashed: {exc}")
-
-    threading.Thread(target=_embed, daemon=True).start()
 
     _maybe_trigger_extraction(channel, row_id)
 
@@ -1005,94 +640,19 @@ def write_input_row(channel: str, role: str, content: str) -> int:
 
 
 def write_assistant_row(channel: str, content: str) -> int:
-    """Write the assistant transcript row. Returns the row ID.
-
-    Fires an embedding hook and rolling episode extraction trigger.
-    """
+    """Write the assistant transcript row and fire the rolling episode extraction trigger."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
             (channel, 'assistant', content),
         )
         row_id = cursor.lastrowid
         cursor.close()
 
-    def _embed():
-        try:
-            if estimate_tokens(content) >= _EMBED_TOKEN_THRESHOLD:
-                _embed_entry(row_id, content)
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} embed-assistant hook crashed: {exc}")
-
-    threading.Thread(target=_embed, daemon=True).start()
-
     _maybe_trigger_extraction(channel, row_id)
 
     return row_id
-
-
-def _keyword_search(
-    channel: Optional[str],
-    query: str,
-    limit: int,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-) -> List[Dict]:
-    """Keyword fallback when embedding search is unavailable."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        conditions = ["content LIKE ?"]
-        params: list = [f'%{query}%']
-
-        if channel:
-            conditions.append("channel = ?")
-            params.append(channel)
-
-        if date_from:
-            conditions.append("created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("created_at <= ?")
-            params.append(date_to)
-
-        where = " AND ".join(conditions)
-        params.append(limit)
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, role, content, tool_name, created_at, channel
-                FROM transcript
-                WHERE {where}
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
-        return [
-            {
-                'id': r[0],
-                'role': r[1],
-                'content': r[2],
-                'tool_name': r[3],
-                'created_at': r[4],
-                'similarity': 0.5,
-                'channel': r[5],
-            }
-            for r in rows
-        ]
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Keyword search failed: {e}")
-        return []

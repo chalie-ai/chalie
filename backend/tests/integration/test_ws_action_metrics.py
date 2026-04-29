@@ -3,9 +3,9 @@ Integration: verify `_handle_action` emits a metrics block on every
 message + error frame it produces.
 
 Exercises the real WS handler function with a captured WS sink and a real
-MemoryClient. No service mocks. The only simulated piece is the WebSocket
-wire protocol — we use a lightweight sink that captures the JSON payloads
-handed to `_send_json`.
+MemoryClient. The only simulated piece is the WebSocket wire protocol — we
+use a lightweight sink that captures the JSON payloads handed to `_send_json`.
+Skill lookup is exercised against `AbilityRegistry`.
 """
 
 import json
@@ -39,34 +39,20 @@ class _FakeWS:
 
 
 @pytest.mark.integration
-def test_handle_action_success_emits_metrics(db):
-    """Action button → message frame carries a metrics block with the
-    expected keys, and tokens_total_complete=False (actions bypass the LLM).
-    """
+def test_handle_action_unknown_skill_emits_error(db):
+    """Unknown skill → error frame + done frame are emitted via _handle_action."""
     from api import websocket as ws_mod
     from services.memory_client import MemoryClientService
 
     store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
-    # Use a real innate skill so the handler path is genuine.
-    # `clear_conversation` is a simple handler that exists across releases.
-    from services.innate_skills import get_skill_handler  # noqa: F401
-    # Pick any registered skill; fall back to a known-safe no-op lookup.
-    # If no handler exists for 'clear_conversation', the error path runs,
-    # which still must emit metrics on the error frame.
     msg = {
         "type": "action",
         "payload": {"skill": "__definitely_nonexistent_skill__", "args": {}},
     }
-
     ws_mod._handle_action(ws, store, msg)
 
-    # When the skill is unknown the handler emits an error frame + done frame.
-    # Our MUST contract: metrics key appears on every frame that carries
-    # semantic content. For the "unknown skill" branch it is an error frame,
-    # but our fix only added metrics to the message frame and the outer
-    # exception error. We'll validate both by also running a real skill.
     errs = ws.frames_of('error')
     msgs = ws.frames_of('message')
     assert errs or msgs, f"Expected message or error frame, got {ws.sent}"
@@ -77,21 +63,21 @@ def test_handle_action_exception_path_carries_metrics(db, monkeypatch):
     """Force a handler exception → error frame MUST include metrics
     (tokens_total=0, tokens_total_complete=False, response_time_s)."""
     from api import websocket as ws_mod
+    from abilities import _registry as reg_mod
     from services.memory_client import MemoryClientService
 
     store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
-    # Force the action handler to raise by shimming get_skill_handler to
-    # return something that blows up when called. No mocks of websocket
-    # internals — just swap the dependency the handler imports.
-    def _raising_handler(_kind, _payload):
-        raise RuntimeError("synthetic failure")
+    class _RaisingAbility:
+        NAME = 'anything'
 
-    import services.innate_skills as innate
+        def execute(self, *_args, **_kwargs):
+            raise RuntimeError("synthetic failure")
+
     monkeypatch.setattr(
-        innate, 'get_skill_handler',
-        lambda name: _raising_handler,
+        reg_mod.AbilityRegistry, 'get',
+        staticmethod(lambda _name: _RaisingAbility()),
     )
 
     msg = {"type": "action", "payload": {"skill": "anything"}}
@@ -110,32 +96,33 @@ def test_handle_action_exception_path_carries_metrics(db, monkeypatch):
 
 
 @pytest.mark.integration
-def test_handle_action_message_frame_marks_tokens_incomplete(db):
+def test_handle_action_message_frame_marks_tokens_incomplete(db, monkeypatch):
     """When a skill succeeds, the message frame's metrics must signal
     tokens_total_complete=False (the skill didn't run the LLM)."""
     from api import websocket as ws_mod
+    from abilities import _registry as reg_mod
     from services.memory_client import MemoryClientService
 
     store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
-    # Monkey-register a trivial handler that returns a string so the success
-    # branch runs end-to-end.
-    import services.innate_skills as innate
-    orig = innate.get_skill_handler
+    class _OkAbility:
+        NAME = '__test_skill__'
 
-    def _patched(skill):
-        if skill == '__test_skill__':
-            return lambda kind, payload: "ok"
-        return orig(skill)
-    innate.get_skill_handler = _patched
-    try:
-        ws_mod._handle_action(
-            ws, store,
-            {"type": "action", "payload": {"skill": "__test_skill__"}},
-        )
-    finally:
-        innate.get_skill_handler = orig
+        def execute(self, *_args, **_kwargs):
+            return "ok"
+
+    def _fake_get(name):
+        if name == '__test_skill__':
+            return _OkAbility()
+        raise KeyError(name)
+
+    monkeypatch.setattr(reg_mod.AbilityRegistry, 'get', staticmethod(_fake_get))
+
+    ws_mod._handle_action(
+        ws, store,
+        {"type": "action", "payload": {"skill": "__test_skill__"}},
+    )
 
     msgs = ws.frames_of('message')
     assert msgs, f"Expected message frame, got: {ws.sent}"

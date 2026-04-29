@@ -582,11 +582,11 @@ body {
 .speech-form {
   position: relative;
   padding: var(--space-lg);
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.025);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
   backdrop-filter: blur(16px) saturate(120%);
   -webkit-backdrop-filter: blur(16px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
   animation: formEntry 200ms var(--ease-out) both;
   transition: border-color 400ms ease, box-shadow 400ms ease;
@@ -597,11 +597,29 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Neon accent stripe — left for Chalie (violet), right for user (cyan) */
+.speech-form::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .speech-form--user {
   background: var(--bg-surface-user);
-  border-color: rgba(138, 92, 255, 0.12);
+  border-color: rgba(0, 240, 255, 0.12);
   align-self: flex-end;
   max-width: 85%;
+}
+
+.speech-form--user::before {
+  right: -1px;
+  background: linear-gradient(180deg, transparent 0%, var(--dusk-blue) 20%, var(--dusk-blue) 80%, transparent 100%);
+  box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px rgba(0, 240, 255, 0.33);
 }
 
 .speech-form--chalie {
@@ -610,14 +628,20 @@ body {
   max-width: 90%;
 }
 
-/* Active form — newest Chalie message gets a single clean accent edge */
+.speech-form--chalie::before {
+  left: -1px;
+  background: linear-gradient(180deg, transparent 0%, var(--violet) 20%, var(--violet) 80%, transparent 100%);
+  box-shadow: 0 0 8px var(--violet), 0 0 18px rgba(138, 92, 255, 0.33);
+}
+
+/* Active form — newest Chalie message gets a top-edge highlight */
 .speech-form--active {
-  border-color: rgba(138, 92, 255, 0.15);
+  border-color: rgba(138, 92, 255, 0.18);
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
 }
 
 /* Thin top-edge highlight — like light catching a glass panel edge */
-.speech-form--active::before {
+.speech-form--active::after {
   content: '';
   position: absolute;
   top: -1px;
@@ -626,10 +650,13 @@ body {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(138, 92, 255, 0.25), rgba(0, 240, 255, 0.15), transparent);
   border-radius: 1px;
+  pointer-events: none;
 }
 
 .speech-form__text {
   word-break: break-word;
+  position: relative;
+  z-index: 2;
 }
 
 /* Preserve newlines in user-typed messages */
@@ -861,6 +888,8 @@ body {
   gap: var(--space-sm);
   margin-top: var(--space-md);
   flex-wrap: wrap;
+  position: relative;
+  z-index: 2;
 }
 
 .speech-form__action-btn {
@@ -904,6 +933,8 @@ body {
   gap: 8px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 2;
 }
 
 .speech-form__image-thumb {
@@ -923,6 +954,10 @@ body {
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   justify-content: flex-start;
+  position: relative;
+  z-index: 2;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  letter-spacing: 0.04em;
 }
 
 .speech-form--user .speech-form__meta {
@@ -932,8 +967,8 @@ body {
 .speech-form__timestamp {
   font-size: 0.72rem;
   color: var(--text-tertiary);
-  opacity: 0.7;
-  letter-spacing: 0.01em;
+  opacity: 0.85;
+  letter-spacing: 0.04em;
 }
 
 .speech-form__topic {
@@ -1003,39 +1038,133 @@ body {
 /* Hide all voice controls when the voice service is unavailable */
 body.voice-unavailable .speech-form__speak-btn { display: none; }
 
-/* Thinking indicator */
-.thinking-indicator {
+/* ACT cycle — chrome-less live tool loop UI.
+   Layout:
+     .act-cycle
+       .act-row
+         .act-logo        (blinking violet disc — IS the placeholder)
+         .act-narrative   (italic, replaces in-place each iteration)
+       .act-tools         (cumulative MONO list across the whole ACT loop)
+   No background, no border, no padding. Replaced wholesale by the final
+   .speech-form--chalie bubble on act_done. */
+.act-cycle {
+  align-self: flex-start;
+  max-width: 90%;
   display: flex;
-  gap: 6px;
-  padding: var(--space-lg);
-}
-
-.thinking-indicator__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  animation: thinkingBounce 1.4s ease-in-out infinite;
-}
-
-.thinking-indicator__dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking-indicator__dot:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes thinkingBounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40%           { transform: scale(1); opacity: 1; }
-}
-
-/* Narration Bubbles — live ACT loop progress */
-.narration-bubble {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  padding: 6px 14px;
-  margin: 2px 0 2px 48px;
-  border-left: 2px solid rgba(138, 92, 255, 0.20);
-  line-height: 1.5;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
   animation: formEntry 200ms var(--ease-out) both;
-  max-width: 85%;
+}
+
+.act-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
+}
+
+.act-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--violet);
+  flex-shrink: 0;
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
+.act-narrative {
+  font-style: italic;
+  color: var(--text-primary);
+  opacity: 0.75;
+  line-height: 1.5;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+}
+
+.act-narrative:empty {
+  display: none;
+}
+
+/* Tool list — indented under the logo (logo width 12 + gap 12 = 24). */
+.act-tools {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.act-tools:empty {
+  display: none;
+}
+
+.act-tool {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+  min-width: 220px;
+  max-width: 320px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-tool__name {
+  font-weight: 500;
+}
+
+.act-tool__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+
+/* States — use Chalie's canonical token colors. Opacity carries the dim. */
+.act-tool--running {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.act-tool--done {
+  color: var(--success);
+  opacity: 0.9;
+}
+
+.act-tool--error {
+  color: var(--error);
+  opacity: 0.5;
+}
+
+/* Spinner — small lavender ring, matches reference design */
+.act-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  animation: act-spinner-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes act-spinner-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes act-logo-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 4px rgba(138, 92, 255, 0.25);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(138, 92, 255, 0.7);
+  }
 }
 
 .steer-bubble {
@@ -1049,35 +1178,6 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   line-height: 1.5;
   animation: formEntry 200ms var(--ease-out) both;
   max-width: 70%;
-}
-
-.narration-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 2px 48px;
-}
-
-.narration-group--collapsed .narration-bubble,
-.narration-group--collapsed .steer-bubble {
-  display: none;
-}
-
-.narration-toggle {
-  background: none;
-  border: 1px solid rgba(138, 92, 255, 0.15);
-  border-radius: 10px;
-  color: var(--text-tertiary);
-  font-size: 0.72rem;
-  padding: 2px 10px;
-  cursor: pointer;
-  width: fit-content;
-  transition: all 220ms ease;
-}
-
-.narration-toggle:hover {
-  color: var(--text-secondary);
-  border-color: rgba(138, 92, 255, 0.30);
 }
 
 /* Error form */
@@ -1158,16 +1258,25 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  background: #0d0f15;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: var(--radius-full);
   padding: var(--space-sm) var(--space-md);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 24px rgba(138, 92, 255, 0.08);
   transition: border-color 220ms ease, box-shadow 220ms ease;
 }
 
 .input-dock__inner:focus-within {
-  border-color: rgba(138, 92, 255, 0.20);
-  box-shadow: 0 0 16px rgba(138, 92, 255, 0.06);
+  border-color: rgba(138, 92, 255, 0.22);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(138, 92, 255, 0.18),
+    0 0 28px rgba(138, 92, 255, 0.18);
 }
 
 .input-dock__textarea {
@@ -1230,9 +1339,14 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   transition: all 220ms ease;
 }
 
+.btn-action--send:not(:disabled) {
+  filter: drop-shadow(0 0 8px rgba(138, 92, 255, 0.40));
+}
+
 .btn-action--send:hover:not(:disabled) {
   color: #9B6FFF;
   transform: translateY(-1px);
+  filter: drop-shadow(0 0 12px rgba(138, 92, 255, 0.65));
 }
 
 .btn-action--send:active:not(:disabled) {
@@ -1407,6 +1521,77 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 @keyframes imgSpinnerSpin {
   to { transform: rotate(360deg); }
+}
+
+/* ---- Status badges (warn / error) in the bottom-right of a thumb -------- */
+
+/* Shared positioning: mirrors .image-preview__remove but non-interactive */
+.image-preview__warn,
+.image-preview__error {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 2;
+}
+
+.image-preview__warn {
+  background: rgba(120, 70, 0, 0.95);  /* deep amber — readable vs white text */
+  color: #ffffff;
+}
+
+.image-preview__error {
+  background: rgba(140, 20, 20, 0.95);  /* deep red — readable vs white text */
+  color: #ffffff;
+}
+
+/* ---- Global drag-over overlay ------------------------------------------- */
+
+.global-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 14, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.global-drop-overlay.active {
+  display: flex;
+  pointer-events: auto;
+}
+
+.global-drop-overlay__label {
+  padding: var(--space-lg) var(--space-xl);
+  border: 1.5px dashed var(--accent-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--accent-tertiary);
+  font-size: var(--font-size-lg);
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 32px rgba(0, 240, 255, 0.12);
+  pointer-events: none;
+}
+
+/* ---- Drag-active class on .input-dock ------------------------------------ */
+
+.input-dock.dragover {
+  outline: 1.5px dashed rgba(138, 92, 255, 0.55);
+  outline-offset: -2px;
+  background: rgba(138, 92, 255, 0.04);
+  transition: outline 120ms ease, background 120ms ease;
 }
 
 /* --------------------------------------------------------------------------
@@ -2086,7 +2271,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   box-shadow: none;
 }
 
-.speech-form--ambient.speech-form--active::before {
+.speech-form--ambient::before,
+.speech-form--ambient.speech-form--active::after {
   display: none;
 }
 
@@ -2153,6 +2339,11 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .speech-form--escalation::before {
+  background: linear-gradient(180deg, transparent 0%, rgba(255, 180, 50, 0.85) 20%, rgba(255, 180, 50, 0.85) 80%, transparent 100%);
+  box-shadow: 0 0 8px rgba(255, 180, 50, 0.6), 0 0 18px rgba(255, 180, 50, 0.33);
+}
+
+.speech-form--escalation::after {
   content: '';
   position: absolute;
   top: 0;
@@ -2160,6 +2351,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   right: 0;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 180, 50, 0.3), transparent);
+  pointer-events: none;
 }
 
 /* --------------------------------------------------------------------------
@@ -2504,115 +2696,7 @@ body.has-task-strip .conversation-spine {
 }
 
 /* --------------------------------------------------------------------------
-   34. Activity Panel (slide-out, z-index 240 — below Apps panel at 250)
-   -------------------------------------------------------------------------- */
-
-/**
- * .activity-panel
- * Slide-in panel from the right that displays a reverse-chronological
- * activity log. Mirrors the .apps-panel layout but sits one z-level lower
- * so both panels can coexist without collision.
- */
-.activity-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 320px;
-  max-width: 85vw;
-  height: 100vh;
-  z-index: 240;
-  background: rgba(8, 10, 18, 0.96);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-left: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform var(--duration-normal) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
-  box-shadow: -8px 0 40px rgba(0, 0, 0, 0.40);
-}
-
-.activity-panel.open {
-  transform: translateX(0);
-}
-
-.activity-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--border-subtle);
-  min-height: 56px;
-  flex-shrink: 0;
-}
-
-.activity-panel__title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: var(--text-primary);
-}
-
-.activity-panel__list {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-sm) 0;
-}
-
-/* --------------------------------------------------------------------------
-   Activity entry row
-   -------------------------------------------------------------------------- */
-
-/**
- * .activity-entry
- * Single activity log row. Each type variant sets --entry-accent inline;
- * the left border picks that up so a single rule covers all variants.
- */
-.activity-entry {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-sm) var(--space-md);
-  border-left: 3px solid var(--entry-accent, #888888);
-  margin: 2px var(--space-sm);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: background var(--duration-fast);
-  cursor: default;
-}
-
-.activity-entry:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-/* Per-type accent colours — also set as --entry-accent inline by JS. */
-.activity-entry--memory    { --entry-accent: #00F0FF; }
-.activity-entry--goal      { --entry-accent: #8A5CFF; }
-.activity-entry--proactive { --entry-accent: #FF00AA; }
-.activity-entry--task      { --entry-accent: #888888; }
-
-.activity-entry__body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.activity-entry__message {
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  line-height: 1.4;
-}
-
-.activity-entry__time {
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  letter-spacing: 0.02em;
-}
-
-/* Active state for the toggle button in the title bar. */
-#activityBtn.active {
-  color: var(--dusk-blue, #00F0FF);
-}
-
-/* --------------------------------------------------------------------------
-   35. App Overlay (full-screen)
+   34. App Overlay (full-screen)
    -------------------------------------------------------------------------- */
 .app-overlay {
   position: fixed;

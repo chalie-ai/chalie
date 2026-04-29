@@ -16,7 +16,7 @@ INITIAL_DELAY = 30    # 30 seconds after startup
 CHECK_INTERVAL = 30   # Check for due scans every 30s
 
 
-def folder_watcher_worker(shared_state=None):
+def folder_watcher_worker():
     """Entry point for the folder watcher daemon thread."""
     logger.info("[FOLDER WATCHER] Starting (initial delay %ds)", INITIAL_DELAY)
     time.sleep(INITIAL_DELAY)

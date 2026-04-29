@@ -80,7 +80,7 @@ def _get_sleep_interval(store) -> float:
     return base * random.uniform(0.9, 1.1)
 
 
-def background_llm_worker(shared_state=None):
+def background_llm_worker():
     """
     Entry point registered with run.py via manager.register_service().
 

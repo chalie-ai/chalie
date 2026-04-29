@@ -8,7 +8,7 @@ Continuously aggregates three signal categories into a cached MemoryStore snapsh
 
 Design:
   - Deterministic, zero-LLM, <50ms refresh
-  - Follows AmbientInferenceService pattern (cached, always-fresh)
+  - Cached snapshot in MemoryStore, always-fresh on demand
   - Noteworthy list is EMPTY when healthy — only populated on degradation
   - Each noteworthy item carries a severity weight (0.0-1.0) for downstream consumers
 """
@@ -30,7 +30,7 @@ REFRESH_INTERVAL = 30  # background thread cycle
 
 # Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
 CRITICAL_JOBS = frozenset({
-    'frontal-cortex-unified', 'cognitive-triage',
+    'frontal-cortex-unified',
 })
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
@@ -49,7 +49,6 @@ SEVERITY_MISSING_PROVIDER = 0.8
 SEVERITY_DEAD_THREADS = 0.6
 SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
-SEVERITY_LOW_ACTIVATION = 0.2
 
 
 def _utc_now() -> datetime:
@@ -335,24 +334,16 @@ class SelfModelService:
                 )
                 trait_count = cursor.fetchone()[0]
 
-                cursor.execute(
-                    "SELECT AVG(retrieval_weight) FROM episodes "
-                    "WHERE retrieval_weight > 0"
-                )
-                row = cursor.fetchone()
-                avg_activation = round(row[0], 3) if row[0] else 1.0
-
                 cursor.close()
 
             return {
                 "episode_count": episode_count,
                 "concept_count": concept_count,
                 "trait_count": trait_count,
-                "avg_activation": avg_activation,
             }
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to get memory pressure: {e}", exc_info=True)
-            return {"episode_count": 0, "concept_count": 0, "trait_count": 0, "avg_activation": 1.0}
+            return {"episode_count": 0, "concept_count": 0, "trait_count": 0}
 
     def _is_bg_llm_stale(self) -> bool:
         """Check if background LLM worker heartbeat is stale (>30s)."""
@@ -379,35 +370,16 @@ class SelfModelService:
         capability_categories = {}
 
         try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-            tool_names = registry.get_tool_names()
-
-            # Categorize tools by scanning manifest documentation keywords
-            for name in tool_names:
-                manifest = registry.get_tool_full_description(name)
-                if not manifest:
-                    continue
-                doc = (manifest.get("documentation", "") or "").lower()
-                desc = (manifest.get("description", "") or "").lower()
-                text = f"{doc} {desc}"
-
+            from abilities._registry import AbilityRegistry
+            for ability in AbilityRegistry.all():
+                name = ability.NAME
+                tool_names.append(name)
+                text = (ability.SUMMARY or '').lower()
                 for category, keywords in CATEGORY_KEYWORDS.items():
                     if any(kw in text for kw in keywords):
-                        if category not in capability_categories:
-                            capability_categories[category] = []
-                        if name not in capability_categories[category]:
-                            capability_categories[category].append(name)
+                        capability_categories.setdefault(category, []).append(name)
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load tool inventory: {e}", exc_info=True)
-
-        # Innate skills from authoritative registry
-        innate_skills = []
-        try:
-            from services.innate_skills.registry import ALL_SKILL_NAMES
-            innate_skills = sorted(ALL_SKILL_NAMES)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to load innate skills: {e}", exc_info=True)
+            logger.warning(f"{LOG_PREFIX} Failed to load ability inventory: {e}", exc_info=True)
 
         # Provider features
         provider_features = self._get_provider_features()
@@ -415,7 +387,7 @@ class SelfModelService:
         return {
             "tool_count": len(tool_names),
             "tool_names": sorted(tool_names),
-            "innate_skills": innate_skills,
+            "innate_skills": sorted(tool_names),
             "capability_categories": capability_categories,
             "provider_features": provider_features,
         }
@@ -453,10 +425,19 @@ class SelfModelService:
         try:
             db = self._get_db()
             with db.connection() as conn:
-                # 1. Compaction stale: topic with uncompacted content exceeding
-                # the fallback token threshold (chars/4 ≈ tokens, 36K token fallback).
-                # Uses the same fallback threshold as compaction_service so this
-                # warning fires iff compaction would actually trigger.
+                # 1. Compaction stale: user-channel transcript with uncompacted
+                # content exceeding the fallback token threshold (chars/4 ≈
+                # tokens, 36K token fallback). Uses the same fallback threshold
+                # as MessageProcessor compaction so this warning fires iff
+                # compaction would actually trigger.
+                #
+                # Scoped to channel='user' because that is the only channel
+                # whose getUserPrompt() loads historical transcript into the
+                # prompt. Background channels (dmn, persistent_task_*, …) only
+                # pass the current turn's input, so their on-disk transcript
+                # size is irrelevant to context pressure. This signal also
+                # only surfaces in the user-channel prompt via
+                # SelfModelService.format_for_prompt().
                 _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
                 row = conn.execute("""
                     SELECT tt.channel,
@@ -464,7 +445,7 @@ class SelfModelService:
                            SUM(LENGTH(tt.content)) as total_chars
                     FROM transcript tt
                     LEFT JOIN compactions tc ON tc.channel = tt.channel
-                    WHERE tc.channel IS NULL
+                    WHERE tc.channel IS NULL AND tt.channel = 'user'
                     GROUP BY tt.channel
                     HAVING total_chars >= ?
                     ORDER BY total_chars DESC LIMIT 1
@@ -475,33 +456,6 @@ class SelfModelService:
                         'signal': f"Compaction stale: topic has {row[1]} entries (~{estimated_tokens:,} tokens), no compaction",
                         'severity': 0.7,
                     })
-
-                # 2. Goal evidence empty: 10+ goals, 0 evidence
-                try:
-                    goal_count = conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
-                    evidence_count = conn.execute("SELECT COUNT(*) FROM goal_evidence").fetchone()[0]
-                    if goal_count >= 10 and evidence_count == 0:
-                        checks.append({
-                            'signal': f"Goal evidence inactive: {goal_count} goals, 0 evidence",
-                            'severity': 0.6,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Goal evidence check failed: {e}", exc_info=True)
-
-                # 3. Goal duplication: any goal title appearing 3+ times
-                try:
-                    dup = conn.execute("""
-                        SELECT description, COUNT(*) as c FROM goals
-                        GROUP BY description HAVING c >= 3
-                        ORDER BY c DESC LIMIT 1
-                    """).fetchone()
-                    if dup:
-                        checks.append({
-                            'signal': f"Duplicate goals: '{dup[0][:50]}' x{dup[1]}",
-                            'severity': 0.5,
-                        })
-                except Exception as e:
-                    logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
 
                 # Orphaned episodes check removed — topics table dropped in migration 035
 
@@ -551,20 +505,12 @@ class SelfModelService:
                 "severity": SEVERITY_QUEUE_CONGESTION,
             })
 
-        # Low average memory activation (severity: 0.2)
-        avg_act = op.get("memory_pressure", {}).get("avg_activation", 1.0)
-        if avg_act < 0.3:
-            notes.append({
-                "signal": f"Overall memory activation is low ({avg_act:.2f}) — thin context",
-                "severity": SEVERITY_LOW_ACTIVATION,
-            })
-
         return notes
 
 
 # ── Background worker ───────────────────────────────────────────
 
-def self_model_worker(shared_state=None):
+def self_model_worker():
     """Background thread: refresh self-model snapshot every 30s."""
     service = SelfModelService()
     logger.info(f"{LOG_PREFIX} Worker started (refresh every {REFRESH_INTERVAL}s)")

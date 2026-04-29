@@ -44,6 +44,18 @@ export class DocumentUpload {
     dialog?.showModal();
   }
 
+  /**
+   * Upload a single file programmatically (e.g. from a drag-drop onto the viewport).
+   * Opens the upload dialog to show progress, then handles the file.
+   *
+   * @param {File} file
+   */
+  uploadFile(file) {
+    if (!file) return;
+    this.openDialog();
+    this._handleFiles([file]);
+  }
+
   _resetUploadDialog() {
     const progress = document.getElementById('uploadProgress');
     const dupWarning = document.getElementById('uploadDuplicateWarning');

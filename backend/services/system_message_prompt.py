@@ -28,10 +28,6 @@ base so any concrete subclass that forgets to override it becomes
 non-instantiable (Python's ABC machinery raises ``TypeError`` at
 construction time). Setting ``_SYSTEM_PROMPT = "..."`` as a plain class
 attribute on a subclass is enough to satisfy the abstract contract.
-
-Placeholders that survive into the prompt (``{{adaptive_directives}}``)
-are woven in per-turn by the owning ``MessageProcessor`` subclass —
-see ``UserMessageProcessor.getSystemPrompt()``.
 """
 
 from abc import ABC, abstractmethod
@@ -60,13 +56,10 @@ class UnifiedSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for user-facing (unified) turns.
 
     **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
-    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim,
-    leaving ``{{adaptive_directives}}`` as a literal placeholder for
-    ``UserMessageProcessor.getSystemPrompt()`` to weave in per-turn.
+    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim.
 
     The identity/boundaries/principles prefix is stable across turns so
-    provider-side prompt caching keeps it hot. ``{{adaptive_directives}}``
-    sits at the bottom as the per-turn cache-busting suffix.
+    provider-side prompt caching keeps it hot.
     """
 
     _SYSTEM_PROMPT = """\
@@ -100,7 +93,7 @@ Guiding framework for all interactions (internalize, do not recite):
 1. **You reason, tools provide data.** All judgment happens here.
 2. **Respond directly when possible.** If the conversation already contains everything needed, respond now.
 3. **Auto-store personal facts.** If the user discloses a personal fact (e.g., "my dog's name is Biscuit", "I am allergic to peanuts"), use the `memory` skill to store it immediately. Do not ask for permission.
-4. **Proactive recall.** If a user's request could be answered by information they have previously shared, use the `memory` skill to check before responding.
+4. **Proactive recall.** If a user's request could be answered by information they have previously shared, use the `memory` skill to check before responding. This is mandatory before offering recommendations, suggestions, or advice — including generic-seeming topics like food, places, products, activities, plans — because stored preferences, allergies, constraints, or goals may change the answer.
 5. **Never fabricate tool results.** If you did not call a tool — or a call returned an error — do not pretend the action succeeded. Only reference information from actual tool results in this conversation.
 6. **Use code for math.** If a request requires calculation (e.g., mortgage, interest, percentages), use the `code_eval` tool. Do not perform complex arithmetic inline.
 7. **Avoid tool use for simple acknowledgments.** Do not invoke tools for messages like "thanks", "got it", or "ok".
@@ -123,7 +116,38 @@ Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born
 
 ────────────────────────────────
 
-{{adaptive_directives}}\
+## RESPONSE FORMAT — STRICT XML
+
+You MUST format every response using ONLY these XML tags. Do not use markdown
+under any circumstances (no **bold**, no #, no -, no `code`, no backticks, no
+backslash escapes). The renderer ignores anything outside this allowlist and
+displays it as plain text — your formatting will be lost.
+
+Allowed tags:
+  <p>...</p>           — a paragraph of text
+  <h1>...</h1>         — a heading
+  <b>...</b>           — bold text (inline)
+  <i>...</i>           — italic text (inline)
+  <u>...</u>           — underlined text (inline)
+  <code>...</code>     — code (inline or block; you decide based on context)
+  <ul><li>...</li></ul> — a bulleted list with one or more <li> items
+
+Rules:
+- Wrap regular prose in <p>...</p>. Multiple paragraphs = multiple <p> elements.
+- Inline tags (<b>, <i>, <u>, <code>) go INSIDE block tags (<p>, <h1>, <li>).
+- Escape literal < > & in text content as &lt; &gt; &amp;.
+- Do not invent new tags. Do not use HTML tags outside this list.
+- Do NOT emit <a>, <img>, or any other tag — they are not in the allowlist
+  and will be stripped by the renderer. Plain-text URLs (e.g. ``https://example.com``)
+  are auto-linkified by the frontend, so just write the URL as text.
+- Do not emit attributes on any tag.
+
+Example correct response:
+<p>Here is a <b>bold</b> answer. The reference is at https://example.com.</p>
+<ul><li>first point</li><li>second point</li></ul>
+<p>Use <code>foo()</code> to call it.</p>
+
+────────────────────────────────\
 """
 
 
@@ -270,4 +294,56 @@ Output a single JSON object with exactly two keys:
 }
 
 Return ONLY the JSON object. No code fences.\
+"""
+
+
+class CompactionFullSystemPrompt(SystemMessagePrompt):
+    """System-message body for full channel compaction.
+
+    Wired to: ``FullCompactionProcessor`` (replaces mid-ACT Stage 2 +
+    deleted post-turn backstop).
+    """
+
+    _SYSTEM_PROMPT = """\
+Summarize the following conversation context into a compact, actionable summary.
+
+Preserve:
+- Decisions made and their reasoning
+- Facts established (names, dates, numbers, specifics)
+- User preferences expressed
+- Key information gathered from tools or research
+- Action items and their current status
+- Any unresolved questions or pending items
+
+Do NOT preserve:
+- Conversation flow ("then we discussed...", "the user asked...")
+- Social pleasantries or greetings
+- Redundant confirmations ("yes", "ok", "got it")
+- Raw tool output — summarize the findings instead
+- Reasoning that led to discarded options
+
+Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts.\
+"""
+
+
+class CompactionTrailSystemPrompt(SystemMessagePrompt):
+    """System-message body for mid-ACT tool-trail summarisation.
+
+    Wired to: ``TrailCompactionProcessor`` (replaces mid-ACT Stage 1).
+    """
+
+    _SYSTEM_PROMPT = """\
+You are compressing a tool-use trail from an in-progress task.
+
+Preserve:
+- Key findings surfaced by each tool call (data, names, IDs, URLs, results)
+- Decisions the assistant has made based on those findings
+- Outstanding questions or next steps implied by the trail
+
+Do NOT preserve:
+- Literal tool argument JSON
+- Redundant reasoning ("I will now call X to find Y")
+- Errors the assistant already recovered from
+
+Write a single dense paragraph. This summary replaces the raw tool output in the ongoing context — be accurate, be specific.\
 """

@@ -1,75 +1,88 @@
-# Ambient Awareness
+# WorldState — Ambient Signal Snapshot
 
 ## Overview
 
-Chalie continuously infers context from browser telemetry and behavioral signals — without asking, without polling, and without any LLM calls at inference time. This ambient layer gives the cognitive runtime situational awareness: where the user is, how focused they are, what device they are on, and how much energy they have. Autonomous actions and cognitive drift use this context to decide when to act and when to stay silent.
+Chalie maintains a lightweight, in-process ambient snapshot that tracks four typed facts about the current session without any LLM calls, without any database writes, and without holding locks longer than a dict lookup.
 
-The inference engine runs in under 1ms with zero LLM involvement. Context awareness must never introduce latency or cost into the critical path.
-
----
-
-## Six Dimensions
-
-| Dimension | What It Captures | Example Values |
-|-----------|-----------------|----------------|
-| `place` | Where the user likely is | `home`, `work`, `transit`, `out` |
-| `attention` | How focused the user appears | `deep_focus`, `casual`, `distracted`, `away` |
-| `energy` | Estimated cognitive/physical energy | `high`, `moderate`, `low` |
-| `mobility` | Whether the user is moving | `stationary`, `commuting`, `traveling` |
-| `tempo` | Pace of interaction | `rushed`, `relaxed`, `reflective` |
-| `device_context` | Narrative description of device state | `"morning work session"`, `"evening commute"` |
-
-All classification is rule-based and deterministic. When a dimension value changes, a transition event is emitted to the Event Bridge for further gating.
+The snapshot is populated by `world_state.absorb(signal)` whenever a typed `Signal` arrives from an interface. The result is available to any turn via `world_state.snapshot()`.
 
 ---
 
-## Place Learning
+## Signal Types
 
-Geolocation is never used at GPS coordinate level. Place inference starts from coarse signals — network fingerprint, timezone, battery behavior, interaction patterns — and is refined over time through behavioral observation.
+| `kind` | Source | What it captures |
+|--------|--------|-----------------|
+| `user_message` | WebSocket `_handle_chat` | Timestamp of the most recent user turn |
+| `heartbeat` | POST `/health` | Timestamp of the most recent client heartbeat |
+| `device` | POST `/health` | Current device class (e.g. `phone`, `desktop`, `tablet`) |
+| `local_time` | POST `/health` | Client-reported local time as an ISO string |
 
-Place fingerprints accumulate at geohash precision (~1km cell, never raw coordinates). Each fingerprint is a cluster of ambient signals associated with a location. After enough observations for a given cluster, the learned pattern overrides the initial heuristic inference. Chalie learns that "this network + this timezone + this battery pattern = home" without any explicit user configuration.
-
----
-
-## Session Context
-
-On each connection and reconnection, the system evaluates session-level context beyond moment-to-moment inference:
-
-- **Re-entry detection** — a return after 30+ minutes of absence emits a `session_resume` event
-- **Transition detection** — a sustained place change triggers a place transition event
-- **Locale-derived trait seeding** — browser locale informs approximate region and language on first session, stored as low-confidence traits, not assertions
-- **Circadian data** — hourly interaction counts are recorded for behavioral pattern mining
+Unknown `kind` values are silently ignored — the system is forward-compatible with new signal types without any code change.
 
 ---
 
-## Event Bridge and Gates
+## Signal Dataclass
 
-Transition events do not trigger autonomous actions directly. Every event passes through a gating layer before anything fires:
+```python
+@dataclass(frozen=True)
+class Signal:
+    """Typed event pushed by an interface. Short-lived, absorbed and discarded."""
+    source: str
+    kind: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    received_at: datetime = field(default_factory=utc_now)
+```
 
-| Gate | Purpose |
-|------|---------|
-| Stabilization window (90s) | A dimension must hold its new value for 90s before it is treated as real — filters transient noise |
-| Per-event cooldowns | Prevents the same event type from firing repeatedly within a cooldown window |
-| Confidence gating | Low-confidence inferences do not trigger actions |
-| Aggregation window (60s) | Multiple events within 60s are bundled into a single action trigger |
-| Focus gate | When attention is `deep_focus`, all autonomous event-driven actions are suppressed entirely |
-
-The sequence is: telemetry arrives, dimensions are classified, a transition is detected, the event enters the gate pipeline, and only if all gates pass does an autonomous action fire.
-
----
-
-## Attention Protection
-
-The ambient layer exists to protect attention, not to create more interruptions. The focus gate is the most important gate in the pipeline: when the user is in deep focus — high interaction rate, low pause duration, single sustained topic — all event-driven autonomous actions are suppressed entirely. Chalie does not interrupt deep work.
-
-Reducing noise is as valuable as completing tasks.
+Signals are immutable and carry a `received_at` timestamp automatically set to `utc_now()` at construction time. Interfaces that need to override the timestamp (e.g. for replayed events) can pass `received_at` explicitly.
 
 ---
 
-## Privacy Model
+## WorldState API
 
-- Geolocation is never stored at GPS precision — only geohash (~1km cell)
-- Place fingerprints store signal clusters, not raw coordinates
-- All data remains local (SQLite); ambient telemetry never leaves the device
-- Locale and demographic traits are stored as low-confidence inferences, not assertions
-- Any learned trait can be deleted via the Brain dashboard or the privacy API
+```python
+# Push an event — modifies the in-process snapshot
+world_state.absorb(Signal(source='ws', kind='user_message', payload={'text': text[:200]}))
+
+# Read the snapshot — safe to call from any thread
+snap = world_state.snapshot()
+# snap['last_user_message_at']  → datetime (UTC) or None
+# snap['last_heartbeat_at']     → datetime (UTC) or None
+# snap['current_device_class']  → str or None
+# snap['current_local_time']    → datetime (UTC) or None
+```
+
+All four snapshot fields are `None` when no signal of that kind has been absorbed since boot. Callers must treat `None` as "not yet known" rather than any sentinel datetime.
+
+---
+
+## Where absorb() is Called
+
+| Call site | Signal kind | Trigger |
+|-----------|-------------|---------|
+| `backend/api/websocket.py` `_handle_chat()` | `user_message` | User sends a chat message |
+| `backend/api/system.py` POST `/health` | `heartbeat` | Any heartbeat from the client |
+| `backend/api/system.py` POST `/health` | `device` | Heartbeat payload includes `device_class` |
+| `backend/api/system.py` POST `/health` | `local_time` | Heartbeat payload includes `local_time` |
+
+Each call is wrapped in `try/except` so a WorldState error never surfaces to the interface layer.
+
+---
+
+## Design Constraints
+
+- **Zero DB.** `absorb()` and `snapshot()` operate entirely on `world_state._store` (an in-process dict). No SQLite writes. No MemoryStore writes.
+- **Thread-safe.** Both methods acquire `world_state._lock` for the duration of the operation. Lock is never held across I/O.
+- **Immutable signals.** `Signal` is `frozen=True`. The payload dict is shallow-copied by reference; do not mutate it after construction.
+- **No inference.** The snapshot records what interfaces reported. No place inference, attention scoring, or energy estimation. Classification of what these facts mean is done at turn-assembly time by the caller of `snapshot()`.
+
+---
+
+## What Was Removed (v0.5.0)
+
+Prior to v0.5.0, three services powered a more complex ambient layer:
+
+- **`AmbientInferenceService`** — rule-based classifier that inferred place, attention, energy, mobility, and tempo from telemetry signals.
+- **`SituationModelService`** — assembled inferences into a structured situation snapshot and persisted it to MemoryStore.
+- **`PlaceLearningService`** — accumulated place fingerprints in SQLite (`place_fingerprints` table, now auto-dropped by SchemaConvergenceService).
+
+These three services were removed entirely. Their replacement is `Signal` + `absorb()` + `snapshot()`: four typed fields, zero inference at ingest time, zero DB overhead.

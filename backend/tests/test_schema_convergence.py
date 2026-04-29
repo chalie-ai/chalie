@@ -79,9 +79,7 @@ class TestSchemaConvergence:
         # Spot-check a representative cross-section of schema tables
         expected = {
             "episodes",
-            "knowledge",
             "transcript",
-            "goals",
             "settings",
             "schema_version",
             "documents",
@@ -109,7 +107,6 @@ class TestSchemaConvergence:
 
         fts_tables = {t for t in virtual_tables if t.endswith("_fts")}
         assert "episodes_fts" in fts_tables
-        assert "knowledge_fts" in fts_tables
         assert "documents_fts" in fts_tables
 
     def test_fresh_db_creates_vec0_virtual_tables(self, tmp_path):
@@ -122,9 +119,7 @@ class TestSchemaConvergence:
 
         vec_tables = {t for t in virtual_tables if t.endswith("_vec")}
         assert "episodes_vec" in vec_tables
-        assert "knowledge_vec" in vec_tables
         assert "documents_vec" in vec_tables
-        assert "transcript_vec" in vec_tables
 
     def test_fresh_db_creates_indexes(self, tmp_path):
         """Representative indexes are created on a fresh database."""
@@ -135,9 +130,7 @@ class TestSchemaConvergence:
             indexes = _index_names(conn)
 
         assert "idx_episodes_channel" in indexes
-        assert "idx_knowledge_kind" in indexes
         assert "idx_transcript_channel" in indexes
-        assert "idx_goals_status" in indexes
 
     # ── 2. Idempotency ────────────────────────────────────────────────────────
 
@@ -188,31 +181,30 @@ class TestSchemaConvergence:
         # SQLite cannot DROP COLUMN directly in older versions; we recreate the
         # table without the target column to simulate a missing column situation.
         with db.connection() as conn:
-            conn.execute("ALTER TABLE goals RENAME TO goals_old")
+            conn.execute("ALTER TABLE episodes RENAME TO episodes_old")
             conn.execute(
                 """
-                CREATE TABLE goals (
+                CREATE TABLE episodes (
                     id TEXT PRIMARY KEY,
-                    description TEXT NOT NULL,
-                    type TEXT NOT NULL DEFAULT 'emergent',
-                    status TEXT NOT NULL DEFAULT 'candidate'
+                    gist TEXT NOT NULL,
+                    channel TEXT NOT NULL
                     -- salience intentionally omitted
                 )
                 """
             )
-            conn.execute("INSERT INTO goals SELECT id, description, type, status FROM goals_old")
-            conn.execute("DROP TABLE goals_old")
+            conn.execute("INSERT INTO episodes SELECT id, gist, channel FROM episodes_old")
+            conn.execute("DROP TABLE episodes_old")
 
         # Verify column is missing before re-convergence
         with db.connection() as conn:
-            cols_before = _column_names(conn, "goals")
+            cols_before = _column_names(conn, "episodes")
         assert "salience" not in cols_before
 
         # Re-converge — should add the missing column
         _converge(db)
 
         with db.connection() as conn:
-            cols_after = _column_names(conn, "goals")
+            cols_after = _column_names(conn, "episodes")
         assert "salience" in cols_after
 
     # ── 4. Missing table detection ────────────────────────────────────────────
@@ -224,15 +216,15 @@ class TestSchemaConvergence:
 
         # Drop a non-critical table
         with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS place_fingerprints")
+            conn.execute("DROP TABLE IF EXISTS documents")
 
         with db.connection() as conn:
-            assert "place_fingerprints" not in _table_names(conn)
+            assert "documents" not in _table_names(conn)
 
         _converge(db)
 
         with db.connection() as conn:
-            assert "place_fingerprints" in _table_names(conn)
+            assert "documents" in _table_names(conn)
 
     def test_missing_table_columns_correct_after_restore(self, tmp_path):
         """Restored table has all expected columns."""
@@ -273,7 +265,7 @@ class TestSchemaConvergence:
         db = _make_db(tmp_path)
         _converge(db)
 
-        dropped = ["idx_knowledge_kind", "idx_goals_salience", "idx_transcript_channel"]
+        dropped = ["idx_episodes_channel", "idx_transcript_channel"]
         with db.connection() as conn:
             for idx in dropped:
                 conn.execute(f"DROP INDEX IF EXISTS {idx}")
@@ -336,15 +328,15 @@ class TestSchemaConvergence:
         _converge(db)
 
         with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS knowledge_vec")
+            conn.execute("DROP TABLE IF EXISTS episodes_vec")
 
         with db.connection() as conn:
-            assert "knowledge_vec" not in _virtual_table_names(conn)
+            assert "episodes_vec" not in _virtual_table_names(conn)
 
         _converge(db)
 
         with db.connection() as conn:
-            assert "knowledge_vec" in _virtual_table_names(conn)
+            assert "episodes_vec" in _virtual_table_names(conn)
 
     def test_fts5_table_is_queryable_after_creation(self, tmp_path):
         """Newly created FTS5 table accepts an FTS query without error."""
@@ -648,27 +640,27 @@ class TestSchemaConvergence:
 
     # ── 12. DDL extraction with comments ──────────────────────────────────────
 
-    def test_comment_with_semicolon_does_not_break_ddl_extraction(self, tmp_path):
-        """SQL comments containing semicolons inside CREATE TABLE blocks don't
-        cause _extract_table_ddl() to truncate the DDL prematurely."""
+    def test_comment_does_not_break_ddl_extraction(self, tmp_path):
+        """SQL comments inside CREATE TABLE blocks don't cause _extract_table_ddl()
+        to truncate the DDL prematurely."""
         db = _make_db(tmp_path)
         svc = SchemaConvergenceService(db, embedding_dimensions=256)
 
-        # The knowledge table has a column with a comment containing a semicolon:
-        #   reliability TEXT ...  -- dropped by migration 026; kept here for migration compat
+        # data_graph has an inline comment on the kind column:
+        #   -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
         # If the extractor is broken it will truncate before the final ')'.
         schema_sql = svc._schema_path.read_text()
-        ddl = svc._extract_table_ddl(schema_sql, "knowledge")
+        ddl = svc._extract_table_ddl(schema_sql, "data_graph")
 
-        assert ddl is not None, "Failed to extract knowledge table DDL"
+        assert ddl is not None, "Failed to extract data_graph table DDL"
         # DDL must be a complete CREATE TABLE statement — ends with );
         stripped = ddl.strip().rstrip(";").strip()
         assert stripped.endswith(")"), (
-            f"knowledge DDL appears truncated (missing closing paren): ...{stripped[-60:]}"
+            f"data_graph DDL appears truncated (missing closing paren): ...{stripped[-60:]}"
         )
-        # Must contain columns that appear after the comment-with-semicolon line
+        # Must contain columns that appear after the comment line
         assert "search_queries" in ddl.lower(), (
-            "search_queries column absent — DDL was likely cut at the comment semicolon"
+            "search_queries column absent — DDL was likely cut at the comment"
         )
 
     def test_extract_table_ddl_strips_inline_comments(self, tmp_path):
@@ -801,11 +793,14 @@ class TestSchemaConvergence:
             tables = _table_names(conn)
 
         for legacy in (
+            "knowledge",
             "cognitive_reflexes",
             "triage_calibration_events",
             "persistent_tasks",
             "document_chunks",
             "cortex_iterations",
+            "goals",
+            "goal_evidence",
         ):
             assert legacy not in tables, (
                 f"Removed table {legacy!r} must not be created on fresh convergence"

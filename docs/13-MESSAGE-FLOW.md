@@ -30,10 +30,12 @@ User (WebSocket)
        │
        ▼
   ┌─────────────────────────────┐
-  │  Pre-loop                   │
-  │  · seed memory from         │
-  │    past episodes            │
-  │  · thinking-level gate      │
+  │  pre_act()                  │
+  │  · memory recall via        │
+  │    handle_memory() —        │
+  │    canonical tool dispatch, │
+  │    stored ephemeral=0       │
+  │  · deliberation-score gate  │
   │    (exploration pass)       │
   └────────────┬────────────────┘
                │
@@ -100,9 +102,9 @@ All tool call records accumulate in memory during the loop. Nothing is written t
 
 When the prompt nears the context window limit, the system compacts before the next LLM call. This is a two-stage process.
 
-**Stage 1 — tool trail summary.** The accumulated tool trail is summarised into a single compact record. Ephemeral tool records are replaced in-place. If the prompt now fits, the loop continues normally.
+**Stage 1 — tool trail summary.** `TrailCompactionProcessor` summarises the accumulated tool trail into a single compact record. Ephemeral tool records are replaced in-place. If the prompt now fits, the loop continues normally.
 
-**Stage 2 — full restart.** If the prompt is still too large after Stage 1, the system summarises the entire channel history into a durable checkpoint, collapses the pre-restart trail into a single restart marker, and resets the loop to iteration zero. The checkpoint is prepended to every subsequent prompt as "Current State", so the model picks up where it left off.
+**Stage 2 — full restart.** If the prompt is still too large after Stage 1, `FullCompactionProcessor` summarises the entire channel history into a durable checkpoint, collapses the pre-restart trail into a single restart marker, and resets the loop to iteration zero. The checkpoint is prepended to every subsequent prompt as "Current State", so the model picks up where it left off.
 
 Both stages produce their own audit records stored with the turn. The wall-clock timeout continues ticking across a Stage 2 restart.
 
@@ -113,15 +115,12 @@ Both stages produce their own audit records stored with the turn. The wall-clock
 After the turn is stored, the user processor triggers a set of services synchronously. Because the response is already on the wire (sent via narration callbacks during the loop), this fan-out does not affect perceived latency.
 
 - **Conversation phase tracking** — updates the current phase based on both the user message and the response.
-- **Situation model** — updates the running model of context and state.
-- **Adaptive signals** — detects and stores behavioural patterns from the response.
 - **DMN timer reset** — defers the idle-trigger so proactive thoughts don't interrupt an active conversation.
 - **Metrics counter** — increments request and user-message totals.
-- **Compaction backstop** — safety check at turn boundary in case mid-loop compaction was not triggered.
 
 Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter.
 
-Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory skill directly. Contradiction detection happens at storage time.
+Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
 ---
 

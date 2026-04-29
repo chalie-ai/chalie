@@ -45,30 +45,25 @@ from pathlib import Path
 pytestmark = pytest.mark.integration
 
 _MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
+_PRETRAINED_DIR = str(Path(__file__).parent.parent / "data" / "pre-trained")
 
 
 @pytest.fixture(scope="module")
 def onnx_svc():
     from services.onnx_inference_service import OnnxInferenceService
-    return OnnxInferenceService(_MODELS_DIR)
+    return OnnxInferenceService(_MODELS_DIR, _PRETRAINED_DIR)
 
 
-class TestThinkingLevelClassifier:
+class TestDeliberationScoreClassifier:
 
-    def test_architecture_question_routes_to_high(self, onnx_svc):
-        import numpy as np
-        onehot = np.zeros((1, 4), dtype=np.float32)
-        onehot[0, 0] = 1.0  # none → index 0
-
-        label, confidence = onnx_svc.predict(
-            "thinking_level",
+    def test_architecture_question_scores_high(self, onnx_svc):
+        score = onnx_svc.predict_scalar(
+            "deliberation_score",
             "Design a fault-tolerant multi-region distributed system for a "
             "high-traffic e-commerce platform.",
-            extra_features=onehot,
         )
 
-        assert label == "high"
-        assert confidence > 0.4
+        assert score >= 0.7
 ```
 
 Names describe the real-world scenario: `test_architecture_question_routes_to_high`, not `test_predict_returns_dict`.

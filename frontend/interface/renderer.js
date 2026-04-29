@@ -1,7 +1,8 @@
 /**
  * Conversation spine DOM renderer.
  */
-import { BlockRenderer } from './blocks.js';
+import { renderMarkupTo } from './markup_renderer.js';
+import { extractPlaintext } from './markup_extract.js';
 
 const REMEMBER_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -21,7 +22,6 @@ export class Renderer {
    */
   constructor(spine) {
     this._spine = spine;
-    this._blockRenderer = new BlockRenderer();
     this._userScrolledUp = false;
     this._activeForm = null;
     this._initScrollTracking();
@@ -100,22 +100,19 @@ export class Renderer {
 
   /**
    * Append a Chalie speech form.
-   * @param {Array} blocks — block protocol array
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  appendChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
+  appendChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
+    renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
     el.appendChild(metaRow);
-
-    // Collapse any narration bubbles before appending the response
-    this._collapseNarrations();
 
     this._spine.appendChild(el);
     this._setActiveForm(el);
@@ -125,56 +122,139 @@ export class Renderer {
 
   /**
    * Prepend a Chalie speech form (for scroll-up pagination).
-   * @param {Array} blocks — block protocol array
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  prependChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
+  prependChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
+    renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
     el.appendChild(metaRow);
 
     this._spine.prepend(el);
     return el;
   }
 
-  /** Create a pending (thinking dots) form. Returns the element. */
-  createPendingForm() {
-    const el = this._createEl('div', 'speech-form speech-form--chalie');
-    const dots = this._createEl('div', 'thinking-indicator');
-    for (let i = 0; i < 3; i++) {
-      dots.appendChild(this._createEl('div', 'thinking-indicator__dot'));
-    }
-    el.appendChild(dots);
+  /**
+   * Create an ACT-cycle host — chrome-less placeholder for the live tool loop.
+   *
+   * Structure:
+   *   .act-cycle
+   *     .act-row          (logo + narrative line)
+   *       .act-logo       (blinking violet disc, always present)
+   *       .act-narrative  (italic text, mutated in-place by setActNarrative)
+   *     .act-tools        (cumulative tool list, populated by appendToolPill)
+   *
+   * No background, no border, no padding — the logo IS the placeholder.
+   * On final response, replaceActWithResponse swaps the whole node for a
+   * normal Chalie speech-form bubble.
+   */
+  createActCycle() {
+    const el = this._createEl('div', 'act-cycle');
+
+    const row = this._createEl('div', 'act-row');
+    const logo = this._createEl('span', 'act-logo');
+    const narrative = this._createEl('span', 'act-narrative');
+    row.appendChild(logo);
+    row.appendChild(narrative);
+    el.appendChild(row);
+
+    const tools = this._createEl('div', 'act-tools');
+    el.appendChild(tools);
+
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
   }
 
   /**
-   * Append a narration bubble — lightweight progress indicator during ACT loops.
+   * Set the active narration text inside an ACT cycle.
+   * Replaces the previous narrative — the spec is one-line-at-a-time, not
+   * a stack of iterations. The logo stays put; only the text mutates.
+   *
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} text — narration line from the LLM
-   * @param {number} step — iteration number
+   * @param {number} [step] — iteration number (stored as data attribute)
    */
-  appendNarrationBubble(text, step) {
-    const bubble = this._createEl('div', 'narration-bubble');
-    bubble.dataset.step = step;
-    bubble.textContent = text;
-
-    // Insert before the pending form (thinking dots) if present
-    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
-    if (pending) {
-      this._spine.insertBefore(bubble, pending);
-    } else {
-      this._spine.appendChild(bubble);
-    }
+  setActNarrative(actEl, text, step) {
+    if (!actEl) return;
+    const slot = actEl.querySelector(':scope > .act-row > .act-narrative');
+    if (!slot) return;
+    slot.textContent = text || '';
+    if (step != null) slot.dataset.step = String(step);
     this._scrollToBottom();
-    return bubble;
+  }
+
+  /**
+   * Append a tool row to an ACT cycle's cumulative tool list.
+   * Tool rows span the entire ACT loop — they are NOT nested under narrations.
+   *
+   * @param {HTMLElement} actEl — the .act-cycle element
+   * @param {string} callId — server-assigned id for resolveToolPill lookup
+   * @param {string} name — tool name to display
+   * @returns {HTMLElement|null} the row element (null if actEl falsy)
+   */
+  appendToolPill(actEl, callId, name) {
+    if (!actEl || !callId) return null;
+    const host = actEl.querySelector(':scope > .act-tools');
+    if (!host) return null;
+
+    const row = this._createEl('div', 'act-tool act-tool--running');
+    row.dataset.callId = callId;
+    row.dataset.startedAt = String(Date.now());
+
+    const nameEl = this._createEl('span', 'act-tool__name');
+    nameEl.textContent = name || 'tool';
+
+    const statusEl = this._createEl('span', 'act-tool__status');
+    const spinner = this._createEl('span', 'act-spinner');
+    statusEl.appendChild(spinner);
+
+    row.appendChild(nameEl);
+    row.appendChild(statusEl);
+    host.appendChild(row);
+    this._scrollToBottom();
+    return row;
+  }
+
+  /**
+   * Resolve a tool row — spinner → duration (ok) or literal "error" (!ok).
+   * Enforces a 150ms minimum visible duration so sub-100ms tools still flash
+   * the spinner before settling.
+   *
+   * @param {string} callId
+   * @param {number} ms — server-reported elapsed ms (>= 0)
+   * @param {boolean} ok
+   */
+  resolveToolPill(callId, ms, ok) {
+    if (!callId) return;
+    const row = this._spine.querySelector(
+      `.act-tool[data-call-id="${CSS.escape(callId)}"]`
+    );
+    if (!row) return;
+
+    const startedAt = Number.parseInt(row.dataset.startedAt || '0', 10);
+    const elapsed = startedAt ? Date.now() - startedAt : 200;
+    const wait = Math.max(0, 150 - elapsed);
+
+    setTimeout(() => {
+      row.classList.remove('act-tool--running');
+      row.classList.add(ok ? 'act-tool--done' : 'act-tool--error');
+      const statusEl = row.querySelector('.act-tool__status');
+      if (!statusEl) return;
+      statusEl.innerHTML = '';
+      if (ok) {
+        const seconds = (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
+        statusEl.textContent = `${seconds}s`;
+      } else {
+        statusEl.textContent = 'error';
+      }
+    }, wait);
   }
 
   /**
@@ -185,9 +265,9 @@ export class Renderer {
     const bubble = this._createEl('div', 'steer-bubble');
     bubble.textContent = text;
 
-    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
-    if (pending) {
-      this._spine.insertBefore(bubble, pending);
+    const act = this._spine.querySelector('.act-cycle');
+    if (act) {
+      this._spine.insertBefore(bubble, act);
     } else {
       this._spine.appendChild(bubble);
     }
@@ -196,56 +276,34 @@ export class Renderer {
   }
 
   /**
-   * Replace a pending form's thinking dots with actual content.
-   * @param {HTMLElement} form
-   * @param {Array} blocks — block protocol array
+   * Replace an ACT cycle with a final Chalie response bubble.
+   * The act-cycle node is removed; a fresh .speech-form--chalie is appended
+   * in its place. This is the spec-mandated transition: ACT UI vanishes
+   * entirely on completion, replaced by a normal chat bubble.
+   *
+   * @param {HTMLElement} actEl — the .act-cycle element
+   * @param {string} content — XML markup string
    * @param {{topic?: string, duration_ms?: number}} [meta]
    */
-  resolvePendingForm(form, blocks, meta = {}) {
-    form.innerHTML = '';
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.appendChild(this._blockRenderer.render(blocks));
-    form.appendChild(textEl);
-
-    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
-    form.appendChild(metaRow);
-
-    // Collapse narration bubbles into an expandable group
-    this._collapseNarrations();
-
-    this._setActiveForm(form);
-    this._scrollToBottom();
+  replaceActWithResponse(actEl, content, meta = {}) {
+    if (actEl?.isConnected) actEl.remove();
+    return this.appendChalieForm(content, meta);
   }
 
   /**
-   * Replace a pending form with an error message.
-   * @param {HTMLElement} form
+   * Replace an ACT cycle with an error speech-form.
+   * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} message
    */
-  resolvePendingFormError(form, message) {
-    form.innerHTML = '';
-    form.classList.add('speech-form--error');
+  replaceActWithError(actEl, message) {
+    if (actEl?.isConnected) actEl.remove();
+    const el = this._createEl('div', 'speech-form speech-form--chalie speech-form--error');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = message;
-    form.appendChild(textEl);
+    el.appendChild(textEl);
+    this._spine.appendChild(el);
     this._scrollToBottom();
-  }
-
-  /**
-   * Upgrade a pending (thinking dots) form to a brief placeholder phrase.
-   * Called after 2 seconds when the response is still in flight.
-   * @param {HTMLElement} form
-   */
-  upgradePendingText(form) {
-    const phrases = ['Working on it...', 'One moment...', 'On it...', 'Thinking...'];
-    const text = phrases[Math.floor(Math.random() * phrases.length)];
-    const dots = form.querySelector('.thinking-indicator');
-    if (!dots) return; // already resolved
-    form.innerHTML = '';
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
-    textEl.style.opacity = '0.80';
-    form.appendChild(textEl);
+    return el;
   }
 
   /** Remove all children from the spine. */
@@ -256,30 +314,6 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  _collapseNarrations() {
-    const bubbles = this._spine.querySelectorAll('.narration-bubble:not(.narration--collapsed), .steer-bubble:not(.narration--collapsed)');
-    if (bubbles.length < 2) return; // Don't collapse a single bubble
-
-    const wrapper = this._createEl('div', 'narration-group narration-group--collapsed');
-    const toggle = this._createEl('button', 'narration-toggle');
-    toggle.textContent = `${bubbles.length} steps`;
-    toggle.addEventListener('click', () => {
-      wrapper.classList.toggle('narration-group--collapsed');
-      toggle.textContent = wrapper.classList.contains('narration-group--collapsed')
-        ? `${bubbles.length} steps`
-        : 'collapse';
-    });
-    wrapper.appendChild(toggle);
-
-    // Move bubbles into the wrapper
-    const firstBubble = bubbles[0];
-    firstBubble.parentNode.insertBefore(wrapper, firstBubble);
-    for (const b of bubbles) {
-      b.classList.add('narration--collapsed');
-      wrapper.appendChild(b);
-    }
-  }
 
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
@@ -327,7 +361,6 @@ export class Renderer {
     });
     metaRow.appendChild(rememberBtn);
 
-    // Speak button — enters voice mode and plays this message
     if (text) {
       const speakBtn = this._createEl('button', 'speech-form__speak-btn');
       speakBtn.setAttribute('aria-label', 'Listen to this message');
@@ -346,23 +379,8 @@ export class Renderer {
     return metaRow;
   }
 
-  _extractPlainText(blocks) {
-    if (!Array.isArray(blocks)) return '';
-    const parts = [];
-    for (const b of blocks) {
-      if (b.type === 'text' || b.type === 'header' || b.type === 'code') {
-        if (b.content) parts.push(b.content);
-      } else if (b.type === 'list' && Array.isArray(b.items)) {
-        parts.push(b.items.join('\n'));
-      } else if (b.type === 'keyvalue' && Array.isArray(b.pairs)) {
-        parts.push(b.pairs.map(p => `${p.key}: ${p.value}`).join('\n'));
-      } else if (b.type === 'table') {
-        if (Array.isArray(b.rows)) parts.push(b.rows.map(r => r.join(', ')).join('\n'));
-      } else if (b.type === 'alert' && b.message) {
-        parts.push(b.message);
-      }
-    }
-    return parts.join('\n');
+  _extractPlainText(content) {
+    return extractPlaintext(content || '');
   }
 
   _createEl(tag, className) {

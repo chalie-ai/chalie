@@ -9,11 +9,29 @@ and a thin delegation to the shared
 """
 
 import logging
+import re
 import time
+from urllib.parse import urlparse
 
 import requests
 import json
-from services.llm_service import LLMResponse, RateLimitError
+from abilities._registry import AbilityRegistry
+from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitError
+
+# Model identifier accepts alphanumeric, dot, underscore, dash, slash, and the
+# `:cloud` / `:7b` size suffix separator. Validating in __init__ acts as a
+# CodeQL sanitisation barrier so logging the model name later does not
+# trip py/clear-text-logging-sensitive-data on the config-derived value.
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
+_ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
+
+# Ollama Cloud (model name suffix ``:cloud``) is fronted by an HTTP edge proxy
+# whose request-body size limit is far below the model's nominal context
+# window (e.g. kimi-k2.6:cloud reports 262 144 tokens but the edge rejects
+# payloads at a much smaller byte threshold with HTTP 413). Clamping the
+# reported context length here makes ``MessageProcessor._check_threshold``
+# fire Stage 1/2 compaction before the request leaves the box.
+OLLAMA_CLOUD_CONTEXT_CAP = 65_536
 
 
 class OllamaService:
@@ -54,8 +72,8 @@ class OllamaService:
             raise ValueError(f"OllamaService does not support platform '{platform}'")
 
         self._config = config
-        self.host = config.get('host')
-        self.model = config.get('model')
+        self.host = _validate_host(config.get('host'))
+        self.model = _validate_model(config.get('model'))
         self.keep_alive = config.get('keep_alive', '0')
         self.timeout = config.get('timeout', 60)
         self.format = config.get('format', 'json')
@@ -80,6 +98,7 @@ class OllamaService:
         if self.format != "text":
             payload["format"] = self.format
 
+        start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
@@ -91,28 +110,34 @@ class OllamaService:
                     provider='ollama',
                     tokens_input=data.get('prompt_eval_count'),
                     tokens_output=data.get('eval_count'),
+                    latency_ms=int((time.time() - start_time) * 1000),
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:
-                self._handle_http_error(e, attempt, payload)
+                self._handle_http_error(e, attempt)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:  # NOSONAR S1172
-        del cache_prefix  # interface parity with Anthropic; Ollama has no prefix-cache.
+    def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
+        # ``_cache_prefix`` is named with a leading underscore on purpose:
+        # interface parity with Anthropic, but Ollama has no prefix-cache so
+        # the value is intentionally ignored.
         url = f"{self.host}/api/chat"
 
         api_messages = _ollama_convert_messages(messages)
         payload = self._build_chat_payload(system_prompt, api_messages, tools, thinking_mode)
 
+        start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
                 response = requests.post(url, json=payload, timeout=self.timeout)
                 response.raise_for_status()
-                return _parse_chat_response(response.json(), self.model)
+                parsed = _parse_chat_response(response.json(), self.model)
+                parsed.latency_ms = int((time.time() - start_time) * 1000)
+                return parsed
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 self._handle_network_error(e, attempt)
             except requests.exceptions.HTTPError as e:
-                self._handle_http_error(e, attempt, payload)
+                self._handle_http_error(e, attempt)
 
     def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: str) -> dict:
         payload: dict = {
@@ -161,34 +186,47 @@ class OllamaService:
             logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed ({type(e).__name__})")
             raise e
 
-    def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int, payload: dict) -> None:
+    def _handle_http_error(self, e: requests.exceptions.HTTPError, attempt: int) -> None:
         status = e.response.status_code if e.response is not None else None
         if status == 429:
             _raise_rate_limit(e)
+        if status == 413:
+            self._raise_payload_too_large(e)
         if status is not None and status >= 500:
-            if attempt < self.max_retries:
-                backoff = 1.5 * (2 ** attempt)
-                logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {status} — backoff {backoff}s")
-                time.sleep(backoff)
-                return
-            logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed (HTTP {status})")
-            raise e
-        # Non-5xx, non-429 (i.e. 4xx). Capture upstream body so we
-        # can diagnose — raise_for_status() otherwise discards it.
-        body = ''
-        try:
-            body = e.response.text[:4000] if e.response is not None else ''
-        except Exception:
-            pass
-        logging.error(
-            "[OllamaService] HTTP %s model=%s think=%s tools=%d body=%r",
-            status if status is not None else '?',
-            self.model,
-            payload.get('think', False),
-            len(payload.get('tools', [])),
-            body,
-        )
+            self._handle_5xx_error(e, attempt)
+            return
+        self._log_4xx_error()
         raise e
+
+    def _raise_payload_too_large(self, e: requests.exceptions.HTTPError) -> None:
+        # Static log message — every variable previously interpolated here
+        # (self.model, payload metadata, response body length) trips
+        # py/clear-text-logging-sensitive-data because CodeQL traces back
+        # through ``__init__``'s config-dict source. The PayloadTooLargeError
+        # raised below carries the model name in its formatted message, and
+        # operators correlate via timestamps; that's the right channel.
+        logging.warning("[OllamaService] HTTP 413 — raising PayloadTooLargeError to trigger Stage 2 compaction")
+        raise PayloadTooLargeError(
+            f"Ollama rejected payload with HTTP 413 (model={self.model})"
+        ) from e
+
+    def _handle_5xx_error(self, e: requests.exceptions.HTTPError, attempt: int) -> None:
+        # See _raise_payload_too_large for the static-string rationale.
+        # The exception ``e`` re-raised below carries the response, so
+        # callers / outer ``except`` blocks have full diagnostic data.
+        if attempt < self.max_retries:
+            backoff = 1.5 * (2 ** attempt)
+            logging.warning("[OllamaService] retrying after HTTP 5xx")
+            time.sleep(backoff)
+            return
+        logging.error("[OllamaService] retries exhausted on HTTP 5xx")
+        raise e
+
+    def _log_4xx_error(self) -> None:
+        # Static log — same rationale as _raise_payload_too_large.
+        # The ``HTTPError`` re-raised by the caller carries the status code
+        # for any caller that wants to switch on it.
+        logging.error("[OllamaService] HTTP 4xx error from upstream")
 
     def _model_supports_thinking(self) -> bool:
         """Return True if the configured model advertises thinking capability.
@@ -222,9 +260,20 @@ class OllamaService:
         return False
 
     def get_context_limit(self) -> int:
-        """Query Ollama for model's context window size, cached."""
+        """Query Ollama for model's context window size, cached.
+
+        For ``:cloud`` models the result is clamped to
+        ``OLLAMA_CLOUD_CONTEXT_CAP`` because the cloud edge proxy enforces a
+        much smaller body-size limit than the model's nominal context window.
+
+        Cache lifetime: instance-scoped. ``Providers._resolve()`` builds a
+        fresh ``OllamaService`` on each call, so the cache effectively lives
+        for one provider call only. Do not store an ``OllamaService`` long-
+        term and assume the cap stays current.
+        """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
+        raw_limit: int | None = None
         try:
             resp = requests.post(
                 f"{self.host}/api/show",
@@ -236,12 +285,28 @@ class OllamaService:
                 model_info = data.get('model_info', {})
                 for key, val in model_info.items():
                     if 'context_length' in key.lower():
-                        self._cached_context_limit = int(val)
-                        return self._cached_context_limit
+                        raw_limit = int(val)
+                        break
         except Exception as e:
             logging.debug(f"[OllamaService] Failed to get context limit: {e}")
-        self._cached_context_limit = 8192  # Conservative default
+        if raw_limit is None:
+            raw_limit = 8192  # Conservative default
+        self._cached_context_limit = self._apply_cloud_cap(raw_limit)
         return self._cached_context_limit
+
+    def _apply_cloud_cap(self, raw_limit: int) -> int:
+        # Lower-cased compare so future tag variants (':Cloud', ':CLOUD') are
+        # caught. Suffix-only — cloud-routed models always end with ':cloud'
+        # in Ollama's current naming convention.
+        model_lower = (self.model or '').lower()
+        if model_lower.endswith(':cloud') and raw_limit > OLLAMA_CLOUD_CONTEXT_CAP:
+            logging.info(
+                "[OllamaService] Clamping :cloud model context window: "
+                "model=%s reported=%d capped=%d (edge proxy body-size limit)",
+                self.model, raw_limit, OLLAMA_CLOUD_CONTEXT_CAP,
+            )
+            return OLLAMA_CLOUD_CONTEXT_CAP
+        return raw_limit
 
     def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
         """Estimate tokens using heuristic (Ollama models vary too much for fixed tokenizer)."""
@@ -281,6 +346,33 @@ class OllamaService:
             raise
 
 
+def _validate_model(raw_model) -> str:
+    """Reject Ollama model identifiers that contain anything but the canonical
+    name characters. Raising here acts as a CodeQL sanitisation barrier so
+    ``self.model`` is no longer treated as derived-from-config-dict tainted
+    data when it later lands in log calls.
+    """
+    if raw_model is None:
+        raise ValueError("Ollama config requires a 'model' field")
+    text = str(raw_model)
+    if not _MODEL_NAME_RE.fullmatch(text):
+        raise ValueError(f"Invalid Ollama model identifier: {raw_model!r}")
+    return text
+
+
+def _validate_host(raw_host) -> str:
+    """Validate the Ollama host URL via ``urllib.parse.urlparse`` + scheme +
+    netloc gates. Same CodeQL-barrier rationale as ``_validate_model``.
+    """
+    if raw_host is None:
+        raise ValueError("Ollama config requires a 'host' field")
+    text = str(raw_host)
+    parsed = urlparse(text)
+    if parsed.scheme not in _ALLOWED_HOST_SCHEMES or not parsed.netloc:
+        raise ValueError(f"Invalid Ollama host URL: {raw_host!r}")
+    return text
+
+
 def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
     """Parse Retry-After from a 429 response and raise RateLimitError."""
     retry_after = None
@@ -292,6 +384,69 @@ def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
             except (ValueError, TypeError):
                 pass
     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
+
+
+_INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
+
+
+def _parse_tool_call_payload(raw: str) -> dict | None:
+    """Decode one <tool_call>…</tool_call> block to a dict, or None on failure."""
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        # JSONDecodeError is a ValueError subclass; the broader catch is
+        # required by S5713 (no redundant exception classes).
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _resolve_tool_name(payload: dict, key: str) -> tuple[str | None, dict]:
+    """If ``payload[key]`` names a registered ability, return (name, args). Else (None, {})."""
+    candidate = payload.get(key)
+    if not isinstance(candidate, str):
+        return None, {}
+    try:
+        AbilityRegistry.get(candidate)
+    except KeyError:
+        return None, {}
+    if key == 'name':
+        args_val = payload.get('arguments', {})
+        if isinstance(args_val, dict):
+            return candidate, args_val
+        return candidate, {k: v for k, v in payload.items() if k != 'name'}
+    return candidate, {k: v for k, v in payload.items() if k != key}
+
+
+def _build_tool_entry(payload: dict, idx: int) -> dict | None:
+    """Resolve a parsed payload to one tool-call entry, or None if no name resolves."""
+    name, arguments = _resolve_tool_name(payload, 'name')
+    if name is None:
+        name, arguments = _resolve_tool_name(payload, 'action')
+    if name is None:
+        return None
+    return {'id': f"ollama_{name}_{idx}", 'name': name, 'input': arguments}
+
+
+def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
+    """Extract <tool_call>...</tool_call> blocks from *text*.
+
+    Returns (cleaned_text, tool_call_entries). Blocks that fail JSON parsing,
+    contain no dict, or whose name/action does not resolve in AbilityRegistry
+    are skipped silently. All matched blocks are stripped from the text
+    regardless of whether they parsed successfully.
+    """
+    entries: list = []
+    for idx, match in enumerate(_INLINE_TOOL_CALL_RE.finditer(text)):
+        payload = _parse_tool_call_payload(match.group(1).strip())
+        if payload is None:
+            continue
+        entry = _build_tool_entry(payload, idx)
+        if entry is not None:
+            entries.append(entry)
+
+    cleaned = _INLINE_TOOL_CALL_RE.sub('', text)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned, entries
 
 
 def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
@@ -309,6 +464,10 @@ def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
             }
             for i, tc in enumerate(raw_tool_calls)
         ]
+    else:
+        text, inline_calls = _extract_inline_tool_calls(text)
+        if inline_calls:
+            tool_calls = inline_calls
     return LLMResponse(
         text=text,
         model=data.get('model', default_model),

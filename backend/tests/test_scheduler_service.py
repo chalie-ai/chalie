@@ -111,7 +111,7 @@ class TestBuildRecurrence:
         item = {
             "id": "xyz99", "item_type": "prompt", "message": "Check my progress",
             "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
-            "recurrence": "daily", "topic": "goals", "created_by_session": None,
+            "recurrence": "daily", "topic": "general", "created_by_session": None,
             "group_id": "xyz99", "is_prompt": True,
         }
         result = scheduler_svc._build_recurrence(item, datetime(2024, 1, 15, 9, 1, tzinfo=timezone.utc))
