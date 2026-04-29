@@ -9,7 +9,9 @@
 const DROP_TAGS = new Set(['actions']);
 
 function _stripActionsSubtrees(root) {
-  for (const node of [...root.querySelectorAll('actions')]) {
+  // querySelectorAll returns a static NodeList — safe to iterate while
+  // mutating the tree, no spread-into-array required.
+  for (const node of root.querySelectorAll('actions')) {
     node.remove();
   }
 }

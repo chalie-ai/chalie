@@ -46,11 +46,11 @@ _MAX_CONTENT_LEN = 5_000_000
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
-def sanitize(html: str) -> str:
+def sanitize(html: str | None) -> str:
     """Strip every tag / attribute outside the allowlist. Returns clean HTML.
 
-    Single chokepoint for LLM-emitted markup. Empty / non-string input
-    returns ``""`` so downstream code never has to nil-check.
+    Single chokepoint for LLM-emitted markup. Empty / ``None`` input returns
+    ``""`` so downstream code never has to nil-check.
     """
     if not html:
         return ""
@@ -160,4 +160,9 @@ def extract_plaintext(html: str) -> str:
     return " ".join(decoded.split()).strip()
 
 
-_IMG_ALT_RE = re.compile(r'<img\b[^>]*\balt="([^"]*)"[^>]*/?\s*>', re.IGNORECASE)
+# Targeted regex for the post-pass1 strip-and-replace step. The first pass
+# already canonicalised the input through nh3 so only one ``<img>`` shape
+# survives: the tag attributes are space-separated, double-quote-delimited,
+# and the closing form is ``>``. Pattern is anchored at ``<img`` and never
+# permits ``<`` inside the attribute zone — no nested quantifiers, bounded.
+_IMG_ALT_RE = re.compile(r'<img [^<>]*?alt="([^"<>]*)"[^<>]*?>')

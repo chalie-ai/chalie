@@ -138,7 +138,7 @@ function _wireActionButton(actionEl) {
 }
 
 function _dashToCamel(s) {
-  return s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
+  return s.replaceAll(/-([a-z])/g, (_m, c) => c.toUpperCase());
 }
 
 function _wireProgrammatic(root) {
