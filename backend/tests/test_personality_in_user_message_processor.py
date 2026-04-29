@@ -5,7 +5,7 @@ real voices.jsonl corpus, zero mocks for service internals.
 
 Verifies:
   - UserMessageProcessor.getSystemPrompt() starts with the personality voice line.
-  - Background processors (DMN, GoalPursuit, Scheduled, UserSummary,
+  - Background processors (DMN, Subagent, Scheduled, UserSummary,
     EpisodeEncoder, SuperEpisodeEncoder) do NOT emit the personality voice.
 """
 
@@ -111,8 +111,8 @@ _BACKGROUND_PROCESSOR_CASES = [
         {'raw_input': 'review context'},
     ),
     (
-        'GoalPursuitProcessor',
-        'services.goal_pursuit_processor',
+        'SubagentProcessor',
+        'services.subagent_processor',
         {'raw_input': 'pursue goal'},
     ),
     (

@@ -235,20 +235,20 @@ def test_find_tools_module_level_abilities_db_path():
 
 
 # ===========================================================================
-# goal_pursuit
+# subagent
 # ===========================================================================
 
 
-def test_goal_pursuit_contract():
-    """GoalPursuitAbility satisfies the ABC contract."""
-    from abilities.goal_pursuit import GoalPursuitAbility
-    _assert_contract(GoalPursuitAbility, name="goal_pursuit", timeout=10)
+def test_subagent_contract():
+    """SubagentAbility satisfies the ABC contract."""
+    from abilities.subagent import SubagentAbility
+    _assert_contract(SubagentAbility, name="subagent", timeout=10)
 
 
-def test_goal_pursuit_registered():
-    """AbilityRegistry.get('goal_pursuit') returns a GoalPursuitAbility."""
-    from abilities.goal_pursuit import GoalPursuitAbility
-    _assert_registered("goal_pursuit", GoalPursuitAbility)
+def test_subagent_registered():
+    """AbilityRegistry.get('subagent') returns a SubagentAbility."""
+    from abilities.subagent import SubagentAbility
+    _assert_registered("subagent", SubagentAbility)
 
 
 # ===========================================================================

@@ -32,14 +32,14 @@ class TestImport:
             SystemMessagePrompt,
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            GoalPursuitSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
+            SubagentSystemMessagePrompt,
         )
         assert callable(SystemMessagePrompt)
         assert callable(UnifiedSystemMessagePrompt)
         assert callable(DMNSystemMessagePrompt)
-        assert callable(GoalPursuitSystemMessagePrompt)
         assert callable(ScheduledSystemMessagePrompt)
+        assert callable(SubagentSystemMessagePrompt)
 
     def test_import_does_not_hit_database(self):
         """Importing the module must not open any DB connections."""
@@ -242,7 +242,7 @@ class TestUnifiedSystemMessagePrompt:
 
 
 class TestBackgroundChannelPrompts:
-    """DMN, GoalPursuit, and Scheduled each return a non-empty inlined string."""
+    """DMN, Subagent, and Scheduled each return a non-empty inlined string."""
 
     def test_dmn_returns_non_empty(self):
         from services.system_message_prompt import DMNSystemMessagePrompt
@@ -250,9 +250,9 @@ class TestBackgroundChannelPrompts:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_goal_pursuit_returns_non_empty(self):
-        from services.system_message_prompt import GoalPursuitSystemMessagePrompt
-        result = GoalPursuitSystemMessagePrompt().getPrompt()
+    def test_subagent_returns_non_empty(self):
+        from services.system_message_prompt import SubagentSystemMessagePrompt
+        result = SubagentSystemMessagePrompt().getPrompt()
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -264,7 +264,7 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "GoalPursuitSystemMessagePrompt",
+        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_return_type_is_str(self, cls_name):
@@ -276,7 +276,7 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "GoalPursuitSystemMessagePrompt",
+        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_mentions_chalie(self, cls_name):
@@ -288,7 +288,7 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "GoalPursuitSystemMessagePrompt",
+        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_idempotent(self, cls_name):
@@ -300,7 +300,7 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "GoalPursuitSystemMessagePrompt",
+        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_no_file_reads(self, cls_name):
@@ -331,9 +331,9 @@ class TestInheritanceChain:
         from services.system_message_prompt import SystemMessagePrompt, DMNSystemMessagePrompt
         assert issubclass(DMNSystemMessagePrompt, SystemMessagePrompt)
 
-    def test_goal_pursuit_is_subclass(self):
-        from services.system_message_prompt import SystemMessagePrompt, GoalPursuitSystemMessagePrompt
-        assert issubclass(GoalPursuitSystemMessagePrompt, SystemMessagePrompt)
+    def test_subagent_is_subclass(self):
+        from services.system_message_prompt import SystemMessagePrompt, SubagentSystemMessagePrompt
+        assert issubclass(SubagentSystemMessagePrompt, SystemMessagePrompt)
 
     def test_scheduled_is_subclass(self):
         from services.system_message_prompt import SystemMessagePrompt, ScheduledSystemMessagePrompt
@@ -344,13 +344,13 @@ class TestInheritanceChain:
             SystemMessagePrompt,
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            GoalPursuitSystemMessagePrompt,
+            SubagentSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
         )
         for cls in (
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            GoalPursuitSystemMessagePrompt,
+            SubagentSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
         ):
             assert isinstance(cls(), SystemMessagePrompt)

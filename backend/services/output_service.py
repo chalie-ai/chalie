@@ -94,7 +94,7 @@ class OutputService:
             'tool_result': 'response',
             'reminder': 'reminder',
             'task': 'task',
-            'goal_pursuit': 'task',
+            'subagent': 'task',
             'scheduled_prompt': 'task',
             'critic_escalation': 'escalation',
             'notification': 'notification',

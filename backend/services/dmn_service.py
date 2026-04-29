@@ -183,7 +183,7 @@ class DMNService:
         """Return the most recently active user-facing channel, or 'general'.
 
         Whitelist: only rows with channel='user' are considered user-facing.
-        After the Commit 9 channel collapse, 'dmn', 'goal_pursuit', and
+        After the Commit 9 channel collapse, 'dmn', 'subagent', and
         'scheduled' are flat strings that accumulate in transcript — a LIKE
         exclusion no longer works. Whitelist is the safe, future-proof approach.
         Decision: Option A (whitelist) chosen — all user turns go to channel='user'

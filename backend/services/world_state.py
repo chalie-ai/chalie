@@ -15,7 +15,7 @@ Push sites:
 Pull sites (read inside render()):
   - telemetry        — flat key/value rows persisted from the FE heartbeat
   - scheduled_items  — upcoming / recently-fired schedule entries
-  - transcript WHERE channel='goal_pursuit' — active pursuits
+  - transcript WHERE channel='subagent' — active pursuits
 
 Output format (literal):
   ### Background Telemetry,Processes & Signals
@@ -57,11 +57,11 @@ ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, due_at ASC
 LIMIT 200
 """
 
-# bg_process query — recent goal_pursuit transcript rows (schema uses created_at, not updated_at)
+# bg_process query — recent subagent transcript rows (schema uses created_at, not updated_at)
 _BG_PROCESS_SQL = """
 SELECT content, created_at
 FROM transcript
-WHERE channel = 'goal_pursuit'
+WHERE channel = 'subagent'
   AND created_at >= datetime('now', '-24 hours')
 ORDER BY created_at DESC
 LIMIT 10
@@ -419,7 +419,7 @@ class WorldState:
         return lines
 
     def _render_bg_process(self) -> list[str]:
-        """Produce [bg_process(...)] lines from goal_pursuit transcript rows."""
+        """Produce [bg_process(...)] lines from subagent transcript rows."""
         rows = _fetch_bg_process_rows()
         lines = []
         for row in rows:

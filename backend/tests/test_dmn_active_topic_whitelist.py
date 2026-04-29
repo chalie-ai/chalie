@@ -8,7 +8,7 @@
 
 """Unit tests for DMNService._active_topic() — Option A whitelist (Commit 9 lockstep fix).
 
-After the Commit 9 channel collapse, 'dmn', 'goal_pursuit', and 'scheduled' are
+After the Commit 9 channel collapse, 'dmn', 'subagent', and 'scheduled' are
 flat channel strings in the transcript table. The old LIKE-exclusion approach no
 longer works. _active_topic() now uses a strict whitelist:
     WHERE channel = 'user'
@@ -85,9 +85,9 @@ class TestActiveTopicWhitelist:
         svc = _make_dmn_service(store)
         assert svc._active_topic() == 'general'
 
-    def test_returns_general_when_only_goal_pursuit_rows(self, db, store):
-        """Flat 'goal_pursuit' channel is excluded by whitelist → returns 'general'."""
-        _insert_transcript(db, channel='goal_pursuit', role='goal_pursuit',
+    def test_returns_general_when_only_subagent_rows(self, db, store):
+        """Flat 'subagent' channel is excluded by whitelist → returns 'general'."""
+        _insert_transcript(db, channel='subagent', role='subagent',
                            content='pursuing goal', ts='2026-04-10T12:00:00')
 
         svc = _make_dmn_service(store)
@@ -110,10 +110,10 @@ class TestActiveTopicWhitelist:
         svc = _make_dmn_service(store)
         assert svc._active_topic() == 'user'
 
-    def test_user_channel_returned_even_when_goal_pursuit_is_more_recent(self, db, store):
-        """Whitelist: 'user' row at 10:00 wins over 'goal_pursuit' row at 12:00."""
+    def test_user_channel_returned_even_when_subagent_is_more_recent(self, db, store):
+        """Whitelist: 'user' row at 10:00 wins over 'subagent' row at 12:00."""
         _insert_transcript(db, channel='user', ts='2026-04-10T10:00:00')
-        _insert_transcript(db, channel='goal_pursuit', role='goal_pursuit',
+        _insert_transcript(db, channel='subagent', role='subagent',
                            content='pursuing', ts='2026-04-10T12:00:00')
 
         svc = _make_dmn_service(store)
@@ -140,10 +140,10 @@ class TestActiveTopicWhitelist:
         assert svc._active_topic() == 'user'
 
     def test_all_three_background_channels_excluded_simultaneously(self, db, store):
-        """dmn + goal_pursuit + scheduled all inserted; no user row → returns 'general'."""
+        """dmn + subagent + scheduled all inserted; no user row → returns 'general'."""
         _insert_transcript(db, channel='dmn', role='proactive_thought',
                            ts='2026-04-10T11:00:00')
-        _insert_transcript(db, channel='goal_pursuit', role='goal_pursuit',
+        _insert_transcript(db, channel='subagent', role='subagent',
                            ts='2026-04-10T11:30:00')
         _insert_transcript(db, channel='scheduled', role='scheduled',
                            ts='2026-04-10T12:00:00')

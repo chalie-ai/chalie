@@ -92,12 +92,12 @@ class UserMessageProcessor(MessageProcessor):
     ALWAYS_AVAILABLE: list[str] = [
         "document",
         "find_tools",
-        "goal_pursuit",
         "list",
         "memory",
         "read",
         "review_tool_calls",
         "schedule",
+        "subagent",
     ]
     DISCOVERABLE: list[str] = [
         "browser",

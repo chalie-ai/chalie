@@ -313,13 +313,13 @@ class TestActiveTopicWhitelist:
     def test_returns_user_even_when_only_background_channels(self, db, store):
         """Whitelist semantics: even with no 'user' rows, the fallback is still 'general'.
 
-        Inserting only background-channel rows (goal_pursuit, dmn, scheduled)
+        Inserting only background-channel rows (subagent, dmn, scheduled)
         must NOT cause _active_topic() to return a background channel name.
         The whitelist forces the result to either 'user' or 'general'.
         """
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'goal_pursuit', 'running...', '2026-04-10T12:00:00')"
+            "VALUES ('subagent', 'subagent', 'running...', '2026-04-10T12:00:00')"
         )
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "

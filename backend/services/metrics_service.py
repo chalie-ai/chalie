@@ -119,7 +119,7 @@ class MetricsService:
             'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued', 'episodes_generated',
             'user_messages_total',
-            'dmn_turns_total', 'goal_pursuit_turns_total', 'scheduled_turns_total'
+            'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total'
         ]
 
         for name in counter_names:

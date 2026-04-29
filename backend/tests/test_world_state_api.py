@@ -195,16 +195,16 @@ class TestWorldStateScheduleRendering:
 
 @pytest.mark.unit
 class TestWorldStateBgProcessRendering:
-    """Rows in transcript WHERE channel='goal_pursuit' appear as [bg_process(…)]
+    """Rows in transcript WHERE channel='subagent' appear as [bg_process(…)]
     lines and in inputs.bg_processes."""
 
-    def test_goal_pursuit_row_appears_in_inputs_bg_processes(self, authed_client):
+    def test_subagent_row_appears_in_inputs_bg_processes(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Booking hotel', ?)",
+            "VALUES ('subagent', 'assistant', 'Booking hotel', ?)",
             (_recent_iso(60),),
         )
         db_conn.commit()
@@ -213,13 +213,13 @@ class TestWorldStateBgProcessRendering:
         contents = [r["content"] for r in data["inputs"]["bg_processes"]]
         assert "Booking hotel" in contents
 
-    def test_goal_pursuit_row_appears_in_rendered_block(self, authed_client):
+    def test_subagent_row_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Booking holiday flights', ?)",
+            "VALUES ('subagent', 'assistant', 'Booking holiday flights', ?)",
             (_recent_iso(60),),
         )
         db_conn.commit()
@@ -286,7 +286,7 @@ class TestWorldStateFullLifecycle:
         # bg_process
         db_conn.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Booking holiday flights', ?)",
+            "VALUES ('subagent', 'assistant', 'Booking holiday flights', ?)",
             (_recent_iso(60),),
         )
         db_conn.commit()

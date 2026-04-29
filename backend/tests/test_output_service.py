@@ -134,10 +134,10 @@ class TestOutputService:
         channels = [ch for ch, _ in mock_store._published]
         assert "output:events" in channels
 
-    def test_enqueue_proactive_goal_pursuit_maps_to_task_event(self, service, mock_store):
-        """source='goal_pursuit' maps to SSE event type 'task'."""
+    def test_enqueue_proactive_subagent_maps_to_task_event(self, service, mock_store):
+        """source='subagent' maps to SSE event type 'task'."""
         with patch('api.push.send_push_to_all'):
-            service.enqueue_proactive("thread-42", "Progress", source='goal_pursuit')
+            service.enqueue_proactive("thread-42", "Progress", source='subagent')
 
         for ch, msg in mock_store._published:
             if ch == "output:events":
@@ -177,9 +177,9 @@ class TestOutputService:
     # source_type_map coverage
     # ------------------------------------------------------------------ #
 
-    def test_source_goal_pursuit_maps_to_task_event_type(self, service, mock_store):
-        """Verify that 'goal_pursuit' source produces event type 'task' in enqueue_text."""
-        metadata = {"source": "goal_pursuit"}
+    def test_source_subagent_maps_to_task_event_type(self, service, mock_store):
+        """Verify that 'subagent' source produces event type 'task' in enqueue_text."""
+        metadata = {"source": "subagent"}
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("t", "msg", "UNIFIED", 1.0, 0.0, metadata)
 

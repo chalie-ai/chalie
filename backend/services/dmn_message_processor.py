@@ -23,7 +23,7 @@ class DMNMessageProcessor(MessageProcessor):
       MAX_ITERATIONS = 15  (vs. base 30)
       MAX_TIMEOUT    = 300 (5 minutes, vs. base 900)
 
-    ALWAYS_AVAILABLE excludes 'goal_pursuit' to prevent a background
+    ALWAYS_AVAILABLE excludes 'subagent' to prevent a background
     process from spawning further background work.
     """
 

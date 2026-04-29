@@ -106,7 +106,6 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "code_eval",
     "document",
     "find_tools",
-    "goal_pursuit",
     "list",
     "memory",
     "news",
@@ -117,6 +116,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "save_pattern",
     "schedule",
     "search",
+    "subagent",
     "weather",
 })
 
@@ -172,8 +172,8 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
 # model hallucinations in nightly run 346.
 
 _DEFAULT_ALWAYS = frozenset({
-    "document", "find_tools", "goal_pursuit", "list", "memory",
-    "read", "review_tool_calls", "schedule",
+    "document", "find_tools", "list", "memory",
+    "read", "review_tool_calls", "schedule", "subagent",
 })
 
 _DEFAULT_DISCOVERABLE = frozenset({
@@ -183,9 +183,9 @@ _DEFAULT_DISCOVERABLE = frozenset({
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
-    "DMNMessageProcessor":       (_DEFAULT_ALWAYS - {"goal_pursuit"}, _DEFAULT_DISCOVERABLE),
-    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "goal_pursuit"}, _DEFAULT_DISCOVERABLE),
-    "GoalPursuitProcessor":      (_DEFAULT_ALWAYS - {"goal_pursuit"}, _DEFAULT_DISCOVERABLE),
+    "DMNMessageProcessor":       (_DEFAULT_ALWAYS - {"subagent"}, _DEFAULT_DISCOVERABLE),
+    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent"}, _DEFAULT_DISCOVERABLE),
+    "SubagentProcessor":         (frozenset({"find_tools"}), frozenset(set(_DEFAULT_DISCOVERABLE) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
@@ -213,9 +213,9 @@ def test_per_processor_tool_scope_matches_spec():
     )
     from services.dmn_message_processor import DMNMessageProcessor
     from services.episode_encoder_processor import EpisodeEncoderProcessor
-    from services.goal_pursuit_processor import GoalPursuitProcessor
     from services.pattern_match_processor import PatternMatchProcessor
     from services.scheduled_message_processor import ScheduledMessageProcessor
+    from services.subagent_processor import SubagentProcessor
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
     from services.user_message_processor import UserMessageProcessor
     from services.user_summary_processor import UserSummaryProcessor
@@ -224,7 +224,7 @@ def test_per_processor_tool_scope_matches_spec():
         "UserMessageProcessor": UserMessageProcessor,
         "DMNMessageProcessor": DMNMessageProcessor,
         "ScheduledMessageProcessor": ScheduledMessageProcessor,
-        "GoalPursuitProcessor": GoalPursuitProcessor,
+        "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
         "FullCompactionProcessor": FullCompactionProcessor,
         "TrailCompactionProcessor": TrailCompactionProcessor,

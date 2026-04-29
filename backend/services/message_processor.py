@@ -136,8 +136,8 @@ class MessageProcessor:
 
     # ── Subclass must set ─────────────────────────────────────────────────────
 
-    CHANNEL: str = ''   # e.g. 'user', 'dmn', 'goal_pursuit', 'scheduled'
-    ROLE: str = ''      # e.g. 'user', 'proactive_thought', 'goal_pursuit'
+    CHANNEL: str = ''   # e.g. 'user', 'dmn', 'subagent', 'scheduled'
+    ROLE: str = ''      # e.g. 'user', 'proactive_thought', 'subagent'
 
     # When True, send() skips write_input_row() and store() skips the
     # assistant row — self._uid stays None for the entire turn.
@@ -183,6 +183,20 @@ class MessageProcessor:
         self._payload_too_large_recovered: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
+        # ACT loop wall-clock anchor — set inside send() once the thinking gate
+        # completes. Exposed as an instance attr so subagent's wait=true path
+        # can advance it by the elapsed blocking time, keeping the parent
+        # MAX_TIMEOUT budget accurate.
+        self._loop_start: float | None = None
+
+    @property
+    def _max_timeout_seconds(self) -> int:
+        """Effective MAX_TIMEOUT for the ACT loop wall-clock guard.
+
+        Base returns the class constant. SubagentProcessor overrides to
+        honour the per-instance max_timeout_override supplied at construction.
+        """
+        return self.MAX_TIMEOUT
 
     def set_turn_start(self, ts: float) -> None:
         """Override the accumulator start time (called from _handle_chat before thread spawn)."""
@@ -205,7 +219,7 @@ class MessageProcessor:
         Injected as the first line of the system prompt. Examples:
           UserMessageProcessor   → user synthesis string (real human)
           DMNMessageProcessor    → "The user is 'proactive_thought' — ..."
-          GoalPursuitProcessor   → "The user is 'goal_pursuit' — ..."
+          SubagentProcessor      → "The user is 'subagent' — ..."
         """
         raise NotImplementedError
 
@@ -583,7 +597,10 @@ class MessageProcessor:
             # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
             # runs under its own THINKING_TIMEOUT envelope (independent budget),
             # so MAX_TIMEOUT covers only ACT loop iterations.
-            loop_start = time.time()
+            # Stored as self._loop_start so the subagent wait=true path can
+            # advance it by elapsed blocking time without affecting the guard.
+            self._loop_start = time.time()
+            loop_start = self._loop_start
 
             # Log exploration injection once per turn — at this single point,
             # not inside the ACT loop.
@@ -606,7 +623,7 @@ class MessageProcessor:
 
             while (
                 self._current_iteration < self.MAX_ITERATIONS
-                and time.time() - loop_start < self.MAX_TIMEOUT
+                and time.time() - loop_start < self._max_timeout_seconds
             ):
                 with self._metrics.iteration(self._current_iteration):
                     with self._metrics.stage('prompt_assembly'):
@@ -761,7 +778,7 @@ class MessageProcessor:
                     self._current_iteration,
                     time.time() - loop_start,
                     self.MAX_ITERATIONS,
-                    self.MAX_TIMEOUT,
+                    self._max_timeout_seconds,
                 )
                 final_text = ''
 

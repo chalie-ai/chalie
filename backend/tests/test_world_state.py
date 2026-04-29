@@ -225,12 +225,12 @@ class TestRenderSchedule:
 
 @pytest.mark.unit
 class TestRenderBgProcess:
-    def test_recent_goal_pursuit_appears_with_last_update(self, db):
+    def test_recent_subagent_appears_with_last_update(self, db):
         # A row from ~2 minutes ago must surface with a formatted "Xm ago" timestamp,
         # rendered as a [bg_process(...)] line (not a bullet).
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Researching hotels in Valletta', ?)",
+            "VALUES ('subagent', 'assistant', 'Researching hotels in Valletta', ?)",
             ((utc_now() - timedelta(seconds=125)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         db.commit()
@@ -242,13 +242,13 @@ class TestRenderBgProcess:
         assert "Researching hotels in Valletta" in line
 
     def test_older_than_24h_excluded_and_other_channels_ignored(self, db):
-        # Two rows that must NOT surface: a goal_pursuit row >24h old, and a
-        # recent row on a non-goal_pursuit channel.
+        # Two rows that must NOT surface: a subagent row >24h old, and a
+        # recent row on a non-subagent channel.
         old_iso = _past_iso(1500)  # >24h
         recent_iso = (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Old pursuit', ?)",
+            "VALUES ('subagent', 'assistant', 'Old pursuit', ?)",
             (old_iso,),
         )
         db.execute(
@@ -266,7 +266,7 @@ class TestRenderBgProcess:
         long_content = "word " * 120  # 600 chars
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
+            "VALUES ('subagent', 'assistant', ?, ?)",
             (long_content, (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")),
         )
         db.commit()
@@ -318,7 +318,7 @@ class TestRenderFullMix:
         _seed_pending(db, "Team meeting", due_minutes_ahead=60)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Active goal', ?)",
+            "VALUES ('subagent', 'assistant', 'Active goal', ?)",
             ((utc_now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         db.commit()

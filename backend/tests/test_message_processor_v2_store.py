@@ -459,7 +459,7 @@ class TestGetPreviousMessagesChannelIsolation:
     """Each processor only sees its own CHANNEL's rows."""
 
     def _seed_all_channels(self, db):
-        for channel in ('user', 'dmn', 'goal_pursuit', 'scheduled', _GPM_CHANNEL):
+        for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
                 "INSERT INTO transcript (channel, role, content, created_at) "
                 "VALUES (?, 'user', ?, '2026-04-10 10:00:00')",
@@ -480,18 +480,18 @@ class TestGetPreviousMessagesChannelIsolation:
         result = p.getPreviousMessages()
         assert 'Content from dmn' not in result
 
-    def test_test_channel_does_not_see_goal_pursuit_channel(self, db):
+    def test_test_channel_does_not_see_subagent_channel(self, db):
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'Content from goal_pursuit' not in result
+        assert 'Content from subagent' not in result
 
     def test_each_channel_sees_only_its_own_rows(self, db):
         """Build four processors with different CHANNELs and assert no bleed."""
         self._seed_all_channels(db)
         from services.message_processor import MessageProcessor
 
-        for channel in ('user', 'dmn', 'goal_pursuit', 'scheduled'):
+        for channel in ('user', 'dmn', 'subagent', 'scheduled'):
             class _Chan(MessageProcessor):
                 CHANNEL = channel
                 ROLE = 'user'
@@ -508,7 +508,7 @@ class TestGetPreviousMessagesChannelIsolation:
             assert f'Content from {channel}' in result, (
                 f"Channel {channel!r} should see its own content"
             )
-            for other in ('user', 'dmn', 'goal_pursuit', 'scheduled', _GPM_CHANNEL):
+            for other in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
                 if other != channel:
                     assert f'Content from {other}' not in result, (
                         f"Channel {channel!r} leaked content from {other!r}"
@@ -726,18 +726,18 @@ class TestGetPreviousMessagesRoleCase:
         assert 'proactive_thought: Background thought' in result
         assert 'PROACTIVE_THOUGHT: Background thought' not in result
 
-    def test_goal_pursuit_role_rendered_lowercase(self, db):
+    def test_subagent_role_rendered_lowercase(self, db):
         channel = _GPM_CHANNEL
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'goal_pursuit', 'Pursuit tick', '2026-04-10 10:00:00')",
+            "VALUES (?, 'subagent', 'Pursuit tick', '2026-04-10 10:00:00')",
             (channel,)
         )
         db.commit()
 
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
-        assert 'goal_pursuit: Pursuit tick' in result
+        assert 'subagent: Pursuit tick' in result
 
     def test_scheduled_role_rendered_lowercase(self, db):
         channel = _GPM_CHANNEL

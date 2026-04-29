@@ -7,7 +7,7 @@ IMPORTANT: Stop Chalie before running this script.
 What this does:
   1. Reads the last N transcript entries for the specified channel(s)
   2. Groups into (user → assistant) exchange pairs; skips background turns
-     (proactive_thought, goal_pursuit, scheduled) and tool-result rows
+     (proactive_thought, subagent, scheduled) and tool-result rows
   3. Strips the UserPromptAssemblyService wrapper from user content — keeps
      only the raw user message below the "## User Message" marker
   4. Deduplicates pairs by content hash
@@ -92,7 +92,7 @@ _INJECTION_PREFIXES = (
 _PLAIN_TEXT_MAX = 10_000
 
 # Roles that are background/internal — skip entirely
-_SKIP_ROLES = {"proactive_thought", "goal_pursuit", "scheduled", "tool"}
+_SKIP_ROLES = {"proactive_thought", "subagent", "scheduled", "tool"}
 
 
 def extract_user_message(content: str) -> str | None:
@@ -280,7 +280,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print(f"\n  Channel: {channel!r}")
     print(f"  Rows read            : {stats['rows_read']}")
     print(f"  Skipped (role)       : {stats['skipped_role']}  "
-          f"(tool, proactive_thought, goal_pursuit, scheduled)")
+          f"(tool, proactive_thought, subagent, scheduled)")
     print(f"  Skipped (unpaired)   : {stats['skipped_unpaired']}  "
           f"(user with no following assistant, or assistant with no preceding user)")
     print(f"  Skipped (bad user)   : {stats['skipped_unrecoverable_user']}  "
@@ -379,7 +379,7 @@ _MIGRATION_ID = "transcript-rebuild-v1"
 # prompt:  — old scheduled-prompt delivery channels (contain [SCHEDULED TASK] text)
 # web:     — old web interface channels (also contained scheduled prompts)
 # scheduled: — new ScheduledMessageProcessor channels
-_BACKGROUND_PREFIXES = ("goal_pursuit:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
+_BACKGROUND_PREFIXES = ("subagent:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
 
 
 def _flag_path(db_path: str) -> Path:

@@ -20,7 +20,7 @@ class ScheduledMessageProcessor(MessageProcessor):
     """MessageProcessor subclass for scheduled prompt execution.
 
     Standard limits (30 iterations / 900 s). Excludes 'schedule' (prevent
-    recursive scheduling) and 'goal_pursuit' (prevent background spawning).
+    recursive scheduling) and 'subagent' (prevent background spawning).
 
     CHANNEL is flat 'scheduled' — item_id lives only in metadata, never
     in the channel string (channel collapse from Commit 9).
