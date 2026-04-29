@@ -14,8 +14,11 @@ class TestCleanForTtsXml:
             == "pick"
         )
 
-    def test_uses_img_alt(self):
-        assert _clean_for_tts('<img src="x" alt="a cat"/>') == "a cat"
+    def test_drops_img_entirely(self):
+        # ``alt`` is an accessibility label for the visual surface; the spoken
+        # TTS path no longer narrates it. Images are programmatic affordances
+        # emitted by the harness — narration covers the surrounding prose.
+        assert _clean_for_tts('<img src="x" alt="a cat"/>') == ""
 
     def test_preserves_plain_text(self):
         assert _clean_for_tts("just text") == "just text"

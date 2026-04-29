@@ -17,7 +17,6 @@ arbitrary anchors into the rendered DOM.
 from __future__ import annotations
 
 import html as _html
-import re
 
 import nh3
 
@@ -132,37 +131,15 @@ def escape_attr(value: str) -> str:
 def extract_plaintext(html: str) -> str:
     """Strip all tags + drop ``<actions>`` subtree, return spoken plain text.
 
-    Used by the TTS / speak button. ``<img>`` tags collapse to their ``alt``
-    attribute so the screen reader / TTS announces the image contents.
-    ``<actions>`` blocks are dropped entirely — UI affordances do not belong
-    in TTS output. Entities are decoded so the speaker says ``cats & dogs``,
-    not ``cats &amp; dogs``. Whitespace is collapsed.
-
-    Implementation: ``nh3.clean(tags={"img"}, clean_content_tags={"actions"})``
-    keeps ``<img>`` tags through the strip pass so the inline ``alt=...``
-    survives, then a regex replaces every img with its alt text, then a
-    final ``nh3.clean(tags=set())`` strips the now-bare html shell.
+    Used by the TTS / speak button. ``<actions>`` blocks are dropped entirely
+    via ``clean_content_tags`` — UI affordances do not belong in spoken
+    output. Every other tag (``<p>``, ``<b>``, ``<img>``, …) collapses to
+    its inner text content; image ``alt`` is *not* spoken (it's an a11y
+    label for the visual surface, not narration). Entities are decoded so
+    the speaker says ``cats & dogs``, not ``cats &amp; dogs``. Whitespace
+    is collapsed.
     """
     if not html:
         return ""
-    # Pass 1: keep <img>, drop <actions> subtree, strip everything else.
-    pass1 = nh3.clean(
-        html,
-        tags={"img"},
-        attributes={"img": {"alt"}},
-        clean_content_tags={"actions"},
-    )
-    # Replace <img alt="..."/> with the alt text. Bounded, anchored regex.
-    pass2 = _IMG_ALT_RE.sub(lambda m: m.group(1) or "", pass1)
-    # Strip any residual img tags (no alt attribute).
-    pass3 = nh3.clean(pass2, tags=set())
-    decoded = _html.unescape(pass3)
-    return " ".join(decoded.split()).strip()
-
-
-# Targeted regex for the post-pass1 strip-and-replace step. The first pass
-# already canonicalised the input through nh3 so only one ``<img>`` shape
-# survives: the tag attributes are space-separated, double-quote-delimited,
-# and the closing form is ``>``. Pattern is anchored at ``<img`` and never
-# permits ``<`` inside the attribute zone — no nested quantifiers, bounded.
-_IMG_ALT_RE = re.compile(r'<img [^<>]*?alt="([^"<>]*)"[^<>]*?>')
+    stripped = nh3.clean(html, tags=set(), clean_content_tags={"actions"})
+    return " ".join(_html.unescape(stripped).split()).strip()

@@ -5,44 +5,47 @@
 // before it reaches the frontend. This file therefore does NO sanitisation
 // — it trusts the backend, renders via innerHTML, then walks the resulting
 // tree to:
-//   1. Auto-linkify plain-text URLs (the LLM is told never to emit <a>).
+//   1. Auto-linkify plain-text URLs / emails (the LLM is told never to emit <a>).
 //   2. Wire programmatic behaviours on harness-emitted <actions>, <action>,
-//      <img> elements (click handlers, lazy loading, allowlist for img src).
+//      <img> elements (click handlers, lazy loading, scheme gate for img src).
 //
 // All other tags (b, i, u, h1, code, p, ul, li) render as-is.
 
-const URL_RE = /\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)]/g;
+import { find as findLinks } from './vendor/linkify.es.mjs';
+
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+
+function _renderLinkAnchor(href, label) {
+  const a = document.createElement('a');
+  a.href = href;
+  // Belt-and-braces: linkify-it only matches http(s)/mailto/etc.; protocol
+  // gate here is redundant for those schemes but ensures any future custom
+  // schemes can't slip through without an explicit allowlist update.
+  if (!HTTP_PROTOCOLS.has(a.protocol) && a.protocol !== 'mailto:') {
+    return document.createTextNode(label);
+  }
+  a.textContent = label;
+  if (HTTP_PROTOCOLS.has(a.protocol)) {
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  }
+  return a;
+}
 
 function _linkifyTextNode(textNode) {
   const text = textNode.nodeValue;
-  if (!text || !URL_RE.test(text)) {
-    URL_RE.lastIndex = 0;
-    return;
-  }
-  URL_RE.lastIndex = 0;
+  if (!text) return;
+  const matches = findLinks(text);
+  if (!matches.length) return;
 
   const fragment = document.createDocumentFragment();
   let cursor = 0;
-  let match;
-  while ((match = URL_RE.exec(text)) !== null) {
-    if (match.index > cursor) {
-      fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+  for (const m of matches) {
+    if (m.start > cursor) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor, m.start)));
     }
-    const anchor = document.createElement('a');
-    // Property assignment routes through the browser's URL parser; the
-    // protocol gate below relies on the parsed result.
-    anchor.href = match[0];
-    if (HTTP_PROTOCOLS.has(anchor.protocol)) {
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.textContent = match[0];
-      fragment.appendChild(anchor);
-    } else {
-      // Non-http(s) URL — render the literal text, no link.
-      fragment.appendChild(document.createTextNode(match[0]));
-    }
-    cursor = match.index + match[0].length;
+    fragment.appendChild(_renderLinkAnchor(m.href, m.value));
+    cursor = m.end;
   }
   if (cursor < text.length) {
     fragment.appendChild(document.createTextNode(text.slice(cursor)));
@@ -92,35 +95,37 @@ function _wireActionsContainer(container) {
   container.classList.add('chalie-actions-row');
 }
 
+// Inline action attributes that get mirrored onto the live element as
+// ``data-*`` so AppsPanel._wireOverlayActions can pick them up.
+const _ACTION_DATA_ATTRS = ['execute', 'collect', 'target', 'open-url', 'payload'];
+
 function _wireActionButton(actionEl) {
   actionEl.classList.add('chalie-action-button');
   const style = actionEl.getAttribute('style');
   if (style === 'secondary') actionEl.classList.add('chalie-action-button--secondary');
   if (style === 'danger') actionEl.classList.add('chalie-action-button--danger');
 
-  // Move display attrs to dataset for CSS / JS hooks. Overlay-action attrs
-  // (execute / collect / target / open-url / payload) are propagated as
-  // data-* so AppsPanel._wireOverlayActions can pick them up.
   const label = actionEl.getAttribute('label') || '';
   const value = actionEl.getAttribute('value') || '';
-  actionEl.dataset.value = value;
-  for (const name of ['execute', 'collect', 'target', 'open-url', 'payload']) {
+
+  // Set data-* attributes directly. The DOM handles dash↔camelCase
+  // conversion when later read via ``.dataset.openUrl``.
+  actionEl.setAttribute('data-value', value);
+  for (const name of _ACTION_DATA_ATTRS) {
     const v = actionEl.getAttribute(name);
-    if (v !== null) {
-      actionEl.dataset[_dashToCamel(name)] = v;
-    }
+    if (v !== null) actionEl.setAttribute(`data-${name}`, v);
   }
   actionEl.textContent = label;
 
-  // Strip the inline attributes now that we have copies on dataset / classlist.
-  for (const name of ['label', 'value', 'execute', 'collect', 'target', 'open-url', 'payload', 'style']) {
+  // Strip the inline source attributes now that copies live on data-*.
+  for (const name of ['label', 'value', ..._ACTION_DATA_ATTRS, 'style']) {
     actionEl.removeAttribute(name);
   }
 
   // Chat-action click handler — overlay actions (execute=...) are wired by
   // AppsPanel._wireOverlayActions, so we skip dispatch in that case to
   // avoid double-firing.
-  if (actionEl.dataset.execute) return;
+  if (actionEl.getAttribute('data-execute')) return;
   actionEl.addEventListener('click', () => {
     const row = actionEl.closest('.chalie-actions-row');
     if (row) {
@@ -135,10 +140,6 @@ function _wireActionButton(actionEl) {
       detail: { payload: { value, label } },
     }));
   });
-}
-
-function _dashToCamel(s) {
-  return s.replaceAll(/-([a-z])/g, (_m, c) => c.toUpperCase());
 }
 
 function _wireProgrammatic(root) {
