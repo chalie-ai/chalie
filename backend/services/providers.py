@@ -70,8 +70,23 @@ class Providers:
         """Write the LLM request log file. Best-effort, never raises.
 
         Called by both :meth:`send` and :meth:`send_messages` so every LLM
-        request goes through a single logging chokepoint.
+        request goes through a single logging chokepoint. Also records the
+        call's latency_ms into the bound processor's MetricsAccumulator so
+        the per-turn timing snapshot reflects every LLM round-trip
+        (ACT iterations, exploration, compaction).
         """
+        try:
+            from services.message_processor import current_processor
+            proc = current_processor()
+            if proc is not None:
+                latency_ms = getattr(response, 'latency_ms', None)
+                if latency_ms is not None:
+                    try:
+                        proc._metrics.record_llm_call(latency_ms)
+                    except Exception as exc:
+                        logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
+        except Exception as exc:
+            logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
         try:
             from services.llm_request_logger import log_llm_request
             from services.message_processor import current_processor
