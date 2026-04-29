@@ -1,31 +1,17 @@
-// Extract plaintext from XML markup for the speak button (TTS).
-// Drops <actions> entirely. Uses <img alt> when present.
+// Plaintext extractor for the speak button (TTS).
 //
-// Parsing is delegated to the browser's HTML parser via <template>; entity
-// decoding, attribute parsing, and nesting are all handled natively. The only
-// pre-processing is NUL-byte stripping + bounding the input length.
-
-// Bound input to keep parse memory + time predictable on hostile input.
-// Real content is bounded by LLM token limits; 5 MB is generous.
-const MAX_CONTENT_LEN = 5_000_000;
+// Backend ``services.markup.sanitize()`` (nh3) is the single chokepoint for
+// allowlist enforcement. This file therefore does NO sanitisation; it simply
+// strips all tags via a throwaway <template>, drops <actions> subtrees so
+// button labels do not leak into the spoken output, and uses <img alt> when
+// present.
 
 const DROP_TAGS = new Set(['actions']);
 
-function _normalizeContent(content) {
-  let out = content;
-  if (out.includes('\u0000')) {
-    out = out.split('\u0000').join('');
+function _stripActionsSubtrees(root) {
+  for (const node of [...root.querySelectorAll('actions')]) {
+    node.remove();
   }
-  if (out.length > MAX_CONTENT_LEN) {
-    out = out.slice(0, MAX_CONTENT_LEN);
-  }
-  return out;
-}
-
-function _parseToFragment(content) {
-  const template = document.createElement('template');
-  template.innerHTML = content;
-  return template.content;
 }
 
 function _walk(node, out) {
@@ -37,9 +23,7 @@ function _walk(node, out) {
     return;
   }
   const tag = node.tagName.toLowerCase();
-  if (DROP_TAGS.has(tag)) {
-    return; // <actions>...</actions> is silenced for TTS
-  }
+  if (DROP_TAGS.has(tag)) return;
   if (tag === 'img') {
     const alt = (node.getAttribute('alt') || '').trim();
     if (alt) out.push(alt);
@@ -52,9 +36,11 @@ function _walk(node, out) {
 
 export function extractPlaintext(content) {
   if (!content) return '';
-  const fragment = _parseToFragment(_normalizeContent(content));
+  const template = document.createElement('template');
+  template.innerHTML = content;
+  _stripActionsSubtrees(template.content);
   const out = [];
-  for (const child of fragment.childNodes) {
+  for (const child of template.content.childNodes) {
     _walk(child, out);
   }
   return out.join(' ').replaceAll(/\s+/g, ' ').trim();

@@ -23,7 +23,7 @@ from collections import deque
 
 from utils.logger import set_correlation_id
 
-from services.markup import wrap_text_xml, actions_to_xml, is_xml_content
+from services.markup import wrap_text_xml, actions_to_xml, is_xml_content, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -403,12 +403,16 @@ def _handle_action(ws, store, msg):
 
         elapsed_ms = int((time.time() - start) * 1000)
 
-        # LLM / skill result → XML content string
+        # LLM / skill result → XML content string. Sanitize() is the single
+        # chokepoint: it strips every tag/attribute outside our allowlist
+        # before the FE ever sees the content. The LLM is told to never emit
+        # ``<a>``; the FE auto-linkifies any plain-text URLs it finds.
         content = (result or "Done.")
         if not is_xml_content(content):
             content = wrap_text_xml(content)
         if reply_actions:
             content += actions_to_xml(reply_actions)
+        content = sanitize(content)
 
         seq = _next_seq()
         message_evt = {
@@ -604,7 +608,7 @@ def _handle_chat(ws, store, msg, active_request=None):
             # Store result at output:{request_id} so the fallback path can
             # find it if the pub/sub message was missed.
             try:
-                _fb_content = response if is_xml_content(response) else wrap_text_xml(response)
+                _fb_content = sanitize(response if is_xml_content(response) else wrap_text_xml(response))
                 fallback_output = {
                     "type": "TEXT",
                     "topic": 'user',

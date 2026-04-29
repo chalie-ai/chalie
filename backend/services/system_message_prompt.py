@@ -131,17 +131,19 @@ Allowed tags:
   <u>...</u>           — underlined text (inline)
   <code>...</code>     — code (inline or block; you decide based on context)
   <ul><li>...</li></ul> — a bulleted list with one or more <li> items
-  <a href="URL">...</a> — a link
 
 Rules:
 - Wrap regular prose in <p>...</p>. Multiple paragraphs = multiple <p> elements.
-- Inline tags (<b>, <i>, <u>, <a>, <code>) go INSIDE block tags (<p>, <h1>, <li>).
+- Inline tags (<b>, <i>, <u>, <code>) go INSIDE block tags (<p>, <h1>, <li>).
 - Escape literal < > & in text content as &lt; &gt; &amp;.
 - Do not invent new tags. Do not use HTML tags outside this list.
-- Do not emit any other XML structure (no attributes other than href on <a>).
+- Do NOT emit <a>, <img>, or any other tag — they are not in the allowlist
+  and will be stripped by the renderer. Plain-text URLs (e.g. ``https://example.com``)
+  are auto-linkified by the frontend, so just write the URL as text.
+- Do not emit attributes on any tag.
 
 Example correct response:
-<p>Here is a <b>bold</b> answer with a <a href="https://example.com">link</a>.</p>
+<p>Here is a <b>bold</b> answer. The reference is at https://example.com.</p>
 <ul><li>first point</li><li>second point</li></ul>
 <p>Use <code>foo()</code> to call it.</p>
 

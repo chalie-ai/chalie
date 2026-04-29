@@ -1,212 +1,162 @@
-// XML markup renderer for Chalie chat content.
+// Renderer for Chalie chat content.
 //
-// Allowlist (11 tags): b, i, u, h1, code, p, ul, li, a, img, actions, action
-// Tolerant: parsing is delegated to the browser's HTML parser via <template>.
-// Unknown tags collapse to their text content. Unclosed tags are auto-closed
-// by the parser. Self-closing void tags work natively for `<img/>`; `<action/>`
-// is the one allowlisted void that the HTML parser doesn't recognise, so we
-// expand it to a balanced pair before parsing.
+// Backend ``services.markup.sanitize()`` (nh3) is the single chokepoint:
+// every assistant response is stripped of disallowed tags / attributes
+// before it reaches the frontend. This file therefore does NO sanitisation
+// — it trusts the backend, renders via innerHTML, then walks the resulting
+// tree to:
+//   1. Auto-linkify plain-text URLs (the LLM is told never to emit <a>).
+//   2. Wire programmatic behaviours on harness-emitted <actions>, <action>,
+//      <img> elements (click handlers, lazy loading, allowlist for img src).
+//
+// All other tags (b, i, u, h1, code, p, ul, li) render as-is.
 
-const ALLOWED_TAGS = new Set(['b', 'i', 'u', 'h1', 'code', 'p', 'ul', 'li', 'a', 'img', 'actions', 'action']);
-const VOID_TAGS = new Set(['img', 'action']);
+const URL_RE = /\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)]/g;
+const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 
-// Bound input to keep parse memory + time predictable on hostile input.
-// Real content is bounded by LLM token limits; 5 MB is generous.
-const MAX_CONTENT_LEN = 5_000_000;
+function _linkifyTextNode(textNode) {
+  const text = textNode.nodeValue;
+  if (!text || !URL_RE.test(text)) {
+    URL_RE.lastIndex = 0;
+    return;
+  }
+  URL_RE.lastIndex = 0;
 
-// HTML5 doesn't recognise <action/> as a void element, so the self-closing
-// form leaves it open. Expand to an explicit pair before handing to the
-// parser. Linear index scan instead of a regex to keep the pre-processor
-// ReDoS-clean.
-function _expandActionVoidTags(content) {
-  let result = '';
-  let i = 0;
-  while (i < content.length) {
-    const open = content.indexOf('<action', i);
-    if (open === -1) {
-      result += content.slice(i);
-      break;
+  const fragment = document.createDocumentFragment();
+  let cursor = 0;
+  let match;
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (match.index > cursor) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
     }
-    // Char following `<action` must be whitespace, `/`, or `>` — anything
-    // else (e.g. `<actions>`) is a different tag and gets skipped.
-    const after = content[open + 7] || '';
-    if (after !== ' ' && after !== '\t' && after !== '\n' && after !== '/' && after !== '>') {
-      result += content.slice(i, open + 7);
-      i = open + 7;
-      continue;
-    }
-    const close = content.indexOf('>', open);
-    if (close === -1) {
-      result += content.slice(i);
-      break;
-    }
-    const tag = content.slice(open, close + 1);
-    if (tag.endsWith('/>')) {
-      result += content.slice(i, open) + tag.slice(0, -2) + '></action>';
+    const anchor = document.createElement('a');
+    // Property assignment routes through the browser's URL parser; the
+    // protocol gate below relies on the parsed result.
+    anchor.href = match[0];
+    if (HTTP_PROTOCOLS.has(anchor.protocol)) {
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = match[0];
+      fragment.appendChild(anchor);
     } else {
-      result += content.slice(i, close + 1);
+      // Non-http(s) URL — render the literal text, no link.
+      fragment.appendChild(document.createTextNode(match[0]));
     }
-    i = close + 1;
+    cursor = match.index + match[0].length;
   }
-  return result;
-}
-
-function _normalizeContent(content) {
-  let out = content;
-  // Strip NUL bytes — DOM createTextNode silently drops them, leaving an
-  // ambiguous gap. Defensive: shouldn't appear in well-formed content.
-  if (out.includes('\u0000')) {
-    out = out.split('\u0000').join('');
+  if (cursor < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(cursor)));
   }
-  if (out.length > MAX_CONTENT_LEN) {
-    out = out.slice(0, MAX_CONTENT_LEN);
-  }
-  return _expandActionVoidTags(out);
+  textNode.parentNode.replaceChild(fragment, textNode);
 }
 
-function _attrsOf(srcEl) {
-  const attrs = {};
-  for (const attr of srcEl.attributes) {
-    attrs[attr.name.toLowerCase()] = attr.value;
-  }
-  return attrs;
-}
-
-// Allowed link schemes. ``mailto:`` extends the http(s) baseline for
-// anchors. Image src is restricted to http(s) only — ``data:`` URIs
-// are blocked by virtue of not matching this allowlist.
-const _ANCHOR_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
-const _IMAGE_PROTOCOLS = new Set(['http:', 'https:']);
-
-function _isRootRelative(value) {
-  // Allow `/path` but reject scheme-relative `//evil.com`.
-  return value.startsWith('/') && !value.startsWith('//');
-}
-
-function _safeUrl(value, allowedProtocols) {
-  if (!value) return null;
-  if (_isRootRelative(value)) return value;
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch (e) {
-    console.warn('[markup-renderer] dropping unparseable URL:', e);
-    return null;
-  }
-  if (!allowedProtocols.has(parsed.protocol)) return null;
-  return parsed.href;
-}
-
-function _wireAnchor(el, attrs) {
-  const href = _safeUrl(attrs.href || '#', _ANCHOR_PROTOCOLS);
-  if (href === null) return;
-  el.setAttribute('href', href);
-  if (href.startsWith('http://') || href.startsWith('https://')) {
-    el.setAttribute('target', '_blank');
-    el.setAttribute('rel', 'noopener noreferrer');
-  }
-}
-
-function _wireImage(el, attrs) {
-  const src = _safeUrl(attrs.src || '', _IMAGE_PROTOCOLS);
-  if (src === null) return;
-  el.setAttribute('src', src);
-  el.setAttribute('alt', attrs.alt || '');
-  el.setAttribute('loading', 'lazy');
-}
-
-function _wireAction(el, attrs) {
-  el.classList.add('chalie-action-button');
-  // Chat actions (LLM-emitted): label + value → dispatch chalie:action.
-  // Overlay actions (apps_panel daemon UI): execute/collect/target/open-url/
-  // payload/style → propagated as data-* attrs; click wired by host.
-  el.dataset.value = attrs.value || '';
-  if (attrs.execute) el.dataset.execute = attrs.execute;
-  if (attrs.collect) el.dataset.collect = attrs.collect;
-  if (attrs.target) el.dataset.target = attrs.target;
-  if (attrs['open-url']) el.dataset.openUrl = attrs['open-url'];
-  if (attrs.payload) el.dataset.payload = attrs.payload;
-  if (attrs.style === 'secondary') el.classList.add('chalie-action-button--secondary');
-  if (attrs.style === 'danger') el.classList.add('chalie-action-button--danger');
-  el.textContent = attrs.label || '';
-  // Chat-action click handler. Overlay actions have data-execute and are
-  // wired by AppsPanel._wireOverlayActions; we skip dispatch in that case
-  // to avoid double-firing.
-  if (!attrs.execute) {
-    el.addEventListener('click', () => {
-      // One-time use: disable siblings in the same <actions> row.
-      const row = el.closest('.chalie-actions-row');
-      if (row) {
-        for (const b of row.querySelectorAll('.chalie-action-button')) {
-          b.setAttribute('disabled', '');
+function _linkifyTextNodesIn(root) {
+  // Skip <code> subtrees and existing anchors so we never linkify URLs that
+  // the user-content has explicitly carved out.
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        let parent = node.parentNode;
+        while (parent && parent !== root) {
+          const tag = parent.tagName ? parent.tagName.toLowerCase() : '';
+          if (tag === 'code' || tag === 'a') return NodeFilter.FILTER_REJECT;
+          parent = parent.parentNode;
         }
-      } else {
-        el.setAttribute('disabled', '');
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  const targets = [];
+  let node;
+  while ((node = walker.nextNode()) !== null) {
+    targets.push(node);
+  }
+  for (const t of targets) _linkifyTextNode(t);
+}
+
+function _wireImage(img) {
+  // Belt-and-braces protocol gate: backend nh3 already restricted img src
+  // to http(s), so this is mostly a no-op.
+  const probe = document.createElement('a');
+  probe.href = img.getAttribute('src') || '';
+  if (!HTTP_PROTOCOLS.has(probe.protocol)) {
+    img.remove();
+    return;
+  }
+  img.loading = 'lazy';
+}
+
+function _wireActionsContainer(container) {
+  container.classList.add('chalie-actions-row');
+}
+
+function _wireActionButton(actionEl) {
+  actionEl.classList.add('chalie-action-button');
+  const style = actionEl.getAttribute('style');
+  if (style === 'secondary') actionEl.classList.add('chalie-action-button--secondary');
+  if (style === 'danger') actionEl.classList.add('chalie-action-button--danger');
+
+  // Move display attrs to dataset for CSS / JS hooks. Overlay-action attrs
+  // (execute / collect / target / open-url / payload) are propagated as
+  // data-* so AppsPanel._wireOverlayActions can pick them up.
+  const label = actionEl.getAttribute('label') || '';
+  const value = actionEl.getAttribute('value') || '';
+  actionEl.dataset.value = value;
+  for (const name of ['execute', 'collect', 'target', 'open-url', 'payload']) {
+    const v = actionEl.getAttribute(name);
+    if (v !== null) {
+      actionEl.dataset[_dashToCamel(name)] = v;
+    }
+  }
+  actionEl.textContent = label;
+
+  // Strip the inline attributes now that we have copies on dataset / classlist.
+  for (const name of ['label', 'value', 'execute', 'collect', 'target', 'open-url', 'payload', 'style']) {
+    actionEl.removeAttribute(name);
+  }
+
+  // Chat-action click handler — overlay actions (execute=...) are wired by
+  // AppsPanel._wireOverlayActions, so we skip dispatch in that case to
+  // avoid double-firing.
+  if (actionEl.dataset.execute) return;
+  actionEl.addEventListener('click', () => {
+    const row = actionEl.closest('.chalie-actions-row');
+    if (row) {
+      for (const b of row.querySelectorAll('.chalie-action-button')) {
+        b.setAttribute('disabled', '');
       }
-      el.classList.add('chalie-action-button--selected');
-      document.dispatchEvent(new CustomEvent('chalie:action', {
-        detail: {
-          payload: { value: attrs.value || '', label: attrs.label || '' },
-        },
-      }));
-    });
-  }
+    } else {
+      actionEl.setAttribute('disabled', '');
+    }
+    actionEl.classList.add('chalie-action-button--selected');
+    document.dispatchEvent(new CustomEvent('chalie:action', {
+      detail: { payload: { value, label } },
+    }));
+  });
 }
 
-function _createElement(name, attrs) {
-  const el = document.createElement(name);
-  if (name === 'a') {
-    _wireAnchor(el, attrs);
-  } else if (name === 'img') {
-    _wireImage(el, attrs);
-  } else if (name === 'action') {
-    _wireAction(el, attrs);
-  } else if (name === 'actions') {
-    el.classList.add('chalie-actions-row');
-  } else if (name === 'code') {
-    el.classList.add('chalie-code');
-  }
-  return el;
+function _dashToCamel(s) {
+  return s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
 }
 
-function _appendNode(parent, srcNode) {
-  if (srcNode.nodeType === Node.TEXT_NODE) {
-    parent.appendChild(document.createTextNode(srcNode.nodeValue));
-    return;
-  }
-  if (srcNode.nodeType !== Node.ELEMENT_NODE) {
-    return; // comments, processing instructions, etc. are dropped silently
-  }
-  const tag = srcNode.tagName.toLowerCase();
-  if (!ALLOWED_TAGS.has(tag)) {
-    // Unknown tags collapse to their visible text content — preserves human
-    // intent without leaking unallowlisted markup into the DOM.
-    parent.appendChild(document.createTextNode(srcNode.textContent || ''));
-    return;
-  }
-  const el = _createElement(tag, _attrsOf(srcNode));
-  parent.appendChild(el);
-  // Void tags + the action button (whose textContent is set from `label`)
-  // do not recurse into source children.
-  if (VOID_TAGS.has(tag)) return;
-  for (const child of srcNode.childNodes) {
-    _appendNode(el, child);
-  }
-}
-
-function _parseToFragment(content) {
-  const template = document.createElement('template');
-  template.innerHTML = content;
-  return template.content;
+function _wireProgrammatic(root) {
+  for (const img of root.querySelectorAll('img')) _wireImage(img);
+  for (const container of root.querySelectorAll('actions')) _wireActionsContainer(container);
+  for (const button of root.querySelectorAll('action')) _wireActionButton(button);
+  // <code> styling
+  for (const c of root.querySelectorAll('code')) c.classList.add('chalie-code');
 }
 
 export function renderMarkupTo(container, content) {
   container.innerHTML = '';
   if (!content) return;
-  const fragment = _parseToFragment(_normalizeContent(content));
-  for (const child of fragment.childNodes) {
-    _appendNode(container, child);
-  }
+  // Trust the backend chokepoint (services.markup.sanitize). All tags /
+  // attributes outside the allowlist are already stripped.
+  container.innerHTML = content;
+  _linkifyTextNodesIn(container);
+  _wireProgrammatic(container);
 }
 
 export function renderMarkup(content) {
