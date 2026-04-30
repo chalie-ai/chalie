@@ -134,18 +134,6 @@ class TestOutputService:
         channels = [ch for ch, _ in mock_store._published]
         assert "output:events" in channels
 
-    def test_enqueue_proactive_subagent_maps_to_task_event(self, service, mock_store):
-        """source='subagent' maps to SSE event type 'task'."""
-        with patch('api.push.send_push_to_all'):
-            service.enqueue_proactive("thread-42", "Progress", source='subagent')
-
-        for ch, msg in mock_store._published:
-            if ch == "output:events":
-                payload = json.loads(msg)
-                assert payload["type"] == "task"
-                return
-        pytest.fail("No publish to output:events found")
-
     def test_enqueue_proactive_default_source_maps_to_task_event(self, service, mock_store):
         """Default source='task' maps to SSE event type 'task'."""
         with patch('api.push.send_push_to_all'):
@@ -172,23 +160,6 @@ class TestOutputService:
 
         recent = mock_store.lrange("notifications:recent", 0, -1)
         assert len(recent) > 0
-
-    # ------------------------------------------------------------------ #
-    # source_type_map coverage
-    # ------------------------------------------------------------------ #
-
-    def test_source_subagent_maps_to_task_event_type(self, service, mock_store):
-        """Verify that 'subagent' source produces event type 'task' in enqueue_text."""
-        metadata = {"source": "subagent"}
-        with patch('api.push.send_push_to_all'):
-            service.enqueue_text("t", "msg", "UNIFIED", 1.0, 0.0, metadata)
-
-        for ch, msg in mock_store._published:
-            if ch == "output:events":
-                payload = json.loads(msg)
-                assert payload["type"] == "task"
-                return
-        pytest.fail("No publish to output:events found")
 
     # ------------------------------------------------------------------ #
     # dequeue

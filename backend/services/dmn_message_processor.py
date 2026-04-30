@@ -21,7 +21,6 @@ class DMNMessageProcessor(MessageProcessor):
 
     Reduced safety caps — DMN turns are best-effort, short-lived:
       MAX_ITERATIONS = 15  (vs. base 30)
-      MAX_TIMEOUT    = 300 (5 minutes, vs. base 900)
 
     ALWAYS_AVAILABLE excludes 'subagent' to prevent a background
     process from spawning further background work.
@@ -30,7 +29,6 @@ class DMNMessageProcessor(MessageProcessor):
     CHANNEL = 'dmn'
     ROLE = 'proactive_thought'
     MAX_ITERATIONS = 15
-    MAX_TIMEOUT = 300  # 5 minutes
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
     ALWAYS_AVAILABLE: list[str] = [
         "document",

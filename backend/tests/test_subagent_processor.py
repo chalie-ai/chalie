@@ -1,16 +1,13 @@
-"""Feature tests for SubagentProcessor class constants, timeout override clamping,
-pre-seed construction, and blocklist enforcement.
+"""Feature tests for SubagentProcessor construction, deadline semantics,
+blocklist enforcement, and class constants.
 
-Tests that require the real embedding pipeline (test_pre_seed_*) are skipped
-when abilities.sqlite or the embedding model is unavailable — this is expected
-in CI environments without the ONNX model asset downloaded.
-
-The one test that patches find_tools_query (test_pre_seed_blocklist_enforced)
-is explicitly documented below. It is the minimum viable mock: patching at the
-import site of abilities.find_tools so we can inject a known return value that
-includes blocklisted names — there is no other way to construct this scenario
-without manipulating the embedding index.
+The pre-seed (_preseeded_tools) tests are REMOVED — pre-seeding was deleted in
+the v0.6.0 subagent rework. The _max_timeout_seconds property tests are
+REPLACED by _deadline semantics tests: instantiating SubagentProcessor with a
+given agent_type sets _deadline to roughly time.time() + type_default_timeout.
 """
+
+import time
 
 import pytest
 
@@ -18,112 +15,58 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# B7–B9. _max_timeout_seconds property
+# B1. Per-instance _deadline from agent_type
 # ---------------------------------------------------------------------------
 
 
-class TestMaxTimeoutOverride:
-    def test_per_instance_max_timeout_override_clamps_to_class_constant(self):
-        """Override larger than MAX_TIMEOUT (7200) must be clamped to 7200."""
+class TestDeadlineSemantics:
+    def test_deadline_set_from_type_default_timeout(self):
+        """SubagentProcessor with default agent_type sets _deadline to
+        time.time() + general_purpose default_timeout (1800s), within 1s."""
+        from abilities.subagent import SUBAGENT_TYPES
         from services.subagent_processor import SubagentProcessor
 
-        proc = SubagentProcessor(raw_input="x", max_timeout_override=99999)
-        assert proc._max_timeout_seconds == 7200
+        t_before = time.time()
+        proc = SubagentProcessor(raw_input="x")  # default agent_type=general_purpose
+        t_after = time.time()
 
-    def test_per_instance_max_timeout_override_below_class_constant_used_as_is(self):
-        """Override of 300 is below 7200 — must be honoured as-is."""
+        expected = SUBAGENT_TYPES["general_purpose"]["default_timeout"]
+        # _deadline should be ~t_before + expected
+        assert proc._deadline >= t_before + expected - 1, (
+            f"deadline {proc._deadline:.1f} < t_before + {expected} - 1"
+        )
+        assert proc._deadline <= t_after + expected + 1, (
+            f"deadline {proc._deadline:.1f} > t_after + {expected} + 1"
+        )
+
+    def test_deadline_set_from_max_timeout_override(self):
+        """max_timeout_override=300 must win over the type's default_timeout."""
         from services.subagent_processor import SubagentProcessor
 
+        t_before = time.time()
         proc = SubagentProcessor(raw_input="x", max_timeout_override=300)
-        assert proc._max_timeout_seconds == 300
 
-    def test_per_instance_no_override_falls_back_to_class_constant(self):
-        """No override → falls back to class MAX_TIMEOUT (7200)."""
+        delta = proc._deadline - t_before
+        assert abs(delta - 300) <= 1.0, (
+            f"deadline delta={delta:.3f}s, expected ~300s"
+        )
+
+    def test_deadline_override_smaller_than_type_default_honoured(self):
+        """A small override (60s) on a type with 3600s default must use 60s."""
         from services.subagent_processor import SubagentProcessor
 
-        proc = SubagentProcessor(raw_input="x")
-        assert proc._max_timeout_seconds == 7200
-
-
-# ---------------------------------------------------------------------------
-# B10. Pre-seed runs once at construction (real embedding + abilities.sqlite)
-# ---------------------------------------------------------------------------
-
-
-class TestPreSeedRealDB:
-    def test_pre_seed_runs_once_at_construction(self):
-        """_preseeded_tools is populated at __init__ against the real abilities.sqlite.
-
-        Skipped when the embedding model or DB asset is unavailable (CI without
-        downloaded ONNX model).
-        """
-        from pathlib import Path
-
-        abilities_db = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "abilities.sqlite"
-        if not abilities_db.exists():
-            pytest.skip("abilities.sqlite not present — skipping pre-seed real-DB test")
-
-        try:
-            from services.embedding_service import EmbeddingService
-            EmbeddingService().generate_embedding("test")
-        except Exception as e:
-            pytest.skip(f"Embedding model unavailable: {e}")
-
-        from services.subagent_processor import SubagentProcessor
-
-        proc = SubagentProcessor(raw_input="research current weather patterns")
-        tools = proc._preseeded_tools
-
-        assert isinstance(tools, list)
-        assert len(tools) <= 3
-
-        # Each entry must be a dict with name/description/input_schema
-        for t in tools:
-            assert "name" in t
-            assert "description" in t
-            assert "input_schema" in t
-
-        # "weather" is expected to surface for a weather-pattern query
-        names = [t["name"] for t in tools]
-        assert "weather" in names, (
-            f"Expected 'weather' in pre-seeded tools for weather query, got: {names}"
+        t_before = time.time()
+        proc = SubagentProcessor(
+            raw_input="x", agent_type="web_surfer", max_timeout_override=60
+        )
+        delta = proc._deadline - t_before
+        assert abs(delta - 60) <= 1.0, (
+            f"deadline delta={delta:.3f}s, expected ~60s for override=60"
         )
 
 
 # ---------------------------------------------------------------------------
-# B11. Blocklist enforced in pre-seed
-# ---------------------------------------------------------------------------
-
-
-class TestPreSeedBlocklist:
-    def test_pre_seed_blocklist_enforced(self):
-        """Blocklisted names returned by find_tools_query must be filtered before
-        being resolved into ability schemas.
-
-        NOTE: find_tools_query is patched here because we cannot force the
-        embedding index to return blocklisted names — they are filtered from the
-        DISCOVERABLE allowlist before the query, so the real DB never returns
-        them. This patch operates at the import site in subagent_processor
-        (abilities.find_tools.find_tools_query) and replaces only the return
-        value, not production dispatch logic.
-        """
-        from unittest.mock import patch
-
-        blocklisted_names = ["subagent", "save_graph", "detect_pattern", "weather"]
-        with patch("abilities.find_tools.find_tools_query", return_value=blocklisted_names):
-            from services.subagent_processor import SubagentProcessor
-            proc = SubagentProcessor(raw_input="test blocklist enforcement")
-
-        tool_names = [t["name"] for t in proc._preseeded_tools]
-        assert "subagent" not in tool_names
-        assert "save_graph" not in tool_names
-        assert "detect_pattern" not in tool_names
-        # Non-blocklisted "weather" may or may not be present (registry may
-        # resolve it) — what matters is the blocked names are gone.
-
-
-# ---------------------------------------------------------------------------
-# B12. Blocklist constant membership
+# B2. Blocklist constant
 # ---------------------------------------------------------------------------
 
 
@@ -138,19 +81,30 @@ class TestBlocklistConstant:
 
 
 # ---------------------------------------------------------------------------
-# B13. Class constants
+# B3. Class constants
 # ---------------------------------------------------------------------------
 
 
 class TestProcessorClassConstants:
     def test_processor_class_constants(self):
+        """CHANNEL, ROLE, MAX_ITERATIONS present. MAX_TIMEOUT is gone.
+        ALWAYS_AVAILABLE is [] at class level (set per-instance in __init__)."""
         from services.subagent_processor import SubagentProcessor, _BLOCKED
 
         assert SubagentProcessor.CHANNEL == "subagent"
         assert SubagentProcessor.ROLE == "subagent"
         assert SubagentProcessor.MAX_ITERATIONS == 50
-        assert SubagentProcessor.MAX_TIMEOUT == 7200
-        assert SubagentProcessor.ALWAYS_AVAILABLE == ["find_tools"]
+
+        # MAX_TIMEOUT class constant must be GONE (ripped in §14.1)
+        assert not hasattr(SubagentProcessor, "MAX_TIMEOUT"), (
+            "MAX_TIMEOUT class constant should have been removed in the timeout rip"
+        )
+
+        # ALWAYS_AVAILABLE at class level must be [] — populated per-instance
+        assert SubagentProcessor.ALWAYS_AVAILABLE == [], (
+            f"Class-level ALWAYS_AVAILABLE should be [] (set per-instance), "
+            f"got: {SubagentProcessor.ALWAYS_AVAILABLE}"
+        )
 
         discoverable = SubagentProcessor.DISCOVERABLE
         expected_tools = [
@@ -165,4 +119,18 @@ class TestProcessorClassConstants:
         for blocked in _BLOCKED:
             assert blocked not in discoverable, (
                 f"Blocklisted '{blocked}' found in DISCOVERABLE"
+            )
+
+    def test_per_instance_always_available_is_set_from_agent_type(self):
+        """After construction, ALWAYS_AVAILABLE on the instance must equal
+        the type's native_tools (not the class-level empty list)."""
+        from abilities.subagent import SUBAGENT_TYPES
+        from services.subagent_processor import SubagentProcessor
+
+        for agent_type, entry in SUBAGENT_TYPES.items():
+            proc = SubagentProcessor(raw_input="x", agent_type=agent_type)
+            # Instance attribute shadows the class attribute
+            assert proc.ALWAYS_AVAILABLE == entry["native_tools"], (
+                f"{agent_type}: instance ALWAYS_AVAILABLE {proc.ALWAYS_AVAILABLE} "
+                f"!= native_tools {entry['native_tools']}"
             )

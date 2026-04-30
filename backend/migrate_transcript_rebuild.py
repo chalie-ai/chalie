@@ -92,7 +92,7 @@ _INJECTION_PREFIXES = (
 _PLAIN_TEXT_MAX = 10_000
 
 # Roles that are background/internal — skip entirely
-_SKIP_ROLES = {"proactive_thought", "subagent", "scheduled", "tool"}
+_SKIP_ROLES = {"proactive_thought", "subagent", "subagent_return", "scheduled", "tool"}
 
 
 def extract_user_message(content: str) -> str | None:

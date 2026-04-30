@@ -193,13 +193,6 @@ export class Chat {
       },
     }, pendingImageIds);
 
-    // Safety: if onDone never fires (connection drop), reset after 5 minutes
-    setTimeout(() => {
-      if (this._isSending) {
-        this._isSending = false;
-        this._pendingForm = null;
-      }
-    }, 300000);
   }
 
   // ---------------------------------------------------------------------------

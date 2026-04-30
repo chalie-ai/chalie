@@ -163,7 +163,6 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
-    MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True
 
     def __init__(

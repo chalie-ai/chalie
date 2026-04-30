@@ -273,7 +273,19 @@ class UserMessageProcessor(MessageProcessor):
             turn_line += ' ' + nudge_tag
         parts.append(turn_line)
 
-        # 6. ACT loop trail (empty on iteration 1)
+        # 6. Drain pending steers from async subagent completions into the trail.
+        # These are envelopes queued by _deliver_envelope() while compaction
+        # or an earlier iteration was in progress. Draining here (before
+        # getActLoopTrail()) is compaction-safe: compaction mutates _act_trail
+        # directly; this drain fires before the next iteration's prompt
+        # assembly, so steers are never mid-compaction when appended.
+        if self._pending_steers:
+            steers = self._pending_steers[:]
+            self._pending_steers.clear()
+            for steer in steers:
+                self._act_trail.append(steer)
+
+        # 7. ACT loop trail (empty on iteration 1)
         trail = self.getActLoopTrail()
         if trail:
             parts.append(trail)
@@ -536,3 +548,23 @@ class UserMessageProcessor(MessageProcessor):
             self._mode_state_cached = {}
         return self._mode_state_cached
 
+
+class SubagentReturnProcessor(UserMessageProcessor):
+    """Thin UMP subclass for async subagent completions.
+
+    When a subagent finishes and the parent user-channel is idle, a daemon
+    thread constructs this processor with the subagent's completion envelope
+    as raw_input and calls .send(). The result is a normal user-channel ACT
+    loop that produces a 'message' SSE event — only Chalie's reasoned
+    response reaches the chat.
+
+    ROLE='subagent_return' ensures the input row is hidden from user-visible
+    chat history (conversation.py filters WHERE channel='user' but the UI
+    renders all roles — the role string is used by migrate_transcript_rebuild
+    _SKIP_ROLES to exclude it from history rebuilds).
+
+    No method overrides needed: all UMP behaviour (ALWAYS_AVAILABLE,
+    DISCOVERABLE, system prompt, postTurn fan-out) is inherited unchanged.
+    """
+
+    ROLE = 'subagent_return'

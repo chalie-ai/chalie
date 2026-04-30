@@ -33,13 +33,11 @@ class TestImport:
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
-            SubagentSystemMessagePrompt,
         )
         assert callable(SystemMessagePrompt)
         assert callable(UnifiedSystemMessagePrompt)
         assert callable(DMNSystemMessagePrompt)
         assert callable(ScheduledSystemMessagePrompt)
-        assert callable(SubagentSystemMessagePrompt)
 
     def test_import_does_not_hit_database(self):
         """Importing the module must not open any DB connections."""
@@ -250,12 +248,6 @@ class TestBackgroundChannelPrompts:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_subagent_returns_non_empty(self):
-        from services.system_message_prompt import SubagentSystemMessagePrompt
-        result = SubagentSystemMessagePrompt().getPrompt()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
     def test_scheduled_returns_non_empty(self):
         from services.system_message_prompt import ScheduledSystemMessagePrompt
         result = ScheduledSystemMessagePrompt().getPrompt()
@@ -264,7 +256,6 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_return_type_is_str(self, cls_name):
@@ -276,7 +267,6 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_mentions_chalie(self, cls_name):
@@ -288,7 +278,6 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_idempotent(self, cls_name):
@@ -300,7 +289,6 @@ class TestBackgroundChannelPrompts:
 
     @pytest.mark.parametrize("cls_name", [
         "DMNSystemMessagePrompt",
-        "SubagentSystemMessagePrompt",
         "ScheduledSystemMessagePrompt",
     ])
     def test_no_file_reads(self, cls_name):
@@ -331,10 +319,6 @@ class TestInheritanceChain:
         from services.system_message_prompt import SystemMessagePrompt, DMNSystemMessagePrompt
         assert issubclass(DMNSystemMessagePrompt, SystemMessagePrompt)
 
-    def test_subagent_is_subclass(self):
-        from services.system_message_prompt import SystemMessagePrompt, SubagentSystemMessagePrompt
-        assert issubclass(SubagentSystemMessagePrompt, SystemMessagePrompt)
-
     def test_scheduled_is_subclass(self):
         from services.system_message_prompt import SystemMessagePrompt, ScheduledSystemMessagePrompt
         assert issubclass(ScheduledSystemMessagePrompt, SystemMessagePrompt)
@@ -344,13 +328,11 @@ class TestInheritanceChain:
             SystemMessagePrompt,
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            SubagentSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
         )
         for cls in (
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            SubagentSystemMessagePrompt,
             ScheduledSystemMessagePrompt,
         ):
             assert isinstance(cls(), SystemMessagePrompt)

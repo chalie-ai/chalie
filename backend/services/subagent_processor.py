@@ -1,5 +1,5 @@
 """
-SubagentProcessor — Focused subagent execution with extended limits.
+SubagentProcessor — Focused subagent execution with per-type tool surfaces.
 
 MessageProcessor v2 subclass. CHANNEL is flat 'subagent'. sub_id is stored
 in metadata only, not embedded in the channel string.
@@ -8,9 +8,10 @@ North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import logging
+import time
 
+from abilities.subagent import SUBAGENT_TYPES
 from services.message_processor import MessageProcessor
-from services.system_message_prompt import SubagentSystemMessagePrompt
 
 logger = logging.getLogger(__name__)
 
@@ -20,24 +21,20 @@ _BLOCKED: frozenset[str] = frozenset({"subagent", "save_graph", "detect_pattern"
 class SubagentProcessor(MessageProcessor):
     """MessageProcessor subclass for focused subagent task execution.
 
-    Extended safety caps for long-running tasks:
+    Extended safety caps:
       MAX_ITERATIONS = 50   (vs. base 30)
-      MAX_TIMEOUT    = 7200 (2 hours, vs. base 900)
+      ITERATION_TIMEOUT inherited from base (1800s per-iteration wall)
 
-    ALWAYS_AVAILABLE is minimal — only find_tools. Everything else is
-    pre-seeded at construction via find_tools_query() against DISCOVERABLE,
-    or discovered at runtime via find_tools.
+    ALWAYS_AVAILABLE is set per-instance from SUBAGENT_TYPES[agent_type]['native_tools'].
+    DISCOVERABLE covers everything not in the blocklist or type's native list.
+    Per-instance deadline (self._deadline) enforces the type's wall-clock budget.
 
-    _BLOCKED names are filtered from pre-seed results and from any future
-    find_tools discovery accumulated in self._discovered_tools.
+    _BLOCKED names are filtered from DISCOVERABLE and any find_tools discovery.
     """
 
     CHANNEL = 'subagent'
     ROLE = 'subagent'
     MAX_ITERATIONS = 50
-    MAX_TIMEOUT = 7200  # hard ceiling; per-instance override clamps to this
-    SYSTEM_PROMPT_CLASS = SubagentSystemMessagePrompt
-    ALWAYS_AVAILABLE: list[str] = ["find_tools"]
     DISCOVERABLE: list[str] = [
         "browser",
         "code_eval",
@@ -57,63 +54,37 @@ class SubagentProcessor(MessageProcessor):
         self,
         raw_input: str,
         metadata: dict | None = None,
+        agent_type: str = "general_purpose",
         max_timeout_override: int | None = None,
     ) -> None:
         super().__init__(raw_input, metadata)
 
-        # Clamp override to [0, MAX_TIMEOUT]; None means use class default.
-        if max_timeout_override is not None:
-            self._max_timeout_override: int | None = min(
-                int(max_timeout_override), self.MAX_TIMEOUT
-            )
-        else:
-            self._max_timeout_override = None
+        self.agent_type = agent_type
 
-        # Pre-seed: run find_tools_query once at construction time against
-        # DISCOVERABLE (minus blocklist). Cached on the instance; injected
-        # into the first iteration via getDynamicTools().
-        allow = [n for n in self.DISCOVERABLE if n not in _BLOCKED]
-        self._preseeded_tools: list[dict] = self._build_preseed(raw_input, allow)
+        # Instance-level tool surface from the type registry.
+        self.ALWAYS_AVAILABLE = list(SUBAGENT_TYPES[agent_type]["native_tools"])
 
-    @property
-    def _max_timeout_seconds(self) -> int:
-        return self._max_timeout_override if self._max_timeout_override is not None else self.MAX_TIMEOUT
+        # Per-instance deadline: prefer caller override, else type default.
+        timeout_seconds = (
+            int(max_timeout_override)
+            if max_timeout_override is not None
+            else SUBAGENT_TYPES[agent_type]["default_timeout"]
+        )
+        self._deadline = time.time() + timeout_seconds
 
-    def _build_preseed(self, query: str, allow: list[str]) -> list[dict]:
-        """Run find_tools_query and resolve top-3 names to ability schemas."""
-        try:
-            from abilities.find_tools import find_tools_query
-            from abilities._registry import AbilityRegistry
-
-            names = find_tools_query(query, allow=allow, limit=3)
-            schemas: list[dict] = []
-            for name in names:
-                if name in _BLOCKED:
-                    continue
-                try:
-                    a = AbilityRegistry.get(name)
-                    schemas.append({
-                        'name': a.NAME,
-                        'description': a.SUMMARY,
-                        'input_schema': a.INPUT_SCHEMA,
-                    })
-                except KeyError:
-                    logger.debug("[SubagentProcessor] Pre-seed: no ability for '%s'", name)
-            return schemas
-        except Exception as exc:
-            logger.debug("[SubagentProcessor] Pre-seed failed: %s", exc)
-            return []
+    def getSystemPrompt(self) -> str:
+        """Build the subagent system prompt from the per-type prompt + guardrails."""
+        from abilities.subagent import _SHARED_GUARDRAILS
+        type_prompt = SUBAGENT_TYPES[self.agent_type]["system_prompt"]
+        body = f"{type_prompt}\n\n{_SHARED_GUARDRAILS}"
+        return f"{self.getUserDefinition()}\n\n{body}"
 
     def getDynamicTools(self) -> list[dict]:
-        """Merge pre-seeded tools with runtime-discovered tools, filtering blocklist."""
-        filtered_discovered = [
+        """Filter blocklist from runtime-discovered tools."""
+        return [
             t for t in self._discovered_tools
             if t.get('name') not in _BLOCKED
         ]
-        # Pre-seeded tools are injected at the start; runtime-discovered tools
-        # accumulate as the subagent calls find_tools during execution.
-        # Deduplication in getTools() (first-seen wins) handles overlaps.
-        return self._preseeded_tools + filtered_discovered
 
     def getUserDefinition(self) -> str:
         return (

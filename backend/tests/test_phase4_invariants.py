@@ -185,7 +185,10 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     "DMNMessageProcessor":       (_DEFAULT_ALWAYS - {"subagent"}, _DEFAULT_DISCOVERABLE),
     "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent"}, _DEFAULT_DISCOVERABLE),
-    "SubagentProcessor":         (frozenset({"find_tools"}), frozenset(set(_DEFAULT_DISCOVERABLE) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
+    # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
+    # the class-level attribute is [] (empty). The per-instance value is
+    # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
+    "SubagentProcessor":         (frozenset(), frozenset(set(_DEFAULT_DISCOVERABLE) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.

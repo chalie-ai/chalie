@@ -649,12 +649,14 @@ def _handle_chat(ws, store, msg, active_request=None):
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "thinking", "seq": seq})
 
-    # Listen for pub/sub events with timeout
+    # Listen for pub/sub events until done, disconnected, or cancelled.
+    # The loop is unbounded — no wall-clock timeout on the chat request.
+    # Exit conditions: (a) 'done' event arrives, (b) background thread sets
+    # bg_done and no pub/sub message received, (c) WS disconnects.
     start_time = time.time()
-    timeout_seconds = 360
     message_received = False
 
-    while time.time() - start_time < timeout_seconds:
+    while True:
         ps_msg = pubsub.get_message(timeout=1.0)
 
         if ps_msg and ps_msg['type'] == 'message':
@@ -799,18 +801,5 @@ def _handle_chat(ws, store, msg, active_request=None):
             _buffer_event(done_evt)
             _send_json(ws, done_evt)
             break
-    else:
-        # Timeout
-        seq = _next_seq()
-        err = {"type": "error", "message": "Request timed out", "recoverable": True, "seq": seq}
-        if partial_metrics:
-            err["metrics"] = partial_metrics
-        _buffer_event(err)
-        _send_json(ws, err)
-        seq = _next_seq()
-        done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-        _buffer_event(done_evt)
-        _send_json(ws, done_evt)
-
     pubsub.unsubscribe(sse_channel)
     pubsub.close()

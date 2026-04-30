@@ -127,7 +127,7 @@ class MessageProcessor:
     # processor can never discover anything outside this list.
     DISCOVERABLE: list[str] = []
     MAX_ITERATIONS: int = 30
-    MAX_TIMEOUT: int = 900    # seconds — ACT loop only
+    ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
     # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
@@ -183,20 +183,16 @@ class MessageProcessor:
         self._payload_too_large_recovered: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
-        # ACT loop wall-clock anchor — set inside send() once the thinking gate
-        # completes. Exposed as an instance attr so subagent's wait=true path
-        # can advance it by the elapsed blocking time, keeping the parent
-        # MAX_TIMEOUT budget accurate.
-        self._loop_start: float | None = None
-
-    @property
-    def _max_timeout_seconds(self) -> int:
-        """Effective MAX_TIMEOUT for the ACT loop wall-clock guard.
-
-        Base returns the class constant. SubagentProcessor overrides to
-        honour the per-instance max_timeout_override supplied at construction.
-        """
-        return self.MAX_TIMEOUT
+        # Per-turn pending steers from async subagent completions.
+        # A subagent finishing mid-ACT appends its envelope here instead of
+        # directly to _act_trail so compaction cannot race the append.
+        # Drained into _act_trail at the start of getUserPrompt() (or equivalent
+        # prompt-assembly point) on each ACT iteration.
+        self._pending_steers: list[str] = []
+        # Per-instance deadline (seconds from epoch) for processors that want a
+        # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
+        # Set by subclasses in __init__ after calling super().__init__().
+        self._deadline: float | None = None
 
     def set_turn_start(self, ts: float) -> None:
         """Override the accumulator start time (called from _handle_chat before thread spawn)."""
@@ -536,16 +532,23 @@ class MessageProcessor:
           ``user_steer`` and ephemeral=0) into a single ``act_restart``
           DTO, clears the trail + discovered tools, and resets
           ``iteration`` to 0 for a clean loop restart.
-        - ``loop_start`` is anchored AFTER ``_run_thinking_gate()`` completes.
-          The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
-          (independent budget). MAX_TIMEOUT covers only ACT loop iterations.
-        - ``loop_start`` is intentionally NOT reset on Stage 2 restart —
-          the MAX_TIMEOUT wall-clock guard keeps ticking so runaway turns
-          eventually hit the cap.
+        - The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
+          (independent budget). The ACT loop has no whole-loop wall-clock budget.
+        - Stage 2 does NOT reset the per-instance deadline — the wall-clock
+          guard (if set) keeps ticking so subagent turns eventually hit the cap.
         - If Stage 2 fails (LLM error) the loop breaks to the cap-exit
           path and returns ``final_text=''``. Retrying the provider call
           against an oversize user_body would almost certainly fail and
           waste budget.
+
+        ACT loop termination:
+        - Clean exit: LLM returned text with no tool_calls.
+        - MAX_ITERATIONS safety cap (default 30; subagent 50).
+        - Per-instance deadline (``self._deadline``) — opt-in, set by
+          SubagentProcessor based on agent_type. Base class: no deadline.
+        - ITERATION_TIMEOUT (1800s) per-iteration safety wall — fires only
+          if a single iteration hangs past 30 min (runaway tool call or
+          blocking provider). Should never fire in practice.
 
         Exception semantics:
         - Provider errors (inside the main ACT loop) propagate immediately.
@@ -565,9 +568,9 @@ class MessageProcessor:
         Final-text semantics:
         - Clean exit (LLM returned text with no tool_calls) → final_text is
           the terminating text.
-        - Cap exit (MAX_ITERATIONS / MAX_TIMEOUT / Stage 2 failure) →
-          final_text is ''. The last iteration's mid-loop narration is
-          NEVER stored as the assistant row — that text represents partial
+        - Cap exit (MAX_ITERATIONS / deadline / ITERATION_TIMEOUT / Stage 2
+          failure) → final_text is ''. The last iteration's mid-loop narration
+          is NEVER stored as the assistant row — that text represents partial
           thinking, not a final answer. Storing it would violate north star
           § Storage Model ("final ACT-loop response only").
         """
@@ -594,14 +597,6 @@ class MessageProcessor:
             with self._metrics.stage('thinking_gate'):
                 self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
-            # Anchor MAX_TIMEOUT AFTER the thinking gate. The exploration pass
-            # runs under its own THINKING_TIMEOUT envelope (independent budget),
-            # so MAX_TIMEOUT covers only ACT loop iterations.
-            # Stored as self._loop_start so the subagent wait=true path can
-            # advance it by elapsed blocking time without affecting the guard.
-            self._loop_start = time.time()
-            loop_start = self._loop_start
-
             # Log exploration injection once per turn — at this single point,
             # not inside the ACT loop.
             if self._thinking_exploration:
@@ -621,10 +616,18 @@ class MessageProcessor:
             llm_response = None
             loop_exited_cleanly = False
 
-            while (
-                self._current_iteration < self.MAX_ITERATIONS
-                and time.time() - loop_start < self._max_timeout_seconds
-            ):
+            while self._current_iteration < self.MAX_ITERATIONS:
+                # Per-instance deadline check (opt-in — SubagentProcessor only).
+                # Base class never sets self._deadline so this is a no-op for UMP.
+                if self._deadline is not None and time.time() > self._deadline:
+                    logger.warning(
+                        "[MessageProcessor.send] %s: per-instance deadline exceeded "
+                        "(iteration=%d) — breaking to cap exit",
+                        self.CHANNEL, self._current_iteration,
+                    )
+                    break
+
+                iter_start = time.time()
                 with self._metrics.iteration(self._current_iteration):
                     with self._metrics.stage('prompt_assembly'):
                         user_body = self.getUserPrompt()
@@ -637,9 +640,9 @@ class MessageProcessor:
                     #
                     # Stage 1: compress the accumulated tool-use trail in place.
                     # Stage 2 (fallback): full checkpoint compaction + loop restart.
-                    # Stage 2 resets iteration to 0 but NOT loop_start — the
-                    # wall-clock MAX_TIMEOUT guard is a safety net against runaway
-                    # turns; compaction LLM calls count against it deliberately.
+                    # Stage 2 resets iteration to 0. The per-instance deadline
+                    # (self._deadline) keeps ticking — compaction LLM calls count
+                    # against the subagent's wall-clock budget deliberately.
                     if self._check_threshold(user_body, context_limit):
                         logger.warning(
                             "[COMPACTION] %s: user body over 80%% threshold "
@@ -764,6 +767,22 @@ class MessageProcessor:
 
                     self._current_iteration += 1
 
+                # Per-iteration safety wall: a single iteration should NEVER
+                # take longer than ITERATION_TIMEOUT seconds. In practice this
+                # only fires if a tool blocks the thread for > 30 min (runaway
+                # subprocess, hung network call with no timeout).
+                iter_elapsed = time.time() - iter_start
+                if iter_elapsed > self.ITERATION_TIMEOUT:
+                    logger.error(
+                        "[MessageProcessor] %s: iteration %d exceeded %ds "
+                        "(elapsed=%.1fs) — interrupting ACT loop",
+                        self.CHANNEL,
+                        self._current_iteration,
+                        self.ITERATION_TIMEOUT,
+                        iter_elapsed,
+                    )
+                    break
+
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
@@ -772,13 +791,11 @@ class MessageProcessor:
                 # must NOT re-use it as the assistant row.
                 logger.warning(
                     "[MessageProcessor.send] ACT loop hit safety cap "
-                    "(iteration=%d, elapsed=%.1fs, max_iter=%d, max_timeout=%d) — "
+                    "(iteration=%d, max_iter=%d) — "
                     "final_text set to '' to avoid persisting mid-loop narration "
                     "as assistant response",
                     self._current_iteration,
-                    time.time() - loop_start,
                     self.MAX_ITERATIONS,
-                    self._max_timeout_seconds,
                 )
                 final_text = ''
 

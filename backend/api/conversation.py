@@ -17,7 +17,8 @@ def get_recent_history(limit=12, offset=0):
     with db.connection() as conn:
         rows = conn.execute(
             "SELECT id, role, content, created_at FROM transcript "
-            "WHERE channel = 'user' ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "WHERE channel = 'user' AND role NOT IN ('subagent_return') "
+            "ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
 

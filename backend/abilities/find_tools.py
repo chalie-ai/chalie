@@ -216,25 +216,6 @@ def _format_no_tools(query: str) -> str:
     return f'INFO: The best tools for "{query}" are already available.'
 
 
-def find_tools_query(query: str, allow: list[str], limit: int = 3) -> list[str]:
-    """Run the RRF discovery pipeline and return up to *limit* tool names.
-
-    Public helper for programmatic pre-seeding (e.g. SubagentProcessor
-    init). Returns [] on any error so callers degrade gracefully.
-    """
-    if not query or not allow:
-        return []
-    try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
-        query_embedding = emb_service.generate_embedding(query)
-        blob = pack_embedding(query_embedding)
-        rows = _query_abilities_db(query, blob, limit, FindToolsAbility._ABILITIES_DB_PATH, allow)
-        return [r["tool_name"] for r in rows]
-    except Exception as exc:
-        logger.debug("%s find_tools_query failed: %s", LOG_PREFIX, exc)
-        return []
-
 
 def _fallback_keyword_search(query: str, limit: int, db_path: Path, allow: List[str]) -> dict:
     if not db_path.exists():
