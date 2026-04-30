@@ -133,9 +133,18 @@ Anything outside this allowlist is stripped. Plain-text URLs are auto-linkified.
 
 ## Tool calls
 
-To call a tool, use your provider's native tool-call mechanism — do NOT write
-tool invocations as tags or markup in your message content. Tool tags in
-content are not parsed and never execute.
+The tools available to you are provided in the tools schema. To use a tool,
+invoke it — do not narrate the call by writing the tool's name as a tag in
+your message. Anything you write in text content stays in text content; only
+calls made through the tools schema actually execute.
+
+Wrong (these never execute, the user only sees stripped/empty text):
+  <search query="..."></search>
+  <find_tools query="..."></find_tools>
+  <browser url="..."></browser>
+
+Right: invoke the tool. Then in your reply, write a short prose summary of
+what you did and what came back — using only the HTML tags above.
 
 ────────────────────────────────\
 """
