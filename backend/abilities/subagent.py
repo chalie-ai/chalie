@@ -22,7 +22,16 @@ LOG_PREFIX = "[SUBAGENT SKILL]"
 
 class SubagentAbility(Ability):
     NAME = "subagent"
-    SUMMARY = "Spawn a focused subagent to execute a delegated task. Default async (fire-and-forget); set wait=true to block parent until done (max 5min)."
+    SUMMARY = (
+        "A subagent is initialised to perform long running tasks or tasks that "
+        "require large data traversal. Use this tool to be able to parallelise "
+        "work or perform actions in the background or to minimise context "
+        "bloat. If a task requires you to read a large document, use this tool "
+        "to have an agent summarise it for you. If you need to search multiple "
+        "pages, use this tool to keep your context window clean, etc... You "
+        "can launch as many subagents as you need. Be descriptive and launch "
+        "bounded tasks to answer to the user more efficiently."
+    )
     EXAMPLES = [
         "research the top 3 health benefits of cold water swimming as a background task",
         "do a deep dive on the competitive landscape for electric vehicles",
@@ -48,7 +57,12 @@ class SubagentAbility(Ability):
             },
             "wait": {
                 "type": "boolean",
-                "description": "Block parent ACT iteration until subagent finishes. Default false (fire-and-forget, result via SSE 'task' event).",
+                "description": (
+                    "Set this to true to make the request synchronous. "
+                    "Request will be hard capped to 5 minutes, else leave it "
+                    "False and you will be notified automatically once the "
+                    "request is completed."
+                ),
                 "default": False,
             },
         },
