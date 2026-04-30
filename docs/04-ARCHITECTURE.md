@@ -156,6 +156,8 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 
 Tool results flow through a single render-and-record path (`ToolRenderAndRecordService`) that formats the output and writes it to the `tool_calls` table. Tool infrastructure has no knowledge of specific tools; tools have no knowledge of infrastructure.
 
+**Native tool calling only.** Every provider adapter (`OllamaService`, `AnthropicService`, `OpenAIService`, `GeminiService` in `services/llm_service.py` + `services/ollama_service.py`) reads tool calls exclusively from the response's structured `tool_calls` (or equivalent) field. There is no content-side fallback that scrapes XML/JSON tool-call markup out of `message.content`. If a model fails to populate the structured field, that turn produces zero tool dispatches by design — silent inline-content rescues mask model misbehaviour and were ripped to keep failure modes loud and observable.
+
 Every ability result uses the canonical tag block format from `backend/services/innate_skills/_tag.py` (the only file remaining under `services/innate_skills/` after Phase 4 cutover — kept because it is purely a formatter shared by every ability):
 
 ```
