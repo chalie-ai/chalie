@@ -242,7 +242,9 @@ def test_find_tools_module_level_abilities_db_path():
 def test_subagent_contract():
     """SubagentAbility satisfies the ABC contract."""
     from abilities.subagent import SubagentAbility
-    _assert_contract(SubagentAbility, name="subagent", timeout=10)
+    # TIMEOUT=305 = wait=true cap (300s) + 5s buffer for envelope render+record.
+    # See backend/abilities/subagent.py for the rationale.
+    _assert_contract(SubagentAbility, name="subagent", timeout=305)
 
 
 def test_subagent_registered():
