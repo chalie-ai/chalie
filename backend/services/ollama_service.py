@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 
 import requests
 import json
-from abilities._registry import AbilityRegistry
 from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitError
 
 # Model identifier accepts alphanumeric, dot, underscore, dash, slash, and the
@@ -43,6 +42,11 @@ class OllamaService:
     :class:`~services.embedding_service.EmbeddingService` rather than
     performing a separate Ollama embed call.
     """
+
+    # JSON path of the user-visible text field in this provider's response.
+    # Substituted into system prompts at the {{provider_content_field_name}}
+    # placeholder so the model is told the exact field where its prose lands.
+    CONTENT_FIELD_LABEL = "message.content"
 
     def __init__(self, config: dict):
         """Initialize the Ollama service with connection and inference settings.
@@ -386,71 +390,12 @@ def _raise_rate_limit(e: requests.exceptions.HTTPError) -> None:
     raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
 
 
-_INLINE_TOOL_CALL_RE = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
-
-
-def _parse_tool_call_payload(raw: str) -> dict | None:
-    """Decode one <tool_call>…</tool_call> block to a dict, or None on failure."""
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        # JSONDecodeError is a ValueError subclass; the broader catch is
-        # required by S5713 (no redundant exception classes).
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _resolve_tool_name(payload: dict, key: str) -> tuple[str | None, dict]:
-    """If ``payload[key]`` names a registered ability, return (name, args). Else (None, {})."""
-    candidate = payload.get(key)
-    if not isinstance(candidate, str):
-        return None, {}
-    try:
-        AbilityRegistry.get(candidate)
-    except KeyError:
-        return None, {}
-    if key == 'name':
-        args_val = payload.get('arguments', {})
-        if isinstance(args_val, dict):
-            return candidate, args_val
-        return candidate, {k: v for k, v in payload.items() if k != 'name'}
-    return candidate, {k: v for k, v in payload.items() if k != key}
-
-
-def _build_tool_entry(payload: dict, idx: int) -> dict | None:
-    """Resolve a parsed payload to one tool-call entry, or None if no name resolves."""
-    name, arguments = _resolve_tool_name(payload, 'name')
-    if name is None:
-        name, arguments = _resolve_tool_name(payload, 'action')
-    if name is None:
-        return None
-    return {'id': f"ollama_{name}_{idx}", 'name': name, 'input': arguments}
-
-
-def _extract_inline_tool_calls(text: str) -> tuple[str, list]:
-    """Extract <tool_call>...</tool_call> blocks from *text*.
-
-    Returns (cleaned_text, tool_call_entries). Blocks that fail JSON parsing,
-    contain no dict, or whose name/action does not resolve in AbilityRegistry
-    are skipped silently. All matched blocks are stripped from the text
-    regardless of whether they parsed successfully.
-    """
-    entries: list = []
-    for idx, match in enumerate(_INLINE_TOOL_CALL_RE.finditer(text)):
-        payload = _parse_tool_call_payload(match.group(1).strip())
-        if payload is None:
-            continue
-        entry = _build_tool_entry(payload, idx)
-        if entry is not None:
-            entries.append(entry)
-
-    cleaned = _INLINE_TOOL_CALL_RE.sub('', text)
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
-    return cleaned, entries
-
-
 def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
-    """Build an LLMResponse from a raw Ollama /api/chat response dict."""
+    """Build an LLMResponse from a raw Ollama /api/chat response dict.
+
+    Native tool-calling only: tool calls are read exclusively from the
+    structured ``message.tool_calls`` field. No inline-content fallback.
+    """
     msg = data.get('message', {})
     text = msg.get('content', '')
     tool_calls = None
@@ -464,10 +409,6 @@ def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
             }
             for i, tc in enumerate(raw_tool_calls)
         ]
-    else:
-        text, inline_calls = _extract_inline_tool_calls(text)
-        if inline_calls:
-            tool_calls = inline_calls
     return LLMResponse(
         text=text,
         model=data.get('model', default_model),
