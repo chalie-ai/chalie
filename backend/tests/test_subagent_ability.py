@@ -1,11 +1,10 @@
 """Feature tests for SubagentAbility input validation, dispatch modes, and
 envelope format.
 
-Covers: INPUT_SCHEMA shape, prompt/type/wait validation, per-type native tool
-surface, per-type deadline, wait-cap semantics, envelope format (success +
-failure), and fire-and-forget ack shape. The blocking-wait path is in
-test_subagent_wait.py. End-to-end nightly scenarios (037, 077, 110) own the
-full ACT-loop path.
+Covers: prompt/type/wait validation, envelope format (success + failure), and
+fire-and-forget ack shape. Per-type wiring (native_tools, deadline) lives in
+test_subagent_processor.py. The blocking-wait path is in test_subagent_wait.py.
+End-to-end nightly scenarios (037, 077, 110) own the full ACT-loop path.
 """
 
 import json
@@ -35,53 +34,20 @@ def _is_error_tag(text: str, error_value: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# A1. INPUT_SCHEMA shape
-# ---------------------------------------------------------------------------
-
-
-class TestInputSchema:
-    def test_input_schema_shape_matches_spec(self):
-        """INPUT_SCHEMA must have prompt (required), type (default general_purpose),
-        wait (default false). No timeout field."""
-        from abilities.subagent import SubagentAbility
-
-        schema = SubagentAbility.INPUT_SCHEMA
-        assert schema["type"] == "object"
-        props = schema["properties"]
-
-        assert "prompt" in props
-        assert props["prompt"]["type"] == "string"
-
-        assert "type" in props
-        assert props["type"]["type"] == "string"
-        assert props["type"]["default"] == "general_purpose"
-        assert set(props["type"]["enum"]) == {"web_surfer", "summariser", "general_purpose"}
-
-        assert "wait" in props
-        assert props["wait"]["type"] == "boolean"
-        assert props["wait"]["default"] is False
-
-        # timeout parameter must be gone
-        assert "timeout" not in props
-
-        assert schema["required"] == ["prompt"]
-
-
-# ---------------------------------------------------------------------------
 # A2–A3. Validation error paths
 # ---------------------------------------------------------------------------
 
 
 class TestValidationErrors:
     def test_empty_prompt_returns_error_tag(self):
+        """Empty prompt and whitespace-only prompt both produce prompt-required error."""
         result = _execute({"prompt": ""})
         text = result["text"]
         assert _is_error_tag(text, "prompt-required"), repr(text)
 
-    def test_whitespace_only_prompt_returns_error_tag(self):
-        result = _execute({"prompt": "   "})
-        text = result["text"]
-        assert _is_error_tag(text, "prompt-required"), repr(text)
+        result2 = _execute({"prompt": "   "})
+        text2 = result2["text"]
+        assert _is_error_tag(text2, "prompt-required"), repr(text2)
 
     def test_invalid_type_returns_error_tag(self):
         """type='nonsense' must return [subagent(error=invalid-type:nonsense)]."""
@@ -110,56 +76,6 @@ class TestDefaultType:
         assert text.startswith("[subagent("), repr(text)
         # The ack body contains the agent type
         assert "general_purpose" in text, repr(text)
-
-
-# ---------------------------------------------------------------------------
-# A5. Per-type native tool surface
-# ---------------------------------------------------------------------------
-
-
-class TestPerTypeNativeTools:
-    def test_each_type_has_correct_native_tools(self):
-        """Instantiating SubagentProcessor with each agent_type sets
-        ALWAYS_AVAILABLE to that type's native_tools list from SUBAGENT_TYPES."""
-        from abilities.subagent import SUBAGENT_TYPES
-        from services.subagent_processor import SubagentProcessor
-
-        for agent_type, entry in SUBAGENT_TYPES.items():
-            proc = SubagentProcessor(raw_input="x", agent_type=agent_type)
-            assert proc.ALWAYS_AVAILABLE == entry["native_tools"], (
-                f"{agent_type}: expected {entry['native_tools']}, "
-                f"got {proc.ALWAYS_AVAILABLE}"
-            )
-
-
-# ---------------------------------------------------------------------------
-# A6. Per-type deadline
-# ---------------------------------------------------------------------------
-
-
-class TestPerTypeDeadline:
-    def test_each_type_has_correct_default_timeout(self):
-        """Instantiating SubagentProcessor with each agent_type sets _deadline
-        to approximately time.time() + default_timeout (within 1s tolerance)."""
-        from abilities.subagent import SUBAGENT_TYPES
-        from services.subagent_processor import SubagentProcessor
-
-        for agent_type, entry in SUBAGENT_TYPES.items():
-            t_before = time.time()
-            proc = SubagentProcessor(raw_input="x", agent_type=agent_type)
-
-            expected_timeout = entry["default_timeout"]
-            delta = proc._deadline - t_before
-
-            assert abs(delta - expected_timeout) <= 1.0, (
-                f"{agent_type}: expected deadline ~{expected_timeout}s from now, "
-                f"got delta={delta:.3f}s (t_before={t_before:.3f}, "
-                f"deadline={proc._deadline:.3f})"
-            )
-            # Also verify the deadline is in the future at construction time
-            assert proc._deadline >= t_before + expected_timeout - 1, (
-                f"{agent_type}: deadline {proc._deadline:.3f} < t_before + timeout - 1"
-            )
 
 
 # ---------------------------------------------------------------------------

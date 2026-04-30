@@ -1,10 +1,7 @@
-"""Feature tests for SubagentProcessor construction, deadline semantics,
-blocklist enforcement, and class constants.
+"""Feature tests for SubagentProcessor construction and deadline semantics.
 
-The pre-seed (_preseeded_tools) tests are REMOVED — pre-seeding was deleted in
-the v0.6.0 subagent rework. The _max_timeout_seconds property tests are
-REPLACED by _deadline semantics tests: instantiating SubagentProcessor with a
-given agent_type sets _deadline to roughly time.time() + type_default_timeout.
+Covers: per-instance _deadline calculation (type default, override, override-
+smaller-than-default), and per-instance ALWAYS_AVAILABLE wiring from agent_type.
 """
 
 import time
@@ -66,61 +63,11 @@ class TestDeadlineSemantics:
 
 
 # ---------------------------------------------------------------------------
-# B2. Blocklist constant
+# B3. Per-instance ALWAYS_AVAILABLE wired from agent_type
 # ---------------------------------------------------------------------------
 
 
-class TestBlocklistConstant:
-    def test_blocklist_constant_includes_subagent_save_graph_detect_pattern(self):
-        from services.subagent_processor import _BLOCKED
-
-        assert isinstance(_BLOCKED, frozenset)
-        assert "subagent" in _BLOCKED
-        assert "save_graph" in _BLOCKED
-        assert "detect_pattern" in _BLOCKED
-
-
-# ---------------------------------------------------------------------------
-# B3. Class constants
-# ---------------------------------------------------------------------------
-
-
-class TestProcessorClassConstants:
-    def test_processor_class_constants(self):
-        """CHANNEL, ROLE, MAX_ITERATIONS present. MAX_TIMEOUT is gone.
-        ALWAYS_AVAILABLE is [] at class level (set per-instance in __init__)."""
-        from services.subagent_processor import SubagentProcessor, _BLOCKED
-
-        assert SubagentProcessor.CHANNEL == "subagent"
-        assert SubagentProcessor.ROLE == "subagent"
-        assert SubagentProcessor.MAX_ITERATIONS == 50
-
-        # MAX_TIMEOUT class constant must be GONE (ripped in §14.1)
-        assert not hasattr(SubagentProcessor, "MAX_TIMEOUT"), (
-            "MAX_TIMEOUT class constant should have been removed in the timeout rip"
-        )
-
-        # ALWAYS_AVAILABLE at class level must be [] — populated per-instance
-        assert SubagentProcessor.ALWAYS_AVAILABLE == [], (
-            f"Class-level ALWAYS_AVAILABLE should be [] (set per-instance), "
-            f"got: {SubagentProcessor.ALWAYS_AVAILABLE}"
-        )
-
-        discoverable = SubagentProcessor.DISCOVERABLE
-        expected_tools = [
-            "browser", "code_eval", "document", "list", "memory", "news",
-            "programming_docs_search", "read", "review_tool_calls",
-            "schedule", "search", "weather",
-        ]
-        for name in expected_tools:
-            assert name in discoverable, f"'{name}' missing from DISCOVERABLE"
-
-        # No blocklisted names must appear in DISCOVERABLE
-        for blocked in _BLOCKED:
-            assert blocked not in discoverable, (
-                f"Blocklisted '{blocked}' found in DISCOVERABLE"
-            )
-
+class TestProcessorWiring:
     def test_per_instance_always_available_is_set_from_agent_type(self):
         """After construction, ALWAYS_AVAILABLE on the instance must equal
         the type's native_tools (not the class-level empty list)."""

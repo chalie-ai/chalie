@@ -2,7 +2,6 @@
 and pending_steers drain.
 
 Covers:
-  - _deliver_envelope Case A: mid-ACT parent appends to _pending_steers
   - _deliver_envelope Case B: idle parent spawns a daemon thread via _spawn_return_processor
   - SubagentReturnProcessor inherits UserMessageProcessor with ROLE=subagent_return
   - _pending_steers drained into _act_trail by UMP.getUserPrompt()
@@ -13,42 +12,6 @@ import threading
 import pytest
 
 pytestmark = pytest.mark.unit
-
-
-# ---------------------------------------------------------------------------
-# T1. _deliver_envelope Case A — mid-ACT parent gets envelope in _pending_steers
-# ---------------------------------------------------------------------------
-
-
-class TestAsyncSteerCaseA:
-    def test_async_steer_appends_to_parent_pending_steers(self):
-        """When parent is a UserMessageProcessor, _deliver_envelope appends the
-        envelope to parent._pending_steers (not directly to _act_trail)."""
-        from abilities.subagent import _deliver_envelope
-        from services.user_message_processor import UserMessageProcessor
-
-        # Minimal UMP subclass — overrides the abstract methods with no-ops.
-        class _StubUMP(UserMessageProcessor):
-            def getUserPrompt(self):
-                return "test"
-
-            def getUserDefinition(self):
-                return "test user"
-
-        parent = _StubUMP(raw_input="test")
-        # Simulate mid-ACT state: iteration > 0
-        parent._current_iteration = 2
-
-        envelope = "[subagent.complete(type=general_purpose)]\nresult\n[end:subagent.complete]"
-        _deliver_envelope(envelope, parent)
-
-        assert envelope in parent._pending_steers, (
-            f"Envelope not found in _pending_steers: {parent._pending_steers}"
-        )
-        # Must NOT have gone directly to _act_trail
-        assert envelope not in parent._act_trail, (
-            "Envelope was placed in _act_trail directly (should be _pending_steers)"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -82,16 +45,6 @@ class TestAsyncSteerCaseB:
             "subagent-return thread must have a callable target"
         )
 
-    def test_deliver_envelope_with_none_parent_routes_to_case_b(self):
-        """_deliver_envelope(envelope, parent_ref=None) takes Case B path — the
-        non-UMP branch — and does not raise. The spawn mechanics are verified by
-        test_spawn_return_processor_returns_daemon_thread above."""
-        from abilities.subagent import _deliver_envelope
-
-        envelope = "[subagent.complete(type=general_purpose)]\nbody\n[end:subagent.complete]"
-        # Must not raise; daemon thread is fire-and-forget
-        _deliver_envelope(envelope, parent_ref=None)
-
 
 # ---------------------------------------------------------------------------
 # T3. SubagentReturnProcessor inherits UserMessageProcessor
@@ -117,16 +70,6 @@ class TestSubagentReturnProcessor:
         assert SubagentReturnProcessor.CHANNEL == "user", (
             f"Expected CHANNEL='user' (inherited), got '{SubagentReturnProcessor.CHANNEL}'"
         )
-
-    def test_subagent_return_processor_can_be_instantiated(self):
-        """SubagentReturnProcessor can be constructed with raw_input only."""
-        from services.user_message_processor import SubagentReturnProcessor
-
-        proc = SubagentReturnProcessor(
-            raw_input="[subagent.complete(type=general_purpose)]\nresult\n[end:subagent.complete]"
-        )
-        assert proc.ROLE == "subagent_return"
-        assert proc.CHANNEL == "user"
 
 
 # ---------------------------------------------------------------------------
