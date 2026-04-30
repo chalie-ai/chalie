@@ -118,24 +118,8 @@ Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born
 
 ## Response format
 
-When responding to the user, use only these HTML tags for prose:
-
-  <p>...</p>           paragraph
-  <h1>...</h1>         heading
-  <b>...</b>           bold (inline)
-  <i>...</i>           italic (inline)
-  <u>...</u>           underline (inline)
-  <code>...</code>     code (inline or block)
-  <ul><li>...</li></ul> bulleted list
-
-Wrap prose in <p>. Inline tags go inside block tags. No markdown. No attributes.
-Anything outside this allowlist is stripped. Plain-text URLs are auto-linkified.
-
-## Tool calls
-
-To call a tool, use your provider's native tool-call mechanism — do NOT write
-tool invocations as tags or markup in your message content. Tool tags in
-content are not parsed and never execute.
+In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
+Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>
 
 ────────────────────────────────\
 """

@@ -43,6 +43,11 @@ class OllamaService:
     performing a separate Ollama embed call.
     """
 
+    # JSON path of the user-visible text field in this provider's response.
+    # Substituted into system prompts at the {{provider_content_field_name}}
+    # placeholder so the model is told the exact field where its prose lands.
+    CONTENT_FIELD_LABEL = "message.content"
+
     def __init__(self, config: dict):
         """Initialize the Ollama service with connection and inference settings.
 
