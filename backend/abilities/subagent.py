@@ -282,7 +282,13 @@ Briefing rules:
         },
         "required": ["prompt"],
     }
-    TIMEOUT = 10  # parent dispatch timeout; per-call timeout flows to SubagentProcessor
+    # Parent-dispatch timeout. wait=false returns in ms so 305 is harmless;
+    # wait=true blocks the parent ACT iteration up to 300s (the wait-true cap)
+    # plus a small buffer for envelope render + record. Anything below 305
+    # short-circuits a legitimate sync run with "Action exceeded Ns timeout"
+    # before SubagentProcessor finishes — the result column then carries the
+    # generic timeout string instead of the canonical [subagent(...)] tag.
+    TIMEOUT = 305
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         prompt = params.get("prompt", "").strip()
