@@ -86,13 +86,43 @@ Chalie keeps thinking when you are not typing. Background workers run as daemon 
 - **Decay engine** — applies power-law decay to episode retrieval weights and data-graph entries, and purges old transcript entries and tool-call rows. The engine itself (`DecayEngineService`) has no daemon thread of its own; it exposes `run_once()` and is called by the subconscious worker as Step 2 of its tick.
 - **Pattern matcher** — `PatternMatchProcessor` runs as Step 3 of the subconscious worker tick when ≥50 new transcripts have accumulated since the last cursor (`data_graph` kind=`system`, key=`pattern_match_cursor`). One LLM forward pass over the new transcript window with two processor-scoped tools: `save_pattern` (UPSERT a `behavioral_pattern` row with confidence math: new=7, reinforced=`min(10, prev+7)`, capped at 10; budget 20 calls) and `save_graph` (routes through `DataGraphService.store()` for `user_specific` / `misc` / `moment` / `document` kinds; budget 50 calls). The model emits all calls in parallel; `MAX_ITERATIONS=30` bounds runaway loops. After the pass, an in-place SQL decay sweep subtracts 0.005 from every untouched active pattern's confidence; rows that hit 0.0 flip to `active=0` (soft delete). `UserSummaryProcessor` reads active behavioral_pattern rows directly when assembling its synopsis prompt — no tool surface for user turns.
 - **DMN (Default Mode Network)** — after a period of idle time, Chalie initiates a proactive thought using recent or high-salience episodes as context. Uses its own `MessageProcessor` subclass; exits silently when nothing warrants a response.
-- **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate ability. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
+- **Subagent** — focused background tasks spawned by the `subagent` innate ability. Each runs a `SubagentProcessor` instance with a per-type tool surface and a per-instance wall-clock deadline. When complete the result is injected into the parent's ACT trail (Case A: parent mid-turn via `_pending_steers`) or spawns a synthetic `SubagentReturnProcessor` turn on the user channel (Case B: parent idle). Three types: `web_surfer` (60 min, web search + browse), `summariser` (10 min, read + compress), `general_purpose` (30 min, arbitrary parallel work). The `wait=true` flag caps any type at 300 s and blocks the parent iteration synchronously. See "Subagent" section below.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
 - **Supporting workers** — world awareness (weather, news), moment context enrichment, document purge, folder watcher, interface health monitor, self-model health signals, and the `SearchExpanderService` (single FIFO consumer that generates + embeds query variants for every new data-graph row). User-summary synthesis and super-episode consolidation no longer run their own daemons — both are driven by the subconscious worker tick.
 - **EmbeddingService** — a module-level singleton that serialises all ONNX inference through a single daemon worker thread via a FIFO queue (`_embedding_queue`). All callers — `generate_embedding(text)`, `generate_embedding_np(text)`, `generate_embeddings_batch(texts)` — check MemoryStore first; cache hits bypass the queue entirely. The worker is started lazily on the first job submission (not at import time) so tests that never call the service never spawn a real ONNX thread. The single-worker model eliminates concurrent `session.run()` calls, which each allocate 500 MB+ of working memory and caused OOM under bulk document ingestion. Session construction routes through `onnx_session.build_session()` (see below).
 - **onnx_session.py** — single chokepoint for all ONNX session construction in the process. `choose_providers(model_path)` returns the ordered provider list, applying the Metal 16384 2D-texture ceiling check for CoreML (any initializer dimension exceeding 16384 triggers automatic removal of `CoreMLExecutionProvider`). `build_session(path, opts, providers, log_prefix)` constructs the session and retries with CPU-only on construction failure. `EmbeddingService`, `VoiceService` (`voice.py`), and `Doc2QueryService` all route through this module — no service constructs `ort.InferenceSession` directly.
 
 No worker shares its processor instance with another. Each channel is fully isolated.
+
+### Subagent
+
+The `subagent` ability (`backend/abilities/subagent.py`) is the public surface. The `SubagentProcessor` (`backend/services/subagent_processor.py`) is the execution engine.
+
+**Three types, registered in `SUBAGENT_TYPES`:**
+
+| Type | Default budget | Tool surface | Use case |
+|------|----------------|--------------|----------|
+| `web_surfer` | 60 min | `read`, `search`, `browser`, `news`, `memory`, `find_tools` | Multi-source web research, live page lookups |
+| `summariser` | 10 min | `read`, `search`, `document`, `find_tools` | Compress long content before pulling into context |
+| `general_purpose` | 30 min | `memory`, `find_tools` | Parallel arbitrary work; use `find_tools` for more capabilities |
+
+**INPUT_SCHEMA:** `prompt` (required string), `type` (enum, default `general_purpose`), `wait` (boolean, default `false`).
+
+**Async return flow (default `wait=false`):**
+
+1. `SubagentAbility.execute()` captures `current_processor()` (a `contextvars.ContextVar` bound by `send()`) as `parent_ref` before spawning the daemon thread — so the reference is stable even if the parent turn finishes first.
+2. The daemon runs `SubagentProcessor(...).send()` and wraps the result in a canonical `[subagent.complete(...)]` envelope via `_build_envelope()`.
+3. `_deliver_envelope(envelope, parent_ref)` routes:
+   - **Case A** (`isinstance(parent_ref, UserMessageProcessor)` is True): appends the envelope to `parent_ref._pending_steers`. `getUserPrompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
+   - **Case B** (parent idle or non-UMP): spawns a `subagent-return` daemon that runs `SubagentReturnProcessor(envelope).send()`.
+
+**`SubagentReturnProcessor`** is a thin `UserMessageProcessor` subclass (`ROLE='subagent_return'`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `ROLE='subagent_return'` causes the input row to be excluded from user-visible history rebuilds.
+
+**`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.getUserPrompt()` drains it. Background processors that do not call `getUserPrompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
+
+**Sync mode (`wait=true`):** `_run_sync()` constructs `SubagentProcessor` inline and calls `.send()` directly from the parent ACT loop iteration. Budget is capped at 300 s regardless of type default. The parent iteration blocks until the subagent returns.
+
+**Wall-clock guard:** `SubagentProcessor` sets `self._deadline = time.time() + timeout_seconds` in `__init__`. The base `send()` loop checks `self._deadline` after each iteration and breaks if exceeded. `ITERATION_TIMEOUT` (1800 s, base class constant) provides an additional per-iteration safety wall that applies to all processors including subagents.
 
 ---
 
@@ -146,7 +176,7 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 - `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `getTools()`.
 - `DISCOVERABLE` — ability names that `find_tools` may surface for this processor at runtime. The SQL query inside `find_tools` filters candidates to `WHERE name IN (DISCOVERABLE)`, so a processor can never discover anything outside its own list.
 
-`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the eight core cognitive abilities (`document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`.
+`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the eight core cognitive abilities (`document`, `find_tools`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`, `subagent`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`. `SubagentProcessor` sets `ALWAYS_AVAILABLE` per-instance from `SUBAGENT_TYPES[agent_type]['native_tools']` and `DISCOVERABLE` to the full external set minus a blocklist (`subagent`, `save_graph`, `detect_pattern`).
 
 **Discoverable abilities** are never pre-injected. The `find_tools` ability performs semantic search against the abilities index at runtime. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
@@ -192,7 +222,7 @@ The `execute(channel, params, telemetry)` method is the sole dispatch surface. `
 
 ### Concrete abilities (14 dispatchable)
 
-`abilities/{browser, code_eval, document, find_tools, goal_pursuit, list, memory, news, programming_docs_search, read, review_tool_calls, schedule, search, weather}.py`. `abilities.sqlite` indexes all 14 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
+`abilities/{browser, code_eval, document, find_tools, list, memory, news, programming_docs_search, read, review_tool_calls, schedule, search, subagent, weather}.py`. `abilities.sqlite` indexes all 14 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
 
 Per-ability implementation notes:
 
@@ -200,7 +230,7 @@ Per-ability implementation notes:
 - `code_eval` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]`; a fresh `dict()` copy is taken per call so state never leaks between executions.
 - `document` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so `api/documents.py` and `services/folder_watcher_service.py` import the same path.
 - `find_tools` — RRF discovery against `abilities.sqlite` (see Tools and Skills section).
-- `goal_pursuit` — `threading.Thread(target=_run, daemon=True)`; `GoalPursuitProcessor` and `OutputService` lazy-imported inside the `_run()` closure to avoid import cycles.
+- `subagent` — spawns a daemon thread that runs `SubagentProcessor`. `SubagentProcessor` and `SubagentReturnProcessor` are lazy-imported inside the `_run_async()` closure to avoid import cycles. On completion, `_deliver_envelope()` routes the result: Case A (parent turn active, detected via `current_processor()` contextvar) appends to `parent._pending_steers`; Case B (parent idle) calls `_spawn_return_processor()` which starts a `subagent-return` daemon running `SubagentReturnProcessor(envelope).send()`. `SubagentReturnProcessor` is a thin `UserMessageProcessor` subclass with `ROLE='subagent_return'`; it inherits all UMP behaviour and the `subagent_return` input row is excluded from user-visible history rebuilds.
 - `list` — `_DEFAULT_LIST_NAME` as `ClassVar[str]`; handler helpers at module level.
 - `memory` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path.
 - `news` — `_service` classvar lazily initialised via `_get_service()` classmethod.
@@ -310,7 +340,7 @@ These are invariants, not conventions. Violating them creates systemic problems.
 | Term | Meaning |
 |------|---------|
 | **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
-| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `goal_pursuit`). |
+| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `subagent`). |
 | **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. |
 | **DMN** | Default Mode Network — timer-based proactive intelligence that fires during idle periods. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
