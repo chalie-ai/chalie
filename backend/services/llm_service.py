@@ -550,6 +550,11 @@ def _anthropic_parse_content_blocks(content) -> tuple:
 class AnthropicService:
     """Anthropic Claude API client."""
 
+    # JSON path of the user-visible text field in this provider's response.
+    # Substituted into system prompts at the {{provider_content_field_name}}
+    # placeholder so the model is told the exact field where its prose lands.
+    CONTENT_FIELD_LABEL = "content[].text"
+
     # Anthropic's API requires max_tokens; use a large ceiling so the model
     # can decide how much output to generate naturally.
     _MAX_TOKENS = 16384
@@ -772,6 +777,11 @@ def _anthropic_convert_messages(messages: list) -> list:
 
 class OpenAIService:
     """OpenAI API client."""
+
+    # JSON path of the user-visible text field in this provider's response.
+    # Substituted into system prompts at the {{provider_content_field_name}}
+    # placeholder so the model is told the exact field where its prose lands.
+    CONTENT_FIELD_LABEL = "choices[].message.content"
 
     def __init__(self, config: dict):
         """Initialise the OpenAI client with provider configuration.
@@ -1071,6 +1081,11 @@ def _openai_convert_messages(messages: list) -> list:
 
 class GeminiService:
     """Google Gemini API client."""
+
+    # JSON path of the user-visible text field in this provider's response.
+    # Substituted into system prompts at the {{provider_content_field_name}}
+    # placeholder so the model is told the exact field where its prose lands.
+    CONTENT_FIELD_LABEL = "candidates[].content.parts[].text"
 
     def __init__(self, config: dict):
         """Initialise the Gemini client with provider configuration.

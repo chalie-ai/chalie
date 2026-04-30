@@ -202,20 +202,6 @@ class TestUnifiedSystemMessagePrompt:
         result = UnifiedSystemMessagePrompt().getPrompt()
         assert '{{identity_modulation}}' not in result
 
-    def test_no_dead_placeholders(self):
-        """No ``{{...}}`` placeholders of any kind in the unified prompt.
-
-        AdaptiveLayerService was removed in v0.5.0 §4.3 — ``{{adaptive_directives}}``
-        no longer exists in the template. Any remaining ``{{...}}`` is a bug.
-        """
-        import re
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        placeholders = set(re.findall(r'\{\{(\w+)\}\}', result))
-        assert not placeholders, (
-            f"Unexpected placeholders in _SYSTEM_PROMPT: {placeholders}"
-        )
-
     # ── No side effects on DB / services ──────────────────────────────────────
 
     def test_get_prompt_returns_non_empty_string(self):

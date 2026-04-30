@@ -259,7 +259,31 @@ class MessageProcessor:
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
         body = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        body = self._substitute_provider_placeholders(body)
         return f"{self.getUserDefinition()}\n\n{body}"
+
+    def _substitute_provider_placeholders(self, body: str) -> str:
+        """Replace per-provider placeholders in a system-prompt body.
+
+        Currently substitutes ``{{provider_content_field_name}}`` with the
+        active provider's CONTENT_FIELD_LABEL (e.g. ``message.content`` for
+        Ollama, ``content[].text`` for Anthropic) so the model is told the
+        exact JSON field where its user-visible prose lands.
+
+        Best-effort: if the placeholder is absent or the provider lookup
+        fails, the body passes through unchanged.
+        """
+        if "{{provider_content_field_name}}" not in body:
+            return body
+        try:
+            from services.providers import Providers
+            provider = Providers.instance()._resolve(self.JOB)
+            label = getattr(provider, 'CONTENT_FIELD_LABEL', None)
+        except Exception:
+            label = None
+        if not label:
+            return body
+        return body.replace("{{provider_content_field_name}}", label)
 
     def getTools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
