@@ -1299,3 +1299,135 @@ class TestRunFullCompaction:
 
         assert captured_jobs == ['frontal-cortex-unified']
         assert 'custom-job-name' not in captured_jobs
+
+
+# =============================================================================
+# End-to-end ACT loop glue: scenario 120/121 reproduce the same path —
+# compact_at is set tiny, the assembled payload must blow past it on the very
+# first iteration, _handle_overflow must run, an append-only success audit row
+# must be written, and the loop must restart and return a final answer.
+# =============================================================================
+
+
+class TestActLoopOverflowEndToEnd:
+    """The full path scenarios 120/121 exercise:
+
+    iter 0: prompt_assembly → _check_threshold(True) → _handle_overflow →
+            _run_full_compaction → write tool_calls(name='compaction',
+            status='success') → reset state → continue
+    iter 1: prompt_assembly → _check_threshold(False after compaction) →
+            send_messages → no tool_calls → break clean
+
+    Mocks: only the Providers singleton (estimate_payload_tokens returns >
+    compact_at on iter 0 then ≤ on iter 1; send_messages returns the
+    compaction LLM body on call 1 and a no-tool answer on call 2).
+    Real DB, real ACT loop, real _handle_overflow, real _run_full_compaction.
+    """
+
+    _CHANNEL = 'test_act_overflow_channel'
+
+    def test_first_iteration_overflow_writes_success_row_then_loop_completes(self, db):
+        """Scenario 120 in miniature: threshold fires once, success row appears."""
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import SystemMessagePrompt
+
+        # Seed prior conversation so _run_full_compaction has entries to
+        # summarise. Without prior entries it short-circuits to None and
+        # writes no row — the same edge that the scenario carefully avoids
+        # by appending 8 transcript rows in step-4.
+        seed_ids = []
+        for i in range(4):
+            seed_ids.append(_compact_seed_transcript_row(
+                db, self._CHANNEL, 'user', f'prior turn {i} content',
+            ))
+            seed_ids.append(_compact_seed_transcript_row(
+                db, self._CHANNEL, 'assistant', f'prior reply {i}',
+            ))
+
+        # Insert the input row that send() would have written (we set
+        # SKIP_TRANSCRIPT_WRITE=False but pre-seed _uid manually below to
+        # bypass write_input_row's auth-context dependency).
+        input_uid = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'user', 'current turn — small body',
+        )
+
+        class _StubPrompt(SystemMessagePrompt):
+            _SYSTEM_PROMPT = ''
+
+        class _OverflowProcessor(MessageProcessor):
+            CHANNEL = TestActLoopOverflowEndToEnd._CHANNEL
+            ROLE = 'user'
+            SYSTEM_PROMPT_CLASS = _StubPrompt
+            SKIP_TRANSCRIPT_WRITE = True  # we manage _uid ourselves
+
+            def getUserDefinition(self):
+                return 'test user'
+
+            def getUserPrompt(self):
+                return 'current turn — small body'
+
+            def getSystemPrompt(self):
+                return 'fake system prompt — content irrelevant, threshold mocked'
+
+            def getTools(self):
+                return []
+
+        proc = _OverflowProcessor(raw_input='current turn — small body')
+        proc._uid = input_uid
+
+        # send_messages call sequence:
+        #   call 1: invoked by ContinuityCompactionProcessor.send() — must
+        #           return text containing <summary>...</summary>
+        #   call 2: invoked by main ACT loop iter 1 — must return a no-tool
+        #           response so the loop exits cleanly
+        compaction_resp = _make_compact_llm_response(
+            text='<analysis>looked at prior turns</analysis>'
+                 '<summary>summary of 4 prior exchanges</summary>',
+        )
+        final_resp = _make_compact_llm_response(text='final assistant answer')
+
+        # estimate_payload_tokens call sequence:
+        #   call 1: main ACT loop iter 0 _check_threshold — return >400 to
+        #           trigger overflow handler
+        #   call 2: ContinuityCompactionProcessor's own ACT iter 0
+        #           _check_threshold (always returns False because
+        #           ContinuityCompactionProcessor overrides it; this call
+        #           never happens in practice but we keep a value just in
+        #           case the overrides change)
+        #   call 3: main ACT loop iter 1 _check_threshold after the
+        #           compaction reset — return ≤400 so the loop proceeds to
+        #           send_messages
+        compact_at_value = 400
+        estimate_seq = iter([500, 100, 100, 100, 100])
+
+        with patch('services.providers.Providers.instance') as mock_inst:
+            mock_inst.return_value.send_messages.side_effect = [
+                compaction_resp,
+                final_resp,
+            ]
+            mock_inst.return_value.get_compact_at.return_value = compact_at_value
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.side_effect = (
+                lambda *a, **kw: next(estimate_seq)
+            )
+
+            result = proc.send()
+
+        assert result == 'final assistant answer', (
+            f"ACT loop must reach iter 1 send_messages and return its text; "
+            f"got {result!r}. Likely cause: compaction failed (no audit row "
+            f"written) or threshold check did not toggle False on iter 1."
+        )
+
+        # The critical scenario-120 assertion: an append-only success
+        # tool_calls row exists for this turn.
+        row = _compact_get_audit_row(db, self._CHANNEL)
+        assert row is not None, (
+            "No success compaction tool_calls row found. _handle_overflow "
+            "did not run, or _run_full_compaction returned None."
+        )
+        assert row['compacted_text'] == 'summary of 4 prior exchanges'
+        assert row['compacted_up_to_id'] == max(seed_ids), (
+            f"watermark must advance to highest entry id fed to LLM; "
+            f"got {row['compacted_up_to_id']}, expected {max(seed_ids)}"
+        )
