@@ -28,10 +28,7 @@ CACHE_KEY = "self_model:snapshot"
 CACHE_TTL = 45  # seconds
 REFRESH_INTERVAL = 30  # background thread cycle
 
-# Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
-CRITICAL_JOBS = frozenset({
-    'frontal-cortex-unified',
-})
+# Removed CRITICAL_JOBS — single global provider replaces per-job assignment
 
 # Tool-agnostic capability categories derived from manifest documentation keywords
 CATEGORY_KEYWORDS = {
@@ -47,8 +44,6 @@ CATEGORY_KEYWORDS = {
 # Severity weights for noteworthy triggers
 SEVERITY_MISSING_PROVIDER = 0.8
 SEVERITY_DEAD_THREADS = 0.6
-SEVERITY_STALE_HEARTBEAT = 0.5
-SEVERITY_QUEUE_CONGESTION = 0.4
 
 
 def _utc_now() -> datetime:
@@ -252,13 +247,11 @@ class SelfModelService:
     # ── Operational layer ───────────────────────────────────────
 
     def _gather_operational(self) -> dict:
-        """Thread health, provider status, queue depth, memory pressure."""
+        """Thread health, provider status, memory pressure."""
         return {
             "thread_health": self._get_thread_health(),
             "provider_status": self._get_provider_status(),
-            "queue_depth": self._get_queue_depth(),
             "memory_pressure": self._get_memory_pressure(),
-            "bg_llm_heartbeat_stale": self._is_bg_llm_stale(),
         }
 
     def _get_thread_health(self) -> dict:
@@ -277,7 +270,7 @@ class SelfModelService:
         return {"alive": 0, "total": 0, "dead_threads": []}
 
     def _get_provider_status(self) -> dict:
-        """Check LLM provider assignments for critical cognitive jobs."""
+        """Check if a provider is selected and active."""
         try:
             from services.provider_db_service import ProviderDbService
             db = self._get_db()
@@ -287,29 +280,17 @@ class SelfModelService:
             providers = provider_service.get_all_providers()
             active_count = sum(1 for p in providers if p.get("is_active"))
 
-            # Check which critical jobs have assigned providers
-            assignments = provider_service.get_all_job_assignments()
-            assigned_jobs = {a["job_name"] for a in assignments}
-            unassigned = [j for j in CRITICAL_JOBS if j not in assigned_jobs]
+            # Check if a provider is selected
+            selected = provider_service.get_selected_provider()
+            has_selected = selected is not None and selected.get("is_active")
 
             return {
                 "active_count": active_count,
-                "unassigned_jobs": sorted(unassigned),
+                "has_selected_provider": has_selected,
             }
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to get provider status: {e}", exc_info=True)
-            return {"active_count": 0, "unassigned_jobs": []}
-
-    def _get_queue_depth(self) -> dict:
-        """Read LLM queue depths from MemoryStore."""
-        try:
-            from services.background_llm_queue import QUEUE_KEY
-            bg_llm = self._store.llen(QUEUE_KEY)
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get bg_llm queue depth: {e}", exc_info=True)
-            bg_llm = 0
-
-        return {"bg_llm": bg_llm}
+            return {"active_count": 0, "has_selected_provider": False}
 
     def _get_memory_pressure(self) -> dict:
         """Episode/concept/trait counts and average activation from SQLite."""
@@ -343,23 +324,6 @@ class SelfModelService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to get memory pressure: {e}", exc_info=True)
             return {"episode_count": 0, "concept_count": 0, "trait_count": 0}
-
-    def _is_bg_llm_stale(self) -> bool:
-        """Check if background LLM worker heartbeat is stale (>30s)."""
-        try:
-            from services.background_llm_queue import (
-                HEARTBEAT_KEY,
-                HEARTBEAT_STALE_THRESHOLD,
-            )
-            last_hb = self._store.get(HEARTBEAT_KEY)
-            if last_hb:
-                elapsed = time.time() - float(last_hb)
-                return elapsed > HEARTBEAT_STALE_THRESHOLD
-            # No heartbeat yet — might be early startup
-            return False
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to check bg LLM heartbeat staleness: {e}", exc_info=True)
-            return False
 
     # ── Capability layer ────────────────────────────────────────
 
@@ -437,27 +401,11 @@ class SelfModelService:
                 "severity": SEVERITY_DEAD_THREADS,
             })
 
-        # Missing providers for critical jobs (severity: 0.8)
-        unassigned = op.get("provider_status", {}).get("unassigned_jobs", [])
-        if unassigned:
+        # No selected provider (severity: 0.8)
+        if not op.get("provider_status", {}).get("has_selected_provider", False):
             notes.append({
-                "signal": f"No LLM provider assigned for: {', '.join(unassigned)}",
+                "signal": "No LLM provider selected — add and select a provider in Brain",
                 "severity": SEVERITY_MISSING_PROVIDER,
-            })
-
-        # Stale background LLM heartbeat (severity: 0.5)
-        if op.get("bg_llm_heartbeat_stale"):
-            notes.append({
-                "signal": "Background LLM worker is stale (no heartbeat >30s)",
-                "severity": SEVERITY_STALE_HEARTBEAT,
-            })
-
-        # Queue congestion (severity: 0.4)
-        bg_depth = op.get("queue_depth", {}).get("bg_llm", 0)
-        if bg_depth > 15:
-            notes.append({
-                "signal": f"LLM queue congested ({bg_depth}/25)",
-                "severity": SEVERITY_QUEUE_CONGESTION,
             })
 
         return notes

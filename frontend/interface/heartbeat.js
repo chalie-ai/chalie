@@ -216,7 +216,7 @@ export class ClientHeartbeat {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         locale: Intl.NumberFormat().resolvedOptions().locale,     // e.g., "en-MT"
         language: navigator.language,                              // e.g., "en-GB"
-        local_time: new Date().toISOString(),
+        local_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
       };
 
       // Device info

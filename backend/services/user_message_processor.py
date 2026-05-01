@@ -23,7 +23,6 @@ callback, and getSystemPrompt() override.
 """
 
 import logging
-import threading
 from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
@@ -31,46 +30,6 @@ from services.system_message_prompt import UnifiedSystemMessagePrompt
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
-
-# ── Lazy-synthesis concurrency guard ─────────────────────────────────────────
-# Prevents multiple concurrent getUserDefinition() calls from each spawning a
-# synthesis daemon when the user_summary row is missing.  The flag is cleared
-# in a ``finally`` block so the next call — whether prior synthesis succeeded,
-# failed, or raised — re-arms the guard cleanly.
-_lazy_fire_lock = threading.Lock()
-_lazy_fire_in_flight = False
-
-def _fire_lazy_synthesis() -> None:
-    """Spawn a one-shot daemon thread to synthesise the user_summary row.
-
-    Guards against concurrent calls with a module-level flag + lock.
-    If synthesis is already in flight the call is a no-op.
-    The flag is cleared in a ``finally`` block on every daemon exit path
-    (success, exception, or early return) so the guard re-arms for the
-    next call regardless of outcome.
-    """
-    global _lazy_fire_in_flight
-
-    with _lazy_fire_lock:
-        if _lazy_fire_in_flight:
-            return
-        _lazy_fire_in_flight = True
-
-    def _run():
-        global _lazy_fire_in_flight
-        try:
-            from services.user_summary_processor import UserSummaryProcessor
-
-            UserSummaryProcessor().send()
-            logger.info("[USER MSG] Lazy synthesis complete")
-        except Exception as exc:
-            logger.warning("[USER MSG] Lazy synthesis failed: %s", exc)
-        finally:
-            with _lazy_fire_lock:
-                _lazy_fire_in_flight = False
-
-    threading.Thread(target=_run, daemon=True, name="user-summary-lazy").start()
-    logger.info("[USER MSG] Lazy synthesis daemon spawned")
 
 
 class UserMessageProcessor(MessageProcessor):
@@ -144,21 +103,14 @@ class UserMessageProcessor(MessageProcessor):
     def getUserDefinition(self) -> str:
         """One-sentence synthesis of the real human user for the system prompt.
 
-        Reads the user_summary record (kind='system', key='user_summary') from data_graph.
-        from DataGraphService and returns its value. This is a human-readable sentence
-        that describes the user (e.g. "Dylan is a software engineer based in Malta").
+        Reads the user_summary record (kind='system', key='user_summary') from data_graph
+        and returns its value. This is a human-readable sentence that describes the user
+        (e.g. "Dylan is a software engineer based in Malta").
 
         Falls back to a static peer-to-peer framing on empty or missing record, or on
-        any exception.  When the row is missing but ``user_specific`` traits exist a
-        one-shot background synthesis is fired via the lazy-fallback path below so
-        that future turns find the row populated.
-
-        Writer path: ``UserSummaryProcessor`` (driven by SubconsciousWorker
-        idle tick, plus ``getUserDefinition()`` lazy fallback).  Traits are
-        written continuously by
-        the LLM-native memory skill (``memory_skill._handle_store`` →
-        ``DataGraphService.store(kind='user_specific', …)``) whenever the user
-        discloses a personal fact.
+        any exception. When the row is missing, the static fallback is returned immediately.
+        UserSummaryProcessor is driven exclusively by SubconsciousWorker._step_synthesis()
+        on each idle tick — no lazy fallback here.
 
         Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
@@ -193,12 +145,6 @@ class UserMessageProcessor(MessageProcessor):
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
                 return self._user_definition_cached
-
-            # user_summary row is missing — check whether any traits exist so we
-            # know if synthesis is worthwhile.
-            trait_rows = dgs.fetch(kinds=['user_specific'], limit=1)
-            if trait_rows:
-                _fire_lazy_synthesis()
 
         except Exception as e:
             logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
@@ -445,12 +391,15 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Three-step fan-out, each individually error-isolated.
+        """Two-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
-          2. DMNService.on_turn() — R10 critical
-          3. MetricsService — last ("turn closed" signal)
+          2. MetricsService — last ("turn closed" signal)
+
+        DMN is no longer a service with an idle timer — it runs as step 5 of
+        SubconsciousWorker, gated by the worker's own user-idle check.
+        The on_turn() hook is therefore not needed here.
 
         Compaction is intentionally NOT here: per the north star
         (message-processing.md § "What does NOT go in postTurn()"),
@@ -475,17 +424,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 2. DMN idle reset — CRITICAL (R10): must fire on every user turn
-        # so the DMN idle timer is deferred while the user is active.
-        # WARNING level — failure here means DMN can fire mid-conversation
-        # (Commit 8 critic P1-2).
-        try:
-            from services.dmn_service import get_dmn_service
-            get_dmn_service().on_turn()
-        except Exception as e:
-            logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
-
-        # 3. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 2. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:

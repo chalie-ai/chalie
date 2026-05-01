@@ -17,20 +17,16 @@ let API_BASE = (() => {
 // State
 // ==========================================
 let providers = [];
-let assignments = {};
+let selectedProviderId = null;  // globally selected provider
 let editPlatform = 'ollama';
 let editingProviderId = null;
 let deletingProviderId = null;
-let editModels = [];  // multi-model tag input state
+let editModel = '';             // single model for the provider form
 
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
-let activeSubtab = 'jobs';      // currently active cognition sub-tab
-// ==========================================
-// LLM Jobs — fetched from backend config
-// ==========================================
-let jobs = [];
+let activeSubtab = 'memory';    // currently active cognition sub-tab
 
 // ==========================================
 // Platform Config
@@ -205,23 +201,18 @@ async function loadData() {
         return;
     }
 
-    await Promise.all([loadAssignments(), loadJobDefinitions()]);
-    renderMain();
-    renderCognition();
-}
-
-async function loadJobDefinitions() {
+    // Fetch selected provider
     try {
-        const res = await apiFetch('/providers/jobs/definitions');
-        if (!res.ok) {
-            console.warn('[Jobs] definitions fetch failed:', res.status);
-            return;
+        const selRes = await apiFetch('/providers/selected');
+        if (selRes.ok) {
+            const selData = await selRes.json();
+            selectedProviderId = selData.provider ? selData.provider.id : null;
         }
-        const data = await res.json();
-        jobs = data.jobs || [];
     } catch (e) {
-        console.warn('[Jobs] definitions fetch error:', e);
+        // ignore
     }
+
+    renderMain();
 }
 
 // ==========================================
@@ -266,9 +257,8 @@ function selectPlatform(platform, context) {
         ollamaListGroup.style.display = platform === 'ollama' ? '' : 'none';
     }
 
-    // Update model input
-    const modelInput = document.getElementById('editModelInput');
-    modelInput.placeholder = config.modelPlaceholder;
+    // Update model select
+    populateModelSelect();
 
     // Update datalist for curated platforms
     const datalist = document.getElementById('editModelSuggestions');
@@ -357,7 +347,6 @@ function renderMain() {
     document.getElementById('mainContent').style.display = '';
     document.getElementById('mainTabs').style.display = '';
     renderProviders();
-    renderCognition();
 }
 
 // ==========================================
@@ -398,18 +387,22 @@ function renderProviders() {
         return;
     }
     el.innerHTML = providers.map(p => {
-        const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
-        const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        const modelDisplay = p.model ? escapeHtml(p.model) : 'no model';
+        const isSelected = p.id === selectedProviderId;
         const warnIcon = p.decrypt_failed
             ? `<span class="provider-warn" title="Provider is misconfigured. Re-enter credentials">&#9888;</span>`
             : '';
         return `
         <div class="provider-card" data-id="${p.id}">
+            <label class="provider-select-radio">
+                <input type="radio" name="selected_provider" value="${p.id}" ${isSelected ? 'checked' : ''}>
+                <span class="radio-label">${isSelected ? 'Active' : 'Select'}</span>
+            </label>
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}${warnIcon}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
-                    ${modelsDisplay}
+                    ${modelDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
             </div>
@@ -428,6 +421,35 @@ function renderProviders() {
     el.querySelectorAll('[data-delete-id]').forEach(btn => {
         btn.addEventListener('click', () => confirmDelete(Number(btn.dataset.deleteId), btn.dataset.deleteName));
     });
+
+    // Wire selection radios
+    el.querySelectorAll('input[name="selected_provider"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const id = Number(radio.value);
+            selectProvider(id);
+        });
+    });
+}
+
+async function selectProvider(id) {
+    try {
+        const res = await apiFetch('/providers/selected', {
+            method: 'PUT',
+            body: JSON.stringify({ provider_id: id }),
+        });
+        if (res.ok) {
+            selectedProviderId = id;
+            renderProviders();
+            showToast('Provider selected', 'success');
+        } else {
+            const err = await res.json();
+            showToast(err.error || 'Failed to select provider', 'error');
+            renderProviders(); // revert UI
+        }
+    } catch (e) {
+        showToast('Failed to select provider', 'error');
+        renderProviders(); // revert UI
+    }
 }
 
 document.getElementById('addProviderBtn').addEventListener('click', () => {
@@ -442,22 +464,21 @@ function openEditModal(id) {
 
     // Reset form
     document.getElementById('providerForm').reset();
-    editModels = [];
+    editModel = '';
 
     if (id) {
         const p = providers.find(x => x.id === id);
         if (p) {
             editPlatform = p.platform;
             document.getElementById('editName').value = p.name;
-            // Populate models from array or fall back to single model
-            editModels = (p.models && p.models.length > 0) ? [...p.models] : (p.model ? [p.model] : []);
+            editModel = p.model || '';
             if (p.host) document.getElementById('editHost').value = p.host;
         }
     } else {
         editPlatform = 'ollama';
     }
 
-    renderModelTags();
+    populateModelSelect();
 
     // Clear any previous test result
     const testResult = document.getElementById('testResult');
@@ -475,36 +496,29 @@ function openEditModal(id) {
     }
 }
 
-function renderModelTags() {
-    const container = document.getElementById('editModelTags');
-    container.innerHTML = editModels.map((m, i) => `
-        <span class="model-tag" data-index="${i}">
-            ${escapeHtml(m)}
-            <button type="button" class="model-tag__remove" data-index="${i}">&times;</button>
-        </span>
-    `).join('');
+function populateModelSelect() {
+    const select = document.getElementById('editModel');
+    if (!select) return;
+    select.innerHTML = '<option value="">Select model...</option>';
 
-    // Wire remove buttons
-    container.querySelectorAll('.model-tag__remove').forEach(btn => {
-        btn.addEventListener('click', () => {
-            editModels.splice(Number(btn.dataset.index), 1);
-            renderModelTags();
+    const config = PLATFORM_CONFIG[editPlatform];
+    if (config.models && config.models.length > 0) {
+        config.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            if (m === editModel) opt.selected = true;
+            select.appendChild(opt);
         });
-    });
-}
-
-function addModelFromInput() {
-    const input = document.getElementById('editModelInput');
-    const val = input.value.trim();
-    if (!val) return;
-    if (editModels.includes(val)) {
-        showToast('Model already added', 'info');
-        return;
     }
-    editModels.push(val);
-    input.value = '';
-    renderModelTags();
-    input.focus();
+    // If no curated list and we have a value, add it as an option
+    if (editModel && !Array.from(select.options).some(o => o.value === editModel)) {
+        const opt = document.createElement('option');
+        opt.value = editModel;
+        opt.textContent = editModel;
+        opt.selected = true;
+        select.appendChild(opt);
+    }
 }
 
 document.getElementById('closeProviderModal').addEventListener('click', () => {
@@ -523,15 +537,6 @@ document.getElementById('editPlatformTabs').addEventListener('click', (e) => {
         const testResult = document.getElementById('testResult');
         testResult.className = 'test-result hidden';
         testResult.innerHTML = '';
-    }
-});
-
-// Model tag input — add button and enter key
-document.getElementById('addModelBtn').addEventListener('click', addModelFromInput);
-document.getElementById('editModelInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        addModelFromInput();
     }
 });
 
@@ -555,16 +560,7 @@ function renderOllamaModelList(names) {
     const container = document.getElementById('ollamaModelList');
     if (!container) return;
 
-    // Also keep datalist in sync so the text input autocomplete still works
-    const datalist = document.getElementById('editModelSuggestions');
-    if (datalist) {
-        datalist.innerHTML = '';
-        names.forEach(n => {
-            const opt = document.createElement('option');
-            opt.value = n;
-            datalist.appendChild(opt);
-        });
-    }
+    const select = document.getElementById('editModel');
 
     if (names.length === 0) {
         container.innerHTML = '<span class="ollama-model-empty">No models found — is Ollama running?</span>';
@@ -572,20 +568,31 @@ function renderOllamaModelList(names) {
     }
 
     container.innerHTML = names.map(n => {
-        const selected = editModels.includes(n);
+        const selected = n === editModel;
         return `<button type="button" class="ollama-model-chip${selected ? ' selected' : ''}" data-model="${escapeHtml(n)}">${escapeHtml(n)}</button>`;
     }).join('');
+
+    // Populate the single model select with fetched names
+    if (select) {
+        const prev = select.value;
+        select.innerHTML = '<option value="">Select model...</option>';
+        names.forEach(n => {
+            const opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            if (n === prev || n === editModel) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
 
     container.querySelectorAll('.ollama-model-chip').forEach(chip => {
         chip.addEventListener('click', () => {
             const m = chip.dataset.model;
-            if (editModels.includes(m)) {
-                editModels = editModels.filter(x => x !== m);
-            } else {
-                editModels.push(m);
-            }
-            chip.classList.toggle('selected', editModels.includes(m));
-            renderModelTags();
+            editModel = m;
+            if (select) select.value = m;
+            container.querySelectorAll('.ollama-model-chip').forEach(c => {
+                c.classList.toggle('selected', c.dataset.model === m);
+            });
         });
     });
 }
@@ -614,8 +621,7 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
-    // Test with first model (or whatever is in the input)
-    const testModel = document.getElementById('editModelInput').value.trim() || (editModels.length > 0 ? editModels[0] : '');
+    const testModel = document.getElementById('editModel').value.trim();
     const body = {
         platform,
         model: testModel,
@@ -662,24 +668,17 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
-    // Auto-commit any pending value in the model input so users don't have
-    // to remember to press Enter / click Add before saving.
-    const pendingModel = document.getElementById('editModelInput').value.trim();
-    if (pendingModel && !editModels.includes(pendingModel)) {
-        editModels.push(pendingModel);
-        document.getElementById('editModelInput').value = '';
-        renderModelTags();
-    }
-
-    if (editModels.length === 0) {
-        showToast('Add at least one model', 'error');
+    const modelVal = document.getElementById('editModel').value.trim();
+    if (!modelVal) {
+        showToast('Select a model', 'error');
         return;
     }
+    editModel = modelVal;
 
     const body = {
         name: document.getElementById('editName').value.trim(),
         platform: platform,
-        models: editModels,
+        model: editModel,
     };
 
     if (config.hasHost) {
@@ -707,7 +706,6 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
         }
         document.getElementById('providerModal').classList.add('hidden');
         renderProviders();
-        renderCognition();
         showToast(id ? 'Provider updated' : 'Provider added', 'success');
     } else {
         const err = await res.json();
@@ -744,7 +742,6 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
         document.getElementById('deleteModal').classList.add('hidden');
         deletingProviderId = null;
         renderProviders();
-        renderCognition();
         showToast('Provider deleted', 'success');
     } else {
         const err = await res.json();
@@ -752,444 +749,6 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
         document.getElementById('deleteModal').classList.add('hidden');
     }
 });
-
-// ==========================================
-// Cognition Tab
-// ==========================================
-async function loadAssignments() {
-    try {
-        const res = await apiFetch('/providers/jobs');
-        if (res.ok) {
-            const data = await res.json();
-            assignments = {};
-            (data.assignments || []).forEach(a => {
-                assignments[a.job_name] = { provider_id: a.provider_id, model: a.model || null };
-            });
-        }
-    } catch (e) {
-        // ignore
-    }
-}
-
-const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification', vision: 'Vision' };
-const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
-
-// ── Group derivation ──
-
-const GROUP_META = {
-    vision:     { name: 'Vision',     desc: 'Jobs requiring visual understanding (OCR, image analysis)', icon: '\u25CE' },
-    reasoning:  { name: 'Reasoning',  desc: 'High reasoning or creativity \u2014 needs your best model', icon: '\u25C6' },
-    analytical: { name: 'Analytical', desc: 'Structured output and classification tasks', icon: '\u25A3' },
-    utility:    { name: 'Utility',    desc: 'Lightweight tasks \u2014 fast/cheap models work well', icon: '\u25AA' },
-};
-
-function computeJobGroup(caps) {
-    if (caps.vision && caps.vision !== 'none') return 'vision';
-    if (caps.reasoning === 'high' || caps.creativity === 'high') return 'reasoning';
-    if (caps.structured === 'high' || caps.classification === 'high') return 'analytical';
-    return 'utility';
-}
-
-function groupJobs(jobList) {
-    const groups = { vision: [], reasoning: [], analytical: [], utility: [] };
-    for (const job of jobList) {
-        const g = computeJobGroup(job.caps || {});
-        groups[g].push(job);
-    }
-    return groups;
-}
-
-function getProviderModels(providerId) {
-    if (!providerId) return [];
-    const p = providers.find(x => x.id === providerId);
-    if (!p) return [];
-    return (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
-}
-
-function renderCognition() {
-    const el = document.getElementById('cognitionList');
-    if (providers.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>No providers configured</h3><p>Add a provider first.</p></div>';
-        return;
-    }
-    if (jobs.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions\u2026</h3></div>';
-        return;
-    }
-
-    const groups = groupJobs(jobs);
-    const groupOrder = ['reasoning', 'analytical', 'vision', 'utility'];
-
-    const cardsHtml = groupOrder.filter(g => groups[g].length > 0).map(groupName => {
-        const meta = GROUP_META[groupName];
-        const groupJobs = groups[groupName];
-
-        // Determine current group-level assignment (only if all jobs share the same provider+model)
-        let groupProviderId = null;
-        let groupModel = null;
-        let isUniform = true;
-        let assignedCount = groupJobs.filter(j => assignments[j.id] && assignments[j.id].provider_id).length;
-
-        const firstAssign = assignments[groupJobs[0].id];
-        if (firstAssign && firstAssign.provider_id) {
-            groupProviderId = firstAssign.provider_id;
-            groupModel = firstAssign.model || null;
-            for (let i = 1; i < groupJobs.length; i++) {
-                const a = assignments[groupJobs[i].id];
-                if (!a || a.provider_id !== groupProviderId || a.model !== groupModel) {
-                    isUniform = false;
-                    groupProviderId = null;
-                    groupModel = null;
-                    break;
-                }
-            }
-        } else {
-            isUniform = false;
-        }
-
-        // Provider dropdown options
-        const providerOptions = providers.map(p =>
-            `<option value="${p.id}" ${isUniform && p.id === groupProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-        ).join('');
-
-        // Model dropdown options (based on selected provider)
-        // When no model override, default to provider's first model (the provider default)
-        const selectedProviderModels = isUniform && groupProviderId ? getProviderModels(groupProviderId) : [];
-        const effectiveGroupModel = groupModel || (selectedProviderModels.length > 0 ? selectedProviderModels[0] : null);
-        const modelOptions = selectedProviderModels.map(m =>
-            `<option value="${escapeHtml(m)}" ${m === effectiveGroupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
-        ).join('');
-
-        let statusText;
-        if (isUniform) {
-            statusText = `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`;
-        } else if (assignedCount === 0) {
-            statusText = `<span class="group-status group-status--unset">Not assigned</span>`;
-        } else if (assignedCount === groupJobs.length) {
-            statusText = `<span class="group-status group-status--mixed">${assignedCount} jobs assigned (mixed)</span>`;
-        } else {
-            statusText = `<span class="group-status group-status--mixed">${assignedCount} of ${groupJobs.length} assigned</span>`;
-        }
-
-        // Advanced individual job overrides
-        const jobRowsHtml = groupJobs.map(job => {
-            const a = assignments[job.id] || {};
-            const jobProviderId = a.provider_id || null;
-            const jobModel = a.model || null;
-
-            const jobProviderOpts = providers.map(p =>
-                `<option value="${p.id}" ${p.id === jobProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-            ).join('');
-
-            const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
-            const effectiveJobModel = jobModel || (jobModels.length > 0 ? jobModels[0] : null);
-            const jobModelDefault = jobProviderId ? '-- default --' : '-- model --';
-            const jobModelOpts = jobModels.map(m =>
-                `<option value="${escapeHtml(m)}" ${m === effectiveJobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
-            ).join('');
-
-            const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
-                `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
-            ).join('');
-
-            return `
-                <div class="job-override-row" data-job-id="${escapeHtml(job.id)}">
-                    <div class="job-override-info">
-                        <span class="job-override-name">${escapeHtml(job.name)}</span>
-                        <span class="job-override-caps">${capsHtml}</span>
-                    </div>
-                    <div class="job-override-selects">
-                        <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
-                            <option value="">Inherit from group</option>
-                            ${jobProviderOpts}
-                        </select>
-                        <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">${jobModelDefault}</option>
-                            ${jobModelOpts}
-                        </select>
-                        <button class="btn-stats" data-stats-job="${escapeHtml(job.id)}" data-stats-name="${escapeHtml(job.name)}" title="Token usage stats">\u229E</button>
-                        <span class="save-indicator" id="save-${escapeHtml(job.id)}">Saved \u2713</span>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div class="group-card" data-group="${escapeHtml(groupName)}">
-                <div class="group-card__header">
-                    <div class="group-card__title">
-                        <span class="group-card__icon">${escapeHtml(meta.icon)}</span>
-                        <span class="group-card__name">${escapeHtml(meta.name)}</span>
-                        <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
-                    </div>
-                    <div class="group-card__desc">${escapeHtml(meta.desc)}</div>
-                </div>
-                <div class="group-card__assign">
-                    <div class="group-card__selects">
-                        <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
-                            <option value="">${!isUniform && assignedCount > 0 ? `Assign all ${groupJobs.length} jobs` : 'Select provider'}</option>
-                            ${providerOptions}
-                        </select>
-                        <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">Select model</option>
-                            ${modelOptions}
-                        </select>
-                    </div>
-                    ${statusText}
-                </div>
-                <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${escapeHtml(groupName)}">Advanced \u25B8</button>
-                    <div class="group-advanced-body" data-group="${escapeHtml(groupName)}" style="display:none">
-                        ${jobRowsHtml}
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    el.innerHTML = cardsHtml;
-    wireGroupCardEvents(el);
-}
-
-function wireGroupCardEvents(el) {
-    // Group provider select → update model dropdown and assign group
-    el.querySelectorAll('.group-provider-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const groupName = sel.dataset.group;
-            const providerId = parseInt(sel.value) || null;
-            const modelSel = el.querySelector(`.group-model-select[data-group="${groupName}"]`);
-
-            // Repopulate model dropdown
-            const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = '<option value="">Select model</option>' +
-                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
-            modelSel.disabled = models.length === 0;
-
-            // Auto-select first model if only one
-            if (models.length === 1) {
-                modelSel.value = models[0];
-                assignGroup(groupName, providerId, models[0]);
-            } else if (models.length === 0 && providerId) {
-                assignGroup(groupName, providerId, null);
-            }
-        });
-    });
-
-    // Group model select → assign group
-    el.querySelectorAll('.group-model-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const groupName = sel.dataset.group;
-            const providerSel = el.querySelector(`.group-provider-select[data-group="${groupName}"]`);
-            const providerId = parseInt(providerSel.value) || null;
-            const model = sel.value || null;
-            if (providerId) assignGroup(groupName, providerId, model);
-        });
-    });
-
-    // Advanced toggle
-    el.querySelectorAll('.group-advanced-toggle').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const body = el.querySelector(`.group-advanced-body[data-group="${btn.dataset.group}"]`);
-            const isOpen = body.style.display !== 'none';
-            body.style.display = isOpen ? 'none' : 'block';
-            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Per-job assignments \u25BE';
-        });
-    });
-
-    // Individual job provider select → update that job's model dropdown
-    el.querySelectorAll('.job-provider-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const jobId = sel.dataset.job;
-            const providerId = parseInt(sel.value) || null;
-            const row = sel.closest('.job-override-row');
-            const modelSel = row.querySelector('.job-model-select');
-
-            const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = `<option value="">${providerId ? '-- default --' : '-- model --'}</option>` +
-                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
-            modelSel.disabled = models.length === 0;
-
-            if (models.length === 1) {
-                modelSel.value = models[0];
-                assignJob(jobId, providerId, models[0]);
-            } else if (providerId) {
-                assignJob(jobId, providerId, null);
-            }
-        });
-    });
-
-    // Individual job model select → assign job
-    el.querySelectorAll('.job-model-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const jobId = sel.dataset.job;
-            const row = sel.closest('.job-override-row');
-            const providerSel = row.querySelector('.job-provider-select');
-            const providerId = parseInt(providerSel.value) || null;
-            const model = sel.value || null;
-            if (providerId) assignJob(jobId, providerId, model);
-        });
-    });
-
-    // Stats buttons
-    el.querySelectorAll('[data-stats-job]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            openJobStats(btn.dataset.statsJob, btn.dataset.statsName);
-        });
-    });
-}
-
-async function assignGroup(groupName, providerId, model) {
-    if (!providerId) return;
-
-    try {
-        const res = await apiFetch(`/providers/jobs/groups/${groupName}`, {
-            method: 'PUT',
-            body: JSON.stringify({ provider_id: providerId, model: model }),
-        });
-
-        if (res.ok) {
-            // Update local assignments for all jobs in this group
-            const groups = groupJobs(jobs);
-            const groupJobList = groups[groupName] || [];
-            for (const job of groupJobList) {
-                assignments[job.id] = { provider_id: providerId, model: model };
-            }
-            showToast(`${GROUP_META[groupName].name} group assigned`, 'success');
-            renderCognition();
-        } else {
-            showToast('Failed to save group assignment', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-async function assignJob(jobName, providerId, model) {
-    if (!providerId) return;
-
-    try {
-        const body = { provider_id: providerId };
-        if (model) body.model = model;
-
-        const res = await apiFetch(`/providers/jobs/${jobName}`, {
-            method: 'PUT',
-            body: JSON.stringify(body),
-        });
-
-        if (res.ok) {
-            assignments[jobName] = { provider_id: providerId, model: model };
-            const indicator = document.getElementById(`save-${jobName}`);
-            if (indicator) {
-                indicator.classList.add('visible');
-                setTimeout(() => indicator.classList.remove('visible'), 2000);
-            }
-        } else {
-            showToast('Failed to save assignment', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-// ==========================================
-// Job Stats Modal — Token Usage Statistics
-// ==========================================
-let statsJobName = '';
-
-async function openJobStats(jobId, jobName) {
-    statsJobName = jobId;
-    document.getElementById('jobStatsTitle').textContent = `${jobName} — Token Usage`;
-    document.getElementById('statsSummary').innerHTML = '<div class="loading">Loading stats…</div>';
-    document.getElementById('statsTableWrap').innerHTML = '';
-    document.getElementById('jobStatsModal').classList.remove('hidden');
-
-    // Reset tab selection to 24h
-    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
-    const defaultTab = document.querySelector('#statsPeriodTabs .stats-tab[data-hours="24"]');
-    if (defaultTab) defaultTab.classList.add('active');
-
-    await loadJobStats(jobId, 24);
-}
-
-document.getElementById('closeJobStatsModal').addEventListener('click', () => {
-    document.getElementById('jobStatsModal').classList.add('hidden');
-});
-
-document.getElementById('jobStatsModal').addEventListener('click', (e) => {
-    if (e.target.id === 'jobStatsModal') {
-        document.getElementById('jobStatsModal').classList.add('hidden');
-    }
-});
-
-document.getElementById('statsPeriodTabs').addEventListener('click', async (e) => {
-    const tab = e.target.closest('.stats-tab');
-    if (!tab) return;
-    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    await loadJobStats(statsJobName, parseInt(tab.dataset.hours));
-});
-
-async function loadJobStats(jobId, hours) {
-    const summaryEl = document.getElementById('statsSummary');
-    const tableEl = document.getElementById('statsTableWrap');
-    summaryEl.innerHTML = '<div class="loading">Loading…</div>';
-    tableEl.innerHTML = '';
-
-    try {
-        const res = await apiFetch(`/providers/jobs/${jobId}/stats?hours=${hours}`);
-        if (!res.ok) throw new Error('Failed to load stats');
-        const data = await res.json();
-        const s = data.summary || {};
-
-        summaryEl.innerHTML = `
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_calls || 0).toLocaleString()}</div>
-                <div class="stat-label">Calls</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_tokens_input || 0).toLocaleString()}</div>
-                <div class="stat-label">Tokens In</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_tokens_output || 0).toLocaleString()}</div>
-                <div class="stat-label">Tokens Out</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${Math.round(s.avg_latency_ms || 0).toLocaleString()}<span class="stat-unit">ms</span></div>
-                <div class="stat-label">Avg Latency</div>
-            </div>
-        `;
-
-        const calls = data.calls || [];
-        if (calls.length === 0) {
-            tableEl.innerHTML = '<div class="stats-empty">No calls in this period.</div>';
-            return;
-        }
-
-        const rows = calls.slice(0, 200).map(c => {
-            const t = c.created_at ? new Date(c.created_at + 'Z') : null;
-            const time = t ? t.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-            return `<tr>
-                <td>${time}</td>
-                <td>${escapeHtml(c.model || '—')}</td>
-                <td class="num">${(c.tokens_input || 0).toLocaleString()}</td>
-                <td class="num">${(c.tokens_output || 0).toLocaleString()}</td>
-                <td class="num">${(c.latency_ms || 0).toLocaleString()}</td>
-            </tr>`;
-        }).join('');
-
-        tableEl.innerHTML = `
-            <table class="stats-table">
-                <thead><tr>
-                    <th>Time</th><th>Model</th><th class="num">In</th><th class="num">Out</th><th class="num">Latency</th>
-                </tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
-    } catch (e) {
-        summaryEl.innerHTML = '<div class="stats-empty">Failed to load stats.</div>';
-    }
-}
 
 // ==========================================
 // Scheduler Tab
@@ -2151,7 +1710,6 @@ document.getElementById('obsRefreshBtn').addEventListener('click', () => {
 });
 
 function loadCognitionSubtab(subtab) {
-    if (subtab === 'jobs') return; // Jobs panel uses existing renderCognition()
     if (subtab === 'memory') { loadRecordsObs(); return; }
     if (subtab === 'personality') { loadPersonality(); return; }
     if (obsLoaded[subtab]) return; // Already cached

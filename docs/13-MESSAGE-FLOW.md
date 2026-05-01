@@ -9,7 +9,7 @@ Chalie handles five distinct message paths. All of them share the same **ACT loo
 | Path | Trigger | Result |
 |---|---|---|
 | **User** | WebSocket message from the user | Response delivered on the same socket |
-| **DMN** | Idle period or periodic cadence, no user activity required | Proactive push to client |
+| **DMN** | Step 5 of the subconscious worker tick (no own trigger) | Saves findings via memory tool; no chat-UI push |
 | **Goal pursuit** | Background daemon spawned per active goal | Proactive push when goal resolves |
 | **Scheduled** | Timer fires on a due prompt | Proactive push to client |
 | **Episode encoder** | Internal, runs when the transcript tail grows long enough | No user-visible output; consolidates memory |
@@ -123,10 +123,9 @@ A second `PayloadTooLargeError` after a successful recovery breaks immediately t
 After the turn is stored, the user processor triggers a set of services synchronously. Because the response is already on the wire (sent via narration callbacks during the loop), this fan-out does not affect perceived latency.
 
 - **Conversation phase tracking** — updates the current phase based on both the user message and the response.
-- **DMN timer reset** — defers the idle-trigger so proactive thoughts don't interrupt an active conversation.
 - **Metrics counter** — increments request and user-message totals.
 
-Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter.
+Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter. (DMN no longer has an idle-timer to reset — it runs as Step 5 of the subconscious worker tick.)
 
 Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
@@ -134,25 +133,21 @@ Personal facts are handled inline during the ACT loop: when the model decides to
 
 ## Background Paths
 
-### DMN (Proactive Thought)
+### DMN (Reflective Pass — Subconscious Step 5)
 
-The DMN path fires on its own schedule — after an idle period with no user activity, and on a periodic cadence to surface high-salience topics. It respects quiet hours and a daily rate cap.
+DMN no longer has its own daemon, idle trigger, or proactive output channel (v0.6.0). It runs as **Step 5 of the subconscious worker tick** — see `04-ARCHITECTURE.md` for the full five-step ordering. The processor reflects on the user picture and persists findings to `data_graph` via the `memory` tool; nothing is pushed to chat.
 
 ```
-  DMN timer
+  Subconscious tick (Step 5)
       │
-      ├── idle trigger  →  context: recent high-weight episodes
+      ├── load user_summary_long (fallback user_summary, else skip)
+      ├── load channel='user' episodes (retrieval_weight ≥ 0.3, 30d window, LIMIT 50)
       │
-      └── cadence trigger  →  context: top episodes + active goals
-              │
-              ▼
-        ACT loop (lighter iteration cap, no pre-loop exploration)
-              │
-              ▼
-        No-action signal? → exit silently
-              │
-              ▼
-        Proactive push → WebSocket → client
+      ▼
+   ACT loop (news / search / browser ALWAYS_AVAILABLE; memory tool for writes)
+      │
+      ▼
+   Findings persisted to data_graph. No chat-UI broadcast.
 ```
 
 ### Goal Pursuit

@@ -309,6 +309,11 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
     """Fire episode extraction when the channel has accumulated
     _EXTRACTION_THRESHOLD untriggered transcripts.
 
+    Gate: only channel='user' produces episodes. Non-user channels (dmn,
+    scheduled, subagent, self_reflection, etc.) are explicitly excluded —
+    this is the structural invariant that keeps the episodes table clean and
+    makes SubconsciousWorker._step_consolidate() iterate only one channel.
+
     DB-state-driven: counts transcripts with id > MAX(episodes.transcript_id_end)
     for the channel. When count >= threshold, fire. No process-local state,
     so restarts and container rebuilds cannot desync the trigger from the
@@ -316,6 +321,9 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 
     Never raises — failures logged and silently ignored.
     """
+    if channel != 'user':
+        return
+
     try:
         from services.database_service import get_shared_db_service
 
