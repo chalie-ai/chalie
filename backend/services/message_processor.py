@@ -865,34 +865,11 @@ class MessageProcessor:
         return estimate_tokens(user_msg)
 
     def _check_threshold(self, user_msg: str, context_limit: int) -> bool:
-        """Return True if the user-message body exceeds the compaction threshold.
+        """Return True if the user-message body exceeds 80% of context_limit.
 
-        Default ratio is 0.80 of context_limit — strict greater-than (exactly
-        at threshold is NOT compaction-eligible). The ratio can be overridden
-        for tests via the ``COMPACTION_THRESHOLD_RATIO`` env var (range
-        0.0-1.0; values outside fall back to 0.80). Lowering the ratio in
-        tests lets nightly scenarios force compaction at modest volumes
-        without depending on the live provider's full context window.
-
-        Every call also emits a diagnostic INFO log line so log-grep can
-        ground-truth whether the threshold was reached during a run.
+        Strict greater-than: a message exactly at 80% is NOT compaction-eligible.
         """
-        import os
-        tokens = self._measure_user_message(user_msg)
-        try:
-            ratio = float(os.environ.get('COMPACTION_THRESHOLD_RATIO', '0.80'))
-            if not 0.0 < ratio <= 1.0:
-                ratio = 0.80
-        except (TypeError, ValueError):
-            ratio = 0.80
-        threshold = int(context_limit * ratio)
-        breached = tokens > threshold
-        logger.info(
-            "[COMPACTION] %s: threshold check — tokens=%d, threshold=%d "
-            "(%.0f%% of %d), breached=%s",
-            self.CHANNEL, tokens, threshold, ratio * 100, context_limit, breached,
-        )
-        return breached
+        return self._measure_user_message(user_msg) > int(context_limit * 0.80)
 
     def _handle_overflow(self) -> bool:
         """Single overflow-handling path: full compaction + ACT loop state reset.
