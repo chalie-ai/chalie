@@ -1,14 +1,19 @@
-"""CompactionMessageProcessor — unified LLM-call wrapper for full + trail compaction.
+"""CompactionMessageProcessor — LLM-call wrappers for channel + subagent compaction.
 
-Replaces both the inline LLM calls in MessageProcessor._run_full_compaction /
-_run_stage1_tool_compaction AND the deleted standalone compaction_service.
+Three subclasses, all sharing ``_CompactionProcessorBase``:
 
-Two subclasses:
-  - FullCompactionProcessor   → channel checkpoint summarisation (ex-Stage 2 / ex-backstop)
-  - TrailCompactionProcessor  → mid-ACT tool-trail summarisation (ex-Stage 1)
+  ContinuityCompactionProcessor
+      UMP channel checkpoint summarisation. Replaces ``FullCompactionProcessor``.
+      Produces ``<summary>`` body parsed by ``_extract_compaction_summary``.
 
-Both share `_CompactionProcessorBase`:
-  - JOB = 'frontal-cortex-unified' (same as parent message type per north star p.547)
+  SubagentTrailCompactionProcessor
+      Subagent mid-ACT tool-trail summarisation. Replaces both the old
+      ``TrailCompactionProcessor`` (UMP variant) and is the canonical path for
+      subagents. Output is a dense per-tool block injected inline; no channel
+      summary, no ``<summary>`` tags.
+
+Both share ``_CompactionProcessorBase``:
+  - JOB = 'frontal-cortex-unified' (same as parent message type)
   - ALWAYS_AVAILABLE / DISCOVERABLE = [] (compaction never calls tools)
   - SKIP_TRANSCRIPT_WRITE = True   (no transcript pollution)
   - _check_threshold returns False (compaction never compacts itself — recursion guard)
@@ -16,14 +21,14 @@ Both share `_CompactionProcessorBase`:
   - getUserPrompt returns self._raw_input (caller pre-formats the input)
 
 Callers:
-  MessageProcessor._run_full_compaction        → FullCompactionProcessor
-  MessageProcessor._run_stage1_tool_compaction → TrailCompactionProcessor
+  MessageProcessor._run_full_compaction → ContinuityCompactionProcessor
+  SubagentProcessor._handle_overflow    → SubagentTrailCompactionProcessor
 """
 
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import (
-    CompactionFullSystemPrompt,
-    CompactionTrailSystemPrompt,
+    ContinuityCompactionSystemPrompt,
+    SubagentTrailCompactionSystemPrompt,
 )
 
 
@@ -50,13 +55,17 @@ class _CompactionProcessorBase(MessageProcessor):
         return False
 
 
-class FullCompactionProcessor(_CompactionProcessorBase):
+class ContinuityCompactionProcessor(_CompactionProcessorBase):
+    """Full channel compaction — continuity-first summary producing <summary> tags."""
+
     CHANNEL = 'compaction'
     ROLE = 'compaction'
-    SYSTEM_PROMPT_CLASS = CompactionFullSystemPrompt
+    SYSTEM_PROMPT_CLASS = ContinuityCompactionSystemPrompt
 
 
-class TrailCompactionProcessor(_CompactionProcessorBase):
-    CHANNEL = 'compaction_trail'
+class SubagentTrailCompactionProcessor(_CompactionProcessorBase):
+    """Subagent mid-ACT trail compaction — dense per-tool blocks, no channel summary."""
+
+    CHANNEL = 'subagent_compaction'
     ROLE = 'compaction'
-    SYSTEM_PROMPT_CLASS = CompactionTrailSystemPrompt
+    SYSTEM_PROMPT_CLASS = SubagentTrailCompactionSystemPrompt

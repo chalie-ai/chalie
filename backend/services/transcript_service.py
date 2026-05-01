@@ -170,30 +170,41 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
     Returns number of entries deleted.
     """
     try:
+        from services import compaction_persistence
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
+        # Build a list of (channel, watermark) pairs from the append-only
+        # tool_calls compaction audit rows.
+        if channel:
+            row = compaction_persistence.get_compaction(channel)
+            watermarks = [(channel, row['compacted_up_to_id'])] if row else []
+        else:
+            with db.connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT t.channel
+                    FROM tool_calls tc
+                    JOIN transcript t ON t.id = tc.transcript_id
+                    WHERE tc.tool_name = 'compaction'
+                      AND json_extract(tc.params, '$.status') = 'success'
+                    """
+                ).fetchall()
+            channels = [r[0] for r in rows]
+            watermarks = []
+            for ch in channels:
+                row = compaction_persistence.get_compaction(ch)
+                if row:
+                    watermarks.append((ch, row['compacted_up_to_id']))
+
+        if not watermarks:
+            return 0
+
         with db.connection() as conn:
             cursor = conn.cursor()
-
-            if channel:
-                cursor.execute(
-                    "SELECT channel, compacted_up_to_id FROM compactions WHERE channel = ?",
-                    (channel,),
-                )
-            else:
-                cursor.execute("SELECT channel, compacted_up_to_id FROM compactions")
-
-            watermarks = cursor.fetchall()
-
-            if not watermarks:
-                cursor.close()
-                return 0
-
             total_deleted = 0
 
-            for row in watermarks:
-                t, watermark = row[0], row[1]
+            for t, watermark in watermarks:
                 if not watermark:
                     continue
 

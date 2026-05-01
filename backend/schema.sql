@@ -519,19 +519,6 @@ CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
--- COMPACTIONS — incremental conversation summarization
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS compactions (
-    channel             TEXT PRIMARY KEY,
-    compacted_text      TEXT NOT NULL,
-    compacted_up_to_id  INTEGER NOT NULL,
-    token_count         INTEGER DEFAULT 0,
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    overflow_content    TEXT,
-    FOREIGN KEY (compacted_up_to_id) REFERENCES transcript(id)
-);
-
--- ────────────────────────────────────────────────────────────────
 -- TOOL CALLS — audit log of every tool invocation per transcript turn
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_calls (

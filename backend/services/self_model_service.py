@@ -192,7 +192,6 @@ class SelfModelService:
             "refreshed_at": _utc_now().isoformat(),
         }
         snapshot["noteworthy"] = self._assess_noteworthy(snapshot)
-        snapshot["noteworthy"].extend(self._check_pipeline_health())
 
         try:
             self._store.setex(CACHE_KEY, CACHE_TTL, json.dumps(snapshot))
@@ -418,50 +417,6 @@ class SelfModelService:
         return features
 
     # ── Noteworthy assessment ───────────────────────────────────
-
-    def _check_pipeline_health(self) -> list:
-        """Check cognitive pipeline health -- returns noteworthy items for degraded pipelines."""
-        checks = []
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                # 1. Compaction stale: user-channel transcript with uncompacted
-                # content exceeding the fallback token threshold (chars/4 ≈
-                # tokens, 36K token fallback). Uses the same fallback threshold
-                # as MessageProcessor compaction so this warning fires iff
-                # compaction would actually trigger.
-                #
-                # Scoped to channel='user' because that is the only channel
-                # whose getUserPrompt() loads historical transcript into the
-                # prompt. Background channels (dmn, persistent_task_*, …) only
-                # pass the current turn's input, so their on-disk transcript
-                # size is irrelevant to context pressure. This signal also
-                # only surfaces in the user-channel prompt via
-                # SelfModelService.format_for_prompt().
-                _COMPACTION_WARN_CHARS = 36_000 * 4  # ~144K chars ≈ 36K tokens
-                row = conn.execute("""
-                    SELECT tt.channel,
-                           COUNT(tt.id) as entries,
-                           SUM(LENGTH(tt.content)) as total_chars
-                    FROM transcript tt
-                    LEFT JOIN compactions tc ON tc.channel = tt.channel
-                    WHERE tc.channel IS NULL AND tt.channel = 'user'
-                    GROUP BY tt.channel
-                    HAVING total_chars >= ?
-                    ORDER BY total_chars DESC LIMIT 1
-                """, (_COMPACTION_WARN_CHARS,)).fetchone()
-                if row:
-                    estimated_tokens = (row[2] or 0) // 4
-                    checks.append({
-                        'signal': f"Compaction stale: topic has {row[1]} entries (~{estimated_tokens:,} tokens), no compaction",
-                        'severity': 0.7,
-                    })
-
-                # Orphaned episodes check removed — topics table dropped in migration 035
-
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")
-        return checks
 
     def _assess_noteworthy(self, snapshot: dict) -> List[dict]:
         """

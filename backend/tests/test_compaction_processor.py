@@ -15,47 +15,47 @@ pytestmark = pytest.mark.unit
 
 
 class TestCompactionProcessorConstants:
-    def test_full_check_threshold_always_false(self):
-        from services.compaction_message_processor import FullCompactionProcessor
-        p = FullCompactionProcessor(raw_input='x')
+    def test_continuity_check_threshold_always_false(self):
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        p = ContinuityCompactionProcessor(raw_input='x')
         assert p._check_threshold('a very long string ' * 1000, 32_000) is False
 
-    def test_trail_check_threshold_always_false(self):
-        from services.compaction_message_processor import TrailCompactionProcessor
-        p = TrailCompactionProcessor(raw_input='x')
+    def test_subagent_trail_check_threshold_always_false(self):
+        from services.compaction_message_processor import SubagentTrailCompactionProcessor
+        p = SubagentTrailCompactionProcessor(raw_input='x')
         assert p._check_threshold('a very long string ' * 1000, 32_000) is False
 
-    def test_full_job_is_frontal_cortex_unified(self):
-        from services.compaction_message_processor import FullCompactionProcessor
-        assert FullCompactionProcessor.JOB == 'frontal-cortex-unified'
+    def test_continuity_job_is_frontal_cortex_unified(self):
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        assert ContinuityCompactionProcessor.JOB == 'frontal-cortex-unified'
 
-    def test_trail_job_is_frontal_cortex_unified(self):
-        from services.compaction_message_processor import TrailCompactionProcessor
-        assert TrailCompactionProcessor.JOB == 'frontal-cortex-unified'
+    def test_subagent_trail_job_is_frontal_cortex_unified(self):
+        from services.compaction_message_processor import SubagentTrailCompactionProcessor
+        assert SubagentTrailCompactionProcessor.JOB == 'frontal-cortex-unified'
 
-    def test_full_always_available_empty(self):
-        from services.compaction_message_processor import FullCompactionProcessor
-        assert FullCompactionProcessor.ALWAYS_AVAILABLE == []
+    def test_continuity_always_available_empty(self):
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        assert ContinuityCompactionProcessor.ALWAYS_AVAILABLE == []
 
-    def test_trail_always_available_empty(self):
-        from services.compaction_message_processor import TrailCompactionProcessor
-        assert TrailCompactionProcessor.ALWAYS_AVAILABLE == []
+    def test_subagent_trail_always_available_empty(self):
+        from services.compaction_message_processor import SubagentTrailCompactionProcessor
+        assert SubagentTrailCompactionProcessor.ALWAYS_AVAILABLE == []
 
-    def test_full_discoverable_empty(self):
-        from services.compaction_message_processor import FullCompactionProcessor
-        assert FullCompactionProcessor.DISCOVERABLE == []
+    def test_continuity_discoverable_empty(self):
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        assert ContinuityCompactionProcessor.DISCOVERABLE == []
 
-    def test_trail_discoverable_empty(self):
-        from services.compaction_message_processor import TrailCompactionProcessor
-        assert TrailCompactionProcessor.DISCOVERABLE == []
+    def test_subagent_trail_discoverable_empty(self):
+        from services.compaction_message_processor import SubagentTrailCompactionProcessor
+        assert SubagentTrailCompactionProcessor.DISCOVERABLE == []
 
-    def test_full_skip_transcript_write(self):
-        from services.compaction_message_processor import FullCompactionProcessor
-        assert FullCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
+    def test_continuity_skip_transcript_write(self):
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        assert ContinuityCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
 
-    def test_trail_skip_transcript_write(self):
-        from services.compaction_message_processor import TrailCompactionProcessor
-        assert TrailCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
+    def test_subagent_trail_skip_transcript_write(self):
+        from services.compaction_message_processor import SubagentTrailCompactionProcessor
+        assert SubagentTrailCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
 
 
 class TestCompactionServiceGone:

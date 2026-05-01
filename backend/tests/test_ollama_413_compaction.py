@@ -195,8 +195,8 @@ def _build_test_processor_class():
     - CHANNEL ≠ 'user' → thinking gate is a no-op.
     - SKIP_TRANSCRIPT_WRITE=True → no SQLite writes (transcript or assistant
       rows). _uid stays None and ToolRenderAndRecordService short-circuits.
-    - _run_full_compaction overridden to return a fixed string so Stage 2's
-      LLM call is replaced; the rest of _run_stage2_act_restart runs real.
+    - _run_full_compaction overridden to return a fixed string so the
+      overflow handler's LLM call is replaced; _handle_overflow runs real.
     """
     from services.message_processor import MessageProcessor
 
@@ -222,8 +222,8 @@ def _build_test_processor_class():
         def getTools(self) -> list[dict]:
             return []
 
-        def _run_full_compaction(self) -> 'str | None':
-            # Stub the LLM call inside Stage 2; everything around it is real.
+        def _run_full_compaction(self, exclude_id=None) -> 'str | None':
+            # Stub the LLM call inside _handle_overflow; everything around it is real.
             self.full_compaction_calls += 1
             return 'COMPACTED'
 
@@ -250,7 +250,7 @@ class TestMessageProcessorSend413Recovery:
         fake.get_context_limit.return_value = get_context_limit
         return patch.object(Providers, 'instance', return_value=fake), fake
 
-    def test_first_413_runs_stage2_then_succeeds(self):
+    def test_first_413_runs_overflow_handler_then_succeeds(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
@@ -262,15 +262,15 @@ class TestMessageProcessorSend413Recovery:
 
         assert result == 'final answer'
         assert proc._payload_too_large_recovered is True
-        assert proc.full_compaction_calls == 1, "Stage 2 must run exactly once"
+        assert proc.full_compaction_calls == 1, "overflow handler must run exactly once"
         assert fake.send_messages.call_count == 2, "one 413 + one success"
 
-    def test_second_413_breaks_to_cap_exit(self):
+    def test_second_413_breaks_to_cap_exit(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
 
-        # Two 413s back-to-back. Second must NOT trigger Stage 2 again.
+        # Two 413s back-to-back. Second must NOT trigger overflow handler again.
         side_effects = [
             PayloadTooLargeError("first 413"),
             PayloadTooLargeError("second 413"),
@@ -281,19 +281,19 @@ class TestMessageProcessorSend413Recovery:
 
         assert result == ''  # cap exit
         assert proc._payload_too_large_recovered is True
-        assert proc.full_compaction_calls == 1, "Stage 2 must run only once"
+        assert proc.full_compaction_calls == 1, "overflow handler must run only once"
         assert fake.send_messages.call_count == 2
 
-    def test_stage2_failure_breaks_to_cap_exit(self):
+    def test_overflow_failure_breaks_to_cap_exit(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(processor_cls):
-            def _run_full_compaction(self):
+        class _FailingOverflow(processor_cls):
+            def _run_full_compaction(self, exclude_id=None):
                 self.full_compaction_calls += 1
-                return None  # Stage 2 failure
+                return None  # overflow failure
 
-        proc = _FailingStage2()
+        proc = _FailingOverflow()
         side_effects = [PayloadTooLargeError("simulated 413")]
         ctx, fake = self._patch_providers(side_effects)
         with ctx:
@@ -302,9 +302,9 @@ class TestMessageProcessorSend413Recovery:
         assert result == ''
         assert proc.full_compaction_calls == 1
         assert fake.send_messages.call_count == 1, \
-            "Provider must not be called again after Stage 2 failure"
+            "Provider must not be called again after overflow failure"
 
-    def test_no_413_path_does_not_set_recovery_flag(self):
+    def test_no_413_path_does_not_set_recovery_flag(self, db):
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
 
@@ -317,35 +317,35 @@ class TestMessageProcessorSend413Recovery:
         assert proc.full_compaction_calls == 0
 
 
-class TestStage2ClearsThinkingExploration:
-    def test_exploration_cleared_on_restart(self):
-        """Large exploration text would re-inflate user_body after Stage 2.
-        Confirm it's nulled when Stage 2 succeeds."""
+class TestHandleOverflowClearsState:
+    def test_exploration_cleared_on_overflow_success(self):
+        """Large exploration text would re-inflate user_body after overflow.
+        Confirm it's nulled when _handle_overflow succeeds."""
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
         proc._thinking_exploration = "X" * 50_000  # large block
 
-        result = proc._run_stage2_act_restart()
+        result = proc._handle_overflow()
         assert result is True
         assert proc._thinking_exploration is None
         assert proc._act_trail == []
         assert proc._discovered_tools == []
 
-    def test_exploration_preserved_when_stage2_fails(self):
-        """If full_compaction returns None, Stage 2 returns False BEFORE the
-        trail/exploration clears — exploration is preserved (no recovery
-        happened, so the existing state must be intact)."""
+    def test_exploration_preserved_when_overflow_fails(self):
+        """If _run_full_compaction returns None, _handle_overflow returns False
+        BEFORE the trail/exploration clears — exploration is preserved (no
+        recovery happened, so the existing state must be intact)."""
         processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(processor_cls):
-            def _run_full_compaction(self):
+        class _FailingOverflow(processor_cls):
+            def _run_full_compaction(self, exclude_id=None):
                 return None
 
-        proc = _FailingStage2()
+        proc = _FailingOverflow()
         proc._thinking_exploration = "preserved"
         proc._act_trail = ['existing-row']
 
-        result = proc._run_stage2_act_restart()
+        result = proc._handle_overflow()
         assert result is False
         assert proc._thinking_exploration == "preserved"
         assert proc._act_trail == ['existing-row']

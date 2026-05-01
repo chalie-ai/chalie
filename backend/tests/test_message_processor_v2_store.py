@@ -200,6 +200,29 @@ class TestGetPreviousMessagesTranscript:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _seed_compaction_via_tool_calls(db, channel, compacted_text, compacted_up_to_id):
+    """Seed a success compaction row via the new tool_calls + transcript join.
+
+    Attaches the tool_calls row to the compacted_up_to_id transcript row as the
+    FK parent. This avoids inserting a phantom transcript row above the watermark
+    that would otherwise appear in getPreviousMessages() output.
+    Returns the tool_call id.
+    """
+    import json
+    cursor = db.execute(
+        "INSERT INTO tool_calls "
+        "(transcript_id, tool_name, params, result, ephemeral, created_at) "
+        "VALUES (?, 'compaction', ?, ?, 0, '2026-01-01 00:00:01')",
+        (
+            compacted_up_to_id,
+            json.dumps({"compacted_up_to_id": compacted_up_to_id, "status": "success"}),
+            compacted_text,
+        )
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
 class TestGetPreviousMessagesCompaction:
     def _seed_with_compaction(self, db, channel=_GPM_CHANNEL):
         """Insert three transcript rows; set compaction watermark at first."""
@@ -221,13 +244,7 @@ class TestGetPreviousMessagesCompaction:
             (channel,)
         )
 
-        db.execute(
-            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, "
-            "token_count, updated_at) "
-            "VALUES (?, 'COMPACTED: previous context here', ?, 50, '2026-04-10 09:30:00')",
-            (channel, wm_id)
-        )
-        db.commit()
+        _seed_compaction_via_tool_calls(db, channel, 'COMPACTED: previous context here', wm_id)
         return wm_id
 
     def test_compacted_text_prepended(self, db):
@@ -347,12 +364,7 @@ class TestGetPreviousMessagesCompactionOnlyNoNewRows:
         old_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.commit()
 
-        db.execute(
-            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
-            "VALUES (?, 'COMPACTED: all prior context', ?, 10, '2026-04-09 10:00:00')",
-            (channel, old_id)
-        )
-        db.commit()
+        _seed_compaction_via_tool_calls(db, channel, 'COMPACTED: all prior context', old_id)
 
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
@@ -370,12 +382,7 @@ class TestGetPreviousMessagesCompactionOnlyNoNewRows:
         seed_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.commit()
 
-        db.execute(
-            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
-            "VALUES (?, 'COMPACT BLOCK', ?, 5, '2026-04-09 10:00:00')",
-            (channel, seed_id)
-        )
-        db.commit()
+        _seed_compaction_via_tool_calls(db, channel, 'COMPACT BLOCK', seed_id)
 
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
@@ -405,12 +412,7 @@ class TestGetPreviousMessagesCompactionPlusOneRow:
         )
         db.commit()
 
-        db.execute(
-            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
-            "VALUES (?, 'COMPACTION SUMMARY', ?, 20, '2026-04-09 09:00:00')",
-            (channel, watermark_id)
-        )
-        db.commit()
+        _seed_compaction_via_tool_calls(db, channel, 'COMPACTION SUMMARY', watermark_id)
 
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
@@ -436,12 +438,7 @@ class TestGetPreviousMessagesCompactionPlusOneRow:
         )
         db.commit()
 
-        db.execute(
-            "INSERT INTO compactions (channel, compacted_text, compacted_up_to_id, token_count, updated_at) "
-            "VALUES (?, 'COMPACT_START', ?, 5, '2026-04-09 09:00:00')",
-            (channel, wm)
-        )
-        db.commit()
+        _seed_compaction_via_tool_calls(db, channel, 'COMPACT_START', wm)
 
         p = _GPMFakeProcessor.make()
         result = p.getPreviousMessages()
@@ -948,42 +945,6 @@ def _compact_seed_transcript_row(db, channel, role='user', content='test content
     return cursor.lastrowid
 
 
-def _compact_seed_compaction(db, channel, compacted_text, compacted_up_to_id=None,
-                             token_count=100, overflow_content=None):
-    """Insert a compactions row for test setup."""
-    if compacted_up_to_id is None:
-        compacted_up_to_id = _compact_seed_transcript_row(db, channel)
-
-    db.execute(
-        """
-        INSERT INTO compactions
-            (channel, compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content)
-        VALUES (?, ?, ?, ?, '2026-04-11T10:00:00+00:00', ?)
-        """,
-        (channel, compacted_text, compacted_up_to_id, token_count, overflow_content),
-    )
-    db.commit()
-
-
-def _compact_get_compaction_row(db, channel):
-    cursor = db.execute(
-        "SELECT compacted_text, compacted_up_to_id, token_count, updated_at, overflow_content "
-        "FROM compactions WHERE channel = ?",
-        (channel,),
-    )
-    row = cursor.fetchone()
-    if not row:
-        return None
-    return {
-        'compacted_text': row[0],
-        'compacted_up_to_id': row[1],
-        'token_count': row[2],
-        'updated_at': row[3],
-        'overflow_content': row[4],
-    }
-
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # _wrap_with_checkpoint — real DB tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -999,7 +960,9 @@ class TestWrapWithCheckpoint:
 
     def test_row_with_content_wraps_with_checkpoint_header(self, db):
         from services.message_processor import _wrap_with_checkpoint
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, 'Previously: we talked about movies.')
+        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
+        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL,
+                                        'Previously: we talked about movies.', anchor)
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'user: What is next?')
         assert result.startswith(
             '### Checkpoint - What you were previously discussing / doing\n'
@@ -1010,7 +973,8 @@ class TestWrapWithCheckpoint:
 
     def test_row_with_content_exact_envelope_format(self, db):
         from services.message_processor import _wrap_with_checkpoint
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, 'checkpoint content')
+        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
+        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, 'checkpoint content', anchor)
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'current body')
         expected = (
             "### Checkpoint - What you were previously discussing / doing\n"
@@ -1024,96 +988,136 @@ class TestWrapWithCheckpoint:
 
     def test_row_with_empty_compacted_text_returns_bare_body(self, db):
         from services.message_processor import _wrap_with_checkpoint
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, '')
+        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
+        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, '', anchor)
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'body text')
         assert result == 'body text'
 
     def test_row_with_whitespace_only_compacted_text_returns_bare_body(self, db):
         from services.message_processor import _wrap_with_checkpoint
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, '   \n\t  ')
+        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
+        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, '   \n\t  ', anchor)
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'body text')
         assert result == 'body text'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _run_stage2_act_restart — DB-writing tests (d8, d9, d10)
+# _handle_overflow — DB-writing tests (d8, d9, d10)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestStage2ActRestartDbWrites:
-    """Stage 2 compaction writes and updates real compactions table rows."""
+def _compact_get_audit_row(db, channel):
+    """Return the most recent success compaction audit row from tool_calls for channel."""
+    row = db.execute(
+        """
+        SELECT tc.result, json_extract(tc.params, '$.compacted_up_to_id') AS compacted_up_to_id
+        FROM tool_calls tc
+        JOIN transcript t ON t.id = tc.transcript_id
+        WHERE tc.tool_name = 'compaction'
+          AND t.channel = ?
+          AND json_extract(tc.params, '$.status') = 'success'
+        ORDER BY tc.id DESC
+        LIMIT 1
+        """,
+        (channel,),
+    ).fetchone()
+    if not row:
+        return None
+    return {'compacted_text': row[0], 'compacted_up_to_id': row[1]}
 
-    def test_d8_stage2_writes_fresh_compaction_row_when_none_existed(self, db):
-        """When no prior compactions row exists, Stage 2 writes a fresh one."""
+
+class TestHandleOverflowDbWrites:
+    """_handle_overflow writes append-only tool_calls audit rows (not compactions table)."""
+
+    def test_d8_overflow_writes_fresh_audit_row_when_none_existed(self, db):
+        """When no prior compaction exists, _handle_overflow writes a fresh tool_calls row."""
         t1_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hello')
         t2_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'assistant', 'hi')
 
         p = _make_compact_processor()
         p._act_trail = []
+        p._uid = t1_id
 
-        llm_resp = _make_compact_llm_response(text='fresh compaction summary')
+        llm_resp = _make_compact_llm_response(
+            text='<analysis>notes</analysis><summary>fresh compaction summary</summary>'
+        )
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t1_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
                  {'id': t2_id, 'role': 'assistant', 'content': 'hi', 'tool_name': None},
-             ]):
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
-            result = p._run_stage2_act_restart()
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            result = p._run_full_compaction()
 
-        assert result is True
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
+        assert result == 'fresh compaction summary'
+        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
         assert row is not None
-        assert 'fresh compaction summary' in row['compacted_text']
+        assert row['compacted_text'] == 'fresh compaction summary'
 
-    def test_d9_stage2_updates_existing_compaction_row(self, db):
-        """When a compactions row exists, Stage 2 updates it in-place via UPSERT."""
+    def test_d9_overflow_appends_new_row_on_top_of_existing(self, db):
+        """A second compaction appends a new row — both coexist, latest wins."""
         old_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'old turn')
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, 'old summary',
-                                 compacted_up_to_id=old_t_id)
+        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, 'old summary', old_t_id)
 
         new_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'new turn')
 
         p = _make_compact_processor()
         p._act_trail = []
+        p._uid = new_t_id
 
-        llm_resp = _make_compact_llm_response(text='updated compaction summary')
+        llm_resp = _make_compact_llm_response(
+            text='<analysis>notes</analysis><summary>updated compaction summary</summary>'
+        )
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': new_t_id, 'role': 'user', 'content': 'new turn', 'tool_name': None},
-             ]):
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value={
+                 'compacted_text': 'old summary',
+                 'compacted_up_to_id': old_t_id,
+             }):
             mock_inst.return_value.send_messages.return_value = llm_resp
-            p._run_stage2_act_restart()
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            p._run_full_compaction()
 
-        new_row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
+        new_row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
         assert new_row is not None
         assert new_row['compacted_text'] == 'updated compaction summary'
 
-    def test_d10_upsert_does_not_touch_overflow_content(self, db):
-        """Stage 2's UPSERT does NOT overwrite overflow_content (legacy field)."""
-        legacy_overflow = 'legacy overflow data'
-        old_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'old turn')
-        _compact_seed_compaction(db, _COMPACT_CHANNEL, 'old summary',
-                                 compacted_up_to_id=old_t_id,
-                                 overflow_content=legacy_overflow)
-
-        new_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'new turn')
+    def test_d10_failure_audit_row_invisible_to_canonical_lookup(self, db):
+        """Failure audit rows are stored (status=failure) but invisible to get_compaction()."""
+        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'a turn')
 
         p = _make_compact_processor()
         p._act_trail = []
+        p._uid = t_id
 
-        llm_resp = _make_compact_llm_response(text='new compaction text')
+        # LLM returns text without <summary> tags — causes a failure audit row
+        llm_resp = _make_compact_llm_response(text='this has no summary tags at all')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': new_t_id, 'role': 'user', 'content': 'turn', 'tool_name': None},
-             ]):
+                 {'id': t_id, 'role': 'user', 'content': 'a turn', 'tool_name': None},
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
-            p._run_stage2_act_restart()
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            result = p._run_full_compaction()
 
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
-        assert row['overflow_content'] == legacy_overflow
+        assert result is None
+        # Failure row exists in DB but is invisible to canonical lookup
+        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
+        failure_row = db.execute(
+            "SELECT json_extract(params, '$.status') FROM tool_calls "
+            "WHERE tool_name='compaction' AND transcript_id=?",
+            (t_id,),
+        ).fetchone()
+        assert failure_row is not None
+        assert failure_row[0] == 'failure'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1126,7 +1130,7 @@ class TestRunFullCompaction:
 
     def test_e1_no_entries_and_no_prior_checkpoint_skips_llm(self, db, caplog):
         """With no entries AND no prior checkpoint, _run_full_compaction returns
-        None WITHOUT calling the LLM and without writing to the compactions table."""
+        None WITHOUT calling the LLM and without writing any audit row."""
         p = _make_compact_processor()
 
         with caplog.at_level(_logging.WARNING):
@@ -1137,115 +1141,126 @@ class TestRunFullCompaction:
                 mock_inst.return_value.send_messages.assert_not_called()
 
         assert result is None
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
-        assert row is None
+        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
         assert any(
             'no entries' in rec.message and 'skipping LLM call' in rec.message
             for rec in caplog.records
         )
 
-    def test_e2_llm_returns_empty_text_returns_none(self, db):
-        """When LLM returns empty text, _run_full_compaction returns None without DB write."""
+    def test_e2_llm_returns_no_summary_tags_returns_none(self, db):
+        """When LLM returns text without <summary> tags, returns None and writes failure row."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
         p = _make_compact_processor()
-        llm_resp = _make_compact_llm_response(text='')
+        p._uid = t_id
+        llm_resp = _make_compact_llm_response(text='plain text without tags')
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-             ]):
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
+            mock_inst.return_value.get_context_limit.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result is None
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
-        assert row is None
+        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None  # failure invisible
 
     def test_e3_llm_raises_returns_none(self, db, caplog):
-        """When LLM call raises, _run_full_compaction returns None without DB write."""
+        """When LLM call raises, _run_full_compaction returns None without a success row."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
         p = _make_compact_processor()
+        p._uid = t_id
 
         with caplog.at_level(_logging.ERROR):
             with patch('services.providers.Providers.instance') as mock_inst, \
                  patch('services.compaction_persistence.get_entries_since', return_value=[
                      {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-                 ]):
+                 ]), \
+                 patch('services.compaction_persistence.get_compaction', return_value=None):
                 mock_inst.return_value.send_messages.side_effect = RuntimeError('LLM down')
+                mock_inst.return_value.get_context_limit.return_value = 32_000
                 result = p._run_full_compaction()
 
         assert result is None
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
-        assert row is None
+        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
 
-    def test_e4_happy_path_writes_compaction_row_and_tool_call_returns_text(self, db):
-        """Happy path: records compaction via ToolRenderAndRecordService, writes DB row, returns summary."""
+    def test_e4_happy_path_writes_audit_row_and_returns_summary(self, db):
+        """Happy path: LLM returns <summary> tags, audit row written, summary text returned."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hello')
         p = _make_compact_processor()
-        # Ensure _uid is set so ToolRenderAndRecordService can record
         p._uid = t_id
-        llm_resp = _make_compact_llm_response(text='happy path summary')
+        llm_resp = _make_compact_llm_response(
+            text='<analysis>context notes</analysis><summary>happy path summary</summary>'
+        )
 
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
-             ]):
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
+            mock_inst.return_value.get_context_limit.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result == 'happy path summary'
 
-        # Compaction row written to DB
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
+        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
         assert row is not None
         assert row['compacted_text'] == 'happy path summary'
 
-        # tool_calls row recorded via ToolRenderAndRecordService
-        from services.database_service import get_shared_db_service
-        tc_conn = get_shared_db_service()._get_connection()
-        tc_row = tc_conn.execute(
-            "SELECT tool_name, ephemeral FROM tool_calls WHERE transcript_id = ? AND tool_name = 'compaction'",
-            (t_id,)
+        # ephemeral=0 so it is persistent (not ephemeral)
+        tc_row = db.execute(
+            "SELECT ephemeral FROM tool_calls WHERE transcript_id=? AND tool_name='compaction'",
+            (t_id,),
         ).fetchone()
         assert tc_row is not None
-        assert tc_row[1] == 0  # ephemeral=False for compaction
+        assert tc_row[0] == 0
 
     def test_e5_watermark_set_to_max_entry_id(self, db):
-        """Watermark is set to max(entry['id']) from the entries list."""
+        """Watermark is set to max(entry['id']) from the entries fed to the LLM."""
         id3 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'a')
         id5 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'c')
         id7 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'assistant', 'b')
 
         p = _make_compact_processor()
+        p._uid = id3
         entries = [
             {'id': id3, 'role': 'user', 'content': 'a', 'tool_name': None},
             {'id': id7, 'role': 'assistant', 'content': 'b', 'tool_name': None},
             {'id': id5, 'role': 'user', 'content': 'c', 'tool_name': None},
         ]
-        llm_resp = _make_compact_llm_response(text='compacted')
+        llm_resp = _make_compact_llm_response(
+            text='<summary>compacted</summary>'
+        )
 
         with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=entries):
+             patch('services.compaction_persistence.get_entries_since', return_value=entries), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
+            mock_inst.return_value.get_context_limit.return_value = 32_000
             p._run_full_compaction()
 
-        row = _compact_get_compaction_row(db, _COMPACT_CHANNEL)
+        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
+        assert row is not None
         assert row['compacted_up_to_id'] == id7
 
     def test_e6_compaction_always_uses_frontal_cortex_unified(self, db):
         """Compaction LLM call always uses 'frontal-cortex-unified' regardless of
-        the host processor's JOB. This is the unified-compaction invariant —
-        FullCompactionProcessor hardcodes JOB so all compaction work is logged
-        and provider-routed under one cognitive job."""
+        the host processor's JOB. ContinuityCompactionProcessor hardcodes JOB so
+        all compaction work is logged and provider-routed under one cognitive job."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
 
         class CustomJobProcessor(_make_compact_processor().__class__):
             JOB = 'custom-job-name'  # host JOB must NOT leak into compaction
 
         p = CustomJobProcessor('hi')
+        p._uid = t_id
 
         captured_jobs = []
-        llm_resp = _make_compact_llm_response(text='compacted')
+        llm_resp = _make_compact_llm_response(
+            text='<summary>compacted</summary>'
+        )
 
         def fake_send(_system_prompt, _messages, job=None, **_kw):  # noqa: ARG001
             captured_jobs.append(job)
@@ -1254,8 +1269,10 @@ class TestRunFullCompaction:
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.compaction_persistence.get_entries_since', return_value=[
                  {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-             ]):
+             ]), \
+             patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.side_effect = fake_send
+            mock_inst.return_value.get_context_limit.return_value = 32_000
             p._run_full_compaction()
 
         assert captured_jobs == ['frontal-cortex-unified']

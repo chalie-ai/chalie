@@ -85,7 +85,6 @@ class TestSchemaConvergence:
             "documents",
             "providers",
             "tool_calls",
-            "compactions",
             "lists",
         }
         missing = expected - tables

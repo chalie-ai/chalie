@@ -37,6 +37,28 @@ from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
+# ── Compaction summary parser ─────────────────────────────────────────────────
+#
+# Parses the <summary>…</summary> block produced by ContinuityCompactionProcessor.
+# Used by _run_full_compaction to extract the stored result from raw LLM output.
+
+_SUMMARY_RE = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_compaction_summary(raw: str) -> 'str | None':
+    """Extract the body of a <summary>…</summary> block from raw LLM output.
+
+    Returns the stripped inner text on success.
+    Returns None when:
+    - raw is empty or None.
+    - no <summary> tags are present in the output.
+    """
+    if not raw:
+        return None
+    m = _SUMMARY_RE.search(raw)
+    return m.group(1).strip() if m else None
+
+
 _LLM_SENTINEL_PATTERNS = (
     re.compile(r'<\|[^|<>]*\|>'),
     re.compile(r'<\|[^|<>]*\|'),
@@ -366,8 +388,8 @@ class MessageProcessor:
         4. Ephemeral (``ephemeral=1``) tool_call rows are never emitted here.
         5. Durable tool_calls whose name is in ``_NEVER_RENDER_IN_PREVIOUS``
            are filtered out — the ``compaction`` pseudo-tool is an audit-only
-           DTO whose content is already surfaced via the ``compactions`` table
-           prepend (step 2) and must never double-render.
+           DTO whose its content is already surfaced via the checkpoint prepend
+           (step 2) and must never double-render.
 
         The ``token_budget`` parameter is accepted for forward-compatibility
         with Commit 7 (compaction). In Commit 2/2a it is silently ignored — no
@@ -419,8 +441,8 @@ class MessageProcessor:
             # Interleave durable tool_calls under this transcript row.
             # Hard filter: compaction pseudo-tool DTOs NEVER surface in
             # Previous Messages — their content is already replayed via the
-            # `compactions` table prepend above. (Decision 4B — compaction
-            # tool must NEVER make it to Previous Messages.)
+            # checkpoint prepend above. (Decision 4B — compaction tool must
+            # NEVER make it to Previous Messages.)
             for tc in durable_by_id.get(entry.get('id'), []):
                 tc_name = tc.get('tool_name') or tc.get('name') or 'tool'
                 if tc_name in _NEVER_RENDER_IN_PREVIOUS:
@@ -543,27 +565,24 @@ class MessageProcessor:
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → postTurn.
 
-        Two-stage mid-ACT compaction (north star § Context Compaction):
+        Single-path overflow handling (north star § Context Compaction):
         - At the start of every iteration, the rebuilt user-message body
           (wrapped by ``_wrap_with_checkpoint``) is measured against 80%
           of the provider's context window for ``self.JOB``.
-        - Over threshold → Stage 1 (``_run_stage1_tool_compaction``) trims
-          the accumulated tool-use trail in place, preserving ephemeral=0
-          DTOs and ``user_steer`` entries.
-        - Re-measure after Stage 1. Still over → Stage 2
-          (``_run_stage2_act_restart``) writes a full checkpoint via
-          ``_run_full_compaction``, collapses ephemeral=1 DTOs (preserving
-          ``user_steer`` and ephemeral=0) into a single ``act_restart``
-          DTO, clears the trail + discovered tools, and resets
-          ``iteration`` to 0 for a clean loop restart.
+        - Over threshold → ``_handle_overflow()`` runs a full continuity
+          compaction via ``ContinuityCompactionProcessor``, writes an
+          append-only ``tool_calls`` audit row, clears ACT state, and
+          resets iteration to 0 for a clean loop restart.
+        - ``PayloadTooLargeError`` (HTTP 413) from the provider triggers the
+          same ``_handle_overflow()`` path, but only once per turn
+          (``_payload_too_large_recovered`` guard).
         - The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
           (independent budget). The ACT loop has no whole-loop wall-clock budget.
-        - Stage 2 does NOT reset the per-instance deadline — the wall-clock
-          guard (if set) keeps ticking so subagent turns eventually hit the cap.
-        - If Stage 2 fails (LLM error) the loop breaks to the cap-exit
-          path and returns ``final_text=''``. Retrying the provider call
-          against an oversize user_body would almost certainly fail and
-          waste budget.
+        - Overflow handling does NOT reset the per-instance deadline — the
+          wall-clock guard (if set) keeps ticking so subagent turns eventually
+          hit the cap.
+        - If overflow handling fails (LLM error, parse failure) the loop breaks
+          to the cap-exit path and returns ``final_text=''``.
 
         ACT loop termination:
         - Clean exit: LLM returned text with no tool_calls.
@@ -658,46 +677,30 @@ class MessageProcessor:
                         user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                         user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
 
-                    # Two-stage mid-ACT compaction: triggered when the rendered
+                    # Single-path overflow handling: triggered when the rendered
                     # user-message body (including checkpoint envelope) exceeds
                     # 80% of the provider's context window.
                     #
-                    # Stage 1: compress the accumulated tool-use trail in place.
-                    # Stage 2 (fallback): full checkpoint compaction + loop restart.
-                    # Stage 2 resets iteration to 0. The per-instance deadline
-                    # (self._deadline) keeps ticking — compaction LLM calls count
-                    # against the subagent's wall-clock budget deliberately.
+                    # _handle_overflow() runs a full continuity compaction,
+                    # resets ACT state, and returns True on success so the loop
+                    # restarts at iter=0. On failure, returns False and the loop
+                    # breaks to cap exit (final_text=''). The per-instance
+                    # deadline (self._deadline) keeps ticking — compaction LLM
+                    # calls count against the subagent's wall-clock budget.
                     if self._check_threshold(user_body, context_limit):
                         logger.warning(
                             "[COMPACTION] %s: user body over 80%% threshold "
-                            "(ctx_limit=%d) — running Stage 1",
+                            "(ctx_limit=%d) — running overflow handler",
                             self.CHANNEL, context_limit,
                         )
-                        self._run_stage1_tool_compaction()
-                        # Re-render after Stage 1 trim and re-check threshold.
-                        with self._metrics.stage('prompt_assembly'):
-                            user_body = self.getUserPrompt()
-                            user_body = _wrap_with_exploration(self.CHANNEL, user_body)
-                            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-                        if self._check_threshold(user_body, context_limit):
-                            logger.warning(
-                                "[COMPACTION] %s: still over threshold after Stage 1 "
-                                "— running Stage 2 (ACT restart)",
-                                self.CHANNEL,
-                            )
-                            if self._run_stage2_act_restart():
-                                self._current_iteration = 0
-                                continue
-                            # Stage 2 failed (compaction LLM error). Retrying the
-                            # main provider call against an over-threshold body
-                            # would almost certainly fail too — break to cap exit
-                            # and return final_text=''.
-                            logger.error(
-                                "[COMPACTION] %s: Stage 2 failed — breaking to "
-                                "cap exit (final_text='')",
-                                self.CHANNEL,
-                            )
-                            break
+                        if self._handle_overflow():
+                            continue
+                        logger.error(
+                            "[COMPACTION] %s: overflow handler failed — breaking to "
+                            "cap exit (final_text='')",
+                            self.CHANNEL,
+                        )
+                        break
 
                     with self._metrics.stage('prompt_assembly'):
                         system_prompt = self.getSystemPrompt()
@@ -712,12 +715,11 @@ class MessageProcessor:
 
                     # Provider errors propagate here. store() is not called if
                     # this raises — the turn leaves no trace in the DB.
-                    # PayloadTooLargeError (HTTP 413) is the one exception: the
-                    # provider's transport-level body cap was hit (e.g. Ollama
-                    # Cloud edge proxy), so we run a Stage 2 ACT restart once
-                    # to compact the trail and retry. A second 413 after that
-                    # means even the compacted body is too big — break to cap
-                    # exit rather than loop forever.
+                    # PayloadTooLargeError (HTTP 413): the provider's transport-
+                    # level body cap was hit (e.g. Ollama Cloud edge proxy). We
+                    # run _handle_overflow() once to compact and retry. A second
+                    # 413 after recovery means even the compacted body is too big
+                    # — break to cap exit rather than loop forever.
                     try:
                         llm_response = Providers.instance().send_messages(
                             system_prompt, messages, job=self.JOB, tools=tools,
@@ -726,23 +728,22 @@ class MessageProcessor:
                     except PayloadTooLargeError as exc:
                         if self._payload_too_large_recovered:
                             logger.error(
-                                "[COMPACTION] %s: PayloadTooLargeError after Stage 2 "
-                                "restart — breaking to cap exit (final_text=''): %s",
+                                "[COMPACTION] %s: PayloadTooLargeError after overflow "
+                                "recovery — breaking to cap exit (final_text=''): %s",
                                 self.CHANNEL, exc,
                             )
                             break
                         logger.warning(
                             "[COMPACTION] %s: PayloadTooLarge from provider — "
-                            "running Stage 2 ACT restart (%s)",
+                            "running overflow handler (%s)",
                             self.CHANNEL, exc,
                         )
                         self._payload_too_large_recovered = True
-                        if self._run_stage2_act_restart():
-                            self._current_iteration = 0
+                        if self._handle_overflow():
                             continue
                         logger.error(
-                            "[COMPACTION] %s: Stage 2 failed after PayloadTooLarge "
-                            "— breaking to cap exit (final_text='')",
+                            "[COMPACTION] %s: overflow handler failed after "
+                            "PayloadTooLarge — breaking to cap exit (final_text='')",
                             self.CHANNEL,
                         )
                         break
@@ -856,7 +857,7 @@ class MessageProcessor:
         """
         return []
 
-    # ── Commit 7: two-stage mid-ACT compaction ────────────────────────────────
+    # ── Single-path overflow + continuity compaction ─────────────────────────
 
     def _measure_user_message(self, user_msg: str) -> int:
         """Return a fast token estimate for the rendered user-message body."""
@@ -870,20 +871,93 @@ class MessageProcessor:
         """
         return self._measure_user_message(user_msg) > int(context_limit * 0.80)
 
-    def _run_full_compaction(self) -> 'str | None':
-        """Run a full checkpoint compaction for this channel.
+    def _handle_overflow(self) -> bool:
+        """Single overflow-handling path: full compaction + ACT loop state reset.
+
+        Called when either:
+        - The rendered user_body exceeds 80% of the context window before an
+          LLM call (threshold overflow).
+        - The provider returns PayloadTooLargeError (HTTP 413) and the turn
+          has not yet been through overflow recovery.
+
+        Contract:
+        - Runs ``_run_full_compaction(exclude_id=self._uid)`` to summarise
+          the channel history up to (but not including) the current turn.
+        - On success:
+            - Resets ``_current_iteration`` to 0.
+            - Clears ``_act_trail``, ``_discovered_tools``, ``_pending_tool_calls``.
+            - Clears ``_thinking_exploration`` so a large exploration block
+              cannot re-inflate ``user_body`` on the next iteration.
+            - Deletes ephemeral=1 tool_calls rows for this turn from the DB
+              so a clean prompt is assembled on restart.
+            - Returns True (caller re-enters the loop at iter 0).
+        - On failure (LLM error, empty output, parse failure):
+            - Returns False (caller breaks to cap exit, returns final_text='').
+
+        Note: ``_pending_steers`` draining is intentionally NOT done here.
+        Steers are drained automatically at the top of each iteration by
+        ``getUserPrompt()`` in UserMessageProcessor — that path fires
+        naturally on the next iter=0 iteration after a successful overflow.
+        """
+        summary = self._run_full_compaction(exclude_id=self._uid)
+        if summary is None:
+            logger.warning(
+                "[COMPACTION] %s: _handle_overflow: _run_full_compaction returned None "
+                "— breaking to cap exit",
+                self.CHANNEL,
+            )
+            return False
+
+        # Clear all per-turn ACT state so the restarted loop starts clean.
+        self._act_trail = []
+        self._discovered_tools = []
+        self._pending_tool_calls = []
+        self._thinking_exploration = None
+        self._current_iteration = 0
+
+        # Purge ephemeral tool_calls for this turn. Keeps the durable audit
+        # rows (tool_name='thinking', tool_name='compaction', ephemeral=0)
+        # while dropping all intermediate work (ephemeral=1) so the prompt
+        # assembled on restart is not contaminated by prior-iteration state.
+        if self._uid is not None:
+            try:
+                from services.database_service import get_shared_db_service
+                db = get_shared_db_service()
+                with db.connection() as conn:
+                    conn.execute(
+                        "DELETE FROM tool_calls WHERE transcript_id = ? AND ephemeral = 1",
+                        (self._uid,),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[COMPACTION] %s: failed to purge ephemeral tool_calls for uid=%s: %s",
+                    self.CHANNEL, self._uid, exc,
+                )
+
+        return True
+
+    def _run_full_compaction(self, exclude_id: 'int | None' = None) -> 'str | None':
+        """Run a full continuity compaction for this channel.
 
         Orchestrator: reads prior compaction + entries since watermark,
-        formats the LLM input, dispatches to ``FullCompactionProcessor``,
-        then writes the ``compactions`` row + ``tool_calls`` audit row from
-        the returned text.
+        formats the LLM input (continuity-first envelope), dispatches to
+        ``ContinuityCompactionProcessor``, parses ``<summary>`` from the
+        output, then writes an append-only ``tool_calls`` audit row.
 
-        Returns the compacted text on success, None on failure.
-        Records via ToolRenderAndRecordService (ephemeral=False).
+        Args:
+            exclude_id: When set, filters this transcript ID from the rendered
+                entries list. Used by ``_handle_overflow`` to exclude the
+                current turn's input row from the compaction so the LLM does
+                not see a partial / unanswered user message.
+
+        Returns:
+            The extracted ``<summary>`` body on success, None on failure.
+            On failure, writes a ``status=failure`` audit row so the failure
+            is traceable but invisible to the canonical lookup (which filters
+            for ``status=success``).
         """
         from services import compaction_persistence
-        from services.compaction_message_processor import FullCompactionProcessor
-        from services.database_service import get_shared_db_service
+        from services.compaction_message_processor import ContinuityCompactionProcessor
         from services.llm_service import estimate_tokens
         from services.providers import Providers
 
@@ -891,12 +965,16 @@ class MessageProcessor:
         watermark = prior['compacted_up_to_id'] if prior else 0
         prev_text = (prior.get('compacted_text') or '').strip() if prior else ''
 
-        entries = list(compaction_persistence.get_entries_since(self.CHANNEL, watermark))
+        all_entries = list(compaction_persistence.get_entries_since(self.CHANNEL, watermark))
 
-        # Nothing to compact — bail before hitting the LLM. Without this guard
-        # we would send a bare "## New Conversation Turns" header to the
-        # compaction LLM and overwrite the existing checkpoint with whatever
-        # it hallucinates.
+        # Filter out the current turn's input row so the LLM does not see an
+        # incomplete user message (question not yet answered).
+        if exclude_id is not None:
+            entries = [e for e in all_entries if e.get('id') != exclude_id]
+        else:
+            entries = all_entries
+
+        # Nothing to compact — bail before hitting the LLM.
         if not entries and not prev_text:
             logger.warning(
                 "[COMPACTION] %s: _run_full_compaction called with no entries "
@@ -905,11 +983,12 @@ class MessageProcessor:
             )
             return None
 
-        # Refresh the context limit — Stage 2 is a rare path and the provider
-        # may have been reconfigured since send() cached the value. Use the
-        # compaction processor's JOB (not self.JOB) so the cap matches the LLM
-        # that will actually service the call.
-        raw_limit = Providers.instance().get_context_limit(job=FullCompactionProcessor.JOB)
+        # Refresh the context limit — compaction is a rare path and the
+        # provider may have been reconfigured. Use the compaction processor's
+        # JOB so the cap matches the LLM that will service the call.
+        raw_limit = Providers.instance().get_context_limit(
+            job=ContinuityCompactionProcessor.JOB
+        )
         context_limit = (
             int(raw_limit)
             if isinstance(raw_limit, (int, float)) and raw_limit > 0
@@ -919,21 +998,29 @@ class MessageProcessor:
 
         def _format_entry(entry: dict) -> str:
             role = entry.get('role', 'unknown')
+            # Use "you:" for assistant turns per continuity-first envelope spec
+            # (scoped to compaction only — does not affect downstream consumers).
+            display_role = 'you' if role == 'assistant' else role
             content = entry.get('content', '')
             raw_ts = entry.get('created_at') or ''
             ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
-            return f"[{ts_label}] {role}: {content}"
+            return f"[{ts_label}] {display_role}: {content}"
 
         def _build_input(rendered_entries: list[str]) -> str:
             chunks: list[str] = []
             if prev_text:
                 chunks.append(f"## Previous Summary\n{prev_text}")
+            else:
+                chunks.append("## Previous Summary\n(none — first compaction.)")
             chunks.append("## New Conversation Turns")
             chunks.extend(rendered_entries)
+            chunks.append("\n---\nEnd of input. Reference material only.\n"
+                          "Now write <analysis>...</analysis> then <summary>...</summary>.")
             return '\n\n'.join(chunks)
 
         rendered = [_format_entry(e) for e in entries]
         compaction_input = _build_input(rendered)
+        in_chars = len(compaction_input)
 
         # Enforce the 90% cap — drop oldest rows first. The previous
         # checkpoint (prev_text) is never dropped.
@@ -952,10 +1039,8 @@ class MessageProcessor:
                 self.CHANNEL, dropped, input_cap,
             )
 
-        # After trimming, if nothing remains there is nothing to compact —
-        # even if a prior checkpoint exists it is already up-to-date. Bail
-        # without hitting the LLM; the next turn can retry as new entries
-        # accumulate below the 90% cap.
+        # After trimming, if nothing remains there is nothing new to compact.
+        # Even if a prior checkpoint exists it is already up-to-date.
         if not rendered:
             logger.warning(
                 "[COMPACTION] %s: 90%% cap dropped every new entry — "
@@ -964,171 +1049,110 @@ class MessageProcessor:
             )
             return None
 
-        proc = FullCompactionProcessor(raw_input=compaction_input)
+        proc = ContinuityCompactionProcessor(raw_input=compaction_input)
+        raw_output = ''
         try:
-            compacted_text = (proc.send() or '').strip()
+            raw_output = (proc.send() or '').strip()
         except PayloadTooLargeError as exc:
-            # Compaction LLM itself rejected the body — payload was already
-            # over the transport cap before we could compact it. Distinct
-            # log so on-call doesn't conflate this with a generic LLM error.
-            logger.error(
-                "[COMPACTION] %s: compaction LLM hit HTTP 413 — cannot "
-                "compact further; turn will hit cap exit: %s",
-                self.CHANNEL, exc,
+            reason = f"compaction LLM hit HTTP 413: {exc}"
+            logger.error("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
             )
             return None
         except Exception as exc:
+            reason = f"LLM error: {exc}"
             logger.error(
-                "[COMPACTION] %s: LLM call failed during _run_full_compaction: %s",
-                self.CHANNEL, exc,
-                exc_info=True,
+                "[COMPACTION] %s: continuity failure — reason=%s",
+                self.CHANNEL, reason, exc_info=True,
+            )
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
             )
             return None
         finally:
             self._metrics.merge(proc._metrics)
 
-        if not compacted_text:
-            logger.warning(
-                "[COMPACTION] %s: LLM returned empty compaction text", self.CHANNEL
+        if not raw_output:
+            reason = "LLM returned empty output"
+            logger.warning("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
             )
             return None
 
-        # Watermark advances only to the highest row we actually fed the LLM.
+        summary = _extract_compaction_summary(raw_output)
+        if not summary:
+            reason = "no <summary> tags in LLM output"
+            logger.warning("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
+            )
+            return None
+
+        # Watermark advances to the highest ID we actually fed the LLM.
         # Dropped rows stay unseen so the next compaction re-reads them.
-        if rendered:
-            # ``rendered`` and ``entries`` were sliced in lockstep — after
-            # ``dropped`` pops, entries[dropped:] is the consumed slice.
-            consumed = entries[dropped:]
-            new_watermark = max(e.get('id', 0) for e in consumed)
-        else:
-            new_watermark = watermark
+        consumed = entries[dropped:]
+        new_watermark = max((e.get('id', 0) for e in consumed), default=watermark)
 
-        token_count = estimate_tokens(compacted_text)
+        out_chars = len(summary)
+        self._write_compaction_audit_row(
+            watermark=new_watermark, status='success', summary=summary
+        )
 
-        # Upsert — omit overflow_content from SET clause (legacy field, do not touch).
+        logger.info(
+            "[COMPACTION] %s: continuity success — in=%d chars, out=%d chars, "
+            "watermark %d→%d",
+            self.CHANNEL, in_chars, out_chars, watermark, new_watermark,
+        )
+        return summary
+
+    def _write_compaction_audit_row(
+        self,
+        *,
+        watermark: int,
+        status: str,
+        summary: str,
+        reason: str = '',
+    ) -> None:
+        """Write a tool_calls audit row for a compaction attempt.
+
+        Success rows (status='success') are picked up by the canonical
+        ``get_compaction()`` lookup.  Failure rows (status='failure') are
+        stored for traceability but invisible to the lookup (filtered by
+        ``json_extract(params, '$.status') = 'success'``).
+
+        Never raises — persistence failure is logged and swallowed so it
+        never kills the calling compaction path.
+        """
+        import json as _json
+        if self._uid is None:
+            return
         try:
+            from services.database_service import get_shared_db_service
+            params: dict = {'compacted_up_to_id': watermark, 'status': status}
+            if reason:
+                params['reason'] = reason
             db = get_shared_db_service()
             with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+                conn.execute(
                     """
-                    INSERT INTO compactions
-                        (channel, compacted_text, compacted_up_to_id, token_count, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(channel) DO UPDATE SET
-                        compacted_text      = excluded.compacted_text,
-                        compacted_up_to_id  = excluded.compacted_up_to_id,
-                        token_count         = excluded.token_count,
-                        updated_at          = excluded.updated_at
+                    INSERT INTO tool_calls
+                        (transcript_id, tool_name, params, result, ephemeral, created_at)
+                    VALUES (?, 'compaction', ?, ?, 0, ?)
                     """,
                     (
-                        self.CHANNEL,
-                        compacted_text,
-                        new_watermark,
-                        token_count,
+                        self._uid,
+                        _json.dumps(params),
+                        summary,
                         utc_now().isoformat(),
                     ),
                 )
-                cursor.close()
-        except Exception as exc:
-            logger.error(
-                "[COMPACTION] %s: failed to upsert compactions row: %s",
-                self.CHANNEL, exc,
-                exc_info=True,
-            )
-            return None
-
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-        ToolRenderAndRecordService(
-            tool_name='compaction',
-            params={},
-            result=compacted_text,
-            ephemeral=False,
-            transcript_id=self._uid,
-        ).renderAndRecord()
-
-        logger.info(
-            "[COMPACTION] %s: full compaction written, watermark=%d, tokens=%d",
-            self.CHANNEL, new_watermark, token_count,
-        )
-        return compacted_text
-
-    def _run_stage1_tool_compaction(self) -> None:
-        """Stage 1 mid-ACT compaction: compress the tool-use trail via LLM.
-
-        Orchestrator: dispatches to ``TrailCompactionProcessor``, then
-        replaces ``self._act_trail`` with the returned summary. On failure,
-        returns without mutating state.
-        """
-        from services.compaction_message_processor import TrailCompactionProcessor
-
-        trail_text = '\n'.join(self._act_trail)
-        if not trail_text.strip():
-            return
-
-        proc = TrailCompactionProcessor(raw_input=trail_text)
-        try:
-            summary_text = (proc.send() or '').strip()
         except Exception as exc:
             logger.warning(
-                "[COMPACTION] %s: Stage 1 tool compaction LLM call failed: %s",
-                self.CHANNEL, exc,
+                "[COMPACTION] %s: failed to write audit row (status=%s): %s",
+                self.CHANNEL, status, exc,
             )
-            return
-        finally:
-            self._metrics.merge(proc._metrics)
-
-        if not summary_text:
-            logger.warning(
-                "[COMPACTION] %s: Stage 1 tool compaction returned empty summary",
-                self.CHANNEL,
-            )
-            return
-
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-        rendered = ToolRenderAndRecordService(
-            tool_name='tool_compaction',
-            params={},
-            result=summary_text,
-            ephemeral=True,
-            transcript_id=self._uid,
-        ).renderAndRecord()
-
-        self._act_trail = [rendered]
-
-    def _run_stage2_act_restart(self) -> bool:
-        """Stage 2: full compaction + ACT loop restart.
-
-        Returns True → reset iteration to 0. False → compaction failed.
-        """
-        compacted_text = self._run_full_compaction()
-        if compacted_text is None:
-            logger.warning(
-                "[COMPACTION] %s: Stage 2 _run_full_compaction returned None — "
-                "continuing loop without restart; turn will likely hit cap",
-                self.CHANNEL,
-            )
-            return False
-
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-        ToolRenderAndRecordService(
-            tool_name='act_restart',
-            params={},
-            result='ACT loop restarted after context compaction',
-            ephemeral=True,
-            transcript_id=self._uid,
-        ).renderAndRecord()
-
-        self._act_trail = []
-        self._discovered_tools = []
-        # Exploration text was generated against the now-collapsed pre-restart
-        # context and has already been summarised into the checkpoint. Keeping
-        # it would re-inflate every subsequent user_body via
-        # _wrap_with_exploration() — directly defeating the recovery for the
-        # 413 path (large exploration block alone can exceed the cloud cap).
-        self._thinking_exploration = None
-
-        return True
 
     def store(self, llm_response: str) -> None:
         """Write the assistant transcript row. Input row was already written
@@ -1380,9 +1404,9 @@ _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 #: it again in Previous Messages would double-inject the exploration text and
 #: pollute the transcript for the LLM.
 #:
-#: ``tool_compaction`` and ``act_restart`` do NOT need to be listed here —
-#: both are stored ``ephemeral=1`` and are already filtered out of Previous
-#: Messages by the durable-only query in ``getPreviousMessages``.
+#: ``subagent_trail_compaction`` is stored ``ephemeral=1`` and is already
+#: filtered out of Previous Messages by the durable-only query in
+#: ``getPreviousMessages`` — no explicit entry needed here.
 _NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction', 'thinking'})
 
 
