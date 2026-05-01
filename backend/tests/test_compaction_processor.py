@@ -17,12 +17,12 @@ class TestCompactionProcessorConstants:
     def test_continuity_check_threshold_always_false(self):
         from services.compaction_message_processor import ContinuityCompactionProcessor
         p = ContinuityCompactionProcessor(raw_input='x')
-        assert p._check_threshold('a very long string ' * 1000) is False
+        assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
 
     def test_subagent_trail_check_threshold_always_false(self):
         from services.compaction_message_processor import SubagentTrailCompactionProcessor
         p = SubagentTrailCompactionProcessor(raw_input='x')
-        assert p._check_threshold('a very long string ' * 1000) is False
+        assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
 
     def test_continuity_job_is_frontal_cortex_unified(self):
         from services.compaction_message_processor import ContinuityCompactionProcessor
@@ -116,3 +116,110 @@ class TestMetricsAccumulatorMerge:
         b = MetricsAccumulator(tokens_total_complete=True)
         a.merge(b)
         assert a.tokens_total_complete is True
+
+
+class TestCheckThresholdFullPayload:
+    """Regression: _check_threshold must measure the full payload, not just user_body.
+
+    Bug: compact_at is 80% of the provider's max_tokens (the full context window).
+    Before this fix, only user_body was measured, leaving system_prompt and tools
+    schema unmeasured — together they typically dwarf user_body.
+
+    This test verifies that a small user_body combined with a large system_prompt
+    and large tools schema DOES exceed compact_at, which the old code would have
+    missed (returning False and skipping compaction).
+    """
+
+    def _make_processor(self):
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import DMNSystemMessagePrompt
+
+        class _MinimalProcessor(MessageProcessor):
+            CHANNEL = 'subagent'
+            ROLE = 'subagent'
+            SKIP_TRANSCRIPT_WRITE = True
+            SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
+
+            def getUserPrompt(self):
+                return 'hi'
+
+            def getUserDefinition(self):
+                return 'test user'
+
+        return _MinimalProcessor(raw_input='hi')
+
+    def test_full_payload_exceeds_threshold_when_system_and_tools_are_large(self):
+        """A tiny user_body must NOT hide a large system_prompt + tools schema."""
+        from unittest.mock import patch, MagicMock
+        from services.llm_service import estimate_tokens
+
+        # 8000-word system prompt + large tools schema; user_body is tiny.
+        large_system = 'word ' * 8_000        # ~10 400 estimated tokens
+        large_tools = [{'name': f'tool_{i}', 'description': 'long description ' * 20}
+                       for i in range(50)]    # 50 tools × ~20 words each
+        small_user = 'hi'
+
+        # compact_at set to something smaller than the combined estimate
+        # but larger than user_body alone (proving the old code would have
+        # returned False while the new code returns True).
+        import json
+        tools_json = json.dumps(large_tools, separators=(',', ':'))
+        total_est = (
+            estimate_tokens(large_system)
+            + estimate_tokens(tools_json)
+            + estimate_tokens(small_user)
+        )
+        user_only_est = estimate_tokens(small_user)
+        compact_at = user_only_est + 1   # just above user_body alone
+
+        # Sanity: total must exceed compact_at (otherwise test is meaningless)
+        assert total_est > compact_at, (
+            f"test setup error: total_est={total_est} must exceed compact_at={compact_at}"
+        )
+
+        proc = self._make_processor()
+        fake_provider = MagicMock()
+        fake_provider.get_compact_at.return_value = compact_at
+
+        with patch('services.providers.Providers') as mock_providers_cls:
+            mock_providers_cls.instance.return_value = fake_provider
+            result = proc._check_threshold(large_system, large_tools, small_user)
+
+        assert result is True, (
+            f"_check_threshold should return True when system+tools+user "
+            f"({total_est} tokens) > compact_at ({compact_at}), "
+            f"but user_body alone ({user_only_est} tokens) is below it"
+        )
+
+    def test_small_full_payload_does_not_exceed_threshold(self):
+        """When the entire payload is well within compact_at, return False."""
+        from unittest.mock import patch, MagicMock
+
+        proc = self._make_processor()
+        fake_provider = MagicMock()
+        fake_provider.get_compact_at.return_value = 128_000
+
+        with patch('services.providers.Providers') as mock_providers_cls:
+            mock_providers_cls.instance.return_value = fake_provider
+            result = proc._check_threshold('short system', [], 'short body')
+
+        assert result is False
+
+    def test_missing_compact_at_returns_false_and_logs_error(self):
+        """compact_at=None must return False (skip compaction) and log an error."""
+        from unittest.mock import patch, MagicMock
+        import logging
+
+        proc = self._make_processor()
+        fake_provider = MagicMock()
+        fake_provider.get_compact_at.return_value = None
+
+        with patch('services.providers.Providers') as mock_providers_cls:
+            mock_providers_cls.instance.return_value = fake_provider
+            with patch('services.message_processor.logger') as mock_logger:
+                result = proc._check_threshold('system', [], 'body')
+
+        assert result is False
+        mock_logger.error.assert_called_once()
+        call_args = mock_logger.error.call_args[0]
+        assert 'compact_at missing' in call_args[0]

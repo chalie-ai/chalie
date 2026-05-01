@@ -49,7 +49,7 @@ class _CompactionProcessorBase(MessageProcessor):
         # that the base would otherwise stitch on with a leading '\n\n'.
         return self.SYSTEM_PROMPT_CLASS().getPrompt()
 
-    def _check_threshold(self, _user_msg: str) -> bool:
+    def _check_threshold(self, _system_prompt: str, _tools: list, _user_body: str) -> bool:
         # Compaction never compacts itself. Hard-disable the gate so a large
         # input (which is the common case) cannot trigger recursion.
         return False

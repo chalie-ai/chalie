@@ -669,10 +669,12 @@ class MessageProcessor:
                         user_body = self.getUserPrompt()
                         user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                         user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
+                        system_prompt = self.getSystemPrompt()
+                        tools = self.getTools()
 
-                    # Single-path overflow handling: triggered when the rendered
-                    # user-message body (including checkpoint envelope) exceeds
-                    # 80% of the provider's context window.
+                    # Single-path overflow handling: triggered when the full
+                    # assembled payload (system_prompt + tools schema + user_body)
+                    # exceeds 80% of the provider's context window.
                     #
                     # _handle_overflow() runs a full continuity compaction,
                     # resets ACT state, and returns True on success so the loop
@@ -680,9 +682,9 @@ class MessageProcessor:
                     # breaks to cap exit (final_text=''). The per-instance
                     # deadline (self._deadline) keeps ticking — compaction LLM
                     # calls count against the subagent's wall-clock budget.
-                    if self._check_threshold(user_body):
+                    if self._check_threshold(system_prompt, tools, user_body):
                         logger.warning(
-                            "[COMPACTION] %s: user body exceeds compact_at — running overflow handler",
+                            "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
                             self.CHANNEL,
                         )
                         if self._handle_overflow():
@@ -693,10 +695,6 @@ class MessageProcessor:
                             self.CHANNEL,
                         )
                         break
-
-                    with self._metrics.stage('prompt_assembly'):
-                        system_prompt = self.getSystemPrompt()
-                        tools = self.getTools()
 
                     # Single-element messages[] so the provider sees one user turn
                     # containing the full literal-text body (Previous Messages,
@@ -851,29 +849,48 @@ class MessageProcessor:
 
     # ── Single-path overflow + continuity compaction ─────────────────────────
 
-    def _measure_user_message(self, user_msg: str) -> int:
-        """Return a fast token estimate for the rendered user-message body."""
-        from services.llm_service import estimate_tokens
-        return estimate_tokens(user_msg)
+    def _measure_full_payload(
+        self, system_prompt: str, tools: list, user_body: str
+    ) -> int:
+        """Return a fast token estimate for the full payload sent to the provider.
 
-    def _check_threshold(self, user_msg: str) -> bool:
-        """Return True if the rendered user-message body exceeds the persisted
+        Measures system_prompt + serialised tools schema + user_body — the three
+        components that together form the context window consumed by a single LLM
+        call. compact_at is 80% of the provider's max_tokens; measuring only
+        user_body would miss the system prompt and tools schema, which together
+        typically dwarf the user body.
+        """
+        import json
+        from services.llm_service import estimate_tokens
+        tools_json = json.dumps(tools, separators=(',', ':')) if tools else ''
+        return (
+            estimate_tokens(system_prompt)
+            + estimate_tokens(tools_json)
+            + estimate_tokens(user_body)
+        )
+
+    def _check_threshold(
+        self, system_prompt: str, tools: list, user_body: str
+    ) -> bool:
+        """Return True if the full assembled payload exceeds the persisted
         compact_at threshold for this processor's provider.
 
-        Strict greater-than: a message exactly at compact_at is NOT eligible.
+        Measures system_prompt + serialised tools schema + user_body combined.
+        compact_at is 80% of the provider's max_tokens (the full context window).
+        Strict greater-than: a payload exactly at compact_at is NOT eligible.
         """
         from services.providers import Providers
-        compact_at = Providers.instance().get_compact_at(job=self.JOB)
+        compact_at = Providers.instance().get_compact_at()
         if compact_at is None:
             # Boot backfill should always populate compact_at. Missing value
             # indicates a misconfigured provider row — log loudly and skip
             # compaction this turn. Do NOT compute a fallback on the fly.
             logger.error(
-                "[COMPACTION] %s: compact_at missing for job=%s — skipping overflow check",
-                self.CHANNEL, self.JOB,
+                "[COMPACTION] %s: compact_at missing — skipping overflow check",
+                self.CHANNEL,
             )
             return False
-        return self._measure_user_message(user_msg) > compact_at
+        return self._measure_full_payload(system_prompt, tools, user_body) > compact_at
 
     def _handle_overflow(self) -> bool:
         """Single overflow-handling path: full compaction + ACT loop state reset.
