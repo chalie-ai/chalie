@@ -180,6 +180,11 @@ class TestCheckThresholdFullPayload:
         proc = self._make_processor()
         fake_provider = MagicMock()
         fake_provider.get_compact_at.return_value = compact_at
+        # estimate_payload_tokens delegates to provider.build_request_body —
+        # in production it returns the literal HTTP body's token estimate.
+        # Here we return our pre-computed `total_est` so the test asserts the
+        # comparison logic, not the provider's serialisation details.
+        fake_provider.estimate_payload_tokens.return_value = total_est
 
         with patch('services.providers.Providers') as mock_providers_cls:
             mock_providers_cls.instance.return_value = fake_provider
@@ -198,6 +203,7 @@ class TestCheckThresholdFullPayload:
         proc = self._make_processor()
         fake_provider = MagicMock()
         fake_provider.get_compact_at.return_value = 128_000
+        fake_provider.estimate_payload_tokens.return_value = 100  # well below
 
         with patch('services.providers.Providers') as mock_providers_cls:
             mock_providers_cls.instance.return_value = fake_provider
