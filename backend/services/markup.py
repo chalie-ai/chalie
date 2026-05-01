@@ -13,6 +13,10 @@ Allowlist (10 tags total):
 The LLM is NOT allowed to emit ``<a>``. Plain-text URLs in the LLM's
 response are linkified by the frontend so the model cannot inject
 arbitrary anchors into the rendered DOM.
+
+``sanitize()`` is the only entry point for LLM output. It accepts mixed
+plain text + allowlisted HTML and passes both through unchanged — text
+nodes are valid HTML, so no wrapping or escaping heuristics are needed.
 """
 from __future__ import annotations
 
@@ -63,28 +67,6 @@ def sanitize(html: str | None) -> str:
     )
 
 
-def is_xml_content(text: str | None) -> bool:
-    """True if *text* is non-empty and its first non-whitespace char is ``<``.
-
-    Single chokepoint for the "did the LLM emit XML or plaintext?" decision.
-    Used by output_service + websocket fallbacks to decide whether to wrap
-    the response in ``<p>...</p>``.
-    """
-    return bool((text or "").lstrip().startswith("<"))
-
-
-def wrap_text_xml(text: str) -> str:
-    """Wrap a plain string as ``<p>{escaped}</p>``. Empty input returns empty.
-
-    Used when the model emits plain text instead of structured markup, so the
-    frontend always receives well-formed HTML.
-    """
-    stripped = (text or "").strip()
-    if not stripped:
-        return ""
-    return f"<p>{escape_text(stripped)}</p>"
-
-
 def actions_to_xml(actions: list[dict]) -> str:
     """Render programmatic action buttons as XML.
 
@@ -105,15 +87,6 @@ def actions_to_xml(actions: list[dict]) -> str:
         parts.append(f'<action label="{label}" value="{value}"/>')
     parts.append("</actions>")
     return "".join(parts)
-
-
-def escape_text(text: str) -> str:
-    """Escape & < > for HTML text content. Used by callers that build their own
-    structured tags around model-supplied text (e.g. ``wrap_text_xml``).
-    """
-    if not text:
-        return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def escape_attr(value: str) -> str:

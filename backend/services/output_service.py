@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .time_utils import utc_now
-from .markup import wrap_text_xml, actions_to_xml, is_xml_content
+from .markup import actions_to_xml, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +67,12 @@ class OutputService:
         if metrics is not None:
             metadata_dict["metrics"] = metrics
 
-        # LLM emits XML directly. If a plain string arrives (rare edge case),
-        # wrap it as <p>. Append programmatic action buttons as XML.
-        content = response if is_xml_content(response) else wrap_text_xml(response)
+        # Single chokepoint: sanitize() accepts mixed plain text + allowlisted
+        # HTML and passes both through. Programmatic action buttons are
+        # appended in their own XML form (already trusted, model-free).
+        content = sanitize(response or "")
         if reply_actions:
-            content = (content or "") + actions_to_xml(reply_actions)
+            content = content + actions_to_xml(reply_actions)
         metadata_dict["content"] = content
 
         output = {
