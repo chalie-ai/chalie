@@ -248,6 +248,7 @@ class TestMessageProcessorSend413Recovery:
         fake = MagicMock()
         fake.send_messages.side_effect = send_messages_side_effects
         fake.get_context_limit.return_value = get_context_limit
+        fake.get_compact_at.return_value = get_context_limit
         return patch.object(Providers, 'instance', return_value=fake), fake
 
     def test_first_413_runs_overflow_handler_then_succeeds(self, db):

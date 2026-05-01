@@ -20,6 +20,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Fraction of a provider's max_tokens that triggers continuity compaction.
+# Lives here so both the boot backfill and any future tuning have one source.
+COMPACTION_THRESHOLD_RATIO = 0.80
+
 
 class Providers:
     """Singleton provider gateway. Resolves provider by job, sends messages."""
@@ -184,6 +188,38 @@ class Providers:
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider."""
         return self._resolve(job).get_context_limit()
+
+    def get_compact_at(self, *, job: str = 'unified') -> 'int | None':
+        """Return the persisted compact_at threshold for the active provider on *job*.
+
+        Reads providers.compact_at from the DB row whose name matches the
+        provider resolved for *job*. Returns None if the row is missing or the
+        column is NULL (boot backfill should always populate it; missing value
+        signals a misconfigured provider row).
+        """
+        try:
+            from services.config_service import ConfigService
+            from services.database_service import get_shared_db_service
+            config = ConfigService.resolve_agent_config(job)
+            provider_name = config.get('name')
+            if not provider_name:
+                logger.warning(
+                    "[COMPACTION] get_compact_at: resolved config for job=%s has no 'name' key",
+                    job,
+                )
+                return None
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT compact_at FROM providers WHERE name = ? AND is_active = 1",
+                    (provider_name,),
+                ).fetchone()
+            if row is None:
+                return None
+            return row[0]  # may be None if column is NULL
+        except Exception as exc:
+            logger.warning("[COMPACTION] get_compact_at(job=%s) failed: %s", job, exc)
+            return None
 
     def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
         """Delegate to resolved provider."""

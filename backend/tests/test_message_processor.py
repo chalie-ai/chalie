@@ -55,6 +55,7 @@ class TestIterationTimeout:
         fake_provider = MagicMock()
         fake_provider.send_messages.side_effect = _slow_send_messages
         fake_provider.get_context_limit.return_value = 32_000
+        fake_provider.get_compact_at.return_value = 32_000
 
         t0 = time.monotonic()
         with patch("services.providers.Providers") as mock_providers_cls:
@@ -109,6 +110,7 @@ class TestPerInstanceDeadline:
         fake_provider = MagicMock()
         fake_provider.send_messages.side_effect = _instant_send
         fake_provider.get_context_limit.return_value = 32_000
+        fake_provider.get_compact_at.return_value = 32_000
 
         with patch("services.providers.Providers") as mock_providers_cls:
             mock_providers_cls.instance.return_value = fake_provider

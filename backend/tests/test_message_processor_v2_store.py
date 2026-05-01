@@ -299,6 +299,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p.send()
         assert isinstance(result, str)
 
@@ -317,6 +318,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p.send()
         assert result == 'done'
 
@@ -335,6 +337,7 @@ class TestGetPreviousMessagesSendStoreWiring:
         with patch('services.providers.Providers.instance') as mock_inst, \
              patch('services.transcript_service._trigger_episode_extraction'):
             mock_inst.return_value.send_messages.return_value = fake_response
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p.send('req-id')
         assert isinstance(result, str)
 
@@ -1050,6 +1053,7 @@ class TestHandleOverflowDbWrites:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result == 'fresh compaction summary'
@@ -1082,6 +1086,7 @@ class TestHandleOverflowDbWrites:
              }):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             p._run_full_compaction()
 
         new_row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
@@ -1106,6 +1111,7 @@ class TestHandleOverflowDbWrites:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result is None
@@ -1161,6 +1167,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result is None
@@ -1180,6 +1187,7 @@ class TestRunFullCompaction:
                  patch('services.compaction_persistence.get_compaction', return_value=None):
                 mock_inst.return_value.send_messages.side_effect = RuntimeError('LLM down')
                 mock_inst.return_value.get_context_limit.return_value = 32_000
+                mock_inst.return_value.get_compact_at.return_value = 32_000
                 result = p._run_full_compaction()
 
         assert result is None
@@ -1201,6 +1209,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             result = p._run_full_compaction()
 
         assert result == 'happy path summary'
@@ -1239,6 +1248,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             p._run_full_compaction()
 
         row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
@@ -1273,6 +1283,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.side_effect = fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
             p._run_full_compaction()
 
         assert captured_jobs == ['frontal-cortex-unified']

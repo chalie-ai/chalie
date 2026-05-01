@@ -18,12 +18,12 @@ class TestCompactionProcessorConstants:
     def test_continuity_check_threshold_always_false(self):
         from services.compaction_message_processor import ContinuityCompactionProcessor
         p = ContinuityCompactionProcessor(raw_input='x')
-        assert p._check_threshold('a very long string ' * 1000, 32_000) is False
+        assert p._check_threshold('a very long string ' * 1000) is False
 
     def test_subagent_trail_check_threshold_always_false(self):
         from services.compaction_message_processor import SubagentTrailCompactionProcessor
         p = SubagentTrailCompactionProcessor(raw_input='x')
-        assert p._check_threshold('a very long string ' * 1000, 32_000) is False
+        assert p._check_threshold('a very long string ' * 1000) is False
 
     def test_continuity_job_is_frontal_cortex_unified(self):
         from services.compaction_message_processor import ContinuityCompactionProcessor

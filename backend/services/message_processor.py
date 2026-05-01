@@ -648,13 +648,6 @@ class MessageProcessor:
                     len(self._thinking_exploration),
                 )
 
-            raw_limit = Providers.instance().get_context_limit(job=self.JOB)
-            context_limit: int = (
-                int(raw_limit)
-                if isinstance(raw_limit, (int, float)) and raw_limit > 0
-                else 32_000
-            )
-
             self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -687,11 +680,10 @@ class MessageProcessor:
                     # breaks to cap exit (final_text=''). The per-instance
                     # deadline (self._deadline) keeps ticking — compaction LLM
                     # calls count against the subagent's wall-clock budget.
-                    if self._check_threshold(user_body, context_limit):
+                    if self._check_threshold(user_body):
                         logger.warning(
-                            "[COMPACTION] %s: user body over 80%% threshold "
-                            "(ctx_limit=%d) — running overflow handler",
-                            self.CHANNEL, context_limit,
+                            "[COMPACTION] %s: user body exceeds compact_at — running overflow handler",
+                            self.CHANNEL,
                         )
                         if self._handle_overflow():
                             continue
@@ -864,12 +856,24 @@ class MessageProcessor:
         from services.llm_service import estimate_tokens
         return estimate_tokens(user_msg)
 
-    def _check_threshold(self, user_msg: str, context_limit: int) -> bool:
-        """Return True if the user-message body exceeds 80% of context_limit.
+    def _check_threshold(self, user_msg: str) -> bool:
+        """Return True if the rendered user-message body exceeds the persisted
+        compact_at threshold for this processor's provider.
 
-        Strict greater-than: a message exactly at 80% is NOT compaction-eligible.
+        Strict greater-than: a message exactly at compact_at is NOT eligible.
         """
-        return self._measure_user_message(user_msg) > int(context_limit * 0.80)
+        from services.providers import Providers
+        compact_at = Providers.instance().get_compact_at(job=self.JOB)
+        if compact_at is None:
+            # Boot backfill should always populate compact_at. Missing value
+            # indicates a misconfigured provider row — log loudly and skip
+            # compaction this turn. Do NOT compute a fallback on the fly.
+            logger.error(
+                "[COMPACTION] %s: compact_at missing for job=%s — skipping overflow check",
+                self.CHANNEL, self.JOB,
+            )
+            return False
+        return self._measure_user_message(user_msg) > compact_at
 
     def _handle_overflow(self) -> bool:
         """Single overflow-handling path: full compaction + ACT loop state reset.
