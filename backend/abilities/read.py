@@ -118,6 +118,19 @@ class ReadAbility(Ability):
             return {"text": _skill_tag("read", source=source, error=str(e)[:200])}
 
 
+def _has_captcha_markers(html: str) -> bool:
+    markers = (
+        "g-recaptcha", "h-captcha", "data-sitekey=",
+        'name="captcha"', "name='captcha'",
+        'id="captcha"', "id='captcha'",
+        'class="captcha', "class='captcha",
+        'class="g-recaptcha', "class='g-recaptcha",
+        'class="h-captcha', "class='h-captcha",
+        'name="g-recaptcha-response"', "name='g-recaptcha-response'",
+    )
+    return any(m in html for m in markers)
+
+
 def _classify_source(source: str) -> str:
     parsed = urlparse(source)
     if parsed.scheme in ("http", "https", "ftp"):
@@ -156,6 +169,14 @@ def _read_url(url: str, max_chars: int) -> str:
             html = response.text
     except requests.RequestException as e:
         return _skill_tag("read", source=url, error=f"fetch-failed:{str(e)[:150]}")
+
+    if _has_captcha_markers(html):
+        return _skill_tag(
+            "read",
+            source=url,
+            error="captcha-or-interactive-widget-detected",
+            hint="Page contains a captcha widget. Use the browser tool with action='interact' to solve it (read only extracts static text — it cannot type into fields or click buttons).",
+        )
 
     from services.text_extractor import extract_html
     content = extract_html(html, url=url)

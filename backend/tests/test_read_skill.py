@@ -194,6 +194,70 @@ class TestUrlReading:
         assert '[end:read]' in result
 
 
+# ─── Captcha detection ───────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestCaptchaDetection:
+    """Tests for _has_captcha_markers and the early-return in _read_url."""
+
+    def _patch_session(self, html):
+        """Patch requests.Session on the already-imported abilities.read module."""
+        mock_session = MagicMock()
+        mock_session.headers = {}
+        mock_response = MagicMock()
+        mock_response.text = html
+        mock_response.raise_for_status = MagicMock()
+        mock_session.get.return_value = mock_response
+        mock_session.__enter__.return_value = mock_session
+        mock_session.__exit__.return_value = False
+        mock_requests = MagicMock()
+        mock_requests.Session.return_value = mock_session
+        import requests as real_requests
+        mock_requests.RequestException = real_requests.RequestException
+        return patch('abilities.read.requests', mock_requests)
+
+    def test_read_url_detects_g_recaptcha(self):
+        html = '<div class="g-recaptcha" data-sitekey="abc123"></div>'
+        with self._patch_session(html), \
+             patch('abilities.read._is_private_url', return_value=False):
+            from abilities.read import _read_url
+            result = _read_url('https://example.com', 4000)
+        assert 'error=captcha-or-interactive-widget-detected' in result
+        assert 'browser' in result
+        assert '[end:read]' in result
+
+    def test_read_url_detects_h_captcha(self):
+        html = '<div class="h-captcha" data-sitekey="xyz789"></div>'
+        with self._patch_session(html), \
+             patch('abilities.read._is_private_url', return_value=False):
+            from abilities.read import _read_url
+            result = _read_url('https://example.com', 4000)
+        assert 'error=captcha-or-interactive-widget-detected' in result
+        assert 'browser' in result
+        assert '[end:read]' in result
+
+    def test_read_url_detects_named_captcha_input(self):
+        html = '<form><input type="text" name="captcha" /></form>'
+        with self._patch_session(html), \
+             patch('abilities.read._is_private_url', return_value=False):
+            from abilities.read import _read_url
+            result = _read_url('https://example.com', 4000)
+        assert 'error=captcha-or-interactive-widget-detected' in result
+        assert 'browser' in result
+        assert '[end:read]' in result
+
+    def test_read_url_no_false_positive_on_article_text(self):
+        html = '<html><body><p>This article explains how captcha works and why it stops bots.</p></body></html>'
+        with self._patch_session(html), \
+             patch('abilities.read._is_private_url', return_value=False), \
+             patch('services.text_extractor.extract_html', return_value='This article explains how captcha works.'):
+            from abilities.read import _read_url
+            result = _read_url('https://example.com', 4000)
+        assert 'captcha-or-interactive-widget-detected' not in result
+        assert 'This article explains' in result
+        assert '[end:read]' in result
+
+
 # ─── File reading ─────────────────────────────────────────────────────────────
 
 @pytest.mark.unit
