@@ -51,7 +51,7 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 
 History reaches the LLM as a literal `## Previous Messages` text block inside the user message body. The provider always receives a single-element `messages[]` array — not a multi-turn array. This is an intentional design choice: it gives the system full control over what context the model sees on each turn.
 
-Compaction also dispatches through the `MessageProcessor` hierarchy. `FullCompactionProcessor` handles full channel checkpoint summarisation; `TrailCompactionProcessor` handles mid-ACT tool-trail summarisation. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `ALWAYS_AVAILABLE=[]`, `DISCOVERABLE=[]`, and `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. Pure SQL helpers for the `compactions` table (`get_compaction`, `get_entries_since`) live in `compaction_persistence.py`.
+Compaction dispatches through the `MessageProcessor` hierarchy. `ContinuityCompactionProcessor` handles full channel checkpoint summarisation; `SubagentTrailCompactionProcessor` handles mid-ACT trail compression for subagents only. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. The SQL helper `compaction_persistence.get_compaction(channel)` queries `tool_calls` rows with `tool_name='compaction'` — there is no separate `compactions` table.
 
 Internal processors (episode encoders, the user summary synthesiser, and compaction processors) set a flag that suppresses transcript writes — they run the ACT loop without polluting the conversation record.
 
@@ -64,11 +64,11 @@ Four layers, each optimised for a different timescale and purpose:
 | Layer | What it stores | Decays? |
 |-------|---------------|---------|
 | **Transcript** | Append-only conversation record, channel-scoped | No (pruned after 90 days) |
-| **Compaction** | LLM-generated summary of history beyond context limit | No (one per channel) |
+| **Compaction** | LLM-generated continuity summaries stored as `tool_calls` rows with `tool_name='compaction'`; append-only, failure rows kept as audit | No |
 | **Episodes** | Narrative units extracted from transcript windows | Yes — power-law retrieval weight decay |
 | **Data Graph** | Structured knowledge (facts, preferences, moments) | Yes — per-kind decay policy |
 
-**Transcript** is the raw record. `getPreviousMessages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the summary becomes the new floor.
+**Transcript** is the raw record. `getPreviousMessages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the latest success summary becomes the new floor. Compaction results are stored as `tool_calls` rows (`tool_name='compaction'`, `ephemeral=0`), not in a separate table. `compaction_persistence.get_compaction(channel)` retrieves the most recent success row via a join on `transcript.channel`; failure rows are recorded for audit but filtered from the lookup so a bad LLM output cannot poison subsequent prompts.
 
 **Episodes** are extracted automatically by a rolling trigger: when enough new transcript lines have accumulated for a channel, a background processor encodes that window into narrative snapshots with emotional valence, arousal, and salience scores. Similar episodes consolidate into super-episodes over time. Retrieval uses hybrid vector + FTS5 search, adaptive radius, and apex traversal (following consolidation links upward).
 
