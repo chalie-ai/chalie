@@ -306,7 +306,7 @@ The system prompt forbids the LLM from emitting programmatic tags or `<a>`.
 {"type": "message", "content": "<p>Hello <b>world</b></p>", ...}
 ```
 
-**Backend module:** `backend/services/markup.py` — `sanitize()` (nh3 chokepoint), `extract_plaintext()` (TTS — strips tags + drops `<actions>` subtree), `wrap_text_xml`, `actions_to_xml`, `is_xml_content`, `escape_text`, `escape_attr`. Zero hand-rolled tokenisation; nh3 owns all parsing.
+**Backend module:** `backend/services/markup.py` — `sanitize()` (nh3 chokepoint, accepts mixed plain text + allowlisted HTML and passes both through), `extract_plaintext()` (TTS — strips tags + drops `<actions>` subtree), `actions_to_xml`, `escape_attr`. Zero hand-rolled tokenisation; nh3 owns all parsing. There is no "is this XML?" heuristic and no plaintext-to-`<p>` wrapper — text nodes are valid HTML so wrapping was wrong: it turned mixed-mode model output into entity-escaped literals.
 **Frontend module:** `frontend/interface/markup_renderer.js` (innerHTML + linkify + programmatic wiring) + `markup_extract.js` (DOM walk for TTS plaintext). `frontend/interface/vendor/linkify.es.mjs` (linkifyjs 4.3.2, vendored ESM, ~20 KB).
 **No boot migration:** legacy markdown→HTML migration was retired with `markdown_xml_migration.py` after the nh3 cutover. Existing transcripts retain their stored content — sanitisation runs on every render.
 

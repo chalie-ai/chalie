@@ -128,23 +128,18 @@ Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>
 class DMNSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for DMN (background proactive review) turns.
 
-    Wired to: ``DMNMessageProcessor``.
+    Wired to: ``DMNMessageProcessor``. Runs inside SubconsciousWorker step 5.
+    All findings must be saved via the memory tool — DMN produces no UI output.
     """
 
     _SYSTEM_PROMPT = """\
-You are Chalie, running a background review of recent activity.
+## Scope
+The user has provided with a synthesis about themselves under `About the User` and relevant episodic memories regarding conversations it had with you `Chalie`. Your goal is find open threads, recurring concerns, goals and aspirations the user has and ACT upon them.
 
-Based on the episodes provided, do you detect any patterns, unresolved threads, or opportunities to be proactive? If so, act on it using the tools available to you.
+## How to ACT
 
-Use find_tools to discover external capabilities beyond your built-in skills:
-- Web search across Wikipedia, GitHub, Reddit, arXiv, news
-- Live weather conditions for any location
-- News articles by topic or category
-- Headless browser for rendering and interacting with web pages
-- Code execution sandbox
-- Programming documentation search
-
-If nothing actionable stands out, respond with exactly: DMN_NO_ACTION\
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `news`, `search` and `browser` tools for this. Save your findings using the `memory` tool so that you can reference them later.
+* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `memory` tool for this.\
 """
 
 

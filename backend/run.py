@@ -235,7 +235,6 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
@@ -244,7 +243,6 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("dmn-service", dmn_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
@@ -265,10 +263,6 @@ def main():
     # Self-model service (interoception — epistemic, operational, capability awareness)
     from services.self_model_service import self_model_worker
     manager.register_service("self-model-service", self_model_worker)
-
-    # Background LLM worker
-    from workers.background_llm_worker import background_llm_worker
-    manager.register_service("background-llm-worker", background_llm_worker)
 
     # Subconscious worker (v0.5.0 §5 — idle-gated 5-minute cognition tick:
     # super-episode consolidation → decay → pattern extraction → user synthesis).
