@@ -249,6 +249,10 @@ class TestMessageProcessorSend413Recovery:
         fake.send_messages.side_effect = send_messages_side_effects
         fake.get_context_limit.return_value = get_context_limit
         fake.get_compact_at.return_value = get_context_limit
+        # Threshold check delegates to provider.estimate_payload_tokens; the
+        # 413 path under test is independent of pre-send threshold checking,
+        # so return a value well below compact_at to skip the overflow branch.
+        fake.estimate_payload_tokens.return_value = 100
         return patch.object(Providers, 'instance', return_value=fake), fake
 
     def test_first_413_runs_overflow_handler_then_succeeds(self, db):

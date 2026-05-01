@@ -204,6 +204,7 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             result = worker._step_pattern_match()
@@ -246,6 +247,7 @@ class TestSavePatternReinforceExisting:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             worker._step_pattern_match()
@@ -286,6 +288,7 @@ class TestSavePatternAt10Caps:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             worker._step_pattern_match()
@@ -317,6 +320,7 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             worker._step_pattern_match()
@@ -372,6 +376,7 @@ class TestSaveGraphRoutesThroughDataGraphService:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             worker._step_pattern_match()
@@ -451,6 +456,7 @@ class TestSavePatternBudgetCapAt20:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             worker._step_pattern_match()
@@ -537,6 +543,7 @@ class TestMaxIterations30CapsRunawayLoop:
             mock_inst.return_value.send_messages.side_effect = _always_tool_call
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
             # Must complete (not loop forever).
