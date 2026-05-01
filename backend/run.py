@@ -133,52 +133,18 @@ def main():
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
 
-    # Populate providers.max_tokens / compact_at on every boot.
-    # Anthropic/OpenAI return hardcoded constants; Gemini/Ollama hit the
-    # respective API. Per-row try/except — a single unreachable provider
-    # never kills startup. Existing values survive a transient failure.
+    # Persist providers.max_tokens / compact_at for every provider (active
+    # and inactive). Per-row try/except inside backfill_one — a single
+    # unreachable provider never kills startup.
     try:
-        from services.providers import COMPACTION_THRESHOLD_RATIO
-        from services.config_service import ConfigService
-        from services.llm_service import create_llm_service
+        from services.provider_token_limits import backfill_all
         with database_service.connection() as _conn:
-            _rows = _conn.execute(
-                "SELECT id, name FROM providers WHERE is_active = 1"
-            ).fetchall()
-            for _pid, _pname in _rows:
-                try:
-                    _providers_map = ConfigService.get_providers()
-                    _pcfg = _providers_map.get(_pname)
-                    if _pcfg is None:
-                        logger.warning(
-                            "[Startup] provider '%s' active in DB but not in providers cache — skipping max_tokens backfill",
-                            _pname,
-                        )
-                        continue
-                    _svc = create_llm_service(dict(_pcfg))
-                    _max = _svc.get_context_limit()
-                    if not isinstance(_max, (int, float)) or _max <= 0:
-                        logger.warning(
-                            "[Startup] provider '%s' returned non-positive max_tokens=%r — skipping",
-                            _pname, _max,
-                        )
-                        continue
-                    _max = int(_max)
-                    _ca = int(_max * COMPACTION_THRESHOLD_RATIO)
-                    _conn.execute(
-                        "UPDATE providers SET max_tokens = ?, compact_at = ?, updated_at = datetime('now') WHERE id = ?",
-                        (_max, _ca, _pid),
-                    )
-                    logger.info(
-                        "[Startup] provider '%s' max_tokens=%d compact_at=%d (%.0f%%)",
-                        _pname, _max, _ca, COMPACTION_THRESHOLD_RATIO * 100,
-                    )
-                except Exception as _per_err:
-                    logger.warning(
-                        "[Startup] provider '%s' max_tokens backfill failed: %s — leaving previous values intact",
-                        _pname, _per_err,
-                    )
+            _stats = backfill_all(_conn)
             _conn.commit()
+        logger.info(
+            "[Startup] providers token-limit backfill: total=%d succeeded=%d failed=%d",
+            _stats['total'], _stats['succeeded'], _stats['failed'],
+        )
     except Exception as _bf_err:
         logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
 
