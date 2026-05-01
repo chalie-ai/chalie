@@ -1,9 +1,9 @@
 """
 Config Service — Centralized configuration loading and provider resolution.
 
-Loads agent configs from JSON files, resolves provider references for LLM and
-embedding backends, and exposes helpers for prompt text, connection settings,
-and registered agent names.
+Loads agent configs from JSON files, merges the globally selected provider
+into the resolved config, and exposes helpers for prompt text, connection
+settings, and registered agent names.
 """
 
 import json
@@ -87,49 +87,6 @@ class ConfigService:
         return ProviderCacheService.get_providers()
 
     @staticmethod
-    def resolve_provider(config: dict) -> dict:
-        """
-        Resolve provider references in a config dict.
-
-        If config has a "provider" key, merge provider defaults under agent overrides.
-        If config has an "embedding_provider" key, merge embedding provider fields
-        prefixed with "embedding_" (e.g. embedding_host, embedding_model, embedding_dimensions).
-        If no provider key, return as-is (backward compatible).
-
-        Merge order: provider defaults < agent config overrides.
-        """
-        result = dict(config)
-
-        # Resolve main provider
-        provider_name = result.pop('provider', None)
-        if provider_name:
-            providers = ConfigService.get_providers()
-            provider = providers.get(provider_name)
-            if provider is None:
-                logger.warning(f"Unknown provider '{provider_name}', using config as-is")
-            else:
-                # Provider defaults, then agent overrides on top
-                merged = dict(provider)
-                merged.update(result)
-                result = merged
-
-        # Resolve embedding provider
-        embed_provider_name = result.pop('embedding_provider', None)
-        if embed_provider_name:
-            providers = ConfigService.get_providers()
-            embed_provider = providers.get(embed_provider_name)
-            if embed_provider is None:
-                logger.warning(f"Unknown embedding provider '{embed_provider_name}'")
-            else:
-                for key, value in embed_provider.items():
-                    prefixed_key = f"embedding_{key}"
-                    # Don't overwrite if agent config already has this key
-                    if prefixed_key not in result:
-                        result[prefixed_key] = value
-
-        return result
-
-    @staticmethod
     def get_agent_config(agent_name: str) -> Dict[str, Any]:
         """Load raw agent config JSON without provider resolution.
 
@@ -143,45 +100,55 @@ class ConfigService:
 
     @staticmethod
     def resolve_agent_config(agent_name: str) -> Dict[str, Any]:
-        """Load agent config and resolve any provider references.
+        """Load agent config and merge in the globally selected provider.
 
-        Uses the globally selected provider (set via Brain UI). Falls back to
-        the first active provider if none is selected.
+        Merge order: selected provider fields first, agent JSON fields on top
+        (agent-specific overrides like temperature, timeout, format win).
+        ``_job_name`` is always injected as the agent name — ``LoggingLLMService``
+        uses it to name its per-job log file.
+
+        Falls back to the first active provider when none is selected.
+        Falls back to an empty provider dict on any lookup error so the agent
+        config is still returned (providers missing → loud warning in logs).
         """
-        config = ConfigService.get_agent_config(agent_name)
+        agent_config = ConfigService.get_agent_config(agent_name)
 
+        provider_config: Dict[str, Any] = {}
         try:
             from services.provider_cache_service import ProviderCacheService
 
             selected = ProviderCacheService.get_selected_provider()
             if selected:
-                # The selected provider dict already contains platform, model, etc.
-                # We need to find its name in the providers dict for resolve_provider().
-                providers = ProviderCacheService.get_providers()
-                selected_name = None
-                for name, p in providers.items():
-                    if p.get('model') == selected.get('model') and p.get('platform') == selected.get('platform'):
-                        selected_name = name
-                        break
-                if selected_name:
-                    config['provider'] = selected_name
-                    logger.debug(f"[ConfigService] Using selected provider '{selected_name}' for job '{agent_name}'")
-                else:
-                    # Selected provider not in cache — use its config directly
-                    config.update(selected)
+                provider_config = selected
+                logger.debug(
+                    "[ConfigService] Using selected provider for agent '%s'", agent_name
+                )
             else:
                 # No selected provider — fall back to the first active provider.
-                providers = ConfigService.get_providers()
+                providers = ProviderCacheService.get_providers()
                 if providers:
                     fallback_name = next(iter(providers))
-                    config['provider'] = fallback_name
-                    logger.warning(f"[ConfigService] No provider selected for job '{agent_name}', "
-                                   f"falling back to '{fallback_name}'")
-        except Exception as e:
-            logger.warning(f"[ConfigService] Provider selection lookup failed for '{agent_name}': {e}")
+                    provider_config = dict(providers[fallback_name])
+                    logger.warning(
+                        "[ConfigService] No provider selected for agent '%s', "
+                        "falling back to '%s'",
+                        agent_name, fallback_name,
+                    )
+                else:
+                    logger.warning(
+                        "[ConfigService] No providers configured — agent '%s' will "
+                        "use agent-config fields only",
+                        agent_name,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "[ConfigService] Provider lookup failed for agent '%s': %s",
+                agent_name, exc,
+            )
 
-        config['_job_name'] = agent_name
-        return ConfigService.resolve_provider(config)
+        # Provider fields are the base; agent-specific fields override them.
+        result = {**provider_config, **agent_config, '_job_name': agent_name}
+        return result
 
     @staticmethod
     def get_agent_prompt(agent_name: str) -> str:
