@@ -962,8 +962,6 @@ class MessageProcessor:
         """
         from services import compaction_persistence
         from services.compaction_message_processor import ContinuityCompactionProcessor
-        from services.llm_service import estimate_tokens
-        from services.providers import Providers
 
         prior = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = prior['compacted_up_to_id'] if prior else 0
@@ -986,19 +984,6 @@ class MessageProcessor:
                 self.CHANNEL,
             )
             return None
-
-        # Refresh the context limit — compaction is a rare path and the
-        # provider may have been reconfigured. Use the compaction processor's
-        # JOB so the cap matches the LLM that will service the call.
-        raw_limit = Providers.instance().get_context_limit(
-            job=ContinuityCompactionProcessor.JOB
-        )
-        context_limit = (
-            int(raw_limit)
-            if isinstance(raw_limit, (int, float)) and raw_limit > 0
-            else 32_000
-        )
-        input_cap = int(context_limit * 0.90)
 
         def _format_entry(entry: dict) -> str:
             role = entry.get('role', 'unknown')
@@ -1025,33 +1010,6 @@ class MessageProcessor:
         rendered = [_format_entry(e) for e in entries]
         compaction_input = _build_input(rendered)
         in_chars = len(compaction_input)
-
-        # Enforce the 90% cap — drop oldest rows first. The previous
-        # checkpoint (prev_text) is never dropped.
-        dropped = 0
-        while (
-            rendered
-            and estimate_tokens(compaction_input) > input_cap
-        ):
-            rendered.pop(0)
-            dropped += 1
-            compaction_input = _build_input(rendered)
-        if dropped:
-            logger.warning(
-                "[COMPACTION] %s: dropped %d oldest entries to fit 90%% cap "
-                "(cap=%d tokens)",
-                self.CHANNEL, dropped, input_cap,
-            )
-
-        # After trimming, if nothing remains there is nothing new to compact.
-        # Even if a prior checkpoint exists it is already up-to-date.
-        if not rendered:
-            logger.warning(
-                "[COMPACTION] %s: 90%% cap dropped every new entry — "
-                "skipping LLM call (prior checkpoint preserved)",
-                self.CHANNEL,
-            )
-            return None
 
         proc = ContinuityCompactionProcessor(raw_input=compaction_input)
         raw_output = ''
@@ -1094,10 +1052,8 @@ class MessageProcessor:
             )
             return None
 
-        # Watermark advances to the highest ID we actually fed the LLM.
-        # Dropped rows stay unseen so the next compaction re-reads them.
-        consumed = entries[dropped:]
-        new_watermark = max((e.get('id', 0) for e in consumed), default=watermark)
+        # Watermark advances to the highest ID fed to the LLM.
+        new_watermark = max((e.get('id', 0) for e in entries), default=watermark)
 
         out_chars = len(summary)
         self._write_compaction_audit_row(
