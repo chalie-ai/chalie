@@ -849,33 +849,16 @@ class MessageProcessor:
 
     # ── Single-path overflow + continuity compaction ─────────────────────────
 
-    def _measure_full_payload(
-        self, system_prompt: str, tools: list, user_body: str
-    ) -> int:
-        """Return a fast token estimate for the full payload sent to the provider.
-
-        Measures system_prompt + serialised tools schema + user_body — the three
-        components that together form the context window consumed by a single LLM
-        call. compact_at is 80% of the provider's max_tokens; measuring only
-        user_body would miss the system prompt and tools schema, which together
-        typically dwarf the user body.
-        """
-        import json
-        from services.llm_service import estimate_tokens
-        tools_json = json.dumps(tools, separators=(',', ':')) if tools else ''
-        return (
-            estimate_tokens(system_prompt)
-            + estimate_tokens(tools_json)
-            + estimate_tokens(user_body)
-        )
-
     def _check_threshold(
         self, system_prompt: str, tools: list, user_body: str
     ) -> bool:
-        """Return True if the full assembled payload exceeds the persisted
+        """Return True if the actual provider payload exceeds the persisted
         compact_at threshold for this processor's provider.
 
-        Measures system_prompt + serialised tools schema + user_body combined.
+        Delegates to ``Providers.estimate_payload_tokens`` which calls the
+        resolved provider's ``build_request_body`` — the identical serialisation
+        path used by ``send_messages`` — so the measured byte count matches what
+        will be sent over the wire rather than a synthesised approximation.
         compact_at is 80% of the provider's max_tokens (the full context window).
         Strict greater-than: a payload exactly at compact_at is NOT eligible.
         """
@@ -890,7 +873,11 @@ class MessageProcessor:
                 self.CHANNEL,
             )
             return False
-        return self._measure_full_payload(system_prompt, tools, user_body) > compact_at
+        messages = [{'role': 'user', 'content': user_body}]
+        estimated = Providers.instance().estimate_payload_tokens(
+            system_prompt, messages, tools, job=self.JOB
+        )
+        return estimated > compact_at
 
     def _handle_overflow(self) -> bool:
         """Single overflow-handling path: full compaction + ACT loop state reset.
