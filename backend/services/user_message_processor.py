@@ -23,6 +23,7 @@ callback, and getSystemPrompt() override.
 """
 
 import logging
+import re
 import threading
 from collections.abc import Callable
 
@@ -71,6 +72,52 @@ def _fire_lazy_synthesis() -> None:
 
     threading.Thread(target=_run, daemon=True, name="user-summary-lazy").start()
     logger.info("[USER MSG] Lazy synthesis daemon spawned")
+
+
+_RESULTS_RE = re.compile(r'results=\d+')
+
+
+def _filter_seed_to_high_relevance(block: str) -> 'str | None':
+    """Return a rebuilt memory block containing only relevance:high lines.
+
+    Parses the [memory(...)] / [end:memory] block produced by MemoryAbility.
+    Keeps only body lines that contain 'relevance:high'. Rewrites the header's
+    results=N to match the kept count. Returns None when:
+      - the block is malformed (missing header or footer), or
+      - zero relevance:high lines remain after filtering.
+
+    This is a consumer-side filter applied after recall — it does not change
+    retrieval radius, relevance bands, or anything in memory.py.
+    """
+    if not block:
+        return None
+
+    lines = block.splitlines()
+    if not lines:
+        return None
+
+    header = lines[0]
+    if not header.startswith('[memory('):
+        return None
+
+    # Footer must be the last non-empty line
+    footer_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip():
+            footer_idx = i
+            break
+
+    if footer_idx is None or lines[footer_idx].strip() != '[end:memory]':
+        return None
+
+    body_lines = lines[1:footer_idx]
+    high_lines = [ln for ln in body_lines if 'relevance:high' in ln]
+
+    if not high_lines:
+        return None
+
+    new_header = _RESULTS_RE.sub(f'results={len(high_lines)}', header)
+    return '\n'.join([new_header] + high_lines + [lines[footer_idx]])
 
 
 class UserMessageProcessor(MessageProcessor):
@@ -362,9 +409,17 @@ class UserMessageProcessor(MessageProcessor):
         # error (`error=...`) header args yield blocks that add noise without
         # value. Inspect only the opener line so a body containing the literal
         # substring `results=0` or `error=` cannot suppress a valid seed.
+        # After the early-out guard, apply a line-level relevance filter: keep
+        # only `relevance:high` body lines and rewrite the header count. This
+        # prevents low/medium cross-scenario contamination from reaching the
+        # prompt while leaving the block present whenever high-confidence hits
+        # exist. (Materially different from the cycle-32 whole-block boolean
+        # gate which was reverted on rc-0.4.0.)
         header = block.split('\n', 1)[0] if block else ''
         if block and 'results=0' not in header and 'error=' not in header:
-            self._memory_seed = block
+            filtered = _filter_seed_to_high_relevance(block)
+            if filtered is not None:
+                self._memory_seed = filtered
 
         if self._uid is None:
             logger.warning(
