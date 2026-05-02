@@ -167,7 +167,7 @@ export class DocumentUpload {
         } else if (status === 'processing') {
           label.textContent = 'Understanding document...';
         }
-      } catch { /* retry */ }
+      } catch (e) { console.warn('[document_upload] status poll failed:', e); }
 
       setTimeout(poll, 2000);
     };
@@ -226,6 +226,7 @@ export class DocumentUpload {
         card.remove();
         showToast('Document ready');
       } catch (e) {
+        console.warn('[document_upload] confirm failed:', e);
         confirmBtn.disabled = false;
         confirmBtn.textContent = 'Looks good';
         showToast('Confirmation failed');
@@ -247,6 +248,7 @@ export class DocumentUpload {
         card.remove();
         showToast('Document ready with your context');
       } catch (e) {
+        console.warn('[document_upload] augment failed:', e);
         submitBtn.disabled = false;
         submitBtn.textContent = 'Save';
         showToast('Failed to save context');
@@ -261,6 +263,7 @@ export class DocumentUpload {
         card.remove();
         showToast('Document discarded');
       } catch (e) {
+        console.warn('[document_upload] discard failed:', e);
         discardBtn.disabled = false;
         discardBtn.textContent = 'Discard';
         showToast('Discard failed');

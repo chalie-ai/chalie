@@ -128,6 +128,7 @@ async function init() {
         await loadData();
         startSessionHeartbeat();
     } catch (err) {
+        console.warn('[brain/app] failed to load initial data:', err);
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
 }
@@ -169,7 +170,7 @@ async function checkSessionAlive() {
             }
             window.location.replace('/login/?next=/brain/');
         }
-    } catch (_) { /* network blip — retry next beat */ }
+    } catch (e) { console.warn('[brain/app] session heartbeat check failed:', e); }
 }
 
 function startSessionHeartbeat() {
@@ -197,6 +198,7 @@ async function loadData() {
             showToast('Failed to load providers', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] failed to load providers:', err);
         showToast('Failed to connect to backend', 'error');
         return;
     }
@@ -209,7 +211,7 @@ async function loadData() {
             selectedProviderId = selData.provider ? selData.provider.id : null;
         }
     } catch (e) {
-        // ignore
+        console.warn('[brain/app] failed to fetch selected provider:', e);
     }
 
     renderMain();
@@ -332,6 +334,7 @@ async function fetchOllamaModels(host, statusId) {
         statusEl.className = 'status-err';
         return [];
     } catch (e) {
+        console.warn('[brain/app] failed to reach backend for Ollama models:', e);
         statusEl.textContent = '✗ Cannot reach backend';
         statusEl.className = 'status-err';
         return [];
@@ -447,6 +450,7 @@ async function selectProvider(id) {
             renderProviders(); // revert UI
         }
     } catch (e) {
+        console.warn('[brain/app] failed to select provider:', e);
         showToast('Failed to select provider', 'error');
         renderProviders(); // revert UI
     }
@@ -654,6 +658,7 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
             resultEl.innerHTML = html;
         }
     } catch (e) {
+        console.warn('[brain/app] provider connection test failed:', e);
         resultEl.className = 'test-result test-error';
         resultEl.innerHTML = '✗ Could not reach the backend';
     } finally {
@@ -898,7 +903,7 @@ function updateScheduleFormHints() {
     }
 
     const date = new Date(dueAtVal);
-    if (isNaN(date.getTime())) {
+    if (Number.isNaN(date.getTime())) {
         hint.style.display = 'none';
         hint.textContent = '';
         return;
@@ -908,11 +913,15 @@ function updateScheduleFormHints() {
     const dayName = DAYS[date.getDay()];
     const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dom = date.getDate();
-    const domSuffix = dom === 1 ? 'st' : dom === 2 ? 'nd' : dom === 3 ? 'rd' : 'th';
+    let domSuffix;
+    if (dom === 1) domSuffix = 'st';
+    else if (dom === 2) domSuffix = 'nd';
+    else if (dom === 3) domSuffix = 'rd';
+    else domSuffix = 'th';
 
     let pattern = '';
     if (recurrence === 'interval') {
-        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        const mins = Number.parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
         if (mins >= 1 && mins <= 1440) {
             const h = Math.floor(mins / 60), m = mins % 60;
             const parts = [];
@@ -998,7 +1007,7 @@ document.getElementById('scheduleForm').addEventListener('submit', async (e) => 
     // Encode interval:N
     let recurrenceValue = document.getElementById('scheduleRecurrence').value || null;
     if (recurrenceValue === 'interval') {
-        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        const mins = Number.parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
         if (!mins || mins < 1 || mins > 1440) {
             showToast('Interval must be between 1 and 1440 minutes', 'error');
             return;
@@ -1036,6 +1045,7 @@ document.getElementById('scheduleForm').addEventListener('submit', async (e) => 
             showToast(data.error || 'Failed to save schedule', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] failed to save schedule:', err);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -1069,6 +1079,7 @@ async function executeCancelSchedule() {
             showToast(err.error || 'Failed to cancel', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to cancel schedule:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1084,6 +1095,7 @@ async function clearHistory() {
             showToast(data.error || 'Failed to clear history', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to clear history:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1091,8 +1103,8 @@ async function clearHistory() {
 function formatRecurrence(recurrence) {
     if (!recurrence) return '';
     if (recurrence.startsWith('interval:')) {
-        const mins = parseInt(recurrence.split(':')[1], 10);
-        if (isNaN(mins)) return recurrence;
+        const mins = Number.parseInt(recurrence.split(':')[1], 10);
+        if (Number.isNaN(mins)) return recurrence;
         const h = Math.floor(mins / 60), m = mins % 60;
         if (h === 0) return `Every ${m}m`;
         if (m === 0) return `Every ${h}h`;
@@ -1201,6 +1213,7 @@ async function loadGroupFires(groupId, container) {
             }).join('')
         }</div>`;
     } catch (e) {
+        console.warn('[brain/app] failed to load schedule history:', e);
         container.innerHTML = '<p class="form-hint">Error loading history.</p>';
     }
 }
@@ -1395,6 +1408,7 @@ async function toggleListExpand(id) {
             expandedListId = null;
         }
     } catch (e) {
+        console.warn('[brain/app] failed to load list:', e);
         showToast('Network error', 'error');
         expandedListId = null;
     }
@@ -1418,6 +1432,7 @@ async function refreshExpandedList(id) {
         }
         renderLists();
     } catch (e) {
+        console.warn('[brain/app] failed to refresh expanded list:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1445,6 +1460,7 @@ async function addListItem(listId) {
             showToast(data.error || 'Failed to add item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to add list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1462,6 +1478,7 @@ async function removeListItem(listId, content) {
             showToast(err.error || 'Failed to remove item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to remove list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1480,6 +1497,7 @@ async function toggleListItem(listId, content, checked) {
             showToast(err.error || 'Failed to update item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to toggle list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1596,6 +1614,7 @@ document.getElementById('createListForm').addEventListener('submit', async (e) =
             showToast(data.error || 'Failed to create list', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to create list:', e);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -1642,6 +1661,7 @@ document.getElementById('renameListForm').addEventListener('submit', async (e) =
             showToast(data.error || 'Failed to rename list', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to rename list:', e);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -1675,6 +1695,7 @@ document.getElementById('confirmDeleteListBtn').addEventListener('click', async 
             deletingListId = null;
         }
     } catch (e) {
+        console.warn('[brain/app] failed to delete list:', e);
         showToast('Network error', 'error');
         deletingListId = null;
     }
@@ -1734,7 +1755,7 @@ function obsSetTimestamp(isoStr) {
     try {
         const d = new Date(isoStr);
         el.textContent = 'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch { el.textContent = ''; }
+    } catch (e) { console.warn('[brain/app] obsSetTimestamp failed:', e); el.textContent = ''; }
 }
 
 // ── Memory Records ──
@@ -1808,6 +1829,7 @@ async function _recordsFetch(append) {
             _recordsSetStatus(null);
         }
     } catch (e) {
+        console.warn('[brain/app] failed to load memory records:', e);
         _recordsSetStatus('Could not load records.');
         document.getElementById('recordsLoadMore').classList.add('hidden');
     }
@@ -1869,6 +1891,7 @@ async function loadToolsObs() {
         html += '</tbody></table>';
         el.innerHTML = html;
     } catch (e) {
+        console.warn('[brain/app] failed to load tool data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load tool data.</div>';
     }
 }
@@ -1928,10 +1951,11 @@ async function loadTasksObs() {
                     const r = await apiFetch(`/system/observability/tasks/${taskId}`, { method: 'DELETE' });
                     if (r.ok) loadTasksObs();
                     else alert('Failed to cancel task');
-                } catch { alert('Failed to cancel task'); }
+                } catch (e) { console.warn('[brain/app] task cancel failed:', e); alert('Failed to cancel task'); }
             });
         });
     } catch (e) {
+        console.warn('[brain/app] failed to load task data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load task data.</div>';
     }
 }
@@ -1976,6 +2000,7 @@ async function loadWorldStateObs() {
 
         el.innerHTML = html;
     } catch (e) {
+        console.warn('[brain/app] failed to load world state data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load world state data.</div>';
     }
 }
@@ -1990,7 +2015,7 @@ function timeAgo(isoStr) {
         if (diff < 3600000) return Math.floor(diff / 60000) + ' min ago';
         if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
         return Math.floor(diff / 86400000) + 'd ago';
-    } catch { return 'unknown'; }
+    } catch (e) { console.warn('[brain/app] timeAgo failed:', e); return 'unknown'; }
 }
 
 // ==========================================
@@ -1999,11 +2024,11 @@ function timeAgo(isoStr) {
 function escapeHtml(str) {
     if (!str) return '';
     return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
 }
 
 const ACRONYMS = {
@@ -2042,6 +2067,7 @@ async function loadDocuments() {
         renderDocuments();
         loadWatchedFolders();
     } catch (e) {
+        console.warn('[brain/app] failed to load documents:', e);
         el.innerHTML = '<div class="empty-state"><p>Failed to load documents.</p></div>';
     }
 }
@@ -2067,10 +2093,11 @@ function renderDocumentRow(doc) {
     const chunks = `${doc.chunk_count || 0} chunks`;
     const date = doc.doc_date || (doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '');
 
-    const statusClass = doc.status === 'ready' ? 'status-ready'
-        : doc.status === 'failed' ? 'status-error'
-        : doc.status === 'processing' ? 'status-building'
-        : '';
+    let statusClass;
+    if (doc.status === 'ready') statusClass = 'status-ready';
+    else if (doc.status === 'failed') statusClass = 'status-error';
+    else if (doc.status === 'processing') statusClass = 'status-building';
+    else statusClass = '';
 
     const isDeleted = !!doc.deleted_at;
 
@@ -2462,7 +2489,7 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.error || 'Upload failed', 'error');
             }
-        } catch { showToast('Upload failed', 'error'); }
+        } catch (e) { console.warn('[brain/app] document upload failed:', e); showToast('Upload failed', 'error'); }
     });
     fileInput.click();
 });
@@ -2629,7 +2656,7 @@ async function openWatchFolderModal(editId) {
                 document.getElementById('watchFolderInterval').value = folder.scan_interval || 300;
                 _currentBrowsePath = folder.folder_path;
             }
-        } catch { /* fallthrough */ }
+        } catch (e) { console.warn('[brain/app] failed to load watched folder for edit:', e); }
     } else {
         title.textContent = 'Watch Folder';
         saveBtn.textContent = 'Watch';
@@ -2689,6 +2716,7 @@ async function browseDirectory(path) {
             ).join('');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to browse directory:', e);
         listEl.innerHTML = '<div class="dir-browser-empty">Failed to browse directory</div>';
     }
 }
@@ -2721,7 +2749,7 @@ document.getElementById('watchFolderForm')?.addEventListener('submit', async (e)
         file_patterns: filePatterns,
         ignore_patterns: ignorePatterns,
         recursive: document.getElementById('watchFolderRecursive').checked,
-        scan_interval: parseInt(document.getElementById('watchFolderInterval').value) || 300,
+        scan_interval: Number.parseInt(document.getElementById('watchFolderInterval').value, 10) || 300,
     };
 
     try {
@@ -2742,7 +2770,7 @@ document.getElementById('watchFolderForm')?.addEventListener('submit', async (e)
             const err = await res.json().catch(() => ({}));
             showToast(err.error || 'Failed to save', 'error');
         }
-    } catch { showToast('Failed to save watched folder', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to save watched folder:', e); showToast('Failed to save watched folder', 'error'); }
 });
 
 // Close / cancel watch folder modal
@@ -2764,7 +2792,7 @@ async function toggleWatchFolder(id, enabled) {
             body: JSON.stringify({ enabled }),
         });
         loadWatchedFolders();
-    } catch { showToast('Failed to toggle folder', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to toggle folder:', e); showToast('Failed to toggle folder', 'error'); }
 }
 
 async function triggerFolderScan(id) {
@@ -2775,7 +2803,7 @@ async function triggerFolderScan(id) {
         } else {
             showToast('Failed to trigger scan', 'error');
         }
-    } catch { showToast('Failed to trigger scan', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to trigger scan:', e); showToast('Failed to trigger scan', 'error'); }
 }
 
 async function deleteWatchFolder(id) {
@@ -2788,7 +2816,7 @@ async function deleteWatchFolder(id) {
         } else {
             showToast('Failed to remove folder watch', 'error');
         }
-    } catch { showToast('Failed to remove folder watch', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to remove folder watch:', e); showToast('Failed to remove folder watch', 'error'); }
 }
 
 // ==========================================
@@ -2816,6 +2844,7 @@ async function loadCapabilities() {
         capabilitiesData = data.capabilities || [];
         renderCapabilities();
     } catch (e) {
+        console.warn('[brain/app] failed to load capabilities:', e);
         el.innerHTML = '<div class="empty-state"><p>Failed to load capabilities.</p></div>';
     }
 }
@@ -2953,6 +2982,7 @@ document.getElementById('capSetupForm').addEventListener('submit', async (e) => 
             showToast(data.error || 'Connection failed', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] capability setup failed:', err);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -2972,6 +3002,7 @@ async function disconnectCapability(capId) {
             showToast(data.error || 'Failed to disconnect', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] capability disconnect failed:', err);
         showToast('Network error', 'error');
     }
 }

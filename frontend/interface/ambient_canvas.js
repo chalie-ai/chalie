@@ -53,7 +53,7 @@ export class AmbientCanvas {
     const orbs = [
       // Large violet field — dominates top-left — this IS the brand color
       { cx: 0.22, cy: 0.20, r: 0.70, color: [100, 60, 220], alpha: 0.08,
-        dx: 0.07, dy: 0.06, sx: 1.0,  sy: 0.75, rBreath: 0.06, phase: 0.0  },
+        dx: 0.07, dy: 0.06, sx: 1,    sy: 0.75, rBreath: 0.06, phase: 0    },
       // Magenta — lower-right — warm human counterpoint
       { cx: 0.78, cy: 0.65, r: 0.55, color: [180, 30, 140], alpha: 0.06,
         dx: 0.06, dy: 0.07, sx: 0.85, sy: 1.1,  rBreath: 0.06, phase: 2.4  },
@@ -62,7 +62,7 @@ export class AmbientCanvas {
         dx: 0.08, dy: 0.05, sx: 0.95, sy: 1.05, rBreath: 0.05, phase: 1.5  },
       // Deep indigo anchor — bottom — grounds the composition
       { cx: 0.40, cy: 0.90, r: 0.50, color: [60, 40, 140],  alpha: 0.06,
-        dx: 0.05, dy: 0.08, sx: 1.10, sy: 0.90, rBreath: 0.06, phase: 4.2  },
+        dx: 0.05, dy: 0.08, sx: 1.1,  sy: 0.9,  rBreath: 0.06, phase: 4.2  },
     ];
 
     for (const orb of orbs) {

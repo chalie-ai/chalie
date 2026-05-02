@@ -102,7 +102,7 @@ export class ClientHeartbeat {
           this._authFailureCb();
         }
       }
-    } catch (_) { /* network error — ignore, will retry next beat */ }
+    } catch (e) { console.warn('[heartbeat] auth check failed:', e); }
   }
 
   /**
@@ -122,7 +122,7 @@ export class ClientHeartbeat {
       });
       // Permission was granted — resend context immediately with coordinates
       this._sendContext();
-    } catch (_) { /* geolocation not supported */ }
+    } catch (e) { console.warn('[heartbeat] geolocation request failed:', e); }
   }
 
   /**
@@ -179,7 +179,8 @@ export class ClientHeartbeat {
         level: Math.round(batt.level * 100) / 100,
         charging: batt.charging,
       };
-    } catch (_) {
+    } catch (e) {
+      console.warn('[heartbeat] getBattery failed:', e);
       return null;
     }
   }
@@ -257,7 +258,7 @@ export class ClientHeartbeat {
               );
             });
           }
-        } catch (_) { /* permissions API not supported — skip */ }
+        } catch (e) { console.warn('[heartbeat] permissions API not supported:', e); }
       }
 
       // Send to backend
@@ -278,7 +279,7 @@ export class ClientHeartbeat {
               detail: { attention: result.attention }
             }));
           }
-        } catch (_) { /* ignore parse failures */ }
+        } catch (e) { console.warn('[heartbeat] failed to parse health response:', e); }
       }
 
       this._lastSentAt = Date.now();

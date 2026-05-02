@@ -110,7 +110,7 @@ function _wireActionButton(actionEl) {
 
   // Set data-* attributes directly. The DOM handles dash↔camelCase
   // conversion when later read via ``.dataset.openUrl``.
-  actionEl.setAttribute('data-value', value);
+  actionEl.dataset.value = value;
   for (const name of _ACTION_DATA_ATTRS) {
     const v = actionEl.getAttribute(name);
     if (v !== null) actionEl.setAttribute(`data-${name}`, v);
@@ -125,7 +125,7 @@ function _wireActionButton(actionEl) {
   // Chat-action click handler — overlay actions (execute=...) are wired by
   // AppsPanel._wireOverlayActions, so we skip dispatch in that case to
   // avoid double-firing.
-  if (actionEl.getAttribute('data-execute')) return;
+  if (actionEl.dataset.execute) return;
   actionEl.addEventListener('click', () => {
     const row = actionEl.closest('.chalie-actions-row');
     if (row) {

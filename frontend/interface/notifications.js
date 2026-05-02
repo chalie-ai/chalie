@@ -40,8 +40,8 @@ export class Notifications {
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.5);
-    } catch (_) {
-      // AudioContext unavailable or blocked — silently skip
+    } catch (e) {
+      console.warn('[notifications] AudioContext unavailable or blocked:', e);
     }
   }
 
@@ -66,7 +66,7 @@ export class Notifications {
       }).catch(() => {});
     } else {
       // Fallback: Notification API directly (no SW available)
-      try { new Notification('Chalie', { body, tag: 'chalie-message' }); } catch (_) {}
+      try { new Notification('Chalie', { body, tag: 'chalie-message' }); } catch (e) { console.warn('[notifications] Notification API failed:', e); }
     }
 
     // Audible chime — Web Audio may be throttled in hidden tabs but works
@@ -142,7 +142,7 @@ export class Notifications {
 
   _urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const base64 = (base64String + padding).replaceAll('-', '+').replaceAll('_', '/');
     const raw = atob(base64);
     const output = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) {

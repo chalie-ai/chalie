@@ -340,8 +340,8 @@ export class VoicePlayer {
   _stopCurrentSource() {
     if (!this._currentSource) return;
     this._currentSource.onended = null;
-    try { this._currentSource.stop(); } catch (_) { /* already stopped */ }
-    try { this._currentSource.disconnect(); } catch (_) { /* already disconnected */ }
+    try { this._currentSource.stop(); } catch (e) { console.warn('[VoicePlayer] source.stop failed:', e); }
+    try { this._currentSource.disconnect(); } catch (e) { console.warn('[VoicePlayer] source.disconnect failed:', e); }
     this._currentSource = null;
   }
 

@@ -344,8 +344,11 @@ export class Renderer {
       const dot = document.createElement('span');
       dot.className = 'meta-confidence-dot';
       const c = meta.confidence;
-      dot.classList.add(c >= 0.85 ? '--high' : c >= 0.65 ? '--mid' : '--low');
-      const label = c >= 0.85 ? 'Highly' : c >= 0.65 ? 'Moderately' : 'Less';
+      const isHigh = c >= 0.85;
+      const isMid = c >= 0.65;
+      const confidenceClass = isHigh ? '--high' : (isMid ? '--mid' : '--low');
+      const label = isHigh ? 'Highly' : (isMid ? 'Moderately' : 'Less');
+      dot.classList.add(confidenceClass);
       dot.title = `${label} confident (${Math.round(c * 100)}%)`;
       metaRow.appendChild(dot);
     }

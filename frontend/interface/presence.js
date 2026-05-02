@@ -38,7 +38,7 @@ export class Presence {
   setState(state) {
     if (!LABELS[state]) return;
     this._state = state;
-    this._dot.setAttribute('data-state', state);
+    this._dot.dataset.state = state;
     this._label.textContent = LABELS[state];
   }
 }
