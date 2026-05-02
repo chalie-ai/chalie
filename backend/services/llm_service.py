@@ -8,6 +8,7 @@ Usage:
     text = response.text
 """
 
+import json
 import re
 import time
 import logging
@@ -250,6 +251,9 @@ class FallbackLLMService:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
 
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
+        return self._primary.build_request_body(system_prompt, messages, tools, **kwargs)
+
     def get_context_limit(self) -> int:
         return self._primary.get_context_limit()
 
@@ -332,6 +336,9 @@ class LoggingLLMService:
         result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._job_name, result)
         return result
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
+        return self._service.build_request_body(system_prompt, messages, tools, **kwargs)
 
     def get_context_limit(self) -> int:
         return self._service.get_context_limit()
@@ -479,6 +486,10 @@ class RefreshableLLMService:
         result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._agent_name, result)
         return result
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
+        self._ensure_fresh()
+        return self._service.build_request_body(system_prompt, messages, tools, **kwargs)
 
     def get_context_limit(self) -> int:
         self._ensure_fresh()
@@ -633,6 +644,24 @@ class AnthropicService:
             tokens_output=response.usage.output_tokens,
             latency_ms=latency_ms,
         )
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Uses the same dict construction as send_messages (cache_prefix=False,
+        thinking_mode=None — measurement path never needs those variants because
+        token counts are independent of caching and thinking budget headers).
+        The result is json.dumps of the identical create_kwargs dict, which is
+        what the Anthropic SDK serialises over the wire.
+        """
+        create_kwargs = {
+            'model': self.model,
+            'max_tokens': self._MAX_TOKENS,
+            'system': system_prompt,
+            'messages': _anthropic_convert_messages(messages),
+            **({'tools': tools} if tools else {}),
+        }
+        return json.dumps(create_kwargs, default=str)
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         import anthropic
@@ -961,6 +990,24 @@ class OpenAIService:
             })
         return tool_calls
 
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Uses the same dict construction as send_messages (thinking_mode=None —
+        reasoning_effort is omitted from measurement because the token count
+        it adds to the payload is negligible and provider-dependent).
+        The result is json.dumps of the identical create_kwargs dict, which is
+        what the OpenAI SDK serialises over the wire.
+        """
+        api_messages = _openai_convert_messages(messages)
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
+        }
+        if tools:
+            create_kwargs['tools'] = self._build_openai_tools(tools)
+        return json.dumps(create_kwargs, default=str)
+
     def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         # ``_cache_prefix``: interface parity with Anthropic, but OpenAI has
         # no prefix-cache so the value is intentionally ignored. Underscore
@@ -1185,6 +1232,38 @@ class GeminiService:
             tokens_output=tokens_output,
             latency_ms=latency_ms,
         )
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Gemini uses the google-genai SDK which serialises over gRPC/REST
+        internally. We serialise the same Python dict structures that
+        send_messages builds (converted contents + config kwargs) so the
+        token estimator sees exactly what the SDK would encode.
+        """
+        gemini_contents = _gemini_convert_messages(messages)
+        # Build a plain-dict config representation without importing genai
+        # (measurement must work without a live API key or SDK initialised).
+        config_dict: dict = {'system_instruction': system_prompt}
+        if tools:
+            config_dict['tools'] = [
+                {
+                    'function_declarations': [
+                        {
+                            'name': t['name'],
+                            'description': t.get('description', ''),
+                            'parameters': t.get('input_schema'),
+                        }
+                        for t in tools
+                    ]
+                }
+            ]
+        body = {
+            'model': self.model,
+            'contents': gemini_contents,
+            'config': config_dict,
+        }
+        return json.dumps(body, default=str)
 
     def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         # ``_cache_prefix``: interface parity with Anthropic, but Gemini has

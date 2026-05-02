@@ -265,6 +265,21 @@ class ProviderDbService:
             new_id = cursor.lastrowid
             cursor.close()
 
+        # Backfill max_tokens + compact_at for the newly-created provider.
+        # Same code path as the boot-time backfill — single source of truth.
+        # Failure here is non-fatal: the row exists, the values can be
+        # populated by the next boot or a manual retry.
+        try:
+            from services.provider_token_limits import backfill_one
+            with self.db.connection() as conn:
+                backfill_one(conn, new_id)
+                conn.commit()
+        except Exception as exc:
+            logger.warning(
+                "[ProviderDBService] post-create token-limit backfill failed for id=%s: %s",
+                new_id, exc,
+            )
+
         # Fetch the newly created row and return it
         return self.get_provider_by_id(new_id)
 

@@ -11,7 +11,7 @@ What this does:
   3. Strips the UserPromptAssemblyService wrapper from user content — keeps
      only the raw user message below the "## User Message" marker
   4. Deduplicates pairs by content hash
-  5. Deletes orphaned tool_calls, clears compactions, truncates transcript
+  5. Deletes orphaned tool_calls, truncates transcript
      rows for the affected channels
   6. Re-inserts clean (user, assistant) pairs in chronological order
      WITHOUT tool_calls rows — north-star format: no role='tool' in transcript,
@@ -28,8 +28,10 @@ Collateral tables:
     integer IDs. SQLite does not enforce this FK, and episode retrieval uses
     vector similarity, not transcript ID lookup — harmless.
   - memory_recall_log: same orphaned-ID situation, same non-impact.
-  - compactions: watermark ID is invalidated; row is deleted and rebuilt
-    naturally during normal operation.
+  - compaction tool_calls rows: watermark IDs reference transcript rows that
+    no longer exist after the rebuild. These rows are harmless — the canonical
+    lookup (get_compaction) filters by transcript.channel JOIN, so orphaned
+    tool_calls rows for deleted transcript IDs are invisible to the lookup.
 
 Usage:
   # Dry run — show what would happen, change nothing
@@ -318,10 +320,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
             )
             stats["orphaned_tool_calls_deleted"] = cur.rowcount
 
-        # 5b. Delete compaction (watermark is stale post-truncate)
-        conn.execute("DELETE FROM compactions WHERE channel = ?", (channel,))
-
-        # 5c. Delete transcript rows for this channel
+        # 5b. Delete transcript rows for this channel
         #     (we only delete the rows we READ — the last N — not the whole channel,
         #      since rows earlier than our window are already compacted / irrelevant)
         if old_ids:
@@ -352,7 +351,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print(f"\n  Written {len(clean_pairs)} exchange pairs "
           f"({len(clean_pairs) * 2} transcript rows)")
     print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
-    print("  Compaction cleared (will rebuild naturally)")
+    print("  Compaction audit rows preserved (orphaned IDs are invisible to canonical lookup)")
     print()
     print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 

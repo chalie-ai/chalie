@@ -133,6 +133,21 @@ def main():
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
 
+    # Persist providers.max_tokens / compact_at for every provider (active
+    # and inactive). Per-row try/except inside backfill_one — a single
+    # unreachable provider never kills startup.
+    try:
+        from services.provider_token_limits import backfill_all
+        with database_service.connection() as _conn:
+            _stats = backfill_all(_conn)
+            _conn.commit()
+        logger.info(
+            "[Startup] providers token-limit backfill: total=%d succeeded=%d failed=%d",
+            _stats['total'], _stats['succeeded'], _stats['failed'],
+        )
+    except Exception as _bf_err:
+        logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
+
     # One-time transcript rebuild (runs exactly once; sentinel file prevents re-runs)
     try:
         from migrate_transcript_rebuild import run_once_on_boot

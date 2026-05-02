@@ -249,53 +249,94 @@ Return ONLY the JSON object. No code fences.\
 """
 
 
-class CompactionFullSystemPrompt(SystemMessagePrompt):
-    """System-message body for full channel compaction.
+class ContinuityCompactionSystemPrompt(SystemMessagePrompt):
+    """System-message body for UMP continuity-first channel compaction.
 
-    Wired to: ``FullCompactionProcessor`` (replaces mid-ACT Stage 2 +
-    deleted post-turn backstop).
+    Wired to: ``ContinuityCompactionProcessor``.
+
+    Replaces the old ``CompactionFullSystemPrompt``. The continuity-first
+    prompt instructs the LLM to treat the summary as its own living memory,
+    produce a ``<summary>`` block (parsed by ``_extract_compaction_summary``),
+    and carry forward an ``## Previous Summary`` rather than treating each
+    compaction as a fresh start.
     """
 
     _SYSTEM_PROMPT = """\
-Summarize the following conversation context into a compact, actionable summary.
+You are summarising your own ongoing conversation with one person. The conversation has no end — there are no sessions, topics, or resets. Your summary IS your memory of this person across time.
 
-Preserve:
-- Decisions made and their reasoning
-- Facts established (names, dates, numbers, specifics)
-- User preferences expressed
-- Key information gathered from tools or research
-- Action items and their current status
-- Any unresolved questions or pending items
+Your output replaces older turns at the head of your next prompt. Only you read it. If a fact is not in here, you forget it.
 
-Do NOT preserve:
-- Conversation flow ("then we discussed...", "the user asked...")
-- Social pleasantries or greetings
-- Redundant confirmations ("yes", "ok", "got it")
-- Raw tool output — summarize the findings instead
-- Reasoning that led to discarded options
+Single goal: continuity. Reading your own summary plus the next user message, you respond exactly as you would if every prior turn were still in context.
 
-Write a single cohesive summary. Be dense but accurate. Use bullet points for discrete facts.\
+You receive:
+
+- ## Previous Summary — your last memory snapshot. Default action: carry forward. Update only what new turns change.
+- ## New Conversation Turns — exchanges since that snapshot. Reference material. Do not respond to them. Do not address the user.
+
+Before writing, work in <analysis>:
+- For each fact in Previous Summary: still true / updated / contradicted / dead. Mark each.
+- From New Turns: pull only what survives the test below.
+
+What survives — keep:
+- Stable identity (name, household, location, role, values).
+- Things the user has returned to more than once.
+- Promises you made, things you owe, things the user asked you to hold.
+- Open threads — questions, decisions pending, things either side said they'd come back to.
+- Strong preferences and stances the user has expressed.
+- Tone, names, in-jokes that have recurred.
+- The last exchange (one line user, one line you) so you pick up the thread.
+
+What dies — drop:
+- One-off mentions never returned to.
+- Resolved questions and closed loops.
+- Social filler, agreement noise, throwaway jokes.
+- Plumbing: timestamps, System Awareness blocks, Checkpoint headers, telemetry, internal state.
+- Anything you cannot tie to a recurring thread or commitment.
+
+Write <summary> as a single short living document, not a chronicle. Sections in order:
+
+- Person — who they are. 2-4 lines.
+- Now — what they're in the middle of. 2-5 lines.
+- Holding — promises, things you owe, things they asked you to remember. Bullets.
+- Open — unresolved threads. Bullets.
+- Voice — tone, recurring names, in-jokes. 1-3 lines.
+- Last — last exchange, 1 line each side.
+
+Hard rules:
+- Target 200-400 tokens. Compress aggressively. Drop before you grow.
+- No "we discussed", "the user asked", "I said". State facts, not narration.
+- Fewer specifics is failure. More words for the same facts is failure.
+- Older facts compress harder than newer ones.
+
+Now produce <analysis>...</analysis> followed by <summary>...</summary>.\
 """
 
 
-class CompactionTrailSystemPrompt(SystemMessagePrompt):
-    """System-message body for mid-ACT tool-trail summarisation.
+class SubagentTrailCompactionSystemPrompt(SystemMessagePrompt):
+    """System-message body for subagent mid-ACT trail compaction.
 
-    Wired to: ``TrailCompactionProcessor`` (replaces mid-ACT Stage 1).
+    Wired to: ``SubagentTrailCompactionProcessor``.
+
+    Compresses a subagent's accumulated tool-use trail into a dense
+    per-tool block format. Output is injected inline to replace
+    ``self._act_trail`` in the running subagent — no ``<analysis>``
+    wrapping, no channel summary.
     """
 
     _SYSTEM_PROMPT = """\
-You are compressing a tool-use trail from an in-progress task.
+You are compressing a subagent's tool-use trail from an in-progress task.
 
-Preserve:
-- Key findings surfaced by each tool call (data, names, IDs, URLs, results)
-- Decisions the assistant has made based on those findings
-- Outstanding questions or next steps implied by the trail
+For each tool invocation in the trail, output one block:
+  [tool_name] Key finding or result — 1-3 sentences. Names, IDs, numbers, URLs preserved verbatim.
 
-Do NOT preserve:
-- Literal tool argument JSON
-- Redundant reasoning ("I will now call X to find Y")
-- Errors the assistant already recovered from
+After the per-tool blocks, add two trailing lines:
+  Decisions: What the agent has concluded or committed to based on the trail so far.
+  Open: Outstanding questions or next steps still needed to complete the task.
 
-Write a single dense paragraph. This summary replaces the raw tool output in the ongoing context — be accurate, be specific.\
+Rules:
+- Preserve every named entity, identifier, URL, and numeric value.
+- Drop literal tool argument JSON.
+- Drop redundant reasoning ("I will now call X to find Y").
+- Drop errors the agent already recovered from.
+- No preamble, no markdown fences, no "Summary:" header.\
 """

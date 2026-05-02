@@ -194,9 +194,9 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
-    "FullCompactionProcessor":     (frozenset(), frozenset()),
-    "TrailCompactionProcessor":    (frozenset(), frozenset()),
-    "EpisodeEncoderProcessor":     (frozenset(), frozenset()),
+    "ContinuityCompactionProcessor":      (frozenset(), frozenset()),
+    "SubagentTrailCompactionProcessor":   (frozenset(), frozenset()),
+    "EpisodeEncoderProcessor":            (frozenset(), frozenset()),
     "SuperEpisodeEncoderProcessor": (frozenset(), frozenset()),
     "UserSummaryProcessor":        (frozenset(), frozenset()),
 }
@@ -213,8 +213,8 @@ def test_per_processor_tool_scope_matches_spec():
     one (PMP today).
     """
     from services.compaction_message_processor import (
-        FullCompactionProcessor,
-        TrailCompactionProcessor,
+        ContinuityCompactionProcessor,
+        SubagentTrailCompactionProcessor,
     )
     from services.dmn_message_processor import DMNMessageProcessor
     from services.episode_encoder_processor import EpisodeEncoderProcessor
@@ -231,8 +231,8 @@ def test_per_processor_tool_scope_matches_spec():
         "ScheduledMessageProcessor": ScheduledMessageProcessor,
         "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
-        "FullCompactionProcessor": FullCompactionProcessor,
-        "TrailCompactionProcessor": TrailCompactionProcessor,
+        "ContinuityCompactionProcessor": ContinuityCompactionProcessor,
+        "SubagentTrailCompactionProcessor": SubagentTrailCompactionProcessor,
         "EpisodeEncoderProcessor": EpisodeEncoderProcessor,
         "SuperEpisodeEncoderProcessor": SuperEpisodeEncoderProcessor,
         "UserSummaryProcessor": UserSummaryProcessor,

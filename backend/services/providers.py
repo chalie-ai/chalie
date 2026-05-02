@@ -20,6 +20,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Fraction of a provider's max_tokens that triggers continuity compaction.
+# Lives here so both the boot backfill and any future tuning have one source.
+COMPACTION_THRESHOLD_RATIO = 0.80
+
 
 class Providers:
     """Singleton provider gateway. Resolves provider by job, sends messages."""
@@ -184,6 +188,61 @@ class Providers:
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider."""
         return self._resolve(job).get_context_limit()
+
+    def get_compact_at(self) -> 'int | None':
+        """Return the persisted compact_at threshold for the globally selected provider.
+
+        Reads providers.compact_at from the row referenced by the
+        selected_provider_id setting. Falls back to the first active row when
+        no provider is explicitly selected.
+
+        Returns None if no active provider row exists or compact_at is NULL
+        (boot backfill should always populate it; a NULL value signals a
+        misconfigured provider row).
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.provider_db_service import ProviderDbService
+
+            db = get_shared_db_service()
+            service = ProviderDbService(db)
+            selected = service.get_selected_provider()
+            with db.connection() as conn:
+                if selected and selected.get('id'):
+                    row = conn.execute(
+                        "SELECT compact_at FROM providers WHERE id = ? AND is_active = 1",
+                        (selected['id'],),
+                    ).fetchone()
+                else:
+                    # Fallback: first active provider
+                    row = conn.execute(
+                        "SELECT compact_at FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1",
+                    ).fetchone()
+            if row is None:
+                logger.warning("[COMPACTION] get_compact_at: no active provider row found")
+                return None
+            return row[0]  # may be None if column is NULL
+        except Exception as exc:
+            logger.warning("[COMPACTION] get_compact_at() failed: %s", exc)
+            return None
+
+    def estimate_payload_tokens(self, system_prompt: str, messages: list, tools: list = None, job: str = 'unified') -> int:
+        """Return an estimated token count for the actual request body the provider will send.
+
+        Calls the resolved provider's ``build_request_body`` method — the same
+        method used by ``send_messages`` — so the measurement reflects the
+        literal serialised payload rather than a synthesised approximation.
+        Falls back to 0 on any error (safe: threshold check skips compaction
+        rather than triggering a false-positive).
+        """
+        from services.llm_service import estimate_tokens
+        try:
+            provider = self._resolve(job)
+            body = provider.build_request_body(system_prompt, messages, tools)
+            return estimate_tokens(body)
+        except Exception as exc:
+            logger.warning("[COMPACTION] estimate_payload_tokens failed: %s", exc)
+            return 0
 
     def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
         """Delegate to resolved provider."""

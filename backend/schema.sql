@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS providers (
     timeout INTEGER DEFAULT 120,
     is_active INTEGER DEFAULT 1,             -- BOOLEAN
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
+    max_tokens INTEGER,
+    compact_at INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -509,19 +511,6 @@ CREATE TABLE IF NOT EXISTS transcript (
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
-
--- ────────────────────────────────────────────────────────────────
--- COMPACTIONS — incremental conversation summarization
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS compactions (
-    channel             TEXT PRIMARY KEY,
-    compacted_text      TEXT NOT NULL,
-    compacted_up_to_id  INTEGER NOT NULL,
-    token_count         INTEGER DEFAULT 0,
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    overflow_content    TEXT,
-    FOREIGN KEY (compacted_up_to_id) REFERENCES transcript(id)
-);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOOL CALLS — audit log of every tool invocation per transcript turn
