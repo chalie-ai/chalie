@@ -322,7 +322,7 @@ class ClientContextService:
         try:
             from zoneinfo import ZoneInfo
             ZoneInfo(tz_name)  # validate IANA name
-        except (KeyError, Exception):
+        except Exception:
             logging.debug(f"[CLIENT CONTEXT] Invalid timezone '{tz_name}', not persisting")
             return
         try:

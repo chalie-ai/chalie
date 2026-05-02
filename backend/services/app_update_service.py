@@ -23,7 +23,6 @@ import tarfile
 import tempfile
 import threading
 from pathlib import Path
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from services.memory_client import MemoryClientService
@@ -154,7 +153,7 @@ class AppUpdateService:
             store.setex(CACHE_KEY, CACHE_TTL, json.dumps(result))
             return result
 
-        except (URLError, OSError, json.JSONDecodeError, KeyError) as exc:
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
             logger.warning("Failed to check for updates: %s", exc)
 
             cached = store.get(CACHE_KEY)
@@ -242,7 +241,7 @@ class AppUpdateService:
         try:
             with urlopen(tarball_url, timeout=30) as resp:
                 tarball_path.write_bytes(resp.read())
-        except (URLError, OSError) as exc:
+        except OSError as exc:
             shutil.rmtree(str(tmp_dir), ignore_errors=True)
             raise RuntimeError(f"Failed to download release {tag}: {exc}") from exc
 

@@ -592,7 +592,7 @@ class FolderWatcherService:
                 try:
                     stat = os.stat(abs_path)
                     yield abs_path, stat.st_mtime
-                except (PermissionError, OSError) as e:
+                except OSError as e:
                     logger.debug(f"[WATCHER] Cannot stat {abs_path}: {e}")
 
     def _compute_hash(self, file_path: str) -> str:
