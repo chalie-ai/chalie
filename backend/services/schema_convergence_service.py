@@ -14,7 +14,6 @@ Safety: destructive operations can be disabled by setting the env var
 ``CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=0``. Default is enabled.
 """
 
-import json
 import logging
 import os
 import re

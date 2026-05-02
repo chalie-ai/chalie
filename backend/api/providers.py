@@ -4,7 +4,6 @@ Providers blueprint — manage LLM provider configuration via REST API.
 
 import ipaddress
 import logging
-import os
 from urllib.parse import urlparse
 
 import requests as req
