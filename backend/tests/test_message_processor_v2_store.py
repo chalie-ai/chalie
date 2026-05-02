@@ -1431,3 +1431,278 @@ class TestActLoopOverflowEndToEnd:
             f"watermark must advance to highest entry id fed to LLM; "
             f"got {row['compacted_up_to_id']}, expected {max(seed_ids)}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACT loop cap-exit when _run_full_compaction returns None
+# Regression: if _handle_overflow returns False the loop must break and
+# send() must return '' rather than raising or returning partial narration.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestActLoopCapExitOnOverflowFailure:
+    """When _handle_overflow fails (returns False) the ACT loop breaks to
+    cap exit and send() returns ''.  Without this test the regression is:
+    the loop either hangs, raises, or returns mid-loop narration text that
+    was not authored as a final answer.
+    """
+
+    _CHANNEL = 'test_cap_exit_channel'
+
+    def test_overflow_handler_failure_returns_empty_string(self, db):
+        """_run_full_compaction returning None must cause send() to return ''."""
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import SystemMessagePrompt
+
+        # Seed no prior transcript rows — _run_full_compaction will find no
+        # entries and no prior checkpoint and will return None immediately
+        # without calling the LLM.  This is the real production failure path.
+        input_uid = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'user', 'overflow me',
+        )
+
+        class _StubPrompt(SystemMessagePrompt):
+            _SYSTEM_PROMPT = ''
+
+        class _CapExitProcessor(MessageProcessor):
+            CHANNEL = TestActLoopCapExitOnOverflowFailure._CHANNEL
+            ROLE = 'user'
+            SYSTEM_PROMPT_CLASS = _StubPrompt
+            SKIP_TRANSCRIPT_WRITE = True
+
+            def getUserDefinition(self):
+                return 'test user'
+
+            def getUserPrompt(self):
+                return 'overflow me'
+
+            def getSystemPrompt(self):
+                return 'sys'
+
+            def getTools(self):
+                return []
+
+        proc = _CapExitProcessor(raw_input='overflow me')
+        proc._uid = input_uid
+
+        # estimate_payload_tokens always exceeds compact_at so the threshold
+        # fires on every iteration.  _run_full_compaction finds zero entries
+        # (only the current-turn row exists; exclude_id filters it out) so it
+        # returns None → _handle_overflow returns False → loop breaks.
+        with patch('services.providers.Providers.instance') as mock_inst:
+            mock_inst.return_value.get_compact_at.return_value = 10
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 9999
+            # get_compaction returns None (no prior), get_entries_since returns
+            # only the current-turn row which exclude_id will filter away.
+            with patch('services.compaction_persistence.get_compaction', return_value=None), \
+                 patch('services.compaction_persistence.get_entries_since', return_value=[
+                     {'id': input_uid, 'role': 'user', 'content': 'overflow me',
+                      'tool_name': None},
+                 ]):
+                result = proc.send()
+
+        assert result == '', (
+            f"send() must return '' on cap exit but got {result!r}. "
+            "The loop may have fallen through to send_messages without compacting."
+        )
+        # Confirm no success compaction row was written (compaction genuinely
+        # failed, not just skipped).
+        assert _compact_get_audit_row(db, self._CHANNEL) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _handle_overflow purges ephemeral=1 rows but preserves ephemeral=0 rows
+# Regression: if the DELETE is too broad it wipes the audit row that was
+# just written (ephemeral=0), making the next turn start without a checkpoint.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHandleOverflowEphemeralPurge:
+    """_handle_overflow must delete ephemeral=1 tool_calls for the current _uid
+    and leave ephemeral=0 rows (compaction audit, thinking) intact.
+    """
+
+    _CHANNEL = 'test_ephemeral_purge_channel'
+
+    def test_ephemeral_rows_deleted_durable_rows_preserved(self, db):
+        """After _handle_overflow, ephemeral=1 rows for the turn are gone
+        but ephemeral=0 rows survive."""
+        input_uid = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'user', 'purge test',
+        )
+
+        # Pre-seed prior conversation rows so _run_full_compaction has
+        # something to summarise and returns a non-None result.
+        prior_ids = []
+        for i in range(3):
+            prior_ids.append(_compact_seed_transcript_row(
+                db, self._CHANNEL, 'user', f'prior {i}',
+            ))
+            prior_ids.append(_compact_seed_transcript_row(
+                db, self._CHANNEL, 'assistant', f'reply {i}',
+            ))
+
+        # Insert one ephemeral=1 tool_call (intermediate work) and one
+        # ephemeral=0 tool_call (durable record, e.g. a memory write) linked
+        # to the current turn's input row.
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
+            "ephemeral, created_at) VALUES (?, 'read', '{}', 'web content', 1, "
+            "'2026-01-01 00:00:01')",
+            (input_uid,),
+        )
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
+            "ephemeral, created_at) VALUES (?, 'memory', '{}', 'recalled fact', 0, "
+            "'2026-01-01 00:00:02')",
+            (input_uid,),
+        )
+        db.commit()
+
+        # Verify setup: both rows exist before overflow
+        rows_before = db.execute(
+            "SELECT ephemeral FROM tool_calls WHERE transcript_id=? "
+            "AND tool_name IN ('read','memory') ORDER BY ephemeral",
+            (input_uid,),
+        ).fetchall()
+        assert len(rows_before) == 2
+
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import SystemMessagePrompt
+
+        class _StubPrompt(SystemMessagePrompt):
+            _SYSTEM_PROMPT = ''
+
+        class _PurgeProcessor(MessageProcessor):
+            CHANNEL = TestHandleOverflowEphemeralPurge._CHANNEL
+            ROLE = 'user'
+            SYSTEM_PROMPT_CLASS = _StubPrompt
+            SKIP_TRANSCRIPT_WRITE = True
+
+            def getUserDefinition(self):
+                return 'test user'
+
+            def getUserPrompt(self):
+                return 'purge test'
+
+        proc = _PurgeProcessor(raw_input='purge test')
+        proc._uid = input_uid
+        proc._act_trail = []
+
+        compaction_resp = _make_compact_llm_response(
+            text='<analysis>x</analysis><summary>purge test summary</summary>'
+        )
+
+        with patch('services.providers.Providers.instance') as mock_inst, \
+             patch('services.compaction_persistence.get_compaction', return_value=None), \
+             patch('services.compaction_persistence.get_entries_since',
+                   return_value=[
+                       {'id': p, 'role': 'user', 'content': f'prior {i}',
+                        'tool_name': None}
+                       for i, p in enumerate(prior_ids)
+                   ]):
+            mock_inst.return_value.send_messages.return_value = compaction_resp
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            success = proc._handle_overflow()
+
+        assert success is True, "_handle_overflow should succeed with prior entries"
+
+        # ephemeral=1 row must be gone
+        ephemeral_row = db.execute(
+            "SELECT id FROM tool_calls WHERE transcript_id=? AND tool_name='read'",
+            (input_uid,),
+        ).fetchone()
+        assert ephemeral_row is None, (
+            "ephemeral=1 'read' tool_call should have been purged by _handle_overflow"
+        )
+
+        # ephemeral=0 row must survive
+        durable_row = db.execute(
+            "SELECT id FROM tool_calls WHERE transcript_id=? AND tool_name='memory'",
+            (input_uid,),
+        ).fetchone()
+        assert durable_row is not None, (
+            "ephemeral=0 'memory' tool_call must NOT be deleted by _handle_overflow"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# exclude_id filters the current turn's transcript row from compaction input
+# Regression: without exclude_id the current unanswered user message enters
+# the compaction LLM prompt, potentially confusing the continuity summary.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRunFullCompactionExcludeId:
+    """_run_full_compaction(exclude_id=X) must not include transcript row X
+    in the entries fed to the LLM.  This is the mechanism that prevents the
+    current (unanswered) user turn from polluting the compaction context.
+    """
+
+    _CHANNEL = 'test_exclude_id_channel'
+
+    def test_current_turn_row_absent_from_compaction_entries(self, db):
+        """The transcript row for _uid is not included in the LLM input."""
+        # Prior conversation that should be included
+        prior_id = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'user', 'prior message',
+        )
+        prior_reply = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'assistant', 'prior reply',
+        )
+        # Current turn row — must be excluded
+        current_id = _compact_seed_transcript_row(
+            db, self._CHANNEL, 'user', 'SHOULD NOT APPEAR IN COMPACTION',
+        )
+
+        captured_inputs: list[list] = []
+
+        def fake_send(system_prompt, messages, job=None, **_kw):
+            # Capture the full message list passed to the compaction LLM
+            captured_inputs.append(messages)
+            from services.llm_service import LLMResponse
+            return LLMResponse(
+                text='<summary>compact result</summary>',
+                model='test', provider='mock', tool_calls=None,
+            )
+
+        p = _make_compact_processor(channel=self._CHANNEL)
+        p._uid = current_id
+
+        with patch('services.providers.Providers.instance') as mock_inst, \
+             patch('services.compaction_persistence.get_compaction', return_value=None), \
+             patch('services.compaction_persistence.get_entries_since',
+                   return_value=[
+                       {'id': prior_id, 'role': 'user', 'content': 'prior message',
+                        'tool_name': None},
+                       {'id': prior_reply, 'role': 'assistant', 'content': 'prior reply',
+                        'tool_name': None},
+                       {'id': current_id, 'role': 'user',
+                        'content': 'SHOULD NOT APPEAR IN COMPACTION',
+                        'tool_name': None},
+                   ]):
+            mock_inst.return_value.send_messages.side_effect = fake_send
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            result = p._run_full_compaction(exclude_id=current_id)
+
+        assert result == 'compact result'
+        # The LLM must have been called exactly once
+        assert len(captured_inputs) == 1, "LLM should be called exactly once"
+        # Flatten all message content from the captured call
+        all_content = ' '.join(
+            str(msg.get('content', ''))
+            for msg in captured_inputs[0]
+        )
+        assert 'SHOULD NOT APPEAR IN COMPACTION' not in all_content, (
+            "The current turn's transcript row leaked into the compaction LLM input. "
+            "exclude_id filtering is broken."
+        )
+        # Prior rows must still be present
+        assert 'prior message' in all_content or 'prior reply' in all_content, (
+            "Prior transcript rows must be included in the compaction input"
+        )

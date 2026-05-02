@@ -198,11 +198,15 @@ class MessageProcessor:
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
         self._thinking_exploration: str | None = None
-        # One-shot guard: a 413 from the provider triggers a Stage 2 ACT
-        # restart, but only once per turn. A second 413 after compaction
-        # means the compacted body is still over the transport-level cap;
-        # restarting again would loop forever.
-        self._payload_too_large_recovered: bool = False
+        # One-shot guard: any overflow recovery (proactive threshold trip
+        # OR 413 from the provider) triggers a Stage 2 ACT restart, but only
+        # once per turn. The proactive threshold path can mis-fire when the
+        # static system_prompt + tools schema alone exceed compact_at — in
+        # that case compaction shrinks user_body but the threshold still
+        # trips on restart, and without this guard the loop spins forever.
+        # After one recovery: send anyway and let the transport 413 path
+        # decide whether the compacted body is genuinely too large.
+        self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
         # Per-turn pending steers from async subagent completions.
@@ -575,7 +579,9 @@ class MessageProcessor:
           resets iteration to 0 for a clean loop restart.
         - ``PayloadTooLargeError`` (HTTP 413) from the provider triggers the
           same ``_handle_overflow()`` path, but only once per turn
-          (``_payload_too_large_recovered`` guard).
+          (``_overflow_recovered_this_turn`` guard, shared with the proactive
+          threshold path so any combination of trips fires at most one
+          compaction per turn).
         - The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
           (independent budget). The ACT loop has no whole-loop wall-clock budget.
         - Overflow handling does NOT reset the per-instance deadline — the
@@ -683,18 +689,35 @@ class MessageProcessor:
                     # deadline (self._deadline) keeps ticking — compaction LLM
                     # calls count against the subagent's wall-clock budget.
                     if self._check_threshold(system_prompt, tools, user_body):
-                        logger.warning(
-                            "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
-                            self.CHANNEL,
-                        )
-                        if self._handle_overflow():
-                            continue
-                        logger.error(
-                            "[COMPACTION] %s: overflow handler failed — breaking to "
-                            "cap exit (final_text='')",
-                            self.CHANNEL,
-                        )
-                        break
+                        if self._overflow_recovered_this_turn:
+                            # One compaction has already run this turn; the
+                            # threshold trip on restart means the static
+                            # system_prompt + tools schema alone are over
+                            # compact_at. Re-running compaction would not
+                            # help — the user_body is already minimal. Send
+                            # anyway; if the wire payload genuinely overflows
+                            # the provider, the 413 path will break to cap
+                            # exit on the second strike.
+                            logger.warning(
+                                "[COMPACTION] %s: payload still exceeds compact_at "
+                                "after one overflow recovery — sending anyway "
+                                "(system_prompt + tools likely dominate)",
+                                self.CHANNEL,
+                            )
+                        else:
+                            logger.warning(
+                                "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
+                                self.CHANNEL,
+                            )
+                            if self._handle_overflow():
+                                self._overflow_recovered_this_turn = True
+                                continue
+                            logger.error(
+                                "[COMPACTION] %s: overflow handler failed — breaking to "
+                                "cap exit (final_text='')",
+                                self.CHANNEL,
+                            )
+                            break
 
                     # Single-element messages[] so the provider sees one user turn
                     # containing the full literal-text body (Previous Messages,
@@ -716,7 +739,7 @@ class MessageProcessor:
                             thinking_mode=self._get_thinking_mode_for_send(),
                         )
                     except PayloadTooLargeError as exc:
-                        if self._payload_too_large_recovered:
+                        if self._overflow_recovered_this_turn:
                             logger.error(
                                 "[COMPACTION] %s: PayloadTooLargeError after overflow "
                                 "recovery — breaking to cap exit (final_text=''): %s",
@@ -728,7 +751,7 @@ class MessageProcessor:
                             "running overflow handler (%s)",
                             self.CHANNEL, exc,
                         )
-                        self._payload_too_large_recovered = True
+                        self._overflow_recovered_this_turn = True
                         if self._handle_overflow():
                             continue
                         logger.error(

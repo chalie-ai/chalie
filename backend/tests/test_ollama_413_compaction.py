@@ -266,7 +266,7 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == 'final answer'
-        assert proc._payload_too_large_recovered is True
+        assert proc._overflow_recovered_this_turn is True
         assert proc.full_compaction_calls == 1, "overflow handler must run exactly once"
         assert fake.send_messages.call_count == 2, "one 413 + one success"
 
@@ -285,7 +285,7 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == ''  # cap exit
-        assert proc._payload_too_large_recovered is True
+        assert proc._overflow_recovered_this_turn is True
         assert proc.full_compaction_calls == 1, "overflow handler must run only once"
         assert fake.send_messages.call_count == 2
 
@@ -318,8 +318,51 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == 'final answer'
-        assert proc._payload_too_large_recovered is False
+        assert proc._overflow_recovered_this_turn is False
         assert proc.full_compaction_calls == 0
+
+
+class TestProactiveThresholdLoopGuard:
+    """Regression: threshold trip → compact → threshold STILL trips because
+    static system_prompt + tools schema dominate. The loop must NOT run a
+    second compaction; it must send anyway and rely on the wire-level 413
+    path for genuine overflow.
+    """
+
+    def _patch_providers_persistent_overflow(self):
+        """Threshold ALWAYS exceeds (estimate > compact_at), regardless of
+        how many times it's checked. send_messages returns a clean response
+        on first call so we can verify the loop reached the LLM call after
+        one compaction."""
+        from services.providers import Providers
+        fake = MagicMock()
+        fake.send_messages.side_effect = [_llm_response()]
+        fake.get_context_limit.return_value = 200_000
+        fake.get_compact_at.return_value = 200_000
+        # Always over threshold — simulates static system+tools dominance.
+        fake.estimate_payload_tokens.return_value = 500_000
+        return patch.object(Providers, 'instance', return_value=fake), fake
+
+    def test_persistent_threshold_trip_compacts_once_then_sends_anyway(self, db):
+        """Compact_at is exceeded on every iteration, but compaction must
+        run exactly once per turn. After the one-shot recovery, the loop
+        proceeds to send_messages even though threshold still trips —
+        otherwise the loop would spin forever recompacting."""
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
+
+        ctx, fake = self._patch_providers_persistent_overflow()
+        with ctx:
+            result = proc.send()
+
+        assert result == 'final answer'
+        # Compaction ran EXACTLY ONCE despite threshold tripping every iter.
+        assert proc.full_compaction_calls == 1, \
+            f"Expected 1 compaction, got {proc.full_compaction_calls} — runaway loop guard failed"
+        # Provider was called once (after the one compaction).
+        assert fake.send_messages.call_count == 1
+        # Guard flag was set.
+        assert proc._overflow_recovered_this_turn is True
 
 
 class TestHandleOverflowClearsState:

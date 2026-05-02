@@ -229,3 +229,147 @@ class TestCheckThresholdFullPayload:
         mock_logger.error.assert_called_once()
         call_args = mock_logger.error.call_args[0]
         assert 'compact_at missing' in call_args[0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# build_request_body — each provider must include system_prompt, messages,
+# and tools in its serialised output.
+#
+# Regression: if a provider's build_request_body omits the system_prompt or
+# tools schema from its serialised payload, estimate_payload_tokens will
+# under-count and _check_threshold will never fire, silently disabling
+# compaction.  No network call is needed — build_request_body is a pure
+# serialisation function.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestBuildRequestBodyIncludesAllComponents:
+    """Each provider's build_request_body must serialise system_prompt,
+    messages, AND tools.  If any are missing, the token estimate is wrong
+    and compaction can be silently disabled.
+    """
+
+    _SYSTEM = 'You are a helpful assistant with important instructions here.'
+    _MESSAGES = [{'role': 'user', 'content': 'What is the capital of France?'}]
+    _TOOLS = [
+        {
+            'name': 'search',
+            'description': 'Search the web for information',
+            'input_schema': {
+                'type': 'object',
+                'properties': {'query': {'type': 'string', 'description': 'Search query'}},
+                'required': ['query'],
+            },
+        }
+    ]
+
+    def test_ollama_build_request_body_includes_system(self):
+        from services.ollama_service import OllamaService
+        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert self._SYSTEM in body, (
+            "OllamaService.build_request_body must include system_prompt in the output"
+        )
+
+    def test_ollama_build_request_body_includes_user_message(self):
+        from services.ollama_service import OllamaService
+        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'What is the capital of France?' in body, (
+            "OllamaService.build_request_body must include message content in the output"
+        )
+
+    def test_ollama_build_request_body_includes_tools(self):
+        from services.ollama_service import OllamaService
+        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'search' in body, (
+            "OllamaService.build_request_body must include tool names in the output"
+        )
+
+    def test_anthropic_build_request_body_includes_system(self):
+        from services.llm_service import AnthropicService
+        svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert self._SYSTEM in body, (
+            "AnthropicService.build_request_body must include system_prompt"
+        )
+
+    def test_anthropic_build_request_body_includes_user_message(self):
+        from services.llm_service import AnthropicService
+        svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'What is the capital of France?' in body, (
+            "AnthropicService.build_request_body must include message content"
+        )
+
+    def test_anthropic_build_request_body_includes_tools(self):
+        from services.llm_service import AnthropicService
+        svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'search' in body, (
+            "AnthropicService.build_request_body must include tool names"
+        )
+
+    def test_openai_build_request_body_includes_system(self):
+        from services.llm_service import OpenAIService
+        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert self._SYSTEM in body, (
+            "OpenAIService.build_request_body must include system_prompt"
+        )
+
+    def test_openai_build_request_body_includes_user_message(self):
+        from services.llm_service import OpenAIService
+        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'What is the capital of France?' in body, (
+            "OpenAIService.build_request_body must include message content"
+        )
+
+    def test_openai_build_request_body_includes_tools(self):
+        from services.llm_service import OpenAIService
+        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'search' in body, (
+            "OpenAIService.build_request_body must include tool names"
+        )
+
+    def test_gemini_build_request_body_includes_system(self):
+        from services.llm_service import GeminiService
+        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert self._SYSTEM in body, (
+            "GeminiService.build_request_body must include system_prompt"
+        )
+
+    def test_gemini_build_request_body_includes_user_message(self):
+        from services.llm_service import GeminiService
+        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'What is the capital of France?' in body, (
+            "GeminiService.build_request_body must include message content"
+        )
+
+    def test_gemini_build_request_body_includes_tools(self):
+        from services.llm_service import GeminiService
+        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
+        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert 'search' in body, (
+            "GeminiService.build_request_body must include tool names"
+        )
+
+    def test_build_request_body_without_tools_smaller_than_with_tools(self):
+        """Serialised body WITH tools must be strictly larger than WITHOUT tools.
+        If they are equal the tools schema is silently dropped and the token
+        estimate will under-count for tool-heavy turns.
+        """
+        from services.ollama_service import OllamaService
+        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
+        body_no_tools = svc.build_request_body(self._SYSTEM, self._MESSAGES, tools=None)
+        body_with_tools = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
+        assert len(body_with_tools) > len(body_no_tools), (
+            "build_request_body with tools must produce a larger payload than without tools. "
+            "If they are equal, tools are being silently dropped and compaction token "
+            "estimates will be wrong."
+        )
