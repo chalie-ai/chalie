@@ -92,6 +92,26 @@ class TestDeliberationScoreServiceBucketing:
             f"Simple factual question scored {result:.4f} — expected < {_HIGH_THR}"
         )
 
+    @pytest.mark.parametrize("reflexive_input", ["hmm", "ok", "interesting"])
+    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input):
+        """Reflexive single-word acknowledgments must score <= 0.5.
+
+        Migrated from deleted nightly scenario 013 — classifier input/output
+        contracts belong here as deterministic unit-style assertions, not in
+        end-to-end nightly flow tests.
+        """
+        _require_encoder()
+        svc = _real_svc()
+        result = svc.classify(reflexive_input)
+        assert result is not None, (
+            f"classify({reflexive_input!r}) returned None — head unavailable?"
+        )
+        assert math.isfinite(result)
+        assert result <= 0.5, (
+            f"{reflexive_input!r} scored {result:.4f} — expected <= 0.5 "
+            f"(reflexive single-word inputs must land in the low band)"
+        )
+
     def test_classify_two_different_inputs_produce_different_scores(self):
         """'hi' and a complex prompt must not return the same scalar — confirms the
         classifier is actually discriminating, not outputting a constant."""
