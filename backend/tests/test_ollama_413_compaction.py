@@ -364,6 +364,41 @@ class TestProactiveThresholdLoopGuard:
         # Guard flag was set.
         assert proc._overflow_recovered_this_turn is True
 
+    def test_proactive_overflow_returning_false_falls_through_to_send(self, db):
+        """When _handle_overflow returns False on the proactive threshold path
+        (e.g. SubagentProcessor with an empty trail at iter 0), the loop must
+        NOT break to cap exit. Instead it sets the recovery flag and falls
+        through to send_messages — the LLM call gets a chance to succeed,
+        and the 413 path is the final safety net.
+
+        Regression: scenario 121 was failing because subagent's first iter
+        threshold check tripped (static system+tools dominate), the empty
+        trail caused _handle_overflow to return False, and the loop broke
+        to cap exit before the subagent could even call its tool.
+        """
+        processor_cls = _build_test_processor_class()
+
+        class _NoOpOverflow(processor_cls):
+            # Returns False without calling _run_full_compaction —
+            # mimics SubagentProcessor's empty-trail short-circuit.
+            def _handle_overflow(self):
+                self.full_compaction_calls += 1
+                return False
+
+        proc = _NoOpOverflow()
+        ctx, fake = self._patch_providers_persistent_overflow()
+        with ctx:
+            result = proc.send()
+
+        assert result == 'final answer', \
+            "Loop must reach send_messages and return its text, not cap-exit"
+        assert proc.full_compaction_calls == 1, \
+            "Overflow handler called once; subsequent threshold trips must skip it"
+        assert fake.send_messages.call_count == 1, \
+            "Provider must be called after the failed-overflow fallthrough"
+        assert proc._overflow_recovered_this_turn is True, \
+            "Recovery flag must be set even when overflow returned False"
+
 
 class TestHandleOverflowClearsState:
     def test_exploration_cleared_on_overflow_success(self):

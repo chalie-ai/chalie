@@ -712,12 +712,26 @@ class MessageProcessor:
                             if self._handle_overflow():
                                 self._overflow_recovered_this_turn = True
                                 continue
-                            logger.error(
-                                "[COMPACTION] %s: overflow handler failed — breaking to "
-                                "cap exit (final_text='')",
+                            # Overflow handler returned False. Two cases:
+                            # 1. Subagent override on empty trail — nothing
+                            #    to compact yet (this is iter 0). Sending the
+                            #    original payload is the right move; the
+                            #    subagent then loops, populates trail, and
+                            #    next overflow has something to compress.
+                            # 2. User-channel compaction LLM error — sending
+                            #    the original payload may 413, but the 413
+                            #    path's second-strike rule will then break
+                            #    to cap exit.
+                            # Either way, mark recovery as attempted (one
+                            # shot) and fall through to the LLM call rather
+                            # than break here. Cap-exit is still the final
+                            # backstop via the 413 path.
+                            logger.warning(
+                                "[COMPACTION] %s: overflow handler returned False — "
+                                "sending anyway (one-shot recovery exhausted)",
                                 self.CHANNEL,
                             )
-                            break
+                            self._overflow_recovered_this_turn = True
 
                     # Single-element messages[] so the provider sees one user turn
                     # containing the full literal-text body (Previous Messages,
