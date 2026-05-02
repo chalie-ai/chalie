@@ -360,49 +360,6 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     return tags
 
 
-def _fetch_tool_calls_for_recent_user_turn(channel: str = 'user') -> list[dict]:
-    """Deprecated: recency-based tool_calls lookup.
-
-    Preserved for test compatibility only. Production code uses
-    ``_fetch_tool_calls_for_transcript_ids`` instead, which receives exact IDs
-    threaded from ``MessageProcessor._uid`` via the output metadata.
-
-    This implementation has two known bugs that the replacement fixes:
-    - Filters WHERE role='user', silently missing subagent channel rows.
-    - Races DMN, which can insert user-channel rows between ACT completion
-      and WS emit, causing the recency lookup to return the wrong turn.
-    """
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            row = conn.execute(
-                "SELECT id FROM transcript WHERE channel = ? AND role = 'user' "
-                "ORDER BY created_at DESC LIMIT 1",
-                (channel,),
-            ).fetchone()
-            if not row:
-                return []
-            transcript_id = row[0]
-            tc_rows = conn.execute(
-                "SELECT tool_name, params, result, ephemeral FROM tool_calls "
-                "WHERE transcript_id = ? ORDER BY created_at",
-                (transcript_id,),
-            ).fetchall()
-        return [
-            {
-                "tool_name": r[0],
-                "params": r[1],
-                "result": r[2] or "",
-                "ephemeral": r[3],
-            }
-            for r in tc_rows
-        ]
-    except Exception as exc:
-        logger.debug("[WS] _fetch_tool_calls_for_recent_user_turn failed: %s", exc)
-        return []
-
-
 def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
     """Fetch all tool_calls rows (including ephemeral=1) for a list of transcript IDs.
 
