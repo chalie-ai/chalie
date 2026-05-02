@@ -73,7 +73,13 @@ LIMIT 10
 
 # Top-level telemetry keys that should not be surfaced in the rendered block —
 # they are internal bookkeeping or noise the LLM does not need.
-_TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale"}
+_TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
+
+# Top-level dict groups that should not be rendered as their own bullet.
+_TELEMETRY_HIDDEN_GROUPS = {"behavioral"}
+
+# Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
+_LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
 def _format_telemetry_value(value) -> str | None:
@@ -130,6 +136,8 @@ def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
         if _is_hidden_telemetry_key(key):
             continue
         if isinstance(value, dict):
+            if key in _TELEMETRY_HIDDEN_GROUPS:
+                continue
             sub_fields = _render_dict_subfields(value)
             if sub_fields:
                 grouped[key] = sub_fields
@@ -215,6 +223,18 @@ def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
         reverse=True,
     ))
     return ordered
+
+
+def _compute_local_time(timezone_name: str | None) -> str | None:
+    """Render the user's wall-clock time as ``Sat 02 May 2026 11:35`` for the given IANA zone."""
+    if not timezone_name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        return utc_now().astimezone(ZoneInfo(timezone_name)).strftime(_LOCAL_TIME_FORMAT)
+    except Exception as exc:
+        logger.debug("[WorldState] local_time compute failed for %r: %s", timezone_name, exc)
+        return None
 
 
 def _render_schedule_fields(row: dict, now) -> str:
@@ -354,7 +374,6 @@ class WorldState:
         telemetry_lines = self._render_telemetry()
         if telemetry_lines:
             parts.append("[telemetry]")
-            parts.append("")
             parts.extend(telemetry_lines)
 
         # ── Schedule ───────────────────────────────────────────────────────
@@ -384,12 +403,17 @@ class WorldState:
         Reads the latest heartbeat from the ``telemetry`` table (populated by
         ``ClientContextService.save()``) and surfaces every key the frontend
         sent, grouped by top-level prefix.  Top-level scalar keys aggregate
-        under the synthetic ``user`` group; nested dicts (``device``,
-        ``behavioral``, …) form their own groups.
+        under the synthetic ``user`` group; nested dicts (``device`` …) form
+        their own groups.  ``local_time`` is overwritten with a freshly-computed
+        value derived from the stored IANA timezone so it never goes stale.
         """
         ctx = _fetch_telemetry()
         if not ctx:
             return []
+
+        fresh_local_time = _compute_local_time(ctx.get("timezone"))
+        if fresh_local_time:
+            ctx["local_time"] = fresh_local_time
 
         lines = []
         for group_name, fields in _group_telemetry(ctx):
