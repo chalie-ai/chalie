@@ -87,6 +87,32 @@ body {
   pointer-events: none;
 }
 
+/* Reactive ambient bloom — a soft tint overlay on top of the canvas that
+   leans toward whoever spoke last. Driven by body.speaker-user / .speaker-chalie
+   toggled by chat.js based on the form nearest the viewport midline. */
+#ambientBloom {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
+              background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
+  background:
+    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(138, 92, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(0, 240, 255, 0.05), transparent 60%);
+}
+body.speaker-chalie #ambientBloom { opacity: 1; }
+body.speaker-user   #ambientBloom {
+  opacity: 1;
+  background:
+    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(138, 92, 255, 0.05), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(0, 240, 255, 0.20), transparent 55%);
+}
+@media (prefers-reduced-motion: reduce) {
+  #ambientBloom { transition: opacity 200ms linear; }
+}
+
 #grainOverlay {
   position: fixed;
   inset: 0;
@@ -618,7 +644,17 @@ body {
 
 .speech-form--user::before {
   right: -1px;
-  background: linear-gradient(180deg, transparent 0%, var(--dusk-blue) 20%, var(--dusk-blue) 80%, transparent 100%);
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--dusk-blue) 12%,
+    #7CFFF6 38%,
+    var(--dusk-blue) 60%,
+    #00B6C6 80%,
+    transparent 100%);
+  background-size: 100% 240%;
+  animation: stripeFlow 7s ease-in-out infinite;
+  filter: saturate(1.15);
   box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px rgba(0, 240, 255, 0.33);
 }
 
@@ -630,8 +666,68 @@ body {
 
 .speech-form--chalie::before {
   left: -1px;
-  background: linear-gradient(180deg, transparent 0%, var(--violet) 20%, var(--violet) 80%, transparent 100%);
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--violet) 12%,
+    #B07CFF 38%,
+    var(--violet) 60%,
+    #6E3FE6 80%,
+    transparent 100%);
+  background-size: 100% 240%;
+  animation: stripeFlow 6.5s ease-in-out infinite;
+  filter: saturate(1.15);
   box-shadow: 0 0 8px var(--violet), 0 0 18px rgba(138, 92, 255, 0.33);
+}
+
+@keyframes stripeFlow {
+  0%, 100% { background-position: 0% 0%; }
+  50%      { background-position: 0% 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speech-form--user::before,
+  .speech-form--chalie::before { animation: none; }
+}
+
+/* Hover lift — bubble rises ~2px and gains a soft inner ring on accent color.
+   Skipped on touch input where :hover is unreliable. */
+@media (hover: hover) {
+  .speech-form:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(138, 92, 255, 0.04) inset;
+  }
+  .speech-form--user:hover {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 240, 255, 0.05) inset;
+  }
+}
+
+/* Sender glyph — fused at the cap of the accent stripe. Constellation for
+   Chalie, spark for the user. */
+.sender-glyph {
+  position: absolute;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  z-index: 3;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.speech-form--chalie .sender-glyph { left: -9px;  color: var(--violet); }
+.speech-form--user   .sender-glyph { right: -9px; color: var(--dusk-blue); }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot {
+  animation: glyphTwinkle 3.2s ease-in-out infinite;
+}
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(2) { animation-delay: 0.4s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(3) { animation-delay: 0.9s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(4) { animation-delay: 1.4s; }
+@keyframes glyphTwinkle {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sender-glyph circle.sender-glyph__dot { animation: none; opacity: 0.85; }
 }
 
 /* Active form — newest Chalie message gets a top-edge highlight */
