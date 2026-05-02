@@ -6,13 +6,19 @@ library) before persisting / sending to the frontend. That single chokepoint
 replaces every hand-rolled tokenizer, regex tag-matcher, and markdown
 converter that lived here previously.
 
-Allowlist (10 tags total):
+Allowlist (11 tags total):
 - LLM-emittable formatting (8): b, i, u, h1, code, p, ul, li
+- Rich-media pairing (1): span (id attribute only — used by RichMediaParser)
 - Programmatic only (3): img, actions, action
 
 The LLM is NOT allowed to emit ``<a>``. Plain-text URLs in the LLM's
 response are linkified by the frontend so the model cannot inject
 arbitrary anchors into the rendered DOM.
+
+``<span id="tool_N">`` is allowed because the rich-media protocol requires
+these tags to survive the sanitisation pass so the parser can read them at
+the WS-send boundary. Only the ``id`` attribute is permitted; ``class``,
+``style``, ``onclick``, and all other span attributes are stripped.
 
 ``sanitize()`` is the only entry point for LLM output. It accepts mixed
 plain text + allowlisted HTML and passes both through unchanged — text
@@ -26,15 +32,17 @@ import nh3
 
 # ── Tag allowlist ───────────────────────────────────────────────────────────
 
-LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li"})
+LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li", "span"})
 PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
 ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 
 # Programmatic-only attributes. ``<img>`` carries src/alt; ``<action>`` carries
 # the chat-button label/value plus the overlay daemon's data-* hooks.
+# ``<span>`` carries only ``id`` — the rich-media pairing key.
 _ATTRIBUTES = {
     "img": {"src", "alt"},
     "action": {"label", "value", "execute", "collect", "target", "open-url", "payload", "style"},
+    "span": {"id"},
 }
 
 # Image src URLs are restricted to http(s). ``data:`` and ``javascript:`` are

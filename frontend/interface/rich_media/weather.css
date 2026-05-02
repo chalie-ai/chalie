@@ -1,0 +1,110 @@
+/* ==========================================================================
+   Weather Card — Radiant skin
+   ========================================================================== */
+
+.weather-card {
+  --icon-glow: rgba(0, 240, 255, 0.18);
+}
+
+/* Location header */
+.weather-card__location {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(234, 230, 242, 0.50);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+
+/* Main data row: icon + temp + condition */
+.weather-card__main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.weather-card__icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 8px var(--icon-glow));
+}
+
+.weather-card__icon img {
+  width: 100%;
+  height: 100%;
+}
+
+.weather-card__temp-block {}
+
+.weather-card__temp {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(234, 230, 242, 0.95);
+  letter-spacing: -0.02em;
+}
+
+.weather-card__condition {
+  font-size: 0.8125rem;
+  color: rgba(234, 230, 242, 0.60);
+  margin-top: 2px;
+}
+
+/* Detail pills row */
+.weather-card__details {
+  font-size: 0.75rem;
+  color: rgba(234, 230, 242, 0.45);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 2px;
+}
+
+.weather-card__detail-pill::before {
+  content: '·';
+  margin-right: 4px;
+  color: rgba(138, 92, 255, 0.50);
+}
+
+.weather-card__detail-pill:first-child::before {
+  content: '';
+  margin-right: 0;
+}
+
+/* Forecast row */
+.weather-card__forecast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: rgba(234, 230, 242, 0.48);
+}
+
+.weather-card__forecast-label {
+  font-weight: 600;
+  color: rgba(234, 230, 242, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+
+.weather-card__forecast-temp {
+  color: rgba(234, 230, 242, 0.60);
+  font-weight: 500;
+}
+
+.weather-card__forecast-condition {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-card__forecast-rain {
+  flex-shrink: 0;
+  color: rgba(0, 240, 255, 0.55);
+}

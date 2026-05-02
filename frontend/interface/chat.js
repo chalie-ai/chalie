@@ -156,6 +156,7 @@ export class Chat {
           exchange_id: data.exchange_id,
           mode: data.mode || '',
           confidence: data.confidence || 0,
+          segments: data.segments || null,
         };
         this._presence.setState('responding');
       },
@@ -262,16 +263,20 @@ export class Chat {
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.content) {
-      this._renderer.appendChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content || msg.segments) {
+      const meta = { ts: msg.timestamp };
+      if (msg.segments) meta.segments = msg.segments;
+      this._renderer.appendChalieForm(msg.content || '', meta, { inWorkingMemory });
     }
   }
 
   _prependMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.content) {
-      this._renderer.prependChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content || msg.segments) {
+      const meta = { ts: msg.timestamp };
+      if (msg.segments) meta.segments = msg.segments;
+      this._renderer.prependChalieForm(msg.content || '', meta, { inWorkingMemory });
     }
   }
 

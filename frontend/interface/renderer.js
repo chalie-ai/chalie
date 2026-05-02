@@ -3,6 +3,7 @@
  */
 import { renderMarkupTo } from './markup_renderer.js';
 import { extractPlaintext } from './markup_extract.js';
+import { renderCard } from './rich_media/registry.js';
 
 const REMEMBER_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -100,44 +101,65 @@ export class Renderer {
 
   /**
    * Append a Chalie speech form.
-   * @param {string} content — XML markup string
-   * @param {{topic?: string, duration_ms?: number}} [meta]
+   *
+   * When ``meta.segments`` is present (rich-media turn), each segment is
+   * rendered independently — text segments as ordinary bubbles, rich segments
+   * via the card registry.  When ``meta.segments`` is absent, falls back to
+   * the original single-bubble path using ``content``.
+   *
+   * @param {string} content — XML markup string (kept for backwards compat)
+   * @param {{segments?: Array, topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
   appendChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
-    const el = this._createEl('div', 'speech-form speech-form--chalie');
-    if (!inWorkingMemory) el.classList.add('message--faded');
-    const textEl = this._createEl('div', 'speech-form__text');
-    renderMarkupTo(textEl, content || '');
-    el.appendChild(textEl);
+    const segments = meta.segments || [{ type: 'text', content: content || '' }];
+    let lastEl = null;
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
-    el.appendChild(metaRow);
+    for (const seg of segments) {
+      if (seg.type === 'text') {
+        const el = this._appendTextBubble(seg.content, meta, inWorkingMemory);
+        lastEl = el;
+      } else if (seg.type === 'rich') {
+        const el = this._appendRichCard(seg.tag, seg.payload, seg.synthesis, meta, inWorkingMemory);
+        lastEl = el;
+      }
+    }
 
-    this._spine.appendChild(el);
-    this._setActiveForm(el);
-    this._scrollToBottom();
-    return el;
+    if (lastEl) {
+      this._setActiveForm(lastEl);
+      this._scrollToBottom();
+    }
+    return lastEl;
   }
 
   /**
    * Prepend a Chalie speech form (for scroll-up pagination).
-   * @param {string} content — XML markup string
-   * @param {{topic?: string, duration_ms?: number}} [meta]
+   *
+   * Mirrors appendChalieForm but inserts before existing nodes (oldest
+   * messages prepended on scroll-up).  Segments rendered in reverse order
+   * so the first segment ends up topmost after prepend.
+   *
+   * @param {string} content — XML markup string (kept for backwards compat)
+   * @param {{segments?: Array, topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
   prependChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
-    const el = this._createEl('div', 'speech-form speech-form--chalie');
-    if (!inWorkingMemory) el.classList.add('message--faded');
-    const textEl = this._createEl('div', 'speech-form__text');
-    renderMarkupTo(textEl, content || '');
-    el.appendChild(textEl);
+    const segments = meta.segments || [{ type: 'text', content: content || '' }];
+    let firstEl = null;
 
-    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
-    el.appendChild(metaRow);
+    // Prepend in reverse order so segments appear in correct visual sequence
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (seg.type === 'text') {
+        const el = this._prependTextBubble(seg.content, meta, inWorkingMemory);
+        if (i === 0) firstEl = el;
+      } else if (seg.type === 'rich') {
+        const el = this._prependRichCard(seg.tag, seg.payload, seg.synthesis, meta, inWorkingMemory);
+        if (i === 0) firstEl = el;
+      }
+    }
 
-    this._spine.prepend(el);
-    return el;
+    return firstEl;
   }
 
   /**
@@ -320,6 +342,68 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /** Append a single text bubble to the spine. Returns the element. */
+  _appendTextBubble(content, meta, inWorkingMemory) {
+    const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    renderMarkupTo(textEl, content || '');
+    el.appendChild(textEl);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
+    el.appendChild(metaRow);
+    this._spine.appendChild(el);
+    return el;
+  }
+
+  /** Prepend a single text bubble. Returns the element. */
+  _prependTextBubble(content, meta, inWorkingMemory) {
+    const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    renderMarkupTo(textEl, content || '');
+    el.appendChild(textEl);
+    const metaRow = this._buildMetaRow(this._extractPlainText(content), meta);
+    el.appendChild(metaRow);
+    this._spine.prepend(el);
+    return el;
+  }
+
+  /** Append a rich-media card to the spine. Returns the card wrapper element. */
+  _appendRichCard(tag, payload, synthesis, meta, inWorkingMemory) {
+    const wrapper = this._createEl('div', 'rich-card-wrapper');
+    if (!inWorkingMemory) wrapper.classList.add('message--faded');
+
+    const fallback = (synText) => {
+      const fallbackEl = this._createEl('div', 'speech-form speech-form--chalie');
+      const textEl = this._createEl('div', 'speech-form__text');
+      textEl.textContent = synText || '';
+      fallbackEl.appendChild(textEl);
+      this._spine.appendChild(fallbackEl);
+    };
+
+    renderCard(tag, payload, synthesis, wrapper, fallback);
+    this._spine.appendChild(wrapper);
+    return wrapper;
+  }
+
+  /** Prepend a rich-media card. Returns the card wrapper element. */
+  _prependRichCard(tag, payload, synthesis, meta, inWorkingMemory) {
+    const wrapper = this._createEl('div', 'rich-card-wrapper');
+    if (!inWorkingMemory) wrapper.classList.add('message--faded');
+
+    const fallback = (synText) => {
+      const fallbackEl = this._createEl('div', 'speech-form speech-form--chalie');
+      const textEl = this._createEl('div', 'speech-form__text');
+      textEl.textContent = synText || '';
+      fallbackEl.appendChild(textEl);
+      this._spine.prepend(fallbackEl);
+    };
+
+    renderCard(tag, payload, synthesis, wrapper, fallback);
+    this._spine.prepend(wrapper);
+    return wrapper;
+  }
 
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };

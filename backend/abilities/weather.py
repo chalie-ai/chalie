@@ -9,8 +9,21 @@ Routing:
   - City name in params: wttr.in directly (Open-Meteo needs coordinates)
 
 Class-level cache per location key, 10-min TTL.
+
+Rich-media rendering:
+  When an ordinal is supplied (``params['_rich_media_ordinal']``), the return
+  value is a string: ``<JSON payload>\\n\\n<rich-media instruction trailer>``.
+  The instruction trailer tells the LLM to wrap its synthesis in a span tag
+  so the RichMediaParser can pair the card with this payload at WS-send time.
+
+  Error payloads do NOT include an instruction trailer — the LLM should not
+  attempt to render a card for an error response.
+
+  The first JSON segment (before the first blank line) is parsed by
+  RichMediaParser._extract_data() and becomes the card payload.
 """
 
+import json
 import logging
 import time
 from typing import ClassVar
@@ -70,35 +83,70 @@ class WeatherAbility(Ability):
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         """
         Get current weather for a location.
 
         Args:
             channel: Conversation channel (passed by framework)
-            params: {"location": str (optional city name; omit to use client coordinates)}
+            params: {"location": str (optional city name; omit to use client coordinates),
+                     "_rich_media_ordinal": int (injected by ActDispatcherService)}
             telemetry: Client telemetry with location coords and resolved name
 
         Returns:
-            location, condition, temperature_c/f, feels_like_c, humidity_pct,
-            wind_kmh, wind_direction, visibility_km, uv_index, precip_mm,
-            observation_time, is_raining, is_daylight, is_hot, is_cold, is_windy, is_clear
+            A string of the form ``<JSON payload>\\n\\n<rich-media instruction>``
+            so the LLM can pair its synthesis with this structured data via a
+            span tag.  Error payloads omit the instruction trailer.
         """
+        ordinal = params.get("_rich_media_ordinal")
         location_param = params.get("location", "").strip()
         lat, lon, location_name = _extract_location(telemetry)
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)
         if cached is not None:
-            return cached
+            return _serialise(cached, ordinal)
 
         result, open_meteo_err, wttr_err = _fetch_with_fallback(location_param, lat, lon, location_name, cache_key)
 
         if result is not None:
             WeatherAbility._cache[cache_key] = (result, time.time())
-            return result
+            return _serialise(result, ordinal)
 
-        return _stale_or_error(cache_key, open_meteo_err, wttr_err)
+        return _serialise(_stale_or_error(cache_key, open_meteo_err, wttr_err), ordinal)
+
+
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. To present this result as a card, "
+    "wrap your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You may mix prose and rich-media spans freely; spans render as cards "
+    "between text bubbles."
+)
+
+
+def _serialise(payload: dict, ordinal: int | None) -> dict | str:
+    """Serialise a weather payload dict to the tool result string or dict.
+
+    When an ordinal is provided (normal ACT dispatch path), the instruction
+    trailer is appended so the LLM knows to emit a span tag.  Error payloads
+    (``'error'`` key present) never get the instruction trailer because a card
+    should not be rendered for error data.  When ordinal is None (direct call,
+    tests, action-button path) the original dict is returned unchanged for
+    backward compatibility.
+
+    Args:
+        payload: Weather data dict (or error dict with ``error``/``details``).
+        ordinal: Per-turn call counter for this tool; None returns the raw dict.
+
+    Returns:
+        ``dict`` when ordinal is None or payload is an error; ``str`` otherwise.
+    """
+    if ordinal is None or "error" in payload:
+        return payload
+    tag = f"weather_{ordinal}"
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"
 
 
 def _extract_location(telemetry: dict | None) -> tuple:

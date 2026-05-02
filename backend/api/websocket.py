@@ -24,6 +24,7 @@ from collections import deque
 from utils.logger import set_correlation_id
 
 from services.markup import actions_to_xml, sanitize
+from services.rich_media_parser import parse as _parse_rich_media
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +360,65 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     return tags
 
 
+def _fetch_tool_calls_for_recent_user_turn(channel: str = 'user') -> list[dict]:
+    """Fetch tool_calls rows for the most recent user-input transcript row.
+
+    Tool calls are stored against the user transcript row (the input row whose
+    ID is ``MessageProcessor._uid``).  The assistant turn writes its transcript
+    row separately and its ID is not surfaced to the WS handler, so we resolve
+    the user row by recency.
+
+    Returns an empty list on any error so the caller degrades gracefully.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM transcript WHERE channel = ? AND role = 'user' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (channel,),
+            ).fetchone()
+            if not row:
+                return []
+            transcript_id = row[0]
+            tc_rows = conn.execute(
+                "SELECT tool_name, params, result, ephemeral FROM tool_calls "
+                "WHERE transcript_id = ? ORDER BY created_at",
+                (transcript_id,),
+            ).fetchall()
+        return [
+            {
+                "tool_name": r[0],
+                "params": r[1],
+                "result": r[2] or "",
+                "ephemeral": r[3],
+            }
+            for r in tc_rows
+        ]
+    except Exception as exc:
+        logger.debug("[WS] _fetch_tool_calls_for_recent_user_turn failed: %s", exc)
+        return []
+
+
+def _attach_segments(message_evt: dict, content: str, tool_calls: list[dict]) -> None:
+    """Attach the ``segments`` field to a message_evt dict in-place.
+
+    Calls RichMediaParser.parse() and always produces at least one segment.
+    For responses with no rich-media spans this is a single text segment —
+    the frontend checks for ``segments`` presence, not length.
+
+    Args:
+        message_evt: The WS event dict being assembled (mutated in-place).
+        content: Sanitised assistant text (``transcript.content``).
+        tool_calls: Tool_calls rows for this turn (including ephemeral=1 rows).
+    """
+    segments = _parse_rich_media(content, tool_calls)
+    if not segments:
+        segments = [{"type": "text", "content": content}]
+    message_evt["segments"] = segments
+
+
 def _handle_resume(ws, msg):
     """Replay missed events on reconnect."""
     last_seq = msg.get('last_seq', 0)
@@ -427,6 +487,10 @@ def _handle_action(ws, msg):
                 "response_time_s": round(time.time() - action_start, 3),
             },
         }
+        # Action-button responses come directly from abilities, not the ACT loop,
+        # so there are no associated tool_calls rows. Attach an empty tool_calls
+        # list — the parser will emit a single text segment.
+        _attach_segments(message_evt, content, [])
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
 
@@ -715,10 +779,11 @@ def _handle_chat(ws, store, msg, active_request=None):
 
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
+                _msg_content = metadata.get("content", "")
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "content": metadata.get("content", ""),
+                    "content": _msg_content,
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -735,6 +800,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                     except Exception:
                         pass
                     message_evt["metrics"] = _msg_metrics
+                _attach_segments(
+                    message_evt,
+                    _msg_content,
+                    _fetch_tool_calls_for_recent_user_turn(
+                        output.get("topic") or "user"
+                    ),
+                )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -758,10 +830,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 output = json.loads(fallback_data)
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
+                _fb_content = metadata.get("content", "")
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "content": metadata.get("content", ""),
+                    "content": _fb_content,
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -776,6 +849,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                     except Exception:
                         pass
                     message_evt["metrics"] = _fallback_metrics
+                _attach_segments(
+                    message_evt,
+                    _fb_content,
+                    _fetch_tool_calls_for_recent_user_turn(
+                        output.get("topic") or "user"
+                    ),
+                )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:

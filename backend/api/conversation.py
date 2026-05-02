@@ -4,9 +4,33 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
+from services.rich_media_parser import parse as _parse_rich_media
 
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
+
+
+def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
+    """Fetch all tool_calls rows for a transcript, including ephemeral=1 rows.
+
+    Ephemeral rows carry the rich-media instruction trailer that the parser
+    uses to pair span tags with their payloads.  Filtering them out would
+    break card reconstruction on page refresh.
+    """
+    tc_rows = conn.execute(
+        "SELECT tool_name, params, result, ephemeral FROM tool_calls "
+        "WHERE transcript_id = ? ORDER BY created_at",
+        (transcript_id,),
+    ).fetchall()
+    return [
+        {
+            "tool_name": r[0],
+            "params": r[1],
+            "result": r[2] or "",
+            "ephemeral": r[3],
+        }
+        for r in tc_rows
+    ]
 
 
 def get_recent_history(limit=12, offset=0):
@@ -18,21 +42,48 @@ def get_recent_history(limit=12, offset=0):
         rows = conn.execute(
             "SELECT id, role, content, created_at FROM transcript "
             "WHERE channel = 'user' AND role NOT IN ('subagent_return') "
-            "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
 
-    # Migration (Phase A boot hook) has already converted all rows to XML.
-    # Pass content through directly — no block conversion.
-    messages = [
-        {
-            "id": str(row[0]),
-            "role": row[1],
-            "content": row[2] or "",
-            "timestamp": row[3],
-        }
-        for row in reversed(rows)
-    ]
+        # Build messages and attach rich-media segments for assistant rows.
+        # Tool_calls are stored against the preceding user (input) transcript
+        # row.  We carry the last-seen user transcript_id forward so each
+        # assistant message can look up the right tool_calls.
+        messages = []
+        last_user_transcript_id = None
+
+        for row in reversed(rows):
+            transcript_id, role, content, created_at = row[0], row[1], row[2] or "", row[3]
+
+            if role == 'user':
+                last_user_transcript_id = transcript_id
+                messages.append({
+                    "id": str(transcript_id),
+                    "role": role,
+                    "content": content,
+                    "timestamp": created_at,
+                })
+            else:
+                msg = {
+                    "id": str(transcript_id),
+                    "role": role,
+                    "content": content,
+                    "timestamp": created_at,
+                }
+                # Attach segments for assistant rows so the frontend can
+                # reconstruct rich-media cards on page refresh.
+                if last_user_transcript_id is not None:
+                    tool_calls = _fetch_tool_calls_for_transcript(
+                        conn, last_user_transcript_id
+                    )
+                else:
+                    tool_calls = []
+                segments = _parse_rich_media(content, tool_calls)
+                if not segments:
+                    segments = [{"type": "text", "content": content}]
+                msg["segments"] = segments
+                messages.append(msg)
 
     return messages, len(rows) == limit
 

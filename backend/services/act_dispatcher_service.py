@@ -84,6 +84,11 @@ class ActDispatcherService:
         self.timeout = timeout
         self.handlers = {}
 
+        # Per-turn ordinal counter: maps tool name → call count this turn.
+        # Reset by reset_turn_ordinals() at the start of each ACT turn.
+        # Exposed to tools via the '_rich_media_ordinal' key injected into params.
+        self._turn_ordinals: Dict[str, int] = {}
+
         # Register every ability from the registry as a handler.
         # Each handler calls ability.execute(channel, params, telemetry=None).
         # The dispatcher unwraps the returned dict's 'text' key automatically.
@@ -97,6 +102,14 @@ class ActDispatcherService:
                     None,
                 )
             )
+
+    def reset_turn_ordinals(self) -> None:
+        """Reset per-tool ordinal counters at the start of a new ACT turn.
+
+        Must be called once per MessageProcessor turn before any dispatch_action
+        calls so that ordinals are scoped to the turn, not the dispatcher lifetime.
+        """
+        self._turn_ordinals = {}
 
     def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -113,6 +126,13 @@ class ActDispatcherService:
         start_time = time.time()
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
+
+        # Bump the per-turn ordinal for this tool name before invoking the handler.
+        # The ordinal is injected into the action dict so tools that support
+        # rich-media rendering can read it via action['_rich_media_ordinal'].
+        self._turn_ordinals[action_type] = self._turn_ordinals.get(action_type, 0) + 1
+        action = dict(action)
+        action['_rich_media_ordinal'] = self._turn_ordinals[action_type]
 
         # Get handler
         handler = self.handlers.get(action_type)
