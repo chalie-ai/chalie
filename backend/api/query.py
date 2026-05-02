@@ -155,7 +155,7 @@ def _slice_relevance(query: str) -> dict:
     }
 
 
-def _slice_memory(query: str, k: int) -> dict:
+def _slice_memory(query: str, _k: int) -> dict:
     """Search episodic memory semantically.
 
     Args:

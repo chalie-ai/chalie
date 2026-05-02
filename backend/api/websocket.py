@@ -206,7 +206,7 @@ def register_websocket(sock):
                 if msg_type == 'chat':
                     _handle_chat(ws, store, msg, active_request)
                 elif msg_type == 'action':
-                    _handle_action(ws, store, msg)
+                    _handle_action(ws, msg)
                 elif msg_type == 'act_steer':
                     _handle_act_steer(store, msg, active_request)
                 elif msg_type == 'resume':
@@ -368,7 +368,7 @@ def _handle_resume(ws, msg):
     logger.debug(f"[WS] Resume: replayed {len(events)} events from seq {last_seq}")
 
 
-def _handle_action(ws, store, msg):
+def _handle_action(ws, msg):
     """Handle a deterministic action button click."""
     payload = msg.get('payload', {})
     skill = payload.get('skill', '')

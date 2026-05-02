@@ -370,7 +370,7 @@ def proxy_context(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/meta", methods=["GET"])
 def get_meta(interface_id: str):
     """Return the daemon's metadata object."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     from . import db
@@ -380,7 +380,7 @@ def get_meta(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/meta", methods=["PUT"])
 def put_meta(interface_id: str):
     """Replace the daemon's entire metadata object."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     body = request.get_json(silent=True)
@@ -394,7 +394,7 @@ def put_meta(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/meta", methods=["PATCH"])
 def patch_meta(interface_id: str):
     """Merge updates into the daemon's metadata object."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     body = request.get_json(silent=True)
@@ -469,7 +469,7 @@ def proxy_execute(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/data", methods=["GET"])
 def list_data_files(interface_id: str):
     """List all files in the daemon's data folder."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     data_path = _daemon_data_dir(interface_id)
@@ -487,7 +487,7 @@ def list_data_files(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["GET"])
 def get_data_file(interface_id: str, filename: str):
     """Read a file from the daemon's data folder."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     safe = _safe_filename(filename)
@@ -502,7 +502,7 @@ def get_data_file(interface_id: str, filename: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["PUT"])
 def put_data_file(interface_id: str, filename: str):
     """Create or overwrite a file in the daemon's data folder."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     safe = _safe_filename(filename)
@@ -518,7 +518,7 @@ def put_data_file(interface_id: str, filename: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["DELETE"])
 def delete_data_file(interface_id: str, filename: str):
     """Delete a file from the daemon's data folder."""
-    iface, err = _get_interface(interface_id)
+    _, err = _get_interface(interface_id)
     if err:
         return err
     safe = _safe_filename(filename)

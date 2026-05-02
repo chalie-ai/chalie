@@ -339,7 +339,7 @@ class TestExpireStale:
         assert stored["status"] == "pending"
 
     def test_expire_stale_ignores_no_expiry(self):
-        svc, store = _make_service()
+        svc, _ = _make_service()
         svc.emit(_make_intent())  # no expires_at
 
         count = svc.expire_stale()
@@ -349,7 +349,7 @@ class TestExpireStale:
         from services.time_utils import utc_now
         from datetime import timedelta
 
-        svc, store = _make_service()
+        svc, _ = _make_service()
         past = (utc_now() - timedelta(hours=1)).isoformat()
         intent = CognitiveIntent(
             intent_id="done-001",

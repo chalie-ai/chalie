@@ -599,7 +599,7 @@ def _get_snapshot_store():
         return None
 
 
-def _inject_credentials(context, url: str, label: str):
+def _inject_credentials(context, url: str, _label: str):
     try:
         from tools.browser.credentials import CredentialVault
         from services.database_service import get_shared_db_service

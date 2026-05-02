@@ -57,7 +57,7 @@ class TestOpenAICompatibleProvider:
     def test_post_openai_compatible_stores_and_lists_provider(self, authed_client):
         """POST /api/providers with openai_compatible platform stores the row and
         GET /api/providers lists it back with platform and host intact."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
         resp = client.post('/providers', json={
@@ -93,7 +93,7 @@ class TestOpenAICompatibleProvider:
     def test_api_key_decrypts_correctly_from_db(self, authed_client):
         """The api_key stored via POST is encrypted in the DB and decrypts to
         the original plaintext when fetched via ProviderDbService."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
         resp = client.post('/providers', json={
@@ -186,7 +186,7 @@ class TestOpenAICompatibleProvider:
     def test_post_openai_compatible_without_host_returns_error(self, authed_client):
         """POST /api/providers with platform='openai_compatible' but no host
         must be rejected with a 4xx response containing a useful error message."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
         resp = client.post('/providers', json={

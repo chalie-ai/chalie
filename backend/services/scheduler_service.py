@@ -306,7 +306,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
     except Exception:
         return None
 
-    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"), fired_at)
+    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"))
     if next_due is None:
         return None
 
@@ -330,7 +330,6 @@ def _calculate_next_due(
     recurrence: str,
     window_start: str = None,
     window_end: str = None,
-    fired_at: datetime = None
 ) -> datetime:
     """
     Calculate next due datetime for a recurrence rule.

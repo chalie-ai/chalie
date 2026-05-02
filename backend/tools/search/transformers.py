@@ -152,7 +152,7 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
             item = item.get(unwrap, item)
 
         title = _extract_field(item, field_map.get('title', ''))
-        snippet = _extract_snippet(item, field_map, provider_name)
+        snippet = _extract_snippet(item, field_map)
         url = _extract_url(item, field_map)
         date = _extract_date(item, field_map)
 
@@ -289,7 +289,7 @@ def _extract_field(item: dict, field_spec: str) -> str:
     return ''
 
 
-def _extract_snippet(item: dict, field_map: dict, provider_name: str) -> str:
+def _extract_snippet(item: dict, field_map: dict) -> str:
     """Extract snippet with provider-specific special handling."""
     snippet_spec = field_map.get('snippet', '')
 

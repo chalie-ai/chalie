@@ -295,7 +295,7 @@ class ConversationPhaseService:
         is_sticky = new_phase.endswith("~sticky") if new_phase else False
 
         if effective_phase != state["current"]:
-            state = self._apply_transition(state, effective_phase, message_text, sticky=is_sticky)
+            state = self._apply_transition(state, effective_phase, sticky=is_sticky)
 
         state["updated_at"] = now_str
         # Remove internal pending fields before persisting
@@ -459,7 +459,6 @@ class ConversationPhaseService:
         self,
         state: dict,
         candidate: str,
-        message_text: str,
         sticky: bool = False,
     ) -> dict:
         """

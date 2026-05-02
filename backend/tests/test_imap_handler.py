@@ -306,7 +306,7 @@ class TestIngest:
     def test_exception_returns_empty(self, handler):
         client = MagicMock()
         client.select_folder.side_effect = OSError("connection lost")
-        items, wm = handler.ingest(client, watermark=0)
+        items, _ = handler.ingest(client, watermark=0)
         assert items == []
 
 

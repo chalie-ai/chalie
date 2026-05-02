@@ -188,14 +188,14 @@ class SearchExpanderService:
             logger.debug("[SES] data_graph rowid=%s gone — skipping", rowid)
             return
 
-        key, value, kind = row[0], row[1], row[2]
+        key, value, _ = row[0], row[1], row[2]
         variants = self._generate_variants(key, value)
 
         with self._db.connection() as conn:
             # Absorbs _schedule_embeddings: populate key_vec/value_vec if missing.
             self._backfill_key_value_vec(conn, rowid, key, value)
             self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants)
-            self._update_search_queries_data_graph(conn, rowid, key, value, kind, variants)
+            self._update_search_queries_data_graph(conn, rowid, variants)
 
     def _generate_variants(self, key: str, value: str) -> list:
         """Generate doc2query variants for the compound 'key: value' text.
@@ -301,7 +301,7 @@ class SearchExpanderService:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 
     def _update_search_queries_data_graph(
-        self, conn, rowid: int, key: str, value: str, kind: str, variants: list
+        self, conn, rowid: int, variants: list
     ) -> None:
         """Persist variant texts in data_graph.search_queries and resync FTS."""
         old = conn.execute(

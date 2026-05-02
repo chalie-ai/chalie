@@ -949,7 +949,7 @@ class MemoryStore:
                         result.add(k)
         return list(result)
 
-    def scan(self, cursor: int = 0, match: str = "*", count: int = 100) -> Tuple[int, list]:
+    def scan(self, _cursor: int = 0, match: str = "*", _count: int = 100) -> Tuple[int, list]:
         """Simplified scan — returns all matching keys at once (cursor always 0)."""
         matched = self.keys(match)
         return (0, matched)

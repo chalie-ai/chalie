@@ -42,7 +42,7 @@ class Providers:
     def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
         """Sync send. Returns LLMResponse."""
         if tools is None:
-            tools = self._get_tools(job)
+            tools = self._get_tools()
         provider = self._resolve(job)
         messages = [{"role": "user", "content": user_prompt}]
         t0 = time.monotonic()
@@ -67,7 +67,7 @@ class Providers:
                 'medium' or 'high' = provider-native thinking enabled.
         """
         if tools is None:
-            tools = self._get_tools(job)
+            tools = self._get_tools()
         provider = self._resolve(job)
         t0 = time.monotonic()
         response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
@@ -169,7 +169,7 @@ class Providers:
         config = ConfigService.resolve_agent_config(job)
         return create_llm_service(config)
 
-    def _get_tools(self, job):
+    def _get_tools(self):
         """Get native tool schemas for the calling processor's ALWAYS_AVAILABLE scope.
 
         Honours the lazy-load contract: DISCOVERABLE abilities are NEVER

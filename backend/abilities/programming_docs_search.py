@@ -184,7 +184,7 @@ class _Source:
     aliases = []
     base_url = ""
 
-    def search(self, query, max_results=5):
+    def search(self, _query, _max_results=5):
         return []
 
 

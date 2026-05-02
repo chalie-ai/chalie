@@ -873,7 +873,7 @@ class MessageProcessor:
         attribute."""
         pass
 
-    def _drain_steering(self, request_id: str | None) -> list[str]:
+    def _drain_steering(self, _request_id: str | None) -> list[str]:
         """Return any mid-loop steering messages queued for this request.
 
         Commit 6 stub — base always returns [] so DMN, goal-pursuit, and

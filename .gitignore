@@ -53,3 +53,4 @@ frontend/server/data/
 backend/.build_baseline.json
 backend/.simplify_baseline.json*
 backend/.simplify_test_results.xml*
+.sonar_issues_p*.json
