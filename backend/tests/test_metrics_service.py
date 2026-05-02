@@ -5,7 +5,6 @@ Uses the real MemoryStore (via ``store`` fixture).  No DB, no models, no vault.
 """
 
 import json
-import time
 
 import pytest
 

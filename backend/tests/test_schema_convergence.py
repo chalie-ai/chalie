@@ -10,7 +10,6 @@ and job-assignment convergence (orphan-pruning).
 Each test method creates its own temp DB via tmp_path — no shared state.
 """
 
-import json
 import logging
 import sqlite3
 from pathlib import Path

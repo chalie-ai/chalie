@@ -11,7 +11,7 @@ import pytest
 from flask import Flask
 
 from api.moments import moments_bp
-from services.data_graph_service import DataGraphService, get_data_graph_service
+from services.data_graph_service import get_data_graph_service
 from services.time_utils import utc_now
 
 pytestmark = pytest.mark.unit

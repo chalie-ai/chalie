@@ -162,7 +162,6 @@ class TestCheckThresholdFullPayload:
         # compact_at set to something smaller than the combined estimate
         # but larger than user_body alone (proving the old code would have
         # returned False while the new code returns True).
-        import json
         tools_json = json.dumps(large_tools, separators=(',', ':'))
         total_est = (
             estimate_tokens(large_system)
@@ -214,7 +213,6 @@ class TestCheckThresholdFullPayload:
     def test_missing_compact_at_returns_false_and_logs_error(self):
         """compact_at=None must return False (skip compaction) and log an error."""
         from unittest.mock import patch, MagicMock
-        import logging
 
         proc = self._make_processor()
         fake_provider = MagicMock()

@@ -83,7 +83,6 @@ class TestGetStats:
 class TestSubmitTransaction:
     def test_writes_land_in_real_db(self, wq, db, monkeypatch):
         """Two INSERTs in a transaction either both land or neither do."""
-        import os
 
         # Resolve the test db path so submit_transaction opens the right file.
         test_db_path = db.execute("PRAGMA database_list").fetchone()[2]
@@ -105,7 +104,6 @@ class TestSubmitTransaction:
 
     def test_transaction_rollback_on_failure(self, wq, db, monkeypatch):
         """If one callable raises, neither row persists."""
-        import os
 
         test_db_path = db.execute("PRAGMA database_list").fetchone()[2]
         monkeypatch.setenv("CHALIE_DB_PATH", test_db_path)
