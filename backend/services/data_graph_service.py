@@ -9,6 +9,7 @@ from typing import Optional
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
+from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 # SearchExpanderService: generates doc2query variants + embeds them for KNN recall.
 # Replaces _schedule_embeddings and _schedule_doc2query fire-and-forget threads.
@@ -1337,7 +1338,7 @@ class DataGraphService:
 
                 return len(rowids)
         except Exception as e:
-            logger.warning("[DATA GRAPH] hard_delete_by_source_prefix failed for '%s': %s", source_prefix, e)
+            logger.warning("[DATA GRAPH] hard_delete_by_source_prefix failed for '%s': %s", safe(source_prefix), e)
             return 0
 
     def set_active(self, row_id: int, active: int) -> None:

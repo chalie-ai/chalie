@@ -19,6 +19,7 @@ import logging
 import mimetypes
 import os
 import secrets
+from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 from typing import Dict, List, Optional, Any
 
@@ -245,7 +246,7 @@ class FolderWatcherService:
         if deleted:
             # Clear scan state cache
             self._clear_scan_cache(folder_id)
-            logger.info(f"[WATCHER] Deleted watched folder {folder_id}")
+            logger.info("[WATCHER] Deleted watched folder %s", safe(folder_id))
         return deleted
 
     def trigger_scan(self, folder_id: str) -> None:

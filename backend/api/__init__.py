@@ -285,7 +285,7 @@ def create_app():
 
     # ── Static file serving (replaces nginx) ─────────────────────────
 
-    @app.route('/shared/<path:filename>')
+    @app.route('/shared/<path:filename>', methods=["GET"])
     def shared_static(filename):
         """Serve shared frontend assets (theme.css, etc.)."""
         real = _strip_version_from_path(filename)
@@ -305,17 +305,17 @@ def create_app():
             return send_from_directory(str(directory), real)
         return _serve_versioned_html(directory)
 
-    @app.route('/brain/<path:filename>')
+    @app.route('/brain/<path:filename>', methods=["GET"])
     def brain_static(filename):
         """Serve brain dashboard SPA."""
         return _serve_spa(_BRAIN_DIR, filename)
 
-    @app.route('/brain')
+    @app.route('/brain', methods=["GET"])
     def brain_index_no_slash():
         """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
         return redirect('/brain/', code=301)
 
-    @app.route('/brain/')
+    @app.route('/brain/', methods=["GET"])
     def brain_index():
         """Serve brain dashboard index. Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
@@ -324,43 +324,43 @@ def create_app():
             return redirect('/login/?next=/brain/')
         return _serve_versioned_html(_BRAIN_DIR)
 
-    @app.route('/on-boarding/<path:filename>')
+    @app.route('/on-boarding/<path:filename>', methods=["GET"])
     def onboarding_static(filename):
         """Serve onboarding SPA."""
         return _serve_spa(_ONBOARDING_DIR, filename)
 
-    @app.route('/on-boarding')
+    @app.route('/on-boarding', methods=["GET"])
     def onboarding_index_no_slash():
         """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
         return redirect('/on-boarding/', code=301)
 
-    @app.route('/on-boarding/')
+    @app.route('/on-boarding/', methods=["GET"])
     def onboarding_index():
         """Serve onboarding index."""
         return _serve_versioned_html(_ONBOARDING_DIR)
 
-    @app.route('/login/<path:filename>')
+    @app.route('/login/<path:filename>', methods=["GET"])
     def login_static(filename):
         """Serve login page assets."""
         return _serve_spa(_LOGIN_DIR, filename)
 
-    @app.route('/login')
+    @app.route('/login', methods=["GET"])
     def login_index_no_slash():
         """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
         return redirect('/login/', code=301)
 
-    @app.route('/login/')
+    @app.route('/login/', methods=["GET"])
     def login_index():
         """Serve login page."""
         return _serve_versioned_html(_LOGIN_DIR)
 
     # Main interface SPA — catch-all (must be last)
-    @app.route('/<path:filename>')
+    @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):
         """Serve main interface SPA files."""
         return _serve_spa(_INTERFACE_DIR, filename)
 
-    @app.route('/')
+    @app.route('/', methods=["GET"])
     def interface_index():
         """Serve main interface index."""
         return _serve_versioned_html(_INTERFACE_DIR)

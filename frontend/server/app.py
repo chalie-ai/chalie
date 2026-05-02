@@ -73,11 +73,11 @@ def create_app(chalie_url: str, port: int, data_dir: str) -> Flask:
         os.path.join(os.path.dirname(__file__), "..", "shared")
     )
 
-    @app.route("/")
+    @app.route("/", methods=["GET"])
     def index():
         return send_from_directory(_frontend_dir, "index.html")
 
-    @app.route("/<path:filename>")
+    @app.route("/<path:filename>", methods=["GET"])
     def static_files(filename):
         # Try interface dir first, then shared
         filepath = os.path.join(_frontend_dir, filename)
@@ -101,7 +101,7 @@ def create_app(chalie_url: str, port: int, data_dir: str) -> Flask:
             return  # Let the interfaces blueprint handle it
         return _proxy_to_chalie()
 
-    @app.route("/ws")
+    @app.route("/ws", methods=["GET"])
     def proxy_ws():
         """WebSocket proxy — redirect to Chalie's WS endpoint."""
         # Flask can't proxy WebSockets natively. The chat UI JS will
@@ -138,7 +138,7 @@ def create_app(chalie_url: str, port: int, data_dir: str) -> Flask:
 
     # ── Shared static assets ───────────────────────────────────────────────
 
-    @app.route("/shared/<path:filename>")
+    @app.route("/shared/<path:filename>", methods=["GET"])
     def shared_static(filename):
         return send_from_directory(_shared_dir, filename)
 

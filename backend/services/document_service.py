@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from services.embedding_utils import pack_embedding as _pack_embedding
+from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -325,9 +326,9 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_update)
-            logger.info(f"[DOCS] Updated status for {doc_id}: {status}")
+            logger.info("[DOCS] Updated status for %s: %s", safe(doc_id), safe(status))
         except Exception as e:
-            logger.error(f"[DOCS] update_status failed for {doc_id}: {e}")
+            logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
             raise
 
     def update_summary(self, doc_id: str, summary: str) -> None:
@@ -430,7 +431,7 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_supersede)
-            logger.info(f"[DOCS] Document {doc_id} supersedes {supersedes_id}")
+            logger.info("[DOCS] Document %s supersedes %s", safe(doc_id), safe(supersedes_id))
         except Exception as e:
             logger.error(f"[DOCS] set_supersedes failed: {e}")
 
@@ -558,7 +559,7 @@ class DocumentService:
             updated = self._write_queue.submit_sync(_soft_delete) > 0
 
             if updated:
-                logger.info(f"[DOCS] Soft-deleted document {doc_id}")
+                logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
                 # Deactivate data_graph artifacts so they stop surfacing in recall.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -569,7 +570,7 @@ class DocumentService:
                             (f'document:{doc_id}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
 
         except Exception as e:
@@ -607,7 +608,7 @@ class DocumentService:
             updated = self._write_queue.submit_sync(_restore) > 0
 
             if updated:
-                logger.info(f"[DOCS] Restored document {doc_id}")
+                logger.info("[DOCS] Restored document %s", safe(doc_id))
                 # Reactivate data_graph artifacts so they surface in recall again.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -618,7 +619,7 @@ class DocumentService:
                             (f'document:{doc_id}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
 
         except Exception as e:
@@ -667,7 +668,7 @@ class DocumentService:
                     from services.data_graph_service import get_data_graph_service
                     get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe(doc_id), exc)
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
@@ -678,7 +679,7 @@ class DocumentService:
                 if resolved.startswith(os.path.realpath(DOCUMENTS_ROOT)) and os.path.exists(resolved):
                     shutil.rmtree(resolved, ignore_errors=True)
             if deleted:
-                logger.info(f"[DOCS] Hard-deleted document {doc_id}")
+                logger.info("[DOCS] Hard-deleted document %s", safe(doc_id))
 
             return deleted
 

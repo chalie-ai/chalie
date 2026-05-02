@@ -18,6 +18,7 @@ import logging
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
@@ -219,5 +220,5 @@ def revoke_wrapper(wrapper_id: str):
     if not revoked:
         return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
 
-    logger.info("[Wrappers API] Revoked wrapper: %s", wrapper_id)
+    logger.info("[Wrappers API] Revoked wrapper: %s", safe(wrapper_id))
     return jsonify({"ok": True}), 200

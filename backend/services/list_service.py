@@ -11,6 +11,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
+from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class ListService:
 
             self._log_event(list_id, 'list_created', details={'name': name})
             embed_list(list_id, name, db=self.db)
-            logger.info(f"[LISTS] Created list '{name}' (id={list_id})")
+            logger.info("[LISTS] Created list '%s' (id=%s)", safe(name), list_id)
             return list_id
 
         except Exception as e:
@@ -378,7 +379,7 @@ class ListService:
 
         if not list_row:
             if not auto_create:
-                logger.warning(f"[LISTS] List '{name_or_id}' not found")
+                logger.warning("[LISTS] List '%s' not found", safe(name_or_id))
                 return 0
             list_id = self.create_list(name_or_id)
             list_row = {'id': list_id, 'name': name_or_id}
@@ -480,7 +481,7 @@ class ListService:
                         item_content=item_content.strip(),
                         details={'normalized_content': item_content.strip().lower()},
                     )
-                logger.info(f"[LISTS] Added {added} items to list '{list_row['name']}'")
+                logger.info("[LISTS] Added %d items to list '%s'", added, safe(list_row['name']))
 
             return added
 

@@ -20,6 +20,7 @@ import uuid
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ def update_belief():
         if not stored:
             logger.info(
                 "[Updates API] belief update rejected: key=%r value=%r",
-                key, value,
+                safe(key), safe(value),
             )
             return jsonify({"error": "Trait rejected by validation rules"}), 422
     except Exception as exc:

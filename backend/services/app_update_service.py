@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from services.log_utils import safe
 from services.memory_client import MemoryClientService
 from services.time_utils import utc_now
 
@@ -233,7 +234,7 @@ class AppUpdateService:
         from run import _safe_tar_extract
 
         tarball_url = GITHUB_TARBALL_URL.format(tag=tag)
-        logger.info("Downloading release %s from %s", tag, tarball_url)
+        logger.info("Downloading release %s from %s", safe(tag), tarball_url)
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="chalie_update_"))
         tarball_path = tmp_dir / "release.tar.gz"
@@ -270,7 +271,7 @@ class AppUpdateService:
                 shutil.rmtree(str(tmp_dir), ignore_errors=True)
                 raise RuntimeError(f"Release {tag} is missing required file: {rel_path}")
 
-        logger.info("Release %s downloaded and validated at %s", tag, source_dir)
+        logger.info("Release %s downloaded and validated at %s", safe(tag), source_dir)
         return source_dir
 
     # ── Apply Update (Rename-Swap) ───────────────────────────────────────
@@ -333,15 +334,15 @@ class AppUpdateService:
 
         try:
             # Step 1: Backup database
-            logger.info("Starting update to %s — backing up database", tag)
+            logger.info("Starting update to %s — backing up database", safe(tag))
             self.backup_database()
 
             # Step 2: Download and validate
-            logger.info("Downloading release %s", tag)
+            logger.info("Downloading release %s", safe(tag))
             source_dir = self.download_and_validate(tag)
 
             # Step 3: Rename-swap
-            logger.info("Performing rename-swap for %s", tag)
+            logger.info("Performing rename-swap for %s", safe(tag))
 
             if backend_dir.exists():
                 backend_dir.rename(backend_old)
@@ -399,7 +400,7 @@ class AppUpdateService:
                 logger.info("Removed .deps-installed stamp")
 
         except Exception as exc:
-            logger.error("Update to %s failed: %s — rolling back", tag, exc)
+            logger.error("Update to %s failed: %s — rolling back", safe(tag), exc)
 
             # Rollback: reverse renames
             try:
@@ -442,7 +443,7 @@ class AppUpdateService:
             shutil.rmtree(str(tmp_root), ignore_errors=True)
 
         store.delete(IN_PROGRESS_KEY)
-        logger.info("Update to %s completed successfully", tag)
+        logger.info("Update to %s completed successfully", safe(tag))
 
         return {
             "ok": True,
