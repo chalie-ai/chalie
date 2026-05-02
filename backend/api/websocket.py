@@ -269,17 +269,6 @@ def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> 
     return f"[image id={image_id} status=timeout]"
 
 
-def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text: str, source_type: str) -> str:
-    """Format the tag for a ready recent-upload. Re-reads for the final committed row."""
-    final = svc.get_document(doc_id) or {}
-    if source_type == 'chat_image':
-        return _image_ocr_tag(final, doc_id)
-    final_text = (final.get('clean_text') or fallback_text or '').strip()
-    if final_text:
-        return f"[document id={doc_id} name={original_name} content={final_text[:2000]}]"
-    return f"[document id={doc_id} name={original_name} content=<empty>]"
-
-
 def _fetch_recent_upload_row(db):
     """SELECT the most recent upload/chat_image within the last 120 seconds."""
     with db.connection() as conn:
@@ -299,13 +288,17 @@ def _fetch_recent_upload_row(db):
 def _resolve_recent_upload(db, svc, request_id: str):
     """Return (tag, doc_id_if_injected) for the recent-upload fallback, or (None, None).
 
-    Only fires when the most recent upload is already 'ready' at lookup time.
-    The fallback exists to cover paste/drop where the chat turn races the
-    upload XHR — that race is sub-second, so anything still in-flight after
-    the row appears here is far more likely to be a stale upload from earlier
-    in the conversation than the user's intent for *this* turn. Injecting a
-    `status=timeout` or `status=failed` tag in that case derails the model
-    into apologising about a missing attachment the user never made.
+    Inject only when extracted content is *actually available* — i.e. the
+    document has clean_text, or (for chat_image) extracted_metadata.ocr_text.
+    The previous behaviour polled an in-flight upload for 10 s and then
+    injected ``[document id=… status=timeout]`` (or ``status=failed``) when it
+    could not reach a terminal state, which derailed the model into
+    apologising about a missing attachment the user never sent — see nightly
+    scenario 060 step-6 in run 425.
+
+    A content-presence check is more robust than a status check: chat_image
+    writes ``extracted_metadata`` before flipping ``status`` to ``'ready'``, so
+    a status-only gate races OCR completion in scenario 062.
     """
     try:
         row = _fetch_recent_upload_row(db)
@@ -315,10 +308,18 @@ def _resolve_recent_upload(db, svc, request_id: str):
     if not row:
         return None, None
 
-    doc_id, original_name, doc_status, clean_text, source_type = row
-    if doc_status != 'ready':
+    doc_id, original_name, _doc_status, clean_text, source_type = row
+    final = svc.get_document(doc_id) or {}
+    if source_type == 'chat_image':
+        ocr = (_parse_meta(final.get('extracted_metadata')).get('ocr_text') or '').strip()
+        if not ocr:
+            return None, None
+        return _image_ocr_tag(final, doc_id), doc_id
+
+    final_text = (final.get('clean_text') or clean_text or '').strip()
+    if not final_text:
         return None, None
-    return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
+    return f"[document id={doc_id} name={original_name} content={final_text[:2000]}]", doc_id
 
 
 def _resolve_file_tags(image_ids: list, request_id: str) -> list:

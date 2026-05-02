@@ -319,17 +319,17 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
 
 
 @pytest.mark.unit
-def test_recent_upload_skipped_when_not_ready(_ft_db):
+def test_recent_upload_skipped_when_no_content(_ft_db):
     """
-    When the most-recent upload is still 'analyzing' (or any non-ready state),
-    the recent-upload fallback must inject NO tag at all — not a
-    `status=timeout` tag, not a `status=failed` tag, nothing.
+    Recent-upload fallback must inject no tag when the most-recent upload
+    has no extracted content yet (clean_text is empty / NULL).
 
     Regression for nightly scenario 060 step-6: the user typed an unrelated
     chat turn after uploading a document earlier in the conversation; the
     fallback fired on the still-analyzing row and injected
     `[document id=... status=timeout]`, which derailed the model into
     apologising about a missing attachment the user never made for that turn.
+    Skipping silently when content is missing keeps the prompt clean.
     """
     _, seed_conn = _ft_db
     _insert_doc(
@@ -370,3 +370,31 @@ def test_recent_upload_skipped_when_failed(_ft_db):
     tags = _resolve_file_tags([], "req-007")
 
     assert tags == []
+
+
+@pytest.mark.unit
+def test_recent_chat_image_injects_when_ocr_present_even_if_status_not_ready(_ft_db):
+    """
+    chat_image documents have extracted_metadata.ocr_text written *before*
+    `status` flips to 'ready' (see api/chat_image.py:_run_analysis).  The
+    fallback must inject the OCR tag as soon as that content is available,
+    not wait for the status field to catch up.
+
+    Regression for nightly scenario 062 step-4: a status-only gate raced
+    OCR completion and dropped the OCR tag, causing the model to hallucinate
+    instead of citing the image text.
+    """
+    _, seed_conn = _ft_db
+    _insert_doc(
+        seed_conn,
+        "img00099",
+        source_type="chat_image",
+        status="analyzing",
+        extracted_metadata={"ocr_text": "HELLO CHALIE 2040", "has_text": True},
+    )
+
+    tags = _resolve_file_tags([], "req-008")
+
+    assert len(tags) == 1
+    assert tags[0].startswith("[image id=img00099 ocr=")
+    assert "HELLO CHALIE 2040" in tags[0]
