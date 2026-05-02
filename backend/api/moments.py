@@ -17,6 +17,8 @@ from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
 
+_ERR_INTERNAL = "Internal server error"
+
 moments_bp = Blueprint("moments", __name__)
 
 
@@ -143,7 +145,7 @@ def list_moments():
         return jsonify({"items": [_serialize_moment(r) for r in rows]})
     except Exception as e:
         logger.error(f"[MOMENTS API] list_moments error: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @moments_bp.route("/moments/<int:transcript_id>/forget", methods=["POST"])
@@ -162,7 +164,7 @@ def forget_moment(transcript_id):
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[MOMENTS API] forget_moment error: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @moments_bp.route("/moments/search", methods=["GET"])
@@ -180,4 +182,4 @@ def search_moments():
         return jsonify({"items": [_serialize_moment(r) for r in results]})
     except Exception as e:
         logger.error(f"[MOMENTS API] search_moments error: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500

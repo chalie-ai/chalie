@@ -16,6 +16,8 @@ from flask import Blueprint, request, jsonify
 
 logger = logging.getLogger(__name__)
 
+_ERR_APP_NOT_FOUND = "App not found"
+
 interfaces_bp = Blueprint("dashboard_apps", __name__)
 
 # Set by app.py at startup
@@ -55,7 +57,7 @@ def get_app(app_id: str):
 
     iface = db.get_interface(app_id)
     if not iface:
-        return jsonify({"error": "App not found"}), 404
+        return jsonify({"error": _ERR_APP_NOT_FOUND}), 404
 
     # Fetch live capabilities from daemon if reachable
     capabilities = []
@@ -89,7 +91,7 @@ def approve_scopes(app_id: str):
 
     iface = db.get_interface(app_id)
     if not iface:
-        return jsonify({"error": "App not found"}), 404
+        return jsonify({"error": _ERR_APP_NOT_FOUND}), 404
 
     body = request.get_json(silent=True) or {}
     approved_scopes = body.get("approved_scopes")
@@ -112,7 +114,7 @@ def refresh_app(app_id: str):
 
     iface = db.get_interface(app_id)
     if not iface:
-        return jsonify({"error": "App not found"}), 404
+        return jsonify({"error": _ERR_APP_NOT_FOUND}), 404
 
     if iface.get("chalie_interface_id"):
         result = _chalie_client.refresh_capabilities(iface["chalie_interface_id"])
@@ -130,7 +132,7 @@ def remove_app(app_id: str):
 
     iface = db.get_interface(app_id)
     if not iface:
-        return jsonify({"error": "App not found"}), 404
+        return jsonify({"error": _ERR_APP_NOT_FOUND}), 404
 
     # Unregister from Chalie
     if iface.get("chalie_interface_id"):

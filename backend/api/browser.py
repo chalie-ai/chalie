@@ -7,6 +7,8 @@ from .auth import require_session
 
 logger = logging.getLogger(__name__)
 
+_ERR_BROWSER_UNAVAILABLE = "Browser tool not available"
+
 browser_bp = Blueprint("browser", __name__, url_prefix="/api/browser")
 
 
@@ -23,7 +25,7 @@ def list_credentials():
         creds = vault.list_credentials(account_id=1)
         return jsonify({"credentials": creds})
     except ImportError:
-        return jsonify({"error": "Browser tool not available"}), 503
+        return jsonify({"error": _ERR_BROWSER_UNAVAILABLE}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -36,7 +38,7 @@ def store_credential():
         from tools.browser.credentials import CredentialVault
         from services.database_service import get_shared_db_service
     except ImportError:
-        return jsonify({"error": "Browser tool not available"}), 503
+        return jsonify({"error": _ERR_BROWSER_UNAVAILABLE}), 503
 
     data = request.get_json(silent=True) or {}
     domain = (data.get("domain") or "").strip()
@@ -73,7 +75,7 @@ def delete_credential(credential_id):
             return jsonify({"status": "deleted"})
         return jsonify({"error": "Not found"}), 404
     except ImportError:
-        return jsonify({"error": "Browser tool not available"}), 503
+        return jsonify({"error": _ERR_BROWSER_UNAVAILABLE}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -91,7 +93,7 @@ def list_snapshots():
         snapshots = store.list_snapshots(account_id=1)
         return jsonify({"snapshots": snapshots})
     except ImportError:
-        return jsonify({"error": "Browser tool not available"}), 503
+        return jsonify({"error": _ERR_BROWSER_UNAVAILABLE}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -109,7 +111,7 @@ def delete_snapshot(snapshot_key):
             return jsonify({"status": "deleted"})
         return jsonify({"error": "Not found"}), 404
     except ImportError:
-        return jsonify({"error": "Browser tool not available"}), 503
+        return jsonify({"error": _ERR_BROWSER_UNAVAILABLE}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

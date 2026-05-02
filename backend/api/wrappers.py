@@ -21,6 +21,8 @@ from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 
+_ERR_WRAPPER_NOT_FOUND = "Wrapper not found"
+
 wrappers_bp = Blueprint("wrappers", __name__, url_prefix="/api/wrappers")
 
 
@@ -150,7 +152,7 @@ def get_wrapper(wrapper_id: str):
     svc = _get_service()
     wrapper = svc.get_wrapper(wrapper_id)
     if wrapper is None:
-        return jsonify({"error": "Wrapper not found"}), 404
+        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
     return jsonify(wrapper), 200
 
 
@@ -191,7 +193,7 @@ def update_capabilities(wrapper_id: str):
     svc = _get_service()
     updated = svc.update_capabilities(wrapper_id, capabilities)
     if not updated:
-        return jsonify({"error": "Wrapper not found"}), 404
+        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
 
     return jsonify({"ok": True}), 200
 
@@ -215,7 +217,7 @@ def revoke_wrapper(wrapper_id: str):
     svc = _get_service()
     revoked = svc.revoke(wrapper_id)
     if not revoked:
-        return jsonify({"error": "Wrapper not found"}), 404
+        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
 
     logger.info("[Wrappers API] Revoked wrapper: %s", wrapper_id)
     return jsonify({"ok": True}), 200

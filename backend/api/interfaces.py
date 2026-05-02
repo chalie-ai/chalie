@@ -12,6 +12,8 @@ from api.auth import require_session
 
 logger = logging.getLogger(__name__)
 
+_ERR_INTERFACE_NOT_FOUND = "Interface not found"
+
 interfaces_bp = Blueprint('interfaces', __name__)
 
 
@@ -85,7 +87,7 @@ def get_interface(interface_id):
     svc = InterfaceRegistryService()
     iface = svc.get_interface(interface_id)
     if not iface:
-        return jsonify({"error": "Interface not found"}), 404
+        return jsonify({"error": _ERR_INTERFACE_NOT_FOUND}), 404
 
     # Include tool list
     tools = svc.get_interface_tools(interface_id)
@@ -101,7 +103,7 @@ def refresh_capabilities(interface_id):
     svc = InterfaceRegistryService()
     iface = svc.get_interface(interface_id)
     if not iface:
-        return jsonify({"error": "Interface not found"}), 404
+        return jsonify({"error": _ERR_INTERFACE_NOT_FOUND}), 404
 
     capabilities = svc.fetch_capabilities(interface_id)
     return jsonify({"capabilities": [c.get("name") for c in capabilities], "count": len(capabilities)}), 200
@@ -115,7 +117,7 @@ def remove_interface(interface_id):
     svc = InterfaceRegistryService()
     iface = svc.get_interface(interface_id)
     if not iface:
-        return jsonify({"error": "Interface not found"}), 404
+        return jsonify({"error": _ERR_INTERFACE_NOT_FOUND}), 404
 
     svc.remove(interface_id)
     return jsonify({"ok": True}), 200

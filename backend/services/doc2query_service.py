@@ -10,6 +10,7 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[DOC2QUERY]"
+_ONNX_PRESENT_PREFIX = "present."
 _MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'models', 'doc2query-small')
 _IDLE_TIMEOUT = 600  # 10 minutes
 
@@ -73,7 +74,7 @@ class Doc2QueryService:
                 self._available = True
                 self._last_used = time.time()
                 logger.info(f"{LOG_PREFIX} Model loaded (3 ONNX sessions)")
-            except (ImportError, ModuleNotFoundError) as e:
+            except ImportError as e:
                 logger.warning(f"{LOG_PREFIX} Permanently unavailable (missing dependency): %s", e)
                 self._available = False
             except Exception as e:
@@ -153,8 +154,8 @@ class Doc2QueryService:
                 output_names = [o.name for o in self._decoder.get_outputs()]
                 past_kv = {}
                 for i, name in enumerate(output_names):
-                    if name.startswith("present."):
-                        past_name = name.replace("present.", "past_key_values.", 1)
+                    if name.startswith(_ONNX_PRESENT_PREFIX):
+                        past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
                         past_kv[past_name] = outputs[i]
             else:
                 feeds = {
@@ -166,8 +167,8 @@ class Doc2QueryService:
                 logits = outputs[0]
                 output_names = [o.name for o in self._decoder_past.get_outputs()]
                 for i, name in enumerate(output_names):
-                    if name.startswith("present."):
-                        past_name = name.replace("present.", "past_key_values.", 1)
+                    if name.startswith(_ONNX_PRESENT_PREFIX):
+                        past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
                         past_kv[past_name] = outputs[i]
 
             next_token = self._sample_top_p(logits[0, -1, :], top_p=0.95)

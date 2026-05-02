@@ -46,6 +46,13 @@ _BACK_TO_BACK_GAP = timedelta(minutes=5)
 _DEFAULT_PAST_DAYS = 30
 _DEFAULT_FUTURE_DAYS = 30
 
+_ERR_CALDAV_NOT_INSTALLED = "'caldav' package is not installed."
+_SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
+                           (id, item_type, message, due_at, status, channel,
+                            source, external_uid, hidden, created_at)
+                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
+                                 'mail', ?, 1, ?)"""
+
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
@@ -141,7 +148,7 @@ class CaldavHandler:
     def open_client(self, url: str, username: str, password: str):
         """Create and return an authenticated caldav.DAVClient."""
         if not _CALDAV_AVAILABLE:
-            raise RuntimeError("'caldav' package is not installed.")
+            raise RuntimeError(_ERR_CALDAV_NOT_INSTALLED)
         return _caldav_lib.DAVClient(
             url=url, username=username, password=password, timeout=_CONNECT_TIMEOUT
         )
@@ -378,11 +385,7 @@ class CaldavHandler:
                     if ev.get("location"):
                         alert_msg += f" @ {ev['location']}"
                     c.execute(
-                        """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 1, ?)""",
+                        _SQL_INSERT_NOTIFICATION,
                         (uuid.uuid4().hex[:8], alert_msg,
                          (dtstart - timedelta(minutes=15)).isoformat(),
                          f"caldav:{uid}:alert", now.isoformat()),
@@ -395,11 +398,7 @@ class CaldavHandler:
                         f"\"{ev_b.get('summary', 'Event')}\" overlap"
                     )
                     c.execute(
-                        """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 1, ?)""",
+                        _SQL_INSERT_NOTIFICATION,
                         (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
                          f"caldav:conflict:{canon_key}", now.isoformat()),
                     )
@@ -411,11 +410,7 @@ class CaldavHandler:
                         f"\"{ev_b.get('summary', 'Event')}\""
                     )
                     c.execute(
-                        """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 1, ?)""",
+                        _SQL_INSERT_NOTIFICATION,
                         (uuid.uuid4().hex[:8], b2b_msg,
                          ev_a.get("dtend", now).isoformat(),
                          f"caldav:b2b:{canon_key}", now.isoformat()),
@@ -562,7 +557,7 @@ class CaldavHandler:
         Optional: location, description, calendar_name.
         """
         if not _CALDAV_AVAILABLE:
-            return {"error": "'caldav' package is not installed."}
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
             return {"error": "'icalendar' package is not installed."}
 
@@ -636,7 +631,7 @@ class CaldavHandler:
         Optional: summary, dtstart, dtend, location, description.
         """
         if not _CALDAV_AVAILABLE:
-            return {"error": "'caldav' package is not installed."}
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
             return {"error": "'icalendar' package is not installed."}
 
@@ -701,7 +696,7 @@ class CaldavHandler:
     def delete_event(self, client, params: dict) -> dict:
         """Delete a calendar event from the CalDAV server by UID."""
         if not _CALDAV_AVAILABLE:
-            return {"error": "'caldav' package is not installed."}
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
 
         uid = (params.get("uid") or "").strip()
         if not uid:

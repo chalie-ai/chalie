@@ -30,6 +30,10 @@ VALID_KINDS = frozenset({
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
     "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
 )
+_ORDER_FIRST_SEEN_DESC = 'first_seen_at DESC'
+_SQL_DELETE_DG_ROW = "DELETE FROM data_graph WHERE rowid=?"
+_SQL_DELETE_DG_KEY_VEC = "DELETE FROM data_graph_key_vec WHERE rowid=?"
+_SQL_DELETE_DG_VALUE_VEC = "DELETE FROM data_graph_value_vec WHERE rowid=?"
 
 
 @dataclass
@@ -1100,18 +1104,18 @@ class DataGraphService:
     # ── fetch() ───────────────────────────────────────────────────────
 
     _VALID_ORDER_BY = frozenset({
-        'first_seen_at DESC', 'last_confirmed_at DESC',
+        _ORDER_FIRST_SEEN_DESC, 'last_confirmed_at DESC',
         'retrieval_weight DESC', 'evidence_count DESC',
         'first_seen_at ASC', 'last_confirmed_at ASC',
         'key ASC',
     })
 
-    def fetch(self, *, kinds=None, limit=None, order_by='first_seen_at DESC',
+    def fetch(self, *, kinds=None, limit=None, order_by=_ORDER_FIRST_SEEN_DESC,
               include_inactive=False, include_deleted=False) -> list:
         try:
             if order_by not in self._VALID_ORDER_BY:
                 logger.warning("[DATA GRAPH] Invalid order_by '%s', using default", order_by)
-                order_by = 'first_seen_at DESC'
+                order_by = _ORDER_FIRST_SEEN_DESC
 
             filters = []
             params = []
@@ -1301,9 +1305,9 @@ class DataGraphService:
         try:
             with self.db.connection() as conn:
                 self._remove_fts(conn, row_id)
-                conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
-                conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
-                conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
+                conn.execute(_SQL_DELETE_DG_ROW, (row_id,))
+                conn.execute(_SQL_DELETE_DG_KEY_VEC, (row_id,))
+                conn.execute(_SQL_DELETE_DG_VALUE_VEC, (row_id,))
             return True
         except Exception as e:
             logger.warning("[DATA GRAPH] hard_delete_by_id failed for rowid=%s: %s", row_id, e)
@@ -1327,9 +1331,9 @@ class DataGraphService:
 
                 for rid in rowids:
                     self._remove_fts(conn, rid)
-                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (rid,))
-                    conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rid,))
-                    conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rid,))
+                    conn.execute(_SQL_DELETE_DG_ROW, (rid,))
+                    conn.execute(_SQL_DELETE_DG_KEY_VEC, (rid,))
+                    conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rid,))
 
                 return len(rowids)
         except Exception as e:
@@ -1381,14 +1385,14 @@ class DataGraphService:
         are non-fatal and logged at debug level.
         """
         self._remove_fts(conn, row_id)
-        conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
+        conn.execute(_SQL_DELETE_DG_ROW, (row_id,))
         conn.execute("DELETE FROM data_graph_edges WHERE from_id=? OR to_id=?", (row_id, row_id))
         try:
-            conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
+            conn.execute(_SQL_DELETE_DG_KEY_VEC, (row_id,))
         except Exception as e:
             logger.debug("vec table delete failed for id=%s: %s", row_id, e)
         try:
-            conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
+            conn.execute(_SQL_DELETE_DG_VALUE_VEC, (row_id,))
         except Exception as e:
             logger.debug("vec table delete failed for id=%s: %s", row_id, e)
 
@@ -1571,9 +1575,9 @@ class DataGraphService:
 
                 for rowid in expired_misc:
                     self._remove_fts(conn, rowid)
-                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (rowid,))
-                    conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rowid,))
-                    conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rowid,))
+                    conn.execute(_SQL_DELETE_DG_ROW, (rowid,))
+                    conn.execute(_SQL_DELETE_DG_KEY_VEC, (rowid,))
+                    conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rowid,))
                     total_updated += 1
 
             if total_updated > 0:

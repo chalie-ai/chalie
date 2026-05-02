@@ -10,6 +10,8 @@ from .markup import actions_to_xml, sanitize
 
 logger = logging.getLogger(__name__)
 
+_KEY_NOTIFICATIONS_RECENT = 'notifications:recent'
+
 
 class OutputService:
     """Service for managing output queue and storage with type-based routing."""
@@ -135,9 +137,9 @@ class OutputService:
             # reconnect gap are permanently lost from pub/sub. Push to a list so
             # the stream endpoint can drain missed events on next connect.
             try:
-                self.store.rpush('notifications:recent', event_payload)
-                self.store.ltrim('notifications:recent', -200, -1)
-                self.store.expire('notifications:recent', 86400)  # 24h TTL
+                self.store.rpush(_KEY_NOTIFICATIONS_RECENT, event_payload)
+                self.store.ltrim(_KEY_NOTIFICATIONS_RECENT, -200, -1)
+                self.store.expire(_KEY_NOTIFICATIONS_RECENT, 86400)  # 24h TTL
             except Exception as e:
                 logger.warning(f"Notification buffer push failed: {e}")
 

@@ -26,6 +26,7 @@ _CONTENT_IDS = ["layout-content", "content", "main-content", "bodyContent", "mw-
 _CONTENT_CLASSES = ["refentry", "mw-content-ltr", "content", "documentation", "doc-content", "markdown-body"]
 _MAX_CHARS = 12_000
 _TIMEOUT = 8
+_RE_HTML_TAGS = r"<[^>]+>"
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; ChalieBot/1.0; +https://chalie.ai)",
     "Accept": "text/html,application/xhtml+xml,application/json",
@@ -137,7 +138,7 @@ def _parse_links(html, base_url):
     results = []
     for m in re.finditer(r'<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
                          html, re.DOTALL | re.IGNORECASE):
-        href, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        href, title = m.group(1), re.sub(_RE_HTML_TAGS, "", m.group(2)).strip()
         if not title:
             continue
         if href.startswith("/"):
@@ -157,7 +158,7 @@ def _sphinx_search(base_url, query, max_results=5):
             r'<li[^>]*>\s*<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
             html, re.DOTALL | re.IGNORECASE,
         ):
-            href, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            href, title = m.group(1), re.sub(_RE_HTML_TAGS, "", m.group(2)).strip()
             if not title or "search" in href.lower():
                 continue
             if href.startswith("http"):
@@ -292,7 +293,7 @@ class DjangoSource(_Source):
                 r'<dt>\s*<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
                 html, re.DOTALL | re.IGNORECASE,
             ):
-                href, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                href, title = m.group(1), re.sub(_RE_HTML_TAGS, "", m.group(2)).strip()
                 if title:
                     full_url = urllib.parse.urljoin("https://docs.djangoproject.com", href)
                     results.append({"url": full_url, "title": title})
@@ -778,7 +779,7 @@ class CSource(_Source):
                 _, html = _fetch(index_url)
                 for m in re.finditer(r'href="([^"]*\.html)"[^>]*>(.*?)</a>', html, re.DOTALL | re.IGNORECASE):
                     href = m.group(1)
-                    title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                    title = re.sub(_RE_HTML_TAGS, "", m.group(2)).strip()
                     if q in title.lower() or q in href.lower():
                         full_url = urllib.parse.urljoin(index_url, href)
                         if full_url not in [r["url"] for r in results]:

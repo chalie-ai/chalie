@@ -22,6 +22,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_RE_SQL_COMMENTS = r"--[^\n]*"
+
 # Tables whose names we never touch even if they appear stale.  SQLite system
 # tables, FTS5/vec0 shadow tables, and our own bookkeeping live here.  Shadow
 # tables are usually filtered out by ``_introspect_tables`` via virtual-table
@@ -182,7 +184,7 @@ class SchemaConvergenceService:
         if self._embedding_dimensions != 768:
             sql = sql.replace("float[768]", f"float[{self._embedding_dimensions}]")
         # Strip single-line comments, then split respecting BEGIN...END blocks.
-        sql_no_comments = re.sub(r"--[^\n]*", "", sql)
+        sql_no_comments = re.sub(_RE_SQL_COMMENTS, "",sql)
         for stmt in self._split_statements(sql_no_comments):
             try:
                 conn.execute(stmt)
@@ -828,7 +830,7 @@ class SchemaConvergenceService:
 
     def _run_seed_data(self, schema_sql: str, live_conn: sqlite3.Connection) -> None:
         """Execute INSERT OR IGNORE seed statements on a fresh database."""
-        stripped = re.sub(r"--[^\n]*", "", schema_sql)
+        stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         for match in re.finditer(
             r"(INSERT\s+OR\s+IGNORE\s+INTO\s+\w+[^;]+;)", stripped, re.IGNORECASE | re.DOTALL
         ):
@@ -846,7 +848,7 @@ class SchemaConvergenceService:
         """Extract the CREATE TABLE ... ; block for a normal table from schema.sql."""
         # Strip single-line SQL comments first — they can contain semicolons
         # (e.g. "-- dropped by migration 026; kept here") which break [^;]+.
-        stripped = re.sub(r"--[^\n]*", "", schema_sql)
+        stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         pattern = re.compile(
             r"(CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(table_name) + r"\s*\([^;]+;)",
             re.IGNORECASE | re.DOTALL,
@@ -861,7 +863,7 @@ class SchemaConvergenceService:
         ``embedding_dimensions`` (defaults to 768; tests use 256).
         """
         # Strip SQL comments before regex matching (same as _extract_table_ddl)
-        clean_sql = re.sub(r"--[^\n]*", "", schema_sql)
+        clean_sql = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         pattern = re.compile(
             r"(CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(table_name) + r"[^;]+;)",
             re.IGNORECASE | re.DOTALL,
@@ -883,7 +885,7 @@ class SchemaConvergenceService:
         Instead we match from CREATE TRIGGER <name> through the END keyword that
         closes the outermost block, then consume the trailing semicolon.
         """
-        stripped = re.sub(r"--[^\n]*", "", schema_sql)
+        stripped = re.sub(_RE_SQL_COMMENTS, "",schema_sql)
         pattern = re.compile(
             r"(CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?" + re.escape(trigger_name) + r"\b.+?END\s*;)",
             re.IGNORECASE | re.DOTALL,

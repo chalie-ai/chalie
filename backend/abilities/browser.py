@@ -25,6 +25,8 @@ from abilities._base import Ability
 
 logger = logging.getLogger(__name__)
 
+_ERR_URL_REQUIRED = "url parameter required"
+
 
 class BrowserAbility(Ability):
     NAME = "browser"
@@ -158,7 +160,7 @@ class BrowserAbility(Ability):
     def _action_render(self, params: dict) -> dict:
         url = (params.get("url") or "").strip()
         if not url:
-            return {"error": "url parameter required", "text": ""}
+            return {"error": _ERR_URL_REQUIRED, "text": ""}
 
         from tools.browser.security import validate_url
         ok, reason = validate_url(url)
@@ -235,7 +237,7 @@ class BrowserAbility(Ability):
     def _action_screenshot(self, params: dict) -> dict:
         url = (params.get("url") or "").strip()
         if not url:
-            return {"error": "url parameter required", "text": ""}
+            return {"error": _ERR_URL_REQUIRED, "text": ""}
 
         from tools.browser.security import validate_url
         ok, reason = validate_url(url)
@@ -319,7 +321,7 @@ class BrowserAbility(Ability):
     def _action_interact(self, params: dict) -> dict:
         url = (params.get("url") or "").strip()
         if not url:
-            return {"error": "url parameter required", "text": ""}
+            return {"error": _ERR_URL_REQUIRED, "text": ""}
 
         steps = params.get("steps")
         if not steps or not isinstance(steps, list):
@@ -416,7 +418,7 @@ class BrowserAbility(Ability):
     def _action_monitor(self, params: dict) -> dict:
         url = (params.get("url") or "").strip()
         if not url:
-            return {"error": "url parameter required", "text": ""}
+            return {"error": _ERR_URL_REQUIRED, "text": ""}
 
         snapshot_key = (params.get("snapshot_key") or "").strip()
         if not snapshot_key:

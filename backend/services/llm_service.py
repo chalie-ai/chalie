@@ -18,6 +18,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_ERR_STREAMING_NOT_SUPPORTED = "Streaming not yet supported"
 
 
 def _strip_think_blocks(text: str) -> str:
@@ -607,7 +608,7 @@ class AnthropicService:
                 are exhausted.
         """
         if stream:
-            raise NotImplementedError("Streaming not yet supported")
+            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
 
         import anthropic
 
@@ -859,7 +860,7 @@ class OpenAIService:
                 exhausted.
         """
         if stream:
-            raise NotImplementedError("Streaming not yet supported")
+            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
 
         import openai as openai_mod
 
@@ -1169,7 +1170,7 @@ class GeminiService:
             ValueError: If the model returns an empty response.
         """
         if stream:
-            raise NotImplementedError("Streaming not yet supported")
+            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
 
         try:
             from google import genai

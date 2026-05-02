@@ -27,6 +27,9 @@ from flask import Blueprint, request, jsonify, send_file
 
 logger = logging.getLogger(__name__)
 
+_CONTENT_TYPE_JSON = "application/json"
+_ERR_INVALID_FILENAME = "Invalid filename"
+
 gateway_bp = Blueprint("gateway", __name__)
 
 # Set by app.py at startup
@@ -429,7 +432,7 @@ def proxy_render(interface_id: str):
         content_type = resp.headers.get("Content-Type", "")
         gw_base = f"/gw/{interface_id}"
 
-        if "application/json" in content_type:
+        if _CONTENT_TYPE_JSON in content_type:
             # SDK v2: blocks response — inject gateway path for action wiring
             data = resp.json()
             data["gateway"] = gw_base
@@ -456,10 +459,10 @@ def proxy_execute(interface_id: str):
         resp = requests.post(
             f"http://{iface['host']}:{iface['port']}/execute",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": _CONTENT_TYPE_JSON},
             timeout=_DISCOVER_TIMEOUT,
         )
-        return resp.text, resp.status_code, {"Content-Type": "application/json"}
+        return resp.text, resp.status_code, {"Content-Type": _CONTENT_TYPE_JSON}
     except Exception as e:
         return jsonify({"error": f"Daemon unreachable: {e}"}), 502
 
@@ -492,7 +495,7 @@ def get_data_file(interface_id: str, filename: str):
         return err
     safe = _safe_filename(filename)
     if not safe:
-        return jsonify({"error": "Invalid filename"}), 400
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     fpath = os.path.join(_daemon_data_dir(interface_id), safe)
     if not os.path.isfile(fpath):
         return jsonify({"error": "File not found"}), 404
@@ -507,7 +510,7 @@ def put_data_file(interface_id: str, filename: str):
         return err
     safe = _safe_filename(filename)
     if not safe:
-        return jsonify({"error": "Invalid filename"}), 400
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     fpath = os.path.join(_daemon_data_dir(interface_id), safe)
     data = request.get_data()
     with open(fpath, "wb") as f:
@@ -523,7 +526,7 @@ def delete_data_file(interface_id: str, filename: str):
         return err
     safe = _safe_filename(filename)
     if not safe:
-        return jsonify({"error": "Invalid filename"}), 400
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     fpath = os.path.join(_daemon_data_dir(interface_id), safe)
     if not os.path.isfile(fpath):
         return jsonify({"error": "File not found"}), 404

@@ -23,6 +23,9 @@ from .auth import require_session
 
 logger = logging.getLogger(__name__)
 
+_ERR_INTERNAL = "Internal server error"
+_ERR_NOT_FOUND = "Not found"
+
 lists_bp = Blueprint("lists", __name__)
 
 
@@ -96,7 +99,7 @@ def get_lists():
         return jsonify({"items": [_serialize_list(lst) for lst in lists]})
     except Exception as e:
         logger.error(f"[LISTS API] get_lists error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists", methods=["POST"])
@@ -120,7 +123,7 @@ def create_list():
         return jsonify({"error": str(e)}), 409
     except Exception as e:
         logger.error(f"[LISTS API] create_list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>", methods=["GET"])
@@ -131,13 +134,13 @@ def get_list(list_id):
         svc = _get_list_service()
         lst = svc.get_list(list_id)
         if lst is None:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         lst = dict(lst)
         lst["items"] = [_serialize_item(i) for i in lst.get("items", [])]
         return jsonify({"item": _serialize_list(lst)})
     except Exception as e:
         logger.error(f"[LISTS API] get_list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/rename", methods=["PUT"])
@@ -157,7 +160,7 @@ def rename_list(list_id):
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[LISTS API] rename_list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>", methods=["DELETE"])
@@ -168,11 +171,11 @@ def delete_list(list_id):
         svc = _get_list_service()
         ok = svc.delete_list(list_id)
         if not ok:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[LISTS API] delete_list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/items", methods=["POST"])
@@ -187,12 +190,12 @@ def add_items(list_id):
     try:
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         added = svc.add_items(list_id, items, auto_create=False)
         return jsonify({"added": added})
     except Exception as e:
         logger.error(f"[LISTS API] add_items error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/items", methods=["DELETE"])
@@ -203,11 +206,11 @@ def clear_items(list_id):
         svc = _get_list_service()
         count = svc.clear_list(list_id)
         if count == -1:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"cleared": count})
     except Exception as e:
         logger.error(f"[LISTS API] clear_items error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/items/batch", methods=["DELETE"])
@@ -222,12 +225,12 @@ def remove_items(list_id):
     try:
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         removed = svc.remove_items(list_id, items)
         return jsonify({"removed": removed})
     except Exception as e:
         logger.error(f"[LISTS API] remove_items error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/items/check", methods=["PUT"])
@@ -242,12 +245,12 @@ def check_items(list_id):
     try:
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         checked = svc.check_items(list_id, items)
         return jsonify({"checked": checked})
     except Exception as e:
         logger.error(f"[LISTS API] check_items error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @lists_bp.route("/lists/<list_id>/items/uncheck", methods=["PUT"])
@@ -262,9 +265,9 @@ def uncheck_items(list_id):
     try:
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         unchecked = svc.uncheck_items(list_id, items)
         return jsonify({"unchecked": unchecked})
     except Exception as e:
         logger.error(f"[LISTS API] uncheck_items error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
