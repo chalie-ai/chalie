@@ -316,3 +316,57 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
     assert len(tags) == 1
     assert tags[0].startswith("[image id=img00003 ocr=")
     assert "Meeting notes: action items" in tags[0]
+
+
+@pytest.mark.unit
+def test_recent_upload_skipped_when_not_ready(_ft_db):
+    """
+    When the most-recent upload is still 'analyzing' (or any non-ready state),
+    the recent-upload fallback must inject NO tag at all — not a
+    `status=timeout` tag, not a `status=failed` tag, nothing.
+
+    Regression for nightly scenario 060 step-6: the user typed an unrelated
+    chat turn after uploading a document earlier in the conversation; the
+    fallback fired on the still-analyzing row and injected
+    `[document id=... status=timeout]`, which derailed the model into
+    apologising about a missing attachment the user never made for that turn.
+    """
+    _, seed_conn = _ft_db
+    _insert_doc(
+        seed_conn,
+        "doc00099",
+        source_type="upload",
+        original_name="report.pdf",
+        mime_type="application/pdf",
+        status="analyzing",
+        clean_text=None,
+    )
+
+    tags = _resolve_file_tags([], "req-006")
+
+    assert tags == []
+
+
+@pytest.mark.unit
+def test_recent_upload_skipped_when_failed(_ft_db):
+    """
+    Recent-upload fallback must not emit a `status=failed` tag either.
+    Same reasoning as the not-ready case: the user did not attach anything
+    for THIS turn — they merely have a failed upload from earlier in the
+    conversation, and surfacing it as if it were the user's intent for the
+    current turn produces incoherent model behaviour.
+    """
+    _, seed_conn = _ft_db
+    _insert_doc(
+        seed_conn,
+        "doc00098",
+        source_type="upload",
+        original_name="report.pdf",
+        mime_type="application/pdf",
+        status="failed",
+        clean_text=None,
+    )
+
+    tags = _resolve_file_tags([], "req-007")
+
+    assert tags == []

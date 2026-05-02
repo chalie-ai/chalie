@@ -297,8 +297,16 @@ def _fetch_recent_upload_row(db):
 
 
 def _resolve_recent_upload(db, svc, request_id: str):
-    """Return (tag, doc_id_if_injected) for the recent-upload fallback, or (None, None)."""
-    import time as _time
+    """Return (tag, doc_id_if_injected) for the recent-upload fallback, or (None, None).
+
+    Only fires when the most recent upload is already 'ready' at lookup time.
+    The fallback exists to cover paste/drop where the chat turn races the
+    upload XHR — that race is sub-second, so anything still in-flight after
+    the row appears here is far more likely to be a stale upload from earlier
+    in the conversation than the user's intent for *this* turn. Injecting a
+    `status=timeout` or `status=failed` tag in that case derails the model
+    into apologising about a missing attachment the user never made.
+    """
     try:
         row = _fetch_recent_upload_row(db)
     except Exception as e:
@@ -308,17 +316,9 @@ def _resolve_recent_upload(db, svc, request_id: str):
         return None, None
 
     doc_id, original_name, doc_status, clean_text, source_type = row
-    if doc_status not in ('ready', 'failed'):
-        doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + 10.0)
-
-    tag_kind = 'image' if source_type == 'chat_image' else 'document'
-    if doc_status == 'ready':
-        return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
-    if doc_status == 'failed':
-        logger.warning(f"[WS] file_tags recent upload failed doc_id={doc_id} source_type={source_type} request_id={request_id}")
-        return f"[{tag_kind} id={doc_id} status=failed]", None
-    logger.warning(f"[WS] file_tags recent upload timed out doc_id={doc_id} source_type={source_type} status={doc_status} request_id={request_id}")
-    return f"[{tag_kind} id={doc_id} status=timeout]", None
+    if doc_status != 'ready':
+        return None, None
+    return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
 
 
 def _resolve_file_tags(image_ids: list, request_id: str) -> list:
