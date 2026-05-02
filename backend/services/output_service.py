@@ -36,6 +36,7 @@ class OutputService:
         reply_actions: list = None,
         channel: str = None,
         metrics: dict = None,
+        transcript_ids: list = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
@@ -49,6 +50,10 @@ class OutputService:
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, source, etc.)
             reply_actions: Optional action buttons for the frontend (only delivered on sync chat, never drift)
+            transcript_ids: Optional list of transcript row IDs that generated this response.
+                Forwarded to the WS handler so tool_calls can be fetched by exact row IDs
+                rather than by recency heuristic. When absent the WS handler falls back to
+                no segments (plain text bubble).
 
         Returns:
             str: UUID of the enqueued output
@@ -68,6 +73,8 @@ class OutputService:
             metadata_dict["reply_actions"] = reply_actions
         if metrics is not None:
             metadata_dict["metrics"] = metrics
+        if transcript_ids is not None:
+            metadata_dict["transcript_ids"] = transcript_ids
 
         # Single chokepoint: sanitize() accepts mixed plain text + allowlisted
         # HTML and passes both through. Programmatic action buttons are

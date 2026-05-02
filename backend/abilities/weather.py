@@ -117,10 +117,12 @@ class WeatherAbility(Ability):
 
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. To present this result as a card, "
-    "wrap your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "You may mix prose and rich-media spans freely; spans render as cards "
-    "between text bubbles."
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a weather card; without it, the user sees only "
+    "plain text. Example output: \"Current conditions in "
+    "<span id='{tag}'>Paris is 14°C with light rain — bring an umbrella.</span>\" "
+    "You may include multiple weather spans (one per location) and prose between them."
 )
 
 

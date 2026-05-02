@@ -361,14 +361,16 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
 
 
 def _fetch_tool_calls_for_recent_user_turn(channel: str = 'user') -> list[dict]:
-    """Fetch tool_calls rows for the most recent user-input transcript row.
+    """Deprecated: recency-based tool_calls lookup.
 
-    Tool calls are stored against the user transcript row (the input row whose
-    ID is ``MessageProcessor._uid``).  The assistant turn writes its transcript
-    row separately and its ID is not surfaced to the WS handler, so we resolve
-    the user row by recency.
+    Preserved for test compatibility only. Production code uses
+    ``_fetch_tool_calls_for_transcript_ids`` instead, which receives exact IDs
+    threaded from ``MessageProcessor._uid`` via the output metadata.
 
-    Returns an empty list on any error so the caller degrades gracefully.
+    This implementation has two known bugs that the replacement fixes:
+    - Filters WHERE role='user', silently missing subagent channel rows.
+    - Races DMN, which can insert user-channel rows between ACT completion
+      and WS emit, causing the recency lookup to return the wrong turn.
     """
     try:
         from services.database_service import get_shared_db_service
@@ -401,18 +403,70 @@ def _fetch_tool_calls_for_recent_user_turn(channel: str = 'user') -> list[dict]:
         return []
 
 
-def _attach_segments(message_evt: dict, content: str, tool_calls: list[dict]) -> None:
+def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
+    """Fetch all tool_calls rows (including ephemeral=1) for a list of transcript IDs.
+
+    Replaces the old recency-based lookup that:
+      - filtered WHERE channel='user' AND role='user', silently missing subagent rows
+      - raced DMN which can write user-channel rows between ACT completion and WS emit
+
+    Args:
+        transcript_ids: List of transcript.id values from the turn that produced
+            the response. Typically a single-element list containing the UMP input
+            row ID (``MessageProcessor._uid``).
+
+    Returns:
+        Tool_calls rows ordered by created_at, id. Empty list on any error.
+    """
+    if not transcript_ids:
+        return []
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        placeholders = ','.join('?' * len(transcript_ids))
+        with db.connection() as conn:
+            tc_rows = conn.execute(
+                f"SELECT tool_name, params, result, ephemeral FROM tool_calls "
+                f"WHERE transcript_id IN ({placeholders}) "
+                f"ORDER BY created_at, id",
+                transcript_ids,
+            ).fetchall()
+        return [
+            {
+                "tool_name": r[0],
+                "params": r[1],
+                "result": r[2] or "",
+                "ephemeral": r[3],
+            }
+            for r in tc_rows
+        ]
+    except Exception as exc:
+        logger.debug("[WS] _fetch_tool_calls_for_transcript_ids failed: %s", exc)
+        return []
+
+
+def _attach_segments(message_evt: dict, content: str, transcript_ids: list) -> None:
     """Attach the ``segments`` field to a message_evt dict in-place.
 
-    Calls RichMediaParser.parse() and always produces at least one segment.
-    For responses with no rich-media spans this is a single text segment —
-    the frontend checks for ``segments`` presence, not length.
+    Fetches tool_calls by exact transcript IDs (avoiding the stale recency
+    heuristic) then calls RichMediaParser.parse(). Always produces at least
+    one segment — for responses with no rich-media spans this is a single
+    text segment; the frontend checks for ``segments`` presence, not length.
+
+    When ``transcript_ids`` is empty or None (e.g. legacy callers), a warning
+    is logged and a plain text segment is emitted — no silent degradation.
 
     Args:
         message_evt: The WS event dict being assembled (mutated in-place).
         content: Sanitised assistant text (``transcript.content``).
-        tool_calls: Tool_calls rows for this turn (including ephemeral=1 rows).
+        transcript_ids: List of transcript row IDs for this turn. Populated
+            from ``MessageProcessor._uid`` by the background chat handler.
     """
+    if not transcript_ids:
+        logger.warning("[WS] _attach_segments: no transcript_ids — emitting plain text segment")
+        message_evt["segments"] = [{"type": "text", "content": content}]
+        return
+    tool_calls = _fetch_tool_calls_for_transcript_ids(transcript_ids)
     segments = _parse_rich_media(content, tool_calls)
     if not segments:
         segments = [{"type": "text", "content": content}]
@@ -488,8 +542,8 @@ def _handle_action(ws, msg):
             },
         }
         # Action-button responses come directly from abilities, not the ACT loop,
-        # so there are no associated tool_calls rows. Attach an empty tool_calls
-        # list — the parser will emit a single text segment.
+        # so there are no transcript IDs or tool_calls rows. Empty list causes
+        # _attach_segments to emit a single plain text segment.
         _attach_segments(message_evt, content, [])
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
@@ -655,6 +709,12 @@ def _handle_chat(ws, store, msg, active_request=None):
             metrics = proc._metrics.snapshot()
             partial_metrics.update(metrics)
 
+            # Thread the input transcript row ID so the WS handler can fetch
+            # tool_calls by exact ID rather than by recency heuristic (Fix 2).
+            # proc._uid is the user-input transcript row written at the top of
+            # send(); all ACT tool_calls for this turn are stored against it.
+            _transcript_ids = [proc._uid] if getattr(proc, '_uid', None) is not None else None
+
             output_svc = OutputService()
             output_svc.enqueue_text(
                 topic='user',
@@ -664,6 +724,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 generation_time=0.0,
                 original_metadata=metadata,
                 metrics=metrics,
+                transcript_ids=_transcript_ids,
             )
 
             # Store result at output:{request_id} so the fallback path can
@@ -803,9 +864,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 _attach_segments(
                     message_evt,
                     _msg_content,
-                    _fetch_tool_calls_for_recent_user_turn(
-                        output.get("topic") or "user"
-                    ),
+                    metadata.get("transcript_ids") or [],
                 )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
@@ -852,9 +911,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 _attach_segments(
                     message_evt,
                     _fb_content,
-                    _fetch_tool_calls_for_recent_user_turn(
-                        output.get("topic") or "user"
-                    ),
+                    metadata.get("transcript_ids") or [],
                 )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)

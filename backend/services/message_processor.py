@@ -640,6 +640,9 @@ class MessageProcessor:
             # mid-turn via find_tools are registered as handlers on this
             # instance so all tools dispatch through the same path.
             self._dispatcher = ActDispatcherService()
+            # Explicit reset makes the per-turn ordinal contract enforceable
+            # even if dispatcher lifetime ever changes (Fix 1).
+            self._dispatcher.reset_turn_ordinals()
 
             with self._metrics.stage('pre_act'):
                 self.pre_act()
