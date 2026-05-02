@@ -1160,7 +1160,7 @@ class TestDocumentKind:
 
     def test_document_no_decay(self, svc, db_service):
         """document kind has d_base=0.0 — decay_cycle does not modify retrieval_weight."""
-        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == 0.0
+        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == pytest.approx(0.0, abs=1e-9)
 
         result = svc.store(KIND_DOCUMENT, 'doc:nodecay:000', 'persistent chunk', source='doc:nodecay')
         assert result is not None

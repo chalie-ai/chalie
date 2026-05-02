@@ -130,20 +130,20 @@ class TestHelpers:
         assert "world" in tokens
 
     def test_jaccard_identical(self):
-        assert _jaccard({"a", "b", "c"}, {"a", "b", "c"}) == 1.0
+        assert _jaccard({"a", "b", "c"}, {"a", "b", "c"}) == pytest.approx(1.0, abs=1e-9)
 
     def test_jaccard_disjoint(self):
-        assert _jaccard({"a", "b"}, {"c", "d"}) == 0.0
+        assert _jaccard({"a", "b"}, {"c", "d"}) == pytest.approx(0.0, abs=1e-9)
 
     def test_jaccard_partial(self):
         result = _jaccard({"a", "b", "c"}, {"b", "c", "d"})
         assert abs(result - 0.5) < 0.01  # 2/4
 
     def test_jaccard_both_empty(self):
-        assert _jaccard(set(), set()) == 1.0
+        assert _jaccard(set(), set()) == pytest.approx(1.0, abs=1e-9)
 
     def test_jaccard_one_empty(self):
-        assert _jaccard({"a"}, set()) == 0.0
+        assert _jaccard({"a"}, set()) == pytest.approx(0.0, abs=1e-9)
 
     def test_derive_domain_strips_rss_prefix(self):
         assert _derive_domain("https://feeds.bbci.co.uk/news/rss.xml") == "bbci.co.uk"

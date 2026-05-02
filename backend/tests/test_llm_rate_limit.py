@@ -18,7 +18,7 @@ class TestRateLimitError:
     def test_retry_after_and_provider_are_accessible(self):
         err = RateLimitError("rate limited", retry_after=45.0, provider="anthropic")
         assert str(err) == "rate limited"
-        assert err.retry_after == 45.0
+        assert err.retry_after == pytest.approx(45.0, abs=1e-9)
         assert err.provider == "anthropic"
 
     def test_defaults_none(self):

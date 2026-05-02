@@ -88,7 +88,7 @@ class TestGetSnapshot:
         assert ep["working_memory_depth"] == 4
         assert ep["partial_match_signal"] == 5
         # warmth formula: 0.6 * clamped(working_memory/max) + 0.4 * clamped(fok/max), yielding 1.0 here
-        assert ep["context_warmth"] == 1.0
+        assert ep["context_warmth"] == pytest.approx(1.0, abs=1e-9)
 
     def test_snapshot_epistemic_cold_when_empty(self, mock_store):
         """No working memory and no FOK yields zero warmth."""
@@ -97,7 +97,7 @@ class TestGetSnapshot:
 
         assert ep["working_memory_depth"] == 0
         assert ep["partial_match_signal"] == 0
-        assert ep["context_warmth"] == 0.0
+        assert ep["context_warmth"] == pytest.approx(0.0, abs=1e-9)
 
     def test_snapshot_caches_in_store(self, mock_store):
         """Second call within TTL returns identical snapshot without re-computing."""
@@ -182,7 +182,7 @@ class TestNoteworthy:
         dead_signals = [n for n in noteworthy if "thread" in n["signal"].lower()]
 
         assert len(dead_signals) == 1
-        assert dead_signals[0]["severity"] == 0.6
+        assert dead_signals[0]["severity"] == pytest.approx(0.6, abs=1e-9)
         assert "dmn-service" in dead_signals[0]["signal"]
 
     def test_noteworthy_item_structure(self, mock_store):
@@ -254,7 +254,7 @@ class TestMemoryRichness:
     def test_zero_when_no_data(self, mock_store):
         """Empty system yields zero richness."""
         svc = _make_service()
-        assert svc.get_memory_richness() == 0.0
+        assert svc.get_memory_richness() == pytest.approx(0.0, abs=1e-9)
 
     def test_nonzero_with_episodes(self, mock_store):
         """Even a few episodes push richness above zero due to log curve."""

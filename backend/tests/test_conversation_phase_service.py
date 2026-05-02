@@ -70,7 +70,7 @@ class TestEmptyThread:
         svc = _make_service(store)
         phase = svc.get_phase()
         assert phase["current"] == "opening"
-        assert phase["momentum"] == 0.5
+        assert phase["momentum"] == pytest.approx(0.5, abs=1e-9)
         assert phase["direction"] == "sustaining"
         assert "updated_at" in phase
 
@@ -110,7 +110,7 @@ class TestStateRoundtrip:
         # After reset, state should be default
         phase = svc.get_phase()
         assert phase["current"] == "opening"
-        assert phase["momentum"] == 0.5
+        assert phase["momentum"] == pytest.approx(0.5, abs=1e-9)
 
 
 class TestOpeningDetection:
@@ -652,8 +652,8 @@ class TestHelpers:
     def test_question_density(self):
         from services.conversation_phase_service import _question_density
         counts = [1, 0, 1, 0, 1]
-        assert _question_density(counts, 5) == 0.6
-        assert _question_density([], 5) == 0.0
+        assert _question_density(counts, 5) == pytest.approx(0.6, abs=1e-9)
+        assert _question_density([], 5) == pytest.approx(0.0, abs=1e-9)
 
     def test_is_increasing(self):
         from services.conversation_phase_service import _is_increasing

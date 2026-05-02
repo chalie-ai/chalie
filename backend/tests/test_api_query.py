@@ -179,7 +179,7 @@ class TestRelevanceEndpoint:
                 resp = client.get("/api/query/relevance?q=")
         data = resp.get_json()
         assert data["recommendation"] == "no_query"
-        assert data["relevance"] == 0.0
+        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
 
     def test_missing_q_returns_no_query(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -242,7 +242,7 @@ class TestRelevanceEndpoint:
                 resp = client.get("/api/query/relevance?q=test")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["relevance"] == 0.0
+        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
         assert data["recommendation"] == "defer"
 
     def test_related_traits_present_and_empty_list(self, cookie_app):

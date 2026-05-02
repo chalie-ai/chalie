@@ -74,7 +74,7 @@ class TestCognitiveIntent:
 
     def test_default_confidence(self):
         intent = _make_intent()
-        assert intent.confidence == 0.5
+        assert intent.confidence == pytest.approx(0.5, abs=1e-9)
 
     def test_broadcast_intent_has_none_target(self):
         intent = _make_intent(target_wrapper=None)

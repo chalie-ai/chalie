@@ -553,7 +553,7 @@ class TestValidateSignal:
         assert err is None
         assert result["signal_type"] == "ctx"
         assert result["content"] == "hello"
-        assert result["activation_energy"] == 0.5
+        assert result["activation_energy"] == pytest.approx(0.5, abs=1e-9)
 
     def test_defaults_applied(self):
         from api.signals import _validate_signal
@@ -572,13 +572,13 @@ class TestValidateSignal:
         from api.signals import _validate_signal
         result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 0.0})
         assert err is None
-        assert result["activation_energy"] == 0.0
+        assert result["activation_energy"] == pytest.approx(0.0, abs=1e-9)
 
     def test_activation_energy_boundary_1(self):
         from api.signals import _validate_signal
         result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 1.0})
         assert err is None
-        assert result["activation_energy"] == 1.0
+        assert result["activation_energy"] == pytest.approx(1.0, abs=1e-9)
 
     def test_activation_energy_negative_fails(self):
         from api.signals import _validate_signal
