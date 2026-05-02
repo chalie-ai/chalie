@@ -258,16 +258,22 @@ export class Renderer {
   }
 
   /**
-   * Append a steer bubble — user's redirect shown inline with narration.
+   * Append a steer bubble inside the in-progress ACT cycle's tool list, so the
+   * user's mid-ACT redirect renders as part of the tool-calling section rather
+   * than as a separate chat bubble. Falls back to the spine if no live ACT.
+   *
    * @param {string} text — the user's steering message
+   * @param {HTMLElement} [actEl] — the .act-cycle element for the running turn
    */
-  appendSteerBubble(text) {
+  appendSteerBubble(text, actEl) {
     const bubble = this._createEl('div', 'steer-bubble');
     bubble.textContent = text;
 
-    const act = this._spine.querySelector('.act-cycle');
-    if (act) {
-      this._spine.insertBefore(bubble, act);
+    const tools = actEl?.isConnected
+      ? actEl.querySelector(':scope > .act-tools')
+      : null;
+    if (tools) {
+      tools.appendChild(bubble);
     } else {
       this._spine.appendChild(bubble);
     }

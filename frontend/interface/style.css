@@ -1168,16 +1168,15 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .steer-bubble {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
-  color: rgba(234, 230, 242, 0.72);
-  padding: 6px 14px;
-  margin: 2px 48px 2px auto;
-  text-align: right;
-  border-right: 2px solid rgba(138, 92, 255, 0.30);
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--dusk-blue);
   font-style: italic;
-  line-height: 1.5;
+  padding: 4px 0;
+  word-break: break-word;
   animation: formEntry 200ms var(--ease-out) both;
-  max-width: 70%;
 }
 
 /* Error form */

@@ -147,8 +147,7 @@ export class Chat {
         this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
       },
       onSteerSent: (steerText) => {
-        // User sent a redirect while ACT is running — show inline
-        this._renderer.appendSteerBubble(steerText);
+        this._renderer.appendSteerBubble(steerText, actEl);
       },
       onMessage: (data) => {
         responseContent = data.content || '';
