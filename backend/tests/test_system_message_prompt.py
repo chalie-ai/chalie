@@ -117,7 +117,6 @@ class TestSystemMessagePromptBase:
         assert sut.getPrompt() == sut.getPrompt()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # UnifiedSystemMessagePrompt
 # ─────────────────────────────────────────────────────────────────────────────
 

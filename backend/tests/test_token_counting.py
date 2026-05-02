@@ -23,12 +23,12 @@ class TestEstimateTokens:
 
     def test_single_word(self):
         from services.llm_service import estimate_tokens
-        assert estimate_tokens('hello') == 1  # int(1 * 1.3) = 1
+        assert estimate_tokens('hello') == 1  # 1 word times 1.3 rounds down to 1
 
     def test_ten_words(self):
         from services.llm_service import estimate_tokens
         result = estimate_tokens('one two three four five six seven eight nine ten')
-        assert result == 13  # int(10 * 1.3) = 13
+        assert result == 13  # 10 words times 1.3 rounds down to 13
 
     def test_proportional_to_word_count(self):
         from services.llm_service import estimate_tokens

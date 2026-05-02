@@ -242,7 +242,7 @@ class TestDeduplication:
     def test_near_duplicates_removed(self):
         articles = [
             _make_article(title="Breaking News in Markets Today"),
-            _make_article(title="Breaking News in Market Today"),  # distance = 1
+            _make_article(title="Breaking News in Market Today"),  # edit distance 1 from the title above
         ]
         result = self.svc.deduplicate(articles)
         assert len(result) == 1

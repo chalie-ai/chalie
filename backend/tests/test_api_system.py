@@ -25,7 +25,6 @@ class TestSystemAPI:
         with patch('services.auth_session_service.validate_session', return_value=True):
             yield
 
-    # ────────────────────────────────────────────
     # GET /health
     # ────────────────────────────────────────────
 
@@ -40,7 +39,6 @@ class TestSystemAPI:
         # GET variant does not include 'attention' field
         assert 'attention' not in data
 
-    # ────────────────────────────────────────────
     # POST /health
     # ────────────────────────────────────────────
 
@@ -70,7 +68,6 @@ class TestSystemAPI:
         assert data['status'] == 'ok'
         assert 'attention' not in data
 
-    # ────────────────────────────────────────────
     # GET /metrics
     # ────────────────────────────────────────────
 
@@ -96,7 +93,6 @@ class TestSystemAPI:
         data = resp.get_json()
         assert 'error' in data
 
-    # ────────────────────────────────────────────
     # GET /system/status
     # ────────────────────────────────────────────
 
@@ -146,7 +142,6 @@ class TestSystemAPI:
         assert data['status'] == 'degraded'
         assert 'memory_store_error' in data
 
-    # ────────────────────────────────────────────
     # GET /system/observability/records
     # ────────────────────────────────────────────
 
@@ -301,7 +296,6 @@ class TestSystemAPI:
         resp_user = client.get('/system/observability/records?source=user')
         assert resp_user.get_json()['returned'] == 0
 
-    # ────────────────────────────────────────────
     # GET /system/observability/tools
     # ────────────────────────────────────────────
 
@@ -385,7 +379,6 @@ class TestSystemAPI:
 
 
 
-    # ────────────────────────────────────────────
     # GET /system/observability/tasks
     # ────────────────────────────────────────────
 
@@ -420,7 +413,6 @@ class TestSystemAPI:
         parsed = datetime.fromisoformat(data['generated_at'])
         assert parsed.tzinfo is not None
 
-    # ────────────────────────────────────────────
     # GET /ready
     # ────────────────────────────────────────────
 

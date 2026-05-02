@@ -179,7 +179,7 @@ class WriteQueueService:
                 calling thread verbatim.
         """
         done_event = threading.Event()
-        result: List[Any] = [None]  # result[0] = value or exception
+        result: List[Any] = [None]  # index 0 holds the return value or a propagated exception
 
         item = _QueueItem(
             item_type=_TYPE_SINGLE,

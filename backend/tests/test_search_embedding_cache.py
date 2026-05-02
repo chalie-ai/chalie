@@ -58,7 +58,7 @@ class TestRouteQuery:
         mock_emb.generate_embedding.return_value = _make_embedding()
 
         conn = _mock_router_conn(
-            knn_rows=[(1, 0.1), (2, 0.6)],  # brave=0.95, ddg=0.70
+            knn_rows=[(1, 0.1), (2, 0.6)],  # resolves to brave at 0.95 and ddg at 0.70
             id_to_provider_rows=[(1, 'brave'), (2, 'ddg')],
         )
 
@@ -76,7 +76,7 @@ class TestRouteQuery:
         mock_emb.generate_embedding.return_value = _make_embedding()
 
         conn = _mock_router_conn(
-            knn_rows=[(1, 0.1), (2, 0.8)],  # brave=0.95, poor=0.60 (gap > 0.10)
+            knn_rows=[(1, 0.1), (2, 0.8)],  # brave scores 0.95, second candidate 0.60, gap exceeds threshold
             id_to_provider_rows=[(1, 'brave'), (2, 'poor')],
         )
 

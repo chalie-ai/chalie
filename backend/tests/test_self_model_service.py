@@ -87,7 +87,7 @@ class TestGetSnapshot:
 
         assert ep["working_memory_depth"] == 4
         assert ep["partial_match_signal"] == 5
-        # warmth = 0.6 * min(1, 4/4) + 0.4 * min(1, 5/5) = 1.0
+        # warmth formula: 0.6 * clamped(working_memory/max) + 0.4 * clamped(fok/max), yielding 1.0 here
         assert ep["context_warmth"] == 1.0
 
     def test_snapshot_epistemic_cold_when_empty(self, mock_store):

@@ -650,7 +650,6 @@ class ListService:
             logger.error(f"[LISTS] _set_checked failed: {e}")
             return 0
 
-    # ─────────────────────────────────────────────
     # History & context
     # ─────────────────────────────────────────────
 

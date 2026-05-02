@@ -366,7 +366,7 @@ class TestSchemaConvergence:
             ).fetchone()
 
         assert row is not None, "api_key seed row missing from settings"
-        assert row[1] == 1  # is_sensitive = True
+        assert row[1] == 1  # the is_sensitive column must be set to true for api_key
 
     def test_schema_version_seeded_on_fresh_db(self, tmp_path):
         """schema_version table has at least one row after fresh convergence."""
