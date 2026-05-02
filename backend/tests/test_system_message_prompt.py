@@ -286,13 +286,6 @@ class TestBackgroundChannelPrompts:
             cls().getPrompt()
         mock_open.assert_not_called()
 
-    def test_dmn_prompt_contains_no_action_sentinel(self):
-        """DMN prompt instructs the LLM to emit DMN_NO_ACTION when nothing fires."""
-        from services.system_message_prompt import DMNSystemMessagePrompt
-        result = DMNSystemMessagePrompt().getPrompt()
-        assert 'DMN_NO_ACTION' in result
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Inheritance
 # ─────────────────────────────────────────────────────────────────────────────

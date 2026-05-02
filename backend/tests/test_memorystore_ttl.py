@@ -96,28 +96,6 @@ class TestOutputServiceQueueTTL:
 
 
 # ---------------------------------------------------------------------------
-# 2. background_llm_queue — rpush to bg_llm:queue
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestBackgroundLLMQueueTTL:
-    """After rpush to bg_llm:queue, expire(bg_llm:queue, 600) must fire."""
-
-    def test_enqueue_sets_ttl_on_queue_key(self):
-        store = MemoryStore()
-        with patch("services.background_llm_queue.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.background_llm_queue import BackgroundLLMProxy, QUEUE_KEY
-            proxy = BackgroundLLMProxy("test-agent")
-
-        # Intercept brpop so the proxy doesn't block indefinitely
-        with patch.object(store, "brpop", return_value=None):
-            proxy.send_message("sys", "user")
-
-        assert _has_ttl(store, QUEUE_KEY), "bg_llm:queue must have a TTL after rpush"
-
-
-# ---------------------------------------------------------------------------
 # 3. event_bus_service — rpush to event_bus:{event_type}
 # ---------------------------------------------------------------------------
 
@@ -233,29 +211,6 @@ class TestIntentServiceQueueTTL:
 
         list_key = f"intents:{_BROADCAST_KEY}"
         assert _has_ttl(store, list_key), f"{list_key} must have a TTL for broadcast intents"
-
-
-# ---------------------------------------------------------------------------
-# 10. dmn_service — zadd to dmn:deliveries
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestDMNServiceDeliveryZSetTTL:
-    """After zadd to dmn:deliveries, expire(dmn:deliveries, 86400) must fire."""
-
-    def test_record_delivery_sets_ttl_on_deliveries_zset(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch("services.database_service.get_shared_db_service"):
-            from services.dmn_service import DMNService, _DELIVERY_ZSET
-            svc = DMNService.__new__(DMNService)
-            svc._store = store
-
-        svc._record_delivery()
-
-        assert _has_ttl(store, _DELIVERY_ZSET), \
-            "dmn:deliveries must have TTL=86400 after zadd"
 
 
 # ---------------------------------------------------------------------------

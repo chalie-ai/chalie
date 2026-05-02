@@ -275,34 +275,6 @@ def tmp_state_file(tmp_path):
 
 
 @pytest.fixture
-def tmp_sqlite_db(tmp_path):
-    """Temporary SQLite database for scheduler tool/service tests."""
-    db_path = tmp_path / "test.db"
-
-    # Create tables if needed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Create scheduled_items table for scheduler tests
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS scheduled_items (
-            id TEXT PRIMARY KEY,
-            message TEXT NOT NULL,
-            due_at TEXT NOT NULL,
-            type TEXT DEFAULT 'reminder',
-            recurrence TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-    yield str(db_path)
-
-
-@pytest.fixture
 def flask_test_client(mock_store):
     """Flask test client with mocked session for API tests."""
     from flask import Flask

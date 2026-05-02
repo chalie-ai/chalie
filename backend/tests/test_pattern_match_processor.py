@@ -125,7 +125,7 @@ class TestColdBootZeroTranscriptsSkips:
     def test_cold_boot_zero_transcripts_skips(self, db, store):
         from services.subconscious_worker import SubconsciousWorker
 
-        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
         # No transcripts, no cursor row.
         result = worker._step_pattern_match()
 
@@ -158,7 +158,7 @@ class TestUnder50DeltaSkipsCursorUnchanged:
             )
         db.commit()
 
-        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
         result = worker._step_pattern_match()
 
         assert result.startswith("skip"), f"Expected skip, got: {result!r}"
@@ -204,7 +204,7 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             result = worker._step_pattern_match()
 
         assert "fired" in result, f"Expected 'fired' in result, got: {result!r}"
@@ -245,7 +245,7 @@ class TestSavePatternReinforceExisting:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         pattern = _fetch_pattern(db, "morning_run")
@@ -284,7 +284,7 @@ class TestSavePatternAt10Caps:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         pattern = _fetch_pattern(db, "morning_run")
@@ -314,7 +314,7 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         # Re-fetch through the raw connection (db fixture is the connection itself).
@@ -368,7 +368,7 @@ class TestSaveGraphRoutesThroughDataGraphService:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         # The key may be LUT-canonicalised by DataGraphService.store().
@@ -446,7 +446,7 @@ class TestSavePatternBudgetCapAt20:
             mock_inst.return_value.send_messages.side_effect = _fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         # Exactly 20 behavioral_pattern rows should exist (21st was rejected).
@@ -531,7 +531,7 @@ class TestMaxIterations30CapsRunawayLoop:
             mock_inst.return_value.send_messages.side_effect = _always_tool_call
             mock_inst.return_value.get_context_limit.return_value = 32_000
 
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             # Must complete (not loop forever).
             worker._step_pattern_match()
 

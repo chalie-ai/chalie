@@ -183,7 +183,9 @@ _DEFAULT_DISCOVERABLE = frozenset({
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
-    "DMNMessageProcessor":       (_DEFAULT_ALWAYS - {"subagent"}, _DEFAULT_DISCOVERABLE),
+    # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
+    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"subagent"}) | {"news", "search", "browser"},
+                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser"}),
     "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent"}, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
@@ -243,7 +245,10 @@ def test_per_processor_tool_scope_matches_spec():
         discoverable = frozenset(cls.DISCOVERABLE)
         expected_always, expected_discoverable = _EXPECTED_SCOPE[name]
 
-        leaked_externals = always & _DEFAULT_DISCOVERABLE
+        # DMNMessageProcessor has news/search/browser promoted to
+        # ALWAYS_AVAILABLE per masterplan §4 — not a leak, by design.
+        approved_always_externals = {"news", "search", "browser"} if name == "DMNMessageProcessor" else set()
+        leaked_externals = always & (_DEFAULT_DISCOVERABLE - approved_always_externals)
         assert not leaked_externals, (
             f"{name}.ALWAYS_AVAILABLE leaks discoverable externals "
             f"{sorted(leaked_externals)}. These MUST be surfaced via find_tools "
