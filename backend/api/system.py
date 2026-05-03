@@ -462,7 +462,8 @@ def _tail_error_lines() -> list[dict]:
 
     with fh_cm as fh:
         if size > _LOG_TAIL_BYTES:
-            fh.seek(-_LOG_TAIL_BYTES, 2)
+            # Absolute seek — text-mode files only allow 0-byte end-relative seeks.
+            fh.seek(size - _LOG_TAIL_BYTES)
             fh.readline()   # discard partial first line
         for raw in fh:
             try:
