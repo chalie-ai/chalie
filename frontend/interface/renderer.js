@@ -86,13 +86,6 @@ export class Renderer {
     textEl.textContent = text;
     el.appendChild(textEl);
 
-    // Append meta row with timestamp
-    const metaRow = this._createEl('div', 'speech-form__meta');
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(ts);
-    metaRow.appendChild(timestampEl);
-    el.appendChild(metaRow);
-
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
@@ -111,12 +104,6 @@ export class Renderer {
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = text;
     el.appendChild(textEl);
-
-    const metaRow = this._createEl('div', 'speech-form__meta');
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(ts);
-    metaRow.appendChild(timestampEl);
-    el.appendChild(metaRow);
 
     this._spine.prepend(el);
     return el;

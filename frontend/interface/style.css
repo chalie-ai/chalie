@@ -834,6 +834,12 @@ body.speaker-user   #ambientBloom {
 /* Preserve newlines in user-typed messages */
 .speech-form--user .speech-form__text {
   white-space: pre-wrap;
+  font-weight: 600;
+}
+
+/* Light theme: user bubble = 80% white. */
+[data-theme="light"] .speech-form--user {
+  background: rgba(255, 255, 255, 0.8);
 }
 
 /* Scoped markdown styles — only inside Chalie messages */
