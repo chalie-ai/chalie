@@ -70,12 +70,16 @@ def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list
         return []
     return [row[0]]
 
-# Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>
+# Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>,
+# optionally with a single ``data-image='url'`` attribute that lets the LLM
+# pick a thumbnail from the tool's image_candidates list.
 # Group 1: tool name prefix (e.g. "weather")
 # Group 2: ordinal string (e.g. "1")
-# Group 3: inner synthesis text (may span multiple lines)
+# Group 3: chosen image URL (optional, empty if absent)
+# Group 4: inner synthesis text (may span multiple lines)
 _TAG_RE = re.compile(
-    r"""<span\s+id=['"]([a-z][a-z0-9_]*)_(\d+)['"][ \t]*>(.*?)</span>""",
+    r"""<span\s+id=['"]([a-z][a-z0-9_]*)_(\d+)['"]"""
+    r"""(?:\s+data-image=['"]([^'"]*)['"])?[ \t]*>(.*?)</span>""",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -100,7 +104,7 @@ def strip_spans(content: str | None) -> str | None:
     """
     if not content:
         return content
-    return _TAG_RE.sub(lambda m: m.group(3), content)
+    return _TAG_RE.sub(lambda m: m.group(4), content)
 
 
 def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
@@ -151,13 +155,15 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
     """Resolve a span tag to a rich or text segment and append it."""
     tool_name = match.group(1)
     ordinal = match.group(2)
+    chosen_image = (match.group(3) or "").strip()
     tag = f"{tool_name}_{ordinal}"
-    synthesis = match.group(3).strip()
+    synthesis = match.group(4).strip()
 
     matched = _find_payload(tag, tool_calls)
     if matched is not None:
         payload, row = matched
         payload = _enrich_payload(tool_name, payload, row)
+        payload = _apply_image_choice(payload, chosen_image)
         segments.append({
             "type": "rich",
             "tag": tag,
@@ -168,6 +174,41 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
         logger.warning("rich_media: orphan tag %s — no matching tool_call result found", tag)
         if synthesis:
             segments.append({"type": "text", "content": synthesis})
+
+
+def _apply_image_choice(payload, chosen_image: str):
+    """Validate the LLM's chosen image against the candidate list and finalise.
+
+    The tool surfaces ``image_candidates: [{url, ocr_text}]`` so the LLM can
+    decide whether to populate the card thumbnail. The choice arrives via the
+    ``data-image`` span attribute; here we:
+
+    * Drop ``image_candidates`` from the payload — it is LLM-facing context,
+      not frontend rendering data.
+    * Set ``image_url`` only when the chosen URL appears in the candidate
+      list. This blocks the LLM from injecting an arbitrary or hallucinated
+      URL into the rendered card.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    candidates = payload.pop("image_candidates", None)
+    if not chosen_image:
+        return payload
+    valid_urls = set()
+    if isinstance(candidates, list):
+        for c in candidates:
+            if isinstance(c, dict):
+                url = c.get("url")
+                if isinstance(url, str):
+                    valid_urls.add(url)
+    if chosen_image in valid_urls:
+        payload["image_url"] = chosen_image
+    else:
+        logger.info(
+            "rich_media: ignoring data-image %r — not in tool's image_candidates",
+            chosen_image,
+        )
+    return payload
 
 
 def _enrich_payload(tool_name: str, payload, row: dict):

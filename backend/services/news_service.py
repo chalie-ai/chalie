@@ -59,6 +59,7 @@ class NewsArticle:
     source: str
     source_id: str
     category: str
+    image_url: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -208,6 +209,7 @@ class NewsService:
                 source=src.name,
                 source_id=src.id,
                 category=src.category,
+                image_url=_rss_item_image(item),
             ))
         return articles
 
@@ -244,6 +246,7 @@ class NewsService:
                 source=src.name,
                 source_id=src.id,
                 category=src.category,
+                image_url=_atom_entry_image(entry),
             ))
         return articles
 
@@ -477,6 +480,72 @@ def _jaccard(set_a: set, set_b: set) -> float:
     if not set_a or not set_b:
         return 0.0
     return len(set_a & set_b) / len(set_a | set_b)
+
+
+_MEDIA_NS = "{http://search.yahoo.com/mrss/}"
+
+
+def _rss_item_image(item) -> str:
+    """Extract a thumbnail URL from an RSS <item>.
+
+    Order: media:thumbnail → media:content (image/*) → enclosure (image/*)
+    → <image><url>. Returns empty string if none present.
+    """
+    thumb = item.find(f"{_MEDIA_NS}thumbnail")
+    if thumb is not None:
+        url = thumb.get("url")
+        if url:
+            return url.strip()
+    for media in item.findall(f"{_MEDIA_NS}content"):
+        media_type = (media.get("type") or "").lower()
+        medium = (media.get("medium") or "").lower()
+        if media_type.startswith("image/") or medium == "image":
+            url = media.get("url")
+            if url:
+                return url.strip()
+    enc = item.find("enclosure")
+    if enc is not None:
+        enc_type = (enc.get("type") or "").lower()
+        if enc_type.startswith("image/"):
+            url = enc.get("url")
+            if url:
+                return url.strip()
+    image_el = item.find("image")
+    if image_el is not None:
+        url_el = image_el.find("url")
+        if url_el is not None and url_el.text:
+            return url_el.text.strip()
+    return ""
+
+
+def _atom_entry_image(entry) -> str:
+    """Extract a thumbnail URL from an Atom <entry>.
+
+    Honours media:thumbnail, media:content, and atom:link[rel=enclosure,
+    type=image/*]. Returns empty string if none present.
+    """
+    thumb = entry.find(f"{_MEDIA_NS}thumbnail")
+    if thumb is not None:
+        url = thumb.get("url")
+        if url:
+            return url.strip()
+    for media in entry.findall(f"{_MEDIA_NS}content"):
+        media_type = (media.get("type") or "").lower()
+        medium = (media.get("medium") or "").lower()
+        if media_type.startswith("image/") or medium == "image":
+            url = media.get("url")
+            if url:
+                return url.strip()
+    atom_ns = "{http://www.w3.org/2005/Atom}"
+    for link_el in entry.findall(f"{atom_ns}link") + entry.findall("link"):
+        if link_el.get("rel") != "enclosure":
+            continue
+        link_type = (link_el.get("type") or "").lower()
+        if link_type.startswith("image/"):
+            href = link_el.get("href")
+            if href:
+                return href.strip()
+    return ""
 
 
 def _derive_domain(feed_url: str) -> Optional[str]:

@@ -221,3 +221,68 @@ class TestParseMixedProseAndSpans:
         content = "<span id='weather_1'>Line one.\nLine two.</span>"
         segs = parse(content, [tc])
         assert segs[0]["synthesis"] == "Line one.\nLine two."
+
+
+# ── data-image attribute (LLM-chosen thumbnail) ──────────────────────────────
+
+
+class TestParseImageChoice:
+    """``data-image`` lets the LLM promote one image_candidate to image_url.
+
+    Validation: only URLs that appear in the tool result's ``image_candidates``
+    are honoured — anything else is dropped silently. ``image_candidates`` is
+    always stripped from the payload sent to the frontend.
+    """
+
+    _CANDIDATES = [
+        {"url": "https://example.com/a.jpg", "ocr_text": "Headline A"},
+        {"url": "https://example.com/b.jpg", "ocr_text": "Headline B"},
+    ]
+
+    def _tool_result(self) -> str:
+        import json as _json
+        head = _json.dumps({"results": [{"title": "T"}], "image_candidates": self._CANDIDATES})
+        return f"{head}\n\n<span id='search_1'>"
+
+    def test_chosen_url_in_candidates_promoted_to_image_url(self):
+        tc = _tc("search", self._tool_result())
+        content = "<span id='search_1' data-image='https://example.com/a.jpg'>Synthesis.</span>"
+        segs = parse(content, [tc])
+        rich = next(s for s in segs if s["type"] == "rich")
+        assert rich["payload"]["image_url"] == "https://example.com/a.jpg"
+        assert "image_candidates" not in rich["payload"]
+
+    def test_chosen_url_not_in_candidates_is_dropped(self):
+        tc = _tc("search", self._tool_result())
+        content = "<span id='search_1' data-image='https://evil.example.com/x.jpg'>Synth.</span>"
+        segs = parse(content, [tc])
+        rich = next(s for s in segs if s["type"] == "rich")
+        assert "image_url" not in rich["payload"]
+        assert "image_candidates" not in rich["payload"]
+
+    def test_no_data_image_strips_candidates_no_image_url(self):
+        tc = _tc("search", self._tool_result())
+        content = "<span id='search_1'>Synthesis without image.</span>"
+        segs = parse(content, [tc])
+        rich = next(s for s in segs if s["type"] == "rich")
+        assert "image_url" not in rich["payload"]
+        assert "image_candidates" not in rich["payload"]
+
+    def test_double_quoted_data_image_works(self):
+        tc = _tc("search", self._tool_result())
+        content = '<span id="search_1" data-image="https://example.com/b.jpg">Synth.</span>'
+        segs = parse(content, [tc])
+        rich = next(s for s in segs if s["type"] == "rich")
+        assert rich["payload"]["image_url"] == "https://example.com/b.jpg"
+
+    def test_synthesis_preserved_with_data_image(self):
+        tc = _tc("search", self._tool_result())
+        content = "<span id='search_1' data-image='https://example.com/a.jpg'>Hello world.</span>"
+        segs = parse(content, [tc])
+        rich = next(s for s in segs if s["type"] == "rich")
+        assert rich["synthesis"] == "Hello world."
+
+    def test_strip_spans_drops_data_image_attribute(self):
+        from services.rich_media_parser import strip_spans
+        content = "x <span id='search_1' data-image='https://example.com/a.jpg'>inner</span> y"
+        assert strip_spans(content) == "x inner y"

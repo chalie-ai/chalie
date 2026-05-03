@@ -43,6 +43,7 @@ FIELD_MAPS = {
         'snippet': 'description',
         'url': 'html_url',
         'date': 'updated_at',
+        'image': '_github_avatar',  # special: owner.avatar_url
     },
     'hn_algolia': {
         'results_path': 'hits',
@@ -60,6 +61,7 @@ FIELD_MAPS = {
         'url': 'url',
         'date': 'created_utc',
         'url_fallback_template': 'https://www.reddit.com{permalink}',
+        'image': '_reddit_image',  # special: preview.images[0].source.url or thumbnail
     },
     'stack_exchange': {
         'results_path': 'items',
@@ -74,6 +76,7 @@ FIELD_MAPS = {
         'snippet': 'author_name',
         'url_template': 'https://openlibrary.org{key}',
         'date': 'first_publish_year',
+        'image': '_open_library_cover',  # special: cover_i → covers.openlibrary.org
     },
     'musicbrainz': {
         'results_path': 'recordings',
@@ -87,6 +90,7 @@ FIELD_MAPS = {
         'snippet': 'shortDescription|longDescription|artistName',
         'url': 'trackViewUrl|collectionViewUrl',
         'date': 'releaseDate',
+        'image': 'artworkUrl100|artworkUrl60|artworkUrl30',
     },
     'nominatim': {
         'results_path': '',  # top-level array
@@ -155,6 +159,7 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
         snippet = _extract_snippet(item, field_map)
         url = _extract_url(item, field_map)
         date = _extract_date(item, field_map)
+        image = _extract_image(item, field_map)
 
         if not title and not snippet:
             continue
@@ -165,6 +170,7 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
             'url': url or '',
             'provider': provider_name,
             'date': date,
+            'image': image or '',
         })
 
     return results
@@ -200,6 +206,7 @@ def _transform_atom(provider_name: str, raw_data, limit: int) -> list:
             'url': url or '',
             'provider': provider_name,
             'date': published[:10] if published else None,
+            'image': '',
         })
 
     return results
@@ -235,6 +242,7 @@ def _transform_rss(provider_name: str, raw_data, limit: int) -> list:
             'url': link or '',
             'provider': provider_name,
             'date': _parse_rss_date(pub_date) if pub_date else None,
+            'image': _rss_item_image(item),
         })
 
     return results
@@ -338,6 +346,50 @@ def _extract_url(item: dict, field_map: dict) -> str:
     return ''
 
 
+def _extract_image(item: dict, field_map: dict) -> str:
+    """Extract a thumbnail/image URL from a result item.
+
+    Most providers use a simple field path; a few need provider-specific
+    handling (Reddit preview vs thumbnail, GitHub owner avatar, Open Library
+    cover_i convention).
+    """
+    spec = field_map.get('image', '')
+    if not spec:
+        return ''
+
+    if spec == '_github_avatar':
+        owner = item.get('owner') if isinstance(item, dict) else None
+        if isinstance(owner, dict):
+            return owner.get('avatar_url') or ''
+        return ''
+
+    if spec == '_reddit_image':
+        preview = item.get('preview') if isinstance(item, dict) else None
+        if isinstance(preview, dict):
+            images = preview.get('images') or []
+            if images and isinstance(images[0], dict):
+                source = images[0].get('source')
+                if isinstance(source, dict):
+                    src_url = source.get('url')
+                    if src_url:
+                        return html.unescape(src_url)
+        thumb = item.get('thumbnail')
+        if isinstance(thumb, str) and thumb.startswith('http'):
+            return thumb
+        return ''
+
+    if spec == '_open_library_cover':
+        cover_id = item.get('cover_i') if isinstance(item, dict) else None
+        if cover_id:
+            return f'https://covers.openlibrary.org/b/id/{cover_id}-L.jpg'
+        return ''
+
+    raw = _extract_field(item, spec)
+    if raw and raw.startswith(('http://', 'https://')):
+        return raw
+    return ''
+
+
 def _extract_date(item: dict, field_map: dict) -> str | None:
     """Extract and normalize date from item."""
     date_spec = field_map.get('date', '')
@@ -391,6 +443,42 @@ def _truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len].rstrip() + '\u2026'
+
+
+_MEDIA_NS = '{http://search.yahoo.com/mrss/}'
+
+
+def _rss_item_image(item) -> str:
+    """Extract a thumbnail URL from an RSS <item>.
+
+    Looks at media:thumbnail, media:content (when type starts with image/),
+    enclosure (image/*), and the item's <image><url> child — in that order.
+    """
+    thumb = item.find(f'{_MEDIA_NS}thumbnail')
+    if thumb is not None:
+        url = thumb.get('url')
+        if url:
+            return url
+    for media in item.findall(f'{_MEDIA_NS}content'):
+        media_type = (media.get('type') or '').lower()
+        medium = (media.get('medium') or '').lower()
+        if media_type.startswith('image/') or medium == 'image':
+            url = media.get('url')
+            if url:
+                return url
+    enc = item.find('enclosure')
+    if enc is not None:
+        enc_type = (enc.get('type') or '').lower()
+        if enc_type.startswith('image/'):
+            url = enc.get('url')
+            if url:
+                return url
+    image_el = item.find('image')
+    if image_el is not None:
+        url_el = image_el.find('url')
+        if url_el is not None and url_el.text:
+            return url_el.text.strip()
+    return ''
 
 
 def _xml_text(element, tag: str, namespaces: dict) -> str | None:

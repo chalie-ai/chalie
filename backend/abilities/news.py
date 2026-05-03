@@ -26,6 +26,15 @@ _RICH_MEDIA_INSTRUCTION = (
     "for the user. Example: \"Here's the latest — "
     "<span id='{tag}'>The EU opened its first audits under the AI Act today, "
     "targeting three major companies you've been tracking.</span>\""
+    "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
+    "array, each entry has a `url` and `ocr_text` (text scanned by local OCR). "
+    "If exactly one candidate clearly depicts what you are synthesising — judged "
+    "by its OCR text and the article it accompanies — you MAY add a "
+    "`data-image='<that url>'` attribute to the span, e.g. "
+    "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
+    "Use a URL verbatim from `image_candidates`. If no candidate is a clear "
+    "match, omit the attribute — a missing thumbnail is better than a "
+    "misleading one."
 )
 
 
@@ -125,18 +134,26 @@ class NewsAbility(Ability):
 def _serialise_rich(articles, ordinal: int) -> str:
     tag = f"news_{ordinal}"
     results = []
-    image_url = None
+    image_urls: list[str] = []
     for a in articles:
         entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
         if a.description:
             entry["desc"] = a.description[:200]
-        img = getattr(a, "image_url", None) or getattr(a, "thumbnail", None)
-        if img and image_url is None:
-            image_url = img
         results.append(entry)
-    payload = {"results": results}
-    if image_url:
-        payload["image_url"] = image_url
+        img = getattr(a, "image_url", "") or ""
+        if img:
+            image_urls.append(img)
+
+    payload: dict = {"results": results}
+    if image_urls:
+        try:
+            from services.image_candidate_service import build_image_candidates
+            candidates = build_image_candidates(image_urls)
+        except Exception as exc:
+            logger.warning("[news-tool] image candidate shortlist failed: %s", exc)
+            candidates = []
+        if candidates:
+            payload["image_candidates"] = candidates
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
     return f"{data_json}\n\n{instruction}"

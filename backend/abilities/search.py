@@ -34,6 +34,15 @@ _RICH_MEDIA_INSTRUCTION = (
     "<span id='{tag}'>The Rust Foundation has cycled through three executive "
     "directors in four years, each departure hinging on the same question of "
     "how much a non-profit steward should do.</span>\""
+    "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
+    "array, each entry has a `url` and `ocr_text` (text scanned by local OCR). "
+    "If exactly one candidate clearly depicts what you are synthesising — judged "
+    "by its OCR text and the result it accompanies — you MAY add a "
+    "`data-image='<that url>'` attribute to the span, e.g. "
+    "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
+    "Use a URL verbatim from `image_candidates`. If no candidate is a clear "
+    "match, omit the attribute — a missing thumbnail is better than a "
+    "misleading one."
 )
 
 
@@ -122,7 +131,8 @@ class SearchAbility(Ability):
         if ordinal is None:
             return {"text": json.dumps({"results": structured})}
 
-        return _serialise_rich(structured, ordinal)
+        image_urls = [r.get("image", "") for r in results if r.get("image")]
+        return _serialise_rich(structured, ordinal, image_urls)
 
     @classmethod
     def _load_providers(cls) -> dict:
@@ -171,9 +181,18 @@ class SearchAbility(Ability):
         return fetch_ddg_fallback(query, limit), ["ddg"], {"routing_method": "fallback"}
 
 
-def _serialise_rich(results: list, ordinal: int) -> str:
+def _serialise_rich(results: list, ordinal: int, image_urls: list[str]) -> str:
     tag = f"search_{ordinal}"
-    payload = {"results": results}
+    payload: dict = {"results": results}
+    if image_urls:
+        try:
+            from services.image_candidate_service import build_image_candidates
+            candidates = build_image_candidates(image_urls)
+        except Exception as exc:
+            logger.warning("[SEARCH] image candidate shortlist failed: %s", exc)
+            candidates = []
+        if candidates:
+            payload["image_candidates"] = candidates
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
     return f"{data_json}\n\n{instruction}"

@@ -655,3 +655,89 @@ class TestDeriveDomainComprehensive:
     def test_url_without_hostname_returns_none(self):
         from services.news_service import _derive_domain
         assert _derive_domain("not-a-url") is None
+
+
+@pytest.mark.unit
+class TestRssItemImage:
+    """`_rss_item_image` walks media:thumbnail → media:content (image/*) →
+    enclosure (image/*) → <image><url>."""
+
+    def test_media_thumbnail(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:thumbnail url='https://t.example.com/a.jpg'/>
+        </item>"""
+        assert _rss_item_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
+
+    def test_media_content_image_type(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:content url='https://cdn.example.com/p.jpg' type='image/jpeg'/>
+        </item>"""
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/p.jpg"
+
+    def test_enclosure_image(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = "<item><enclosure url='https://cdn.example.com/e.png' type='image/png'/></item>"
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/e.png"
+
+    def test_image_url_child(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = "<item><image><url>https://cdn.example.com/i.jpg</url></image></item>"
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/i.jpg"
+
+    def test_no_image_returns_empty(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        assert _rss_item_image(ET.fromstring("<item></item>")) == ""
+
+
+@pytest.mark.unit
+class TestAtomEntryImage:
+    def test_media_thumbnail(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = """<entry xmlns='http://www.w3.org/2005/Atom' xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:thumbnail url='https://t.example.com/a.jpg'/>
+        </entry>"""
+        assert _atom_entry_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
+
+    def test_atom_link_enclosure_image(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = """<entry xmlns='http://www.w3.org/2005/Atom'>
+            <link rel='enclosure' type='image/jpeg' href='https://cdn.example.com/e.jpg'/>
+        </entry>"""
+        assert _atom_entry_image(ET.fromstring(xml)) == "https://cdn.example.com/e.jpg"
+
+    def test_no_image_returns_empty(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = "<entry xmlns='http://www.w3.org/2005/Atom'></entry>"
+        assert _atom_entry_image(ET.fromstring(xml)) == ""
+
+
+@pytest.mark.unit
+class TestNewsArticleImageUrl:
+    def test_dataclass_default_empty_string(self):
+        from services.news_service import NewsArticle
+        a = NewsArticle(
+            title="t", description="d", url="u",
+            published_at="2026-05-03T00:00:00+00:00",
+            source="s", source_id="sid", category="c",
+        )
+        assert a.image_url == ""
+
+    def test_to_dict_includes_image_url(self):
+        from services.news_service import NewsArticle
+        a = NewsArticle(
+            title="t", description="d", url="u",
+            published_at="2026-05-03T00:00:00+00:00",
+            source="s", source_id="sid", category="c",
+            image_url="https://x.example.com/p.jpg",
+        )
+        assert a.to_dict()["image_url"] == "https://x.example.com/p.jpg"
