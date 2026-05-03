@@ -2244,7 +2244,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   margin: 0;
   padding: 0;
   border: none;
-  background: rgba(6, 8, 14, 0.96);
+  background: var(--bg-2);
   color: var(--text-primary);
   z-index: 100;
 }
@@ -2751,15 +2751,15 @@ body.has-task-strip .conversation-spine {
   max-width: 85vw;
   height: 100vh;
   z-index: 250;
-  background: rgba(8, 10, 18, 0.96);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border-left: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
   transition: transform var(--duration-normal) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
-  box-shadow: -8px 0 40px rgba(0, 0, 0, 0.40);
 }
 
 .apps-panel.open {
@@ -2882,7 +2882,8 @@ body.has-task-strip .conversation-spine {
   position: fixed;
   inset: 0;
   z-index: 260;
-  background: rgba(3, 4, 8, 0.98);
+  background: var(--bg-2);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   animation: fadeIn var(--duration-normal);
@@ -2898,9 +2899,9 @@ body.has-task-strip .conversation-spine {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
   min-height: 48px;
-  background: rgba(8, 10, 18, 0.90);
+  background: var(--bg-surface-2);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
