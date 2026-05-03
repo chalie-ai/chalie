@@ -129,6 +129,11 @@ def _patch_kokoro_speed_dtype(tts):
                 "speed": np.ones(1, dtype=np.float32) * speed,
             }
         audio = self.sess.run(None, inputs)[0]
+        # The HF fp16 export returns shape (1, N) float16; kokoro-onnx's
+        # downstream concatenation + soundfile encoding both expect a 1-D
+        # float32 waveform (the legacy thewh1teagle fp32 model returned that
+        # natively). Squeeze and cast so existing chunk-stitching keeps working.
+        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         logger.debug("[Voice] kokoro chunk %.2fs in %.2fs",
                      len(audio) / SAMPLE_RATE, time.time() - start_t)
         return audio, SAMPLE_RATE

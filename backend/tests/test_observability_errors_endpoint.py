@@ -193,3 +193,31 @@ class TestObservabilityErrorsEndpoint:
         # After reversal the first element is error-249, last is error-050
         assert errors[0]["message"] == "error-249"
         assert errors[-1]["message"] == "error-050"
+
+    def test_large_file_triggers_tail_seek(self, client):
+        """A log file larger than _LOG_TAIL_BYTES (256 KB) must trigger the seek branch
+        without crashing — regression guard for the 'can't do nonzero end-relative seeks'
+        bug where the helper used end-relative seek (whence=2) on a text-mode file.
+
+        Pads the file with INFO lines until it exceeds the tail-window threshold, then
+        appends a single ERROR line at the very end. The endpoint must seek into the tail,
+        skip the partial first line, parse forward, and return only the trailing ERROR.
+        """
+        tc, log_file = client
+        from api.system import _LOG_TAIL_BYTES
+
+        # One filler line is ~120 bytes; pad past the threshold with margin
+        pad_line = _log_line("INFO", "x" * 100, "2026-05-03T08:00:00.000000Z")
+        n_pad = (_LOG_TAIL_BYTES // len(pad_line)) + 200
+        lines = [pad_line] * n_pad
+        lines.append(_log_line("ERROR", "tail-error", "2026-05-03T09:00:00.000000Z"))
+
+        log_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert log_file.stat().st_size > _LOG_TAIL_BYTES   # confirm we cross the threshold
+
+        resp = tc.get("/system/observability/errors")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        messages = [e["message"] for e in data["errors"]]
+        assert "tail-error" in messages
