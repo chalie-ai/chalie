@@ -3788,28 +3788,16 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-player {
   position: relative;
   width: min(420px, calc(100vw - 32px));
-  background: rgba(12, 14, 22, 0.97);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow:
-    0 0 0 1px rgba(138, 92, 255, 0.12),
-    0 24px 48px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   padding: var(--space-xl) var(--space-xl) var(--space-lg);
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-}
-
-.voice-player__title {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  line-height: 1.4;
-  margin: 0;
-  max-height: 3.2em;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 /* Loading state */
@@ -3866,7 +3854,6 @@ details.block-section[open] > summary.block-section__title::before {
   border-radius: 50%;
   background: #8A5CFF;
   cursor: pointer;
-  box-shadow: 0 0 6px rgba(138, 92, 255, 0.5);
 }
 
 .voice-player__progress::-moz-range-thumb {
@@ -3888,41 +3875,43 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-player__btns {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-lg);
+  justify-content: space-between;
+  gap: var(--space-md);
+  width: 100%;
 }
 
 .voice-player__btn {
   background: none;
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  border: none;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
-  transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+  transition: color var(--duration-fast), opacity var(--duration-fast);
 }
 
 .voice-player__btn:hover {
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.15);
-  background: color-mix(in oklab, var(--text) 4%, transparent);
+  opacity: 0.7;
 }
 
+/* Skip-back / skip-forward — text glyphs aligned with the slider edges */
+.voice-player__btn--seek {
+  font-size: 1.6rem;
+  line-height: 1;
+  font-weight: 500;
+  color: var(--text-secondary);
+  width: auto;
+  height: auto;
+  letter-spacing: -0.02em;
+}
+
+/* Center play button — bigger glyph, no border, no background */
 .voice-player__btn--play {
-  width: 48px;
-  height: 48px;
-  border-color: rgba(138, 92, 255, 0.4);
+  flex: 0 0 auto;
+  margin: 0 auto;
   color: var(--text-primary);
-}
-
-.voice-player__btn--play:hover {
-  border-color: rgba(138, 92, 255, 0.8);
-  background: rgba(138, 92, 255, 0.12);
-  box-shadow: 0 0 12px rgba(138, 92, 255, 0.25);
 }
 
 .voice-player__close {
