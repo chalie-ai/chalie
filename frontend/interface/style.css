@@ -1272,7 +1272,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 /* States — use Chalie's canonical token colors. Opacity carries the dim. */
 .act-tool--running {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
 }
 
 .act-tool--done {
@@ -1290,8 +1290,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.2);
-  border-top-color: rgba(255, 255, 255, 0.9);
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 20%, transparent);
+  border-top-color: color-mix(in oklab, var(--text-primary) 90%, transparent);
   animation: act-spinner-spin 0.9s linear infinite;
   display: inline-block;
 }
