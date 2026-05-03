@@ -50,8 +50,8 @@ class TestValidationErrors:
         assert _is_error_tag(text2, "prompt-required"), repr(text2)
 
     def test_invalid_type_returns_error_tag(self):
-        """type='nonsense' must return [subagent(error=invalid-type:nonsense)]."""
-        result = _execute({"prompt": "do something", "type": "nonsense"})
+        """agent_type='nonsense' must return [subagent(error=invalid-type:nonsense)]."""
+        result = _execute({"prompt": "do something", "agent_type": "nonsense"})
         text = result["text"]
         assert text.startswith("[subagent("), repr(text)
         assert "error=invalid-type:nonsense" in text, repr(text)

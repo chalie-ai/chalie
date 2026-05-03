@@ -254,7 +254,7 @@ Briefing rules:
                     "(summary length, bullet list vs prose, key fields)."
                 ),
             },
-            "type": {
+            "agent_type": {
                 "type": "string",
                 "enum": ["web_surfer", "summariser", "general_purpose"],
                 "description": (
@@ -295,7 +295,7 @@ Briefing rules:
         if not prompt:
             return {"text": _skill_tag("subagent", error="prompt-required")}
 
-        agent_type = params.get("type", "general_purpose")
+        agent_type = params.get("agent_type", "general_purpose")
         if agent_type not in SUBAGENT_TYPES:
             return {"text": _skill_tag("subagent", error=f"invalid-type:{agent_type}")}
 

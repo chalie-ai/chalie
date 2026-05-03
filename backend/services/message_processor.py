@@ -497,9 +497,13 @@ class MessageProcessor:
         ok = True
         result_text = ''
         try:
-            # 1. Dispatch via the per-turn dispatcher
+            # 1. Dispatch via the per-turn dispatcher.
+            # Spread tc_input first so the action-envelope 'type' (the tool
+            # name) cannot be overwritten by a schema property of the same
+            # name. The dispatcher reserves 'type' for the action category;
+            # schemas must use a non-colliding key (e.g. 'agent_type').
             dispatch = self._dispatcher.dispatch_action(
-                self.CHANNEL, {'type': tool_name, **tc_input}
+                self.CHANNEL, {**tc_input, 'type': tool_name}
             )
             result_text = str(dispatch.get('result', ''))
 
