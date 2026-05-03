@@ -4,7 +4,7 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
-from services.rich_media_parser import parse as _parse_rich_media
+from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
@@ -47,17 +47,15 @@ def get_recent_history(limit=12, offset=0):
         ).fetchall()
 
         # Build messages and attach rich-media segments for assistant rows.
-        # Tool_calls are stored against the preceding user (input) transcript
-        # row.  We carry the last-seen user transcript_id forward so each
-        # assistant message can look up the right tool_calls.
+        # _resolve_ids() queries the DB for the user-input transcript row that
+        # precedes each assistant row — the same lookup used by the WS-send path.
+        # Both paths call the same helper so they can never silently diverge.
         messages = []
-        last_user_transcript_id = None
 
         for row in reversed(rows):
             transcript_id, role, content, created_at = row[0], row[1], row[2] or "", row[3]
 
             if role == 'user':
-                last_user_transcript_id = transcript_id
                 messages.append({
                     "id": str(transcript_id),
                     "role": role,
@@ -73,10 +71,9 @@ def get_recent_history(limit=12, offset=0):
                 }
                 # Attach segments for assistant rows so the frontend can
                 # reconstruct rich-media cards on page refresh.
-                if last_user_transcript_id is not None:
-                    tool_calls = _fetch_tool_calls_for_transcript(
-                        conn, last_user_transcript_id
-                    )
+                input_ids = _resolve_ids(transcript_id, conn)
+                if input_ids:
+                    tool_calls = _fetch_tool_calls_for_transcript(conn, input_ids[0])
                 else:
                     tool_calls = []
                 segments = _parse_rich_media(content, tool_calls)

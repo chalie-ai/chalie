@@ -440,7 +440,14 @@ def _handle_resume(ws, msg):
 
 
 def _handle_action(ws, msg):
-    """Handle a deterministic action button click."""
+    """Handle a deterministic action button click.
+
+    All ability invocations flow through ``ActDispatcherService`` so there is a
+    single tool-dispatch path.  The channel ``'action_button'`` is not
+    ``'user'``, so the dispatcher never injects ``_rich_media_ordinal`` — the
+    ordinal-None contract on ``Ability.execute()`` is automatically satisfied
+    without any special-casing here.
+    """
     payload = msg.get('payload', {})
     skill = payload.get('skill', '')
     if not skill:
@@ -453,23 +460,38 @@ def _handle_action(ws, msg):
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
     try:
-        from abilities._registry import AbilityRegistry
-        try:
-            ability = AbilityRegistry.get(skill)
-        except KeyError:
-            seq = _next_seq()
-            _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
-            seq = _next_seq()
-            _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
-            return
+        from services.act_dispatcher_service import ActDispatcherService
+
+        # Build an action dict for the dispatcher: type = skill name, remaining
+        # keys are the ability's input parameters.  'skill' itself is a
+        # framework key (like 'type') so it is excluded from params.
+        action = {
+            'type': skill,
+            **{k: v for k, v in payload.items() if k != 'skill'},
+        }
 
         start = time.time()
-        result = ability.execute('action_button', payload, None)
+        dispatcher = ActDispatcherService()
+        dispatch_result = dispatcher.dispatch_action('action_button', action)
 
-        # Handle structured results (text + reply_actions)
-        reply_actions = None
+        if dispatch_result.get('status') == 'error':
+            result_text = dispatch_result.get('result', '')
+            if 'Unknown action type' in result_text:
+                seq = _next_seq()
+                _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
+                seq = _next_seq()
+                _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
+                return
+
+        # Dispatcher already unwraps {'text': ..., 'reply_actions': ...} in
+        # _build_success_result — result is plain text or dict by this point.
+        result = dispatch_result.get('result')
+        reply_actions = dispatch_result.get('reply_actions')
+
+        # If the ability returned a dict with a 'text' key that the dispatcher
+        # did not unwrap (non-standard ability shape), normalise it here.
         if isinstance(result, dict) and 'text' in result:
-            reply_actions = result.get('reply_actions')
+            reply_actions = reply_actions or result.get('reply_actions')
             result = result['text']
 
         elapsed_ms = int((time.time() - start) * 1000)

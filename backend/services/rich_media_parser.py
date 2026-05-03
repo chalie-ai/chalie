@@ -27,6 +27,49 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list[int]:
+    """Return the transcript row IDs whose tool_calls feed the parser for one assistant turn.
+
+    Tool_calls are stored against the user-input transcript row that triggered
+    the ACT loop — not against the assistant output row.  This function queries
+    the DB to find that user-input row for the given assistant turn: the most
+    recent row with ``id < assistant_transcript_id`` that shares the same
+    ``channel`` and has ``role = 'user'`` or ``role = 'subagent_return'``.
+
+    Both the WS-send path (``api/websocket.py``) and the
+    ``/conversation/recent`` refresh path (``api/conversation.py``) use this
+    function so they are guaranteed to resolve the same transcript IDs.  If the
+    storage rule ever changes (e.g. tool_calls keyed to the assistant row
+    instead), updating this single function is sufficient — neither call site
+    needs to change.
+
+    Args:
+        assistant_transcript_id: The ``transcript.id`` of the assistant output row.
+        conn: An open SQLite connection (or compatible cursor) for the query.
+
+    Returns:
+        List containing the single user-input transcript ID for this turn, or an
+        empty list if no preceding user row can be found (should not happen in
+        normal operation — logged as a warning).
+    """
+    row = conn.execute(
+        "SELECT t2.id FROM transcript t1 "
+        "JOIN transcript t2 ON t2.channel = t1.channel "
+        "  AND t2.id < t1.id "
+        "  AND t2.role IN ('user', 'subagent_return') "
+        "WHERE t1.id = ? "
+        "ORDER BY t2.id DESC LIMIT 1",
+        (assistant_transcript_id,),
+    ).fetchone()
+    if row is None:
+        logger.warning(
+            "resolve_tool_call_transcript_ids: no preceding user row for assistant_id=%s",
+            assistant_transcript_id,
+        )
+        return []
+    return [row[0]]
+
 # Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>
 # Group 1: tool name prefix (e.g. "weather")
 # Group 2: ordinal string (e.g. "1")
@@ -126,11 +169,24 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
 
 
 def _find_payload(tag: str, tool_calls: list[dict]) -> dict | str | None:
-    """Scan tool_calls for the row whose result contains the tag's instruction string.
+    """Scan tool_calls for the row whose rich-media trailer references this tag.
 
-    The instruction trailer the tool embeds contains the literal span tag, so
-    we look for the exact substring ``<span id='tag'>`` or ``<span id="tag">``
-    in each tool_call's ``result`` field.  First hit wins.
+    Matching is anchored to the trailer section (the part of the result string
+    that follows the first ``\\n\\n`` separator) so that tool results whose
+    *payload* JSON happens to contain a literal span tag — for example, a search
+    snippet that scraped a page containing ``<span id='weather_1'>`` in its body
+    — are never mistakenly paired.  The span tag must appear in the trailer, not
+    anywhere in the full result string.
+
+    All rich-media tool trailers follow the format::
+
+        <json payload>
+
+        This tool supports rich-media rendering. ... <span id='tag'>
+
+    So the span tag is always in the trailer section.  A search snippet or
+    document body containing a literal span would be part of the JSON payload
+    (before the first ``\\n\\n``), and will never satisfy this check.
 
     Returns:
         Parsed payload dict (or raw string if JSON parse fails), or None if
@@ -143,7 +199,14 @@ def _find_payload(tag: str, tool_calls: list[dict]) -> dict | str | None:
         result = row.get("result") or ""
         if not isinstance(result, str):
             continue
-        if needle_single in result or needle_double in result:
+        # Anchor to the trailer section — everything after the first blank line.
+        # A span tag present only in the JSON payload body (before \n\n) must
+        # not match; only trailer-section occurrences qualify.
+        parts = result.split("\n\n", 1)
+        if len(parts) < 2:
+            continue
+        trailer = parts[1]
+        if needle_single in trailer or needle_double in trailer:
             return _extract_data(result)
 
     return None

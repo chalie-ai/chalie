@@ -38,7 +38,53 @@ class Ability(ABC):
             )
 
     @abstractmethod
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str: ...
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+        """Execute the ability and return a result.
+
+        Ordinal-None contract
+        ─────────────────────
+        ``params`` may contain the key ``_rich_media_ordinal`` (an ``int``)
+        injected by ``ActDispatcherService.dispatch_action()`` ONLY when the
+        call originates from a ``channel == 'user'`` dispatch.  This is the
+        single physical gate that controls whether the rich-media instruction
+        trailer is appended to the tool result.
+
+        When ``params`` does NOT contain ``_rich_media_ordinal`` (i.e. ordinal
+        is ``None``) the ability MUST NOT emit a rich-media instruction trailer.
+        It must return a plain ``dict`` (or a plain string with no trailer
+        signature). The trailer is only appended when the dispatcher injects the
+        ordinal, and that only happens on ``channel == 'user'``.
+
+        Paths where ``_rich_media_ordinal`` is absent (never inject a trailer):
+
+        * ``channel == 'subagent'`` — dispatcher withholds the ordinal;
+          ``SubagentProcessor`` also scrubs spans via ``strip_spans()`` as a
+          second line of defence.
+        * Action-button handler (``api/websocket.py::_handle_action``) — the
+          ability is invoked via the dispatcher with a synthetic
+          ``'action_button'`` channel, which is not ``'user'``, so no ordinal
+          is injected.
+        * Direct test calls — unit tests call ``execute()`` without the ordinal
+          key and must receive a plain dict result.
+
+        Args:
+            channel: The conversation channel for this invocation (e.g.
+                ``'user'``, ``'subagent'``, ``'action_button'``).
+            params: Input parameters from the LLM action dict (or action-button
+                payload), with framework keys (``type``, ``exchange_id``) already
+                stripped by the dispatcher.  May contain
+                ``_rich_media_ordinal: int`` when called from a user-channel
+                dispatch.
+            telemetry: Optional client telemetry dict (location, device info),
+                or ``None`` if not available.
+
+        Returns:
+            ``dict`` when the result is structured data (no rich-media trailer),
+            or ``str`` when the dispatcher-injected ordinal is present and the
+            ability supports rich-media rendering (the string encodes the JSON
+            payload + ``\\n\\n`` + the instruction trailer).
+        """
+        ...
 
     def pre_dispatch(self, params: dict) -> None: ...
 
