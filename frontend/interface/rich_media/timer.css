@@ -1,0 +1,127 @@
+/* ==========================================================================
+   Timer Card (theme-aware)
+   ========================================================================== */
+
+.rich-card.timer-card {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 16px;
+  align-items: center;
+}
+
+/* ── Progress ring ──────────────────────────────────────────────────────── */
+
+.timer-card__ring {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+
+.timer-card__ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.timer-card__ring-track {
+  fill: none;
+  stroke: var(--border, color-mix(in oklab, var(--violet) 18%, transparent));
+  stroke-width: 3;
+}
+
+.timer-card__ring-fill {
+  fill: none;
+  stroke: var(--violet, #8a5cff);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s linear;
+}
+
+.timer-card--done .timer-card__ring-fill {
+  stroke: var(--amber, #ffb257);
+  animation: timer-ring-pulse 1s ease-in-out infinite;
+}
+
+@keyframes timer-ring-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* ── Title + time ────────────────────────────────────────────────────────── */
+
+.timer-card__info {
+  min-width: 0;
+}
+
+.timer-card__title {
+  font-size: 0.96rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  margin: 0 0 2px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timer-card__time {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+.timer-card__time b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ── Action buttons ─────────────────────────────────────────────────────── */
+
+.timer-card__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.timer-card__btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+  padding: 0;
+}
+
+.timer-card__btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: color-mix(in oklab, var(--violet) 50%, var(--border));
+}
+
+.timer-card__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.timer-card__btn svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+/* ── Stopped + error variants ───────────────────────────────────────────── */
+
+.timer-card--stopped {
+  opacity: 0.65;
+}
+
+.timer-card--error {
+  display: block;
+  color: var(--text-tertiary);
+  font-style: italic;
+}

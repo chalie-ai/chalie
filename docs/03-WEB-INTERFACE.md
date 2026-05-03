@@ -106,6 +106,7 @@ frontend/interface/rich_media/
   article.js / .css  — news + search (shared layout)
   scheduler.js / .css — schedule card (date block + same-day list)
   list.js / .css     — checklist with click-to-toggle persistence
+  timer.js / .css    — live countdown card (pause/stop, Web-Audio alarm)
   base_card.css      — shared Radiant card chrome (border, padding, entrance keyframes)
   icons/weather/     — semantic SVGs (clear-day, clear-night, partly-cloudy-*, rain, snow, fog, thunderstorm, cloudy)
 ```
@@ -120,6 +121,8 @@ frontend/interface/rich_media/
 - `hourly` — array of 8 `{hour, temp_c, code}` entries starting from the slot containing the current observation. Drives the bottom rail. wttr.in fallback returns `[]`; the rail simply hides.
 
 The card renders a gradient sky tinted by phase, drifting cloud blobs, a sun (day/dawn/sunset) or moon (night), a low skyline silhouette, and an overlay with the big top-left temperature, location + day/time top-right, and a narrative caption (the LLM synthesis or a phase-aware fallback). The hour rail highlights the current hour (violet) and the daily peak (amber).
+
+**Timer card.** `TimerAbility` returns `{title, duration_seconds}` to the LLM — the wall-clock anchor is deliberately hidden so the model can't fill, edit, or reason about it. `RichMediaParser` injects `started_at` from the tool_calls row's `created_at` (normalised to ISO 8601 UTC) before the segment reaches the FE. `timer.js` then computes `remaining = duration_seconds − (now − started_at)` on every 1-second tick, so a page reload resumes the countdown from real elapsed (no DB, no worker — purely ephemeral, in contrast to `schedule` which persists in `scheduled_items`). Pause is in-memory only; reloading while paused resumes the timer. When `remaining ≤ 0` the ring switches to amber and a Web-Audio oscillator (3 × 880 Hz beeps every 1.4 s) plays until the user clicks Stop.
 
 **Interactive cards — silent action channel.** Cards that mutate server state (currently the list card's check toggles) dispatch a `chalie:silent-action` `CustomEvent` on `document` with `detail = { payload, onMessage, onError, onDone }`. `app.js` listens and forwards `payload` to `ws.sendAction(...)` without rendering an ACT cycle or chat bubble — the card already owns the visual feedback (optimistic UI, revert on error). The matching backend path is unchanged: `WS message {type:'action'} → _handle_action → ActDispatcherService.dispatch_action('action_button', …)`. Channel `'action_button'` is **not** `'user'`, so no rich-media ordinal is injected and the response is a plain dict, never a card.
 

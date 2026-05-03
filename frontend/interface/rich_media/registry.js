@@ -12,6 +12,7 @@ import * as weatherModule from './weather.js';
 import * as articleModule from './article.js';
 import * as schedulerModule from './scheduler.js';
 import * as listModule from './list.js';
+import * as timerModule from './timer.js';
 
 const REGISTRY = {
   weather: weatherModule,
@@ -19,6 +20,7 @@ const REGISTRY = {
   search: articleModule,
   schedule: schedulerModule,
   list: listModule,
+  timer: timerModule,
 };
 
 /**

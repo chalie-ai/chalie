@@ -32,14 +32,19 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class ScheduleAbility(Ability):
     NAME = "schedule"
-    SUMMARY = "Create, list, or cancel scheduled reminders and recurring prompts by natural language time expression."
+    SUMMARY = (
+        "Create, list, or cancel persistent reminders and recurring prompts at a "
+        "specific calendar date/time. For a short ephemeral countdown the user wants "
+        "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
+        "use the `timer` tool instead — not `schedule`."
+    )
     EXAMPLES = [
         "remind me to call the dentist tomorrow at 3pm",
         "set a daily reminder at 8am to take my vitamins",
         "what reminders do I have this week",
         "cancel my dentist reminder",
         "schedule a weekly check-in every Monday at 9am",
-        "remind me in 2 hours to check the oven",
+        "remind me to email the quarterly report by Friday 5pm",
         "show me everything coming up in the next hour",
         "set an hourly reminder between 9am and 5pm to drink water",
     ]
@@ -49,7 +54,13 @@ class ScheduleAbility(Ability):
             "action": {
                 "type": "string",
                 "enum": ["create", "list", "cancel"],
-                "description": "The scheduler action to perform.",
+                "description": (
+                    "The scheduler action to perform. If the user wants a short "
+                    "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
+                    "25 minute focus block'), STOP — call the `timer` tool "
+                    "instead of `schedule`. `schedule` is for calendar-anchored "
+                    "reminders that persist across restarts."
+                ),
             },
             "message": {
                 "type": "string",

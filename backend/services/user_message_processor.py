@@ -54,6 +54,7 @@ class UserMessageProcessor(MessageProcessor):
         "review_tool_calls",
         "schedule",
         "subagent",
+        "timer",
     ]
     DISCOVERABLE: list[str] = [
         "browser",

@@ -117,12 +117,13 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "schedule",
     "search",
     "subagent",
+    "timer",
     "weather",
 })
 
 
-def test_abilities_directory_has_exactly_16_non_underscore_modules():
-    """abilities/ contains exactly the 16 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_17_non_underscore_modules():
+    """abilities/ contains exactly the 17 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -150,7 +151,7 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 16
+    assert len(walked) == 17
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +172,7 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "schedule", "subagent",
+    "read", "review_tool_calls", "schedule", "subagent", "timer",
 })
 
 _DEFAULT_DISCOVERABLE = frozenset({
@@ -182,9 +183,12 @@ _DEFAULT_DISCOVERABLE = frozenset({
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
-    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"subagent"}) | {"news", "search", "browser"},
+    # `timer` is dropped: DMN runs in the background without a user-channel
+    # surface, so the rich-media card would never render.
+    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"subagent", "timer"}) | {"news", "search", "browser"},
                                    _DEFAULT_DISCOVERABLE - {"news", "search", "browser"}),
-    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent"}, _DEFAULT_DISCOVERABLE),
+    # Scheduled has no UI surface either — drop `timer` for the same reason.
+    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent", "timer"}, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.

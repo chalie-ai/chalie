@@ -383,7 +383,7 @@ def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
         placeholders = ','.join('?' * len(transcript_ids))
         with db.connection() as conn:
             tc_rows = conn.execute(
-                f"SELECT tool_name, params, result, ephemeral FROM tool_calls "
+                f"SELECT tool_name, params, result, ephemeral, created_at FROM tool_calls "
                 f"WHERE transcript_id IN ({placeholders}) "
                 f"ORDER BY created_at, id",
                 transcript_ids,
@@ -394,6 +394,7 @@ def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
                 "params": r[1],
                 "result": r[2] or "",
                 "ephemeral": r[3],
+                "created_at": r[4],
             }
             for r in tc_rows
         ]

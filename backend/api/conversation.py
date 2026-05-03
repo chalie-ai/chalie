@@ -18,7 +18,7 @@ def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
     break card reconstruction on page refresh.
     """
     tc_rows = conn.execute(
-        "SELECT tool_name, params, result, ephemeral FROM tool_calls "
+        "SELECT tool_name, params, result, ephemeral, created_at FROM tool_calls "
         "WHERE transcript_id = ? ORDER BY created_at",
         (transcript_id,),
     ).fetchall()
@@ -28,6 +28,7 @@ def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
             "params": r[1],
             "result": r[2] or "",
             "ephemeral": r[3],
+            "created_at": r[4],
         }
         for r in tc_rows
     ]
