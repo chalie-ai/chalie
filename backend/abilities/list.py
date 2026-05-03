@@ -115,6 +115,32 @@ class ListAbility(Ability):
 
         return {"text": _skill_tag("list", body, action=action)}
 
+    @classmethod
+    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+        """Re-fetch the live list so checkbox state mutated via the silent-action
+        channel is visible on conversation refresh.
+
+        ``tool_calls.result`` is a frozen snapshot from the LLM-call moment; the
+        FE check-action writes directly to the ``lists`` table via
+        ``ListService.check_items``. Without this hook, refresh would replay the
+        stale snapshot and visually un-tick boxes the user already ticked.
+        Single read path: both the live action handler and the refresh path go
+        through ``ListService.get_list``.
+        """
+        name = payload.get("name") if isinstance(payload, dict) else None
+        if not name:
+            return payload
+        try:
+            from services.database_service import get_shared_db_service
+            from services.list_service import ListService
+
+            service = ListService(get_shared_db_service())
+            fresh = _list_json(service, name)
+        except Exception as exc:
+            logger.warning("list.enrich_rich_payload: live re-fetch failed for %r: %s", name, exc)
+            return payload
+        return fresh if fresh else payload
+
 
 def _dispatch(service, action: str, params: dict, default_list_name: str) -> str:
     if action == "add":

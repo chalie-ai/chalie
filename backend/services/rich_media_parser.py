@@ -154,8 +154,10 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
     tag = f"{tool_name}_{ordinal}"
     synthesis = match.group(3).strip()
 
-    payload = _find_payload(tag, tool_calls, tool_name)
-    if payload is not None:
+    matched = _find_payload(tag, tool_calls)
+    if matched is not None:
+        payload, row = matched
+        payload = _enrich_payload(tool_name, payload, row)
         segments.append({
             "type": "rich",
             "tag": tag,
@@ -168,7 +170,37 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
             segments.append({"type": "text", "content": synthesis})
 
 
-def _find_payload(tag: str, tool_calls: list[dict], tool_name: str | None = None) -> dict | str | None:
+def _enrich_payload(tool_name: str, payload, row: dict):
+    """Hand the payload to the matching ability so it can resolve runtime state.
+
+    The parser stays tool-agnostic — every ability declares its own
+    ``enrich_rich_payload`` classmethod (defaults to identity). This is the
+    single hook so cards needing live data (timer's wall-clock anchor, list's
+    live items) can graft it on without the parser learning their names.
+
+    A non-dict payload (i.e. JSON parse failed and ``_extract_data`` returned
+    the raw string) is passed through unchanged — there is nothing to enrich.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    try:
+        from abilities._registry import AbilityRegistry
+        ability = AbilityRegistry.get(tool_name)
+    except Exception:
+        return payload
+    if ability is None:
+        return payload
+    try:
+        return ability.enrich_rich_payload(payload, row)
+    except Exception as exc:
+        logger.warning(
+            "rich_media: enrich_rich_payload(%s) failed — falling back to raw payload: %s",
+            tool_name, exc,
+        )
+        return payload
+
+
+def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] | None:
     """Scan tool_calls for the row whose rich-media trailer references this tag.
 
     Matching is anchored to the trailer section (the part of the result string
@@ -207,46 +239,9 @@ def _find_payload(tag: str, tool_calls: list[dict], tool_name: str | None = None
             continue
         trailer = parts[1]
         if needle_single in trailer or needle_double in trailer:
-            payload = _extract_data(result)
-            # Timer cards need a wall-clock anchor for their countdown but the
-            # LLM must never see it (so it can't fill, edit, or reason about
-            # `started_at`). Inject from the tool_calls row's created_at —
-            # this is the authoritative "when the tool ran" stamp and is
-            # reload-safe because it lives in the DB.
-            if tool_name == "timer" and isinstance(payload, dict):
-                started_at = _row_started_at(row)
-                if started_at:
-                    payload["started_at"] = started_at
-            return payload
+            return _extract_data(result), row
 
     return None
-
-
-def _row_started_at(row: dict) -> str | None:
-    """Return the row's ``created_at`` as an ISO 8601 UTC string, or None.
-
-    SQLite's default ``datetime('now')`` produces naive ``YYYY-MM-DD HH:MM:SS``
-    text. Frontend ``Date.parse()`` interprets that ambiguously across browsers,
-    so we normalise to ``YYYY-MM-DDTHH:MM:SS+00:00``.
-
-    ``parse_utc`` does not raise on garbage — it returns the ``datetime.min``
-    sentinel. We must reject that explicitly: a year-0001 ISO string is truthy
-    and would happily flow into the FE, where ``Date.parse`` produces a huge
-    negative epoch and the timer renders as instantly expired (firing the
-    alarm). Returning ``None`` here makes the FE's ``parseStartedAt`` guard
-    trip cleanly with the existing "Invalid timer payload" path.
-    """
-    from datetime import datetime, timezone
-
-    from services.time_utils import parse_utc
-
-    raw = row.get("created_at")
-    if not raw or not isinstance(raw, str):
-        return None
-    parsed = parse_utc(raw)
-    if parsed == datetime.min.replace(tzinfo=timezone.utc):
-        return None
-    return parsed.isoformat()
 
 
 def _extract_data(result: str) -> dict | str:

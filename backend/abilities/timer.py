@@ -22,11 +22,15 @@ Rich-media rendering:
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import ClassVar
 
 from abilities._base import Ability
+from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
+
+_PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
 _RICH_MEDIA_INSTRUCTION = (
     "This tool supports rich-media rendering. You MUST present this result by "
@@ -93,3 +97,22 @@ class TimerAbility(Ability):
         tag = f"timer_{ordinal}"
         instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
         return f"{json.dumps(payload)}\n\n{instruction}"
+
+    @classmethod
+    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+        """Inject the wall-clock anchor from the tool_calls row's ``created_at``.
+
+        ``started_at`` is intentionally absent from the LLM-visible JSON; the FE
+        needs it to compute the countdown so the parser grafts it on at render
+        time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
+        than raising — that sentinel must be rejected so the FE falls through to
+        its "Invalid timer payload" guard rather than rendering a year-0001
+        countdown that instantly fires the alarm.
+        """
+        created_at = row.get("created_at")
+        if not created_at:
+            return payload
+        parsed = parse_utc(created_at)
+        if parsed == _PARSE_UTC_SENTINEL:
+            return payload
+        return {**payload, "started_at": parsed.isoformat()}

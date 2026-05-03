@@ -39,15 +39,20 @@ class TestExtractData:
 # ── _find_payload ─────────────────────────────────────────────────────────────
 
 class TestFindPayload:
+    """``_find_payload`` returns ``(payload, row)`` so the parser can hand the
+    matched row to the ability's ``enrich_rich_payload`` hook."""
+
     def test_matches_single_quote_syntax(self):
         tc = _tc("weather", '{"loc":"London"}\n\n<span id=\'weather_1\'>')
-        result = _find_payload("weather_1", [tc])
-        assert result == {"loc": "London"}
+        payload, row = _find_payload("weather_1", [tc])
+        assert payload == {"loc": "London"}
+        assert row is tc
 
     def test_matches_double_quote_syntax(self):
         tc = _tc("weather", '{"loc":"Paris"}\n\n<span id="weather_1">')
-        result = _find_payload("weather_1", [tc])
-        assert result == {"loc": "Paris"}
+        payload, row = _find_payload("weather_1", [tc])
+        assert payload == {"loc": "Paris"}
+        assert row is tc
 
     def test_returns_none_for_no_match(self):
         tc = _tc("weather", '{"loc":"Rome"}\n\n<span id=\'weather_1\'>')
@@ -59,8 +64,9 @@ class TestFindPayload:
     def test_first_match_wins(self):
         tc1 = _tc("weather", '{"loc":"A"}\n\n<span id=\'weather_1\'>')
         tc2 = _tc("weather", '{"loc":"B"}\n\n<span id=\'weather_1\'>')
-        result = _find_payload("weather_1", [tc1, tc2])
-        assert result == {"loc": "A"}
+        payload, row = _find_payload("weather_1", [tc1, tc2])
+        assert payload == {"loc": "A"}
+        assert row is tc1
 
 
 # ── parse() — core cases ──────────────────────────────────────────────────────

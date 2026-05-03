@@ -89,3 +89,32 @@ class Ability(ABC):
     def pre_dispatch(self, params: dict) -> None: ...
 
     def post_dispatch(self, result: dict) -> None: ...
+
+    @classmethod
+    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+        """Resolve a rich-media payload's runtime state at parse time.
+
+        The default implementation returns the payload unchanged. Override on
+        subclasses whose card needs data that does NOT live in the LLM-visible
+        tool result — for example:
+
+        * ``timer`` injects ``started_at`` from the row's ``created_at`` so the
+          wall-clock anchor never reaches the LLM.
+        * ``list`` re-fetches the live list from ``ListService`` so checkbox
+          mutations made via the silent-action channel are visible on refresh
+          (the snapshot in ``tool_calls.result`` is frozen at LLM-call time).
+
+        Called by ``rich_media_parser.parse()`` exactly once per rich segment,
+        immediately after the payload is extracted from the matching tool_calls
+        row. Returning the same dict is fine; building a new one is fine too.
+
+        Args:
+            payload: The structured data extracted from the tool result string.
+                ``dict`` for JSON-parsed bodies, kept as-is for raw strings.
+            row: The matched ``tool_calls`` row dict (carries ``tool_name``,
+                ``params``, ``result``, ``ephemeral``, ``created_at``).
+
+        Returns:
+            The payload to ship to the FE. Identity-returns the input by default.
+        """
+        return payload
