@@ -30,10 +30,10 @@ import re
 import mimetypes
 import threading
 from datetime import datetime
-from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 
+import paths
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -74,9 +74,8 @@ ALLOWED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.webp', '.gif',
 }
 
-# Document storage root — env var overrides for Docker; local default mirrors backend/data/
-_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
+# Document storage root — single hard-coded layout (paths.py).
+DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
 
 
 # ---------------------------------------------------------------------------

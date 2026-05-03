@@ -32,7 +32,9 @@ sys.path.insert(0, str(_backend))
 
 import onnxruntime as ort  # noqa: E402
 
-MODELS_DIR = _backend / "data" / "models"
+import paths  # noqa: E402
+
+MODELS_DIR = paths.MODELS_DIR
 
 
 def optimize_model(onnx_path: Path, optimized_path: Path,

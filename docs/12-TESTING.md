@@ -40,12 +40,13 @@ pytest                  # both
 # backend/tests/test_classifier_features.py
 
 import pytest
-from pathlib import Path
+
+import paths
 
 pytestmark = pytest.mark.integration
 
-_MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
-_PRETRAINED_DIR = str(Path(__file__).parent.parent / "data" / "pre-trained")
+_MODELS_DIR = str(paths.MODELS_DIR)
+_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
 
 
 @pytest.fixture(scope="module")

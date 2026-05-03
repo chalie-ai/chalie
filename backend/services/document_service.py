@@ -16,9 +16,9 @@ import os
 import secrets
 import shutil
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import paths
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.log_utils import safe
 from services.write_queue_service import get_write_queue
@@ -33,9 +33,8 @@ DEDUP_MIN_TEXT_LENGTH = 200        # skip semantic dedup for very short docs
 # Purge window (days after soft delete)
 PURGE_WINDOW_DAYS = 30
 
-# Document storage root — env var overrides for Docker; local default mirrors backend/data/
-_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
+# Document storage root — single hard-coded layout (paths.py).
+DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
 
 
 class DocumentService:

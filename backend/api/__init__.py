@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask_cors import CORS
 
+import paths
 from .auth import require_session as require_session
 
 
@@ -144,7 +145,7 @@ def _get_or_generate_session_secret() -> str:
     if env_key:
         return env_key
 
-    secret_file = _BACKEND_DIR / 'data' / '.session_secret'
+    secret_file = paths.SESSION_SECRET_PATH
     if secret_file.exists():
         try:
             value = secret_file.read_text().strip()
@@ -187,9 +188,8 @@ def _init_dashboard_gateway(app):
     port = int(rc_get('port', 8081))
 
     # Dashboard DB lives alongside Chalie's data
-    data_dir = str(_BACKEND_DIR / 'data')
-    db_path = os.path.join(data_dir, 'dashboard.db')
-    dashboard_db.init_db(db_path)
+    data_dir = str(paths.DATA_DIR)
+    dashboard_db.init_db(str(paths.DASHBOARD_DB_PATH))
 
     # ChalieClient talks to ourselves (localhost) — no network hop.
     # Auto-generate a wrapper bearer token so the gateway can authenticate

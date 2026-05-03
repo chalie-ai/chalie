@@ -4,7 +4,7 @@ Build or drift-check the ability search database.
 Walks backend/abilities/ for concrete Ability subclasses, embeds SUMMARY +
 EXAMPLES for each, and writes:
   backend/abilities/assets/abilities.sqlite  — vector + FTS5 search index
-  backend/data/pre-trained/abilities_sha.json — drift sidecar
+  resources/pre-trained/abilities_sha.json   — drift sidecar
 
 Run from backend/:
     python -m utils.build_ability_db           # build (default)
@@ -22,12 +22,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from abilities._registry import AbilityRegistry
-from services.embedding_service import EmbeddingService
-from services.embedding_utils import pack_embedding
+import paths  # noqa: E402
+from abilities._registry import AbilityRegistry  # noqa: E402
+from services.embedding_service import EmbeddingService  # noqa: E402
+from services.embedding_utils import pack_embedding  # noqa: E402
 
 _DB_PATH = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "abilities.sqlite"
-_SHA_PATH = Path(__file__).resolve().parent.parent / "data" / "pre-trained" / "abilities_sha.json"
+_SHA_PATH = paths.PRETRAINED_DIR / "abilities_sha.json"
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:

@@ -81,13 +81,13 @@ class TestGetStats:
 # ── submit_transaction ──────────────────────────────────────────────────────
 
 class TestSubmitTransaction:
-    def test_writes_land_in_real_db(self, wq, db, monkeypatch):
-        """Two INSERTs in a transaction either both land or neither do."""
+    def test_writes_land_in_real_db(self, wq, db):
+        """Two INSERTs in a transaction either both land or neither do.
 
-        # Resolve the test db path so submit_transaction opens the right file.
-        test_db_path = db.execute("PRAGMA database_list").fetchone()[2]
-        monkeypatch.setenv("CHALIE_DB_PATH", test_db_path)
-
+        The ``db`` fixture installs a test-scoped DatabaseService as the
+        process-wide singleton, so :meth:`submit_transaction` follows it
+        automatically (no env override needed).
+        """
         db.execute("CREATE TABLE IF NOT EXISTS wq_test (id INTEGER PRIMARY KEY, val TEXT)")
         db.commit()
 
@@ -102,12 +102,8 @@ class TestSubmitTransaction:
         rows = db.execute("SELECT val FROM wq_test ORDER BY id").fetchall()
         assert [r[0] for r in rows] == ["a", "b"]
 
-    def test_transaction_rollback_on_failure(self, wq, db, monkeypatch):
+    def test_transaction_rollback_on_failure(self, wq, db):
         """If one callable raises, neither row persists."""
-
-        test_db_path = db.execute("PRAGMA database_list").fetchone()[2]
-        monkeypatch.setenv("CHALIE_DB_PATH", test_db_path)
-
         db.execute("CREATE TABLE IF NOT EXISTS wq_test2 (id INTEGER PRIMARY KEY, val TEXT)")
         db.commit()
 

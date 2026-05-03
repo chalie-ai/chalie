@@ -37,11 +37,11 @@ Usage:
   # Dry run — show what would happen, change nothing
   python migrate_transcript_rebuild.py --dry-run
 
-  # Run against default DB (backend/data/chalie.db), channel='user'
+  # Run against default DB (data/chalie.db), channel='user'
   python migrate_transcript_rebuild.py
 
-  # Custom DB path
-  python migrate_transcript_rebuild.py --db /data/chalie.db
+  # Custom DB path (e.g. operating on a backup)
+  python migrate_transcript_rebuild.py --db /tmp/chalie.db.pre-0.5.0
 
   # Different channel or limit
   python migrate_transcript_rebuild.py --channel main --limit 200
@@ -55,17 +55,18 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# Add backend/ to sys.path so `import paths` resolves when invoked standalone.
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+import paths  # noqa: E402
+
 logger = logging.getLogger(__name__)
-
-# ── DB path resolution ──────────────────────────────────────────────────────
-
-_DEFAULT_DB = str(Path(__file__).resolve().parent / "data" / "chalie.db")
 
 
 def _resolve_db(cli_arg: str | None) -> str:
-    if cli_arg:
-        return cli_arg
-    return os.environ.get("CHALIE_DB_PATH", _DEFAULT_DB)
+    return cli_arg if cli_arg else str(paths.DB_PATH)
 
 
 # ── Content extraction ──────────────────────────────────────────────────────
@@ -398,7 +399,7 @@ def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
     loop exits early with "Nothing to write."
 
     Args:
-        db_path: Override the DB path (default: $CHALIE_DB_PATH or built-in default).
+        db_path: Override the DB path (default: paths.DB_PATH).
         limit:   Number of most-recent rows to analyse per channel (default 100).
     """
     db_path = _resolve_db(db_path)
@@ -486,7 +487,7 @@ def main():
         "--db",
         metavar="PATH",
         default=None,
-        help=f"SQLite DB path (default: $CHALIE_DB_PATH or {_DEFAULT_DB})",
+        help=f"SQLite DB path (default: {paths.DB_PATH})",
     )
     parser.add_argument(
         "--channel",

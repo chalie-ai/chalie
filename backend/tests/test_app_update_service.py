@@ -177,7 +177,7 @@ class TestAppUpdateService:
     def test_backup_database(self, tmp_path):
         """Creates backup and cleans old ones."""
         # Setup fake data dir
-        data_dir = tmp_path / "backend" / "data"
+        data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True)
         db_file = data_dir / "chalie.db"
         db_file.write_text("fake db content")
@@ -186,7 +186,7 @@ class TestAppUpdateService:
         old_backup = data_dir / "chalie.db.pre-v0.1.0"
         old_backup.write_text("old backup")
 
-        with patch('services.app_update_service.APP_ROOT', tmp_path), \
+        with patch('services.app_update_service.paths.DB_PATH', db_file), \
              patch.object(AppUpdateService, 'get_current_version', return_value='0.2.0'):
             backup_path = AppUpdateService.backup_database()
 

@@ -19,6 +19,7 @@ import threading
 
 from flask import Blueprint, request, jsonify
 
+import paths
 from services.markup import extract_plaintext
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,8 @@ MAX_AUDIO_SECONDS = 660
 STT_CONCURRENCY = 1
 TTS_CONCURRENCY = 2
 
-# Kokoro model files — downloaded lazily into backend/data/models/kokoro/
-_KOKORO_MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "models", "kokoro",
-)
+# Kokoro model files — downloaded lazily into data/models/kokoro/
+_KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
 _KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 _KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 

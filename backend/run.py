@@ -48,8 +48,6 @@ def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    parser.add_argument("--models-dir", default=None, help="ONNX models directory (default: backend/data/models or MODELS_DIR env)")
-    parser.add_argument("--pretrained-dir", default=None, help="Pre-shipped classifier directory (default: backend/data/pre-trained or PRETRAINED_DIR env)")
     args = parser.parse_args()
 
     port = args.port
@@ -57,12 +55,7 @@ def main():
 
     # Store in runtime_config so any module can access these values
     import runtime_config
-    config = {"port": port, "host": host}
-    if args.models_dir:
-        config["models_dir"] = args.models_dir
-    if args.pretrained_dir:
-        config["pretrained_dir"] = args.pretrained_dir
-    runtime_config.set(config)
+    runtime_config.set({"port": port, "host": host})
 
     # Preload models in a single background thread so Flask starts immediately.
     # Models are loaded sequentially to avoid concurrent memory spikes that

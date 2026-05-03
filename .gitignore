@@ -4,13 +4,12 @@
 *.session_secret
 backend/.env
 backend/.key
-backend/data/*
-!backend/data/pre-trained/
-!backend/data/pre-trained/**
-backend/*.db
-backend/*.db-journal
-backend/*.db-wal
-backend/*.db-shm
+# Runtime state — entire /data tree is local-only, never committed.
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 backend/configs/generated/
 
 # Python

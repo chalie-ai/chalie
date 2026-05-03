@@ -15,14 +15,14 @@ import os
 
 import pytest
 
+import paths
 from services.deliberation_score_service import DeliberationScoreService
 from services.onnx_inference_service import OnnxInferenceService
 
 pytestmark = pytest.mark.integration
 
-_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_MODELS_DIR = os.path.join(_BACKEND_ROOT, "data", "models")
-_DEFAULT_PRETRAINED_DIR = os.path.join(_BACKEND_ROOT, "data", "pre-trained")
+_DEFAULT_MODELS_DIR = str(paths.MODELS_DIR)
+_DEFAULT_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
 _ENCODER_PATH = os.path.join(
     _DEFAULT_MODELS_DIR, "gte-modernbert-base", "onnx", "model.onnx"
 )

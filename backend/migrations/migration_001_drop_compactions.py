@@ -18,9 +18,16 @@ Usage (manual, standalone):
     python backend/migrations/migration_001_drop_compactions.py [path/to/chalie.db]
 """
 
+import os
 import sqlite3
 import sys
-from pathlib import Path
+
+# Add backend/ to sys.path so `import paths` resolves when invoked standalone.
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+import paths  # noqa: E402
 
 
 def apply(db_path: str) -> None:
@@ -35,8 +42,5 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _default_db = str(
-        Path(__file__).resolve().parent.parent / "data" / "chalie.db"
-    )
-    _path = sys.argv[1] if len(sys.argv) > 1 else _default_db
+    _path = sys.argv[1] if len(sys.argv) > 1 else str(paths.DB_PATH)
     apply(_path)

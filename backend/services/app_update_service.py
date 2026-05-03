@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+import paths
 from services.log_utils import safe
 from services.memory_client import MemoryClientService
 from services.time_utils import utc_now
@@ -181,7 +182,7 @@ class AppUpdateService:
     def backup_database() -> Path:
         """Back up the SQLite database before an update.
 
-        Creates a copy at ``backend/data/chalie.db.pre-{version}`` and
+        Creates a copy at ``data/chalie.db.pre-{version}`` and
         removes any older ``.pre-*`` backups so only the latest remains.
 
         Returns:
@@ -190,7 +191,7 @@ class AppUpdateService:
         Raises:
             FileNotFoundError: If the database file does not exist.
         """
-        db_path = APP_ROOT / "backend" / "data" / "chalie.db"
+        db_path = paths.DB_PATH
         if not db_path.exists():
             raise FileNotFoundError(f"Database not found at {db_path}")
 
@@ -366,16 +367,10 @@ class AppUpdateService:
             else:
                 raise RuntimeError(f"Release {tag} has no frontend/ directory")
 
-            # Step 4: Preserve data and tools from old backend
+            # Step 4: Preserve user-installed tools from old backend.
+            # data/ and resources/ live at APP_ROOT and are untouched by the
+            # backend/ rename-swap, so they don't need preservation here.
             if renamed_backend:
-                old_data = backend_old / "data"
-                if old_data.exists():
-                    new_data = backend_dir / "data"
-                    if new_data.exists():
-                        shutil.rmtree(str(new_data))
-                    shutil.copytree(str(old_data), str(new_data))
-                    logger.info("Preserved data/ directory")
-
                 old_tools = backend_old / "tools"
                 if old_tools.exists():
                     new_tools = backend_dir / "tools"

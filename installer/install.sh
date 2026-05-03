@@ -5,9 +5,12 @@
 #
 # Behaviour:
 #   - Idempotent: safe to re-run. Updates, upgrades, and fresh installs all use
-#     the same flow. Data at $HOME/.chalie/data is never touched.
+#     the same flow. Data at $HOME/.chalie/app/data is never touched.
 #   - If the source tree is already present at $HOME/.chalie/app, the GitHub
 #     download is skipped (used by the Dockerfile, which COPYs the source in).
+#   - One-time migration: legacy installs whose DB lives inside the source
+#     tree at $HOME/.chalie/app/backend/data are moved up one level to
+#     $HOME/.chalie/app/data, where the new paths module looks for it.
 set -euo pipefail
 
 CHALIE_HOME="$HOME/.chalie"
@@ -585,7 +588,9 @@ _install_cli() {
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
 PID_FILE="$CHALIE_HOME/chalie.pid"
 LOG_FILE="$CHALIE_HOME/chalie.log"
-DATA_DIR="$CHALIE_HOME/data"
+# Runtime state lives alongside the source tree so the Python `paths` module
+# (which resolves data/ relative to backend/) finds it without env vars.
+DATA_DIR="$CHALIE_HOME/app/data"
 
 _is_running() {
   [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
@@ -614,7 +619,7 @@ case "$_cmd" in
   start)
     _is_running && echo "Chalie is already running (PID $(cat "$PID_FILE"))" && exit 0
     mkdir -p "$DATA_DIR"
-    CHALIE_DATA_DIR="$DATA_DIR" CHALIE_VENV="$CHALIE_HOME/venv" \
+    CHALIE_VENV="$CHALIE_HOME/venv" \
       bash "$CHALIE_HOME/app/run.sh" --port="$_port" --host="$_host" \
       >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
@@ -715,9 +720,26 @@ _print_success() {
   printf "\n"
 }
 
+# ─── Data layout migration (one-time) ────────────────────────────────────────
+# Pre-cleanup installs let Python's old default resolver write the DB inside
+# the source tree at $CHALIE_HOME/app/backend/data/. The new layout puts data
+# alongside backend/ at $CHALIE_HOME/app/data/. Move it once if the legacy
+# location is populated and the new one is empty.
+_migrate_data_layout() {
+  local legacy="$CHALIE_HOME/app/backend/data"
+  local target="$CHALIE_HOME/app/data"
+  if [[ -f "$legacy/chalie.db" && ! -f "$target/chalie.db" ]]; then
+    _section "Migrating Data Layout"
+    _info "Moving $legacy → $target"
+    mkdir -p "$CHALIE_HOME/app"
+    mv "$legacy" "$target"
+    _ok "Data migrated"
+  fi
+}
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 # Single flow — fresh installs, upgrades, and re-runs all take the same path.
-# Every step is idempotent. Data at $CHALIE_HOME/data is never touched.
+# Every step is idempotent. Data at $CHALIE_HOME/app/data is never touched.
 main() {
   _parse_args "$@"
 
@@ -733,6 +755,7 @@ main() {
   _install_voice_deps
   _install_deno
   _download_release
+  _migrate_data_layout
   _setup_venv
   _install_onnxruntime_variant
   _install_playwright_browsers
