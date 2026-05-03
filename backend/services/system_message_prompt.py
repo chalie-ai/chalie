@@ -123,6 +123,7 @@ Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born
 
 In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
 Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>
+NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
 
 ────────────────────────────────\
 """
