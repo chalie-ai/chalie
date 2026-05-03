@@ -114,7 +114,11 @@ function buildOverlay(payload, synthesis, now, phase) {
 
   const caption = document.createElement('div');
   caption.className = 'weather-card__caption';
-  caption.textContent = synthesis || buildFallbackCaption(payload, phase);
+  if (synthesis) {
+    caption.innerHTML = synthesis;
+  } else {
+    caption.textContent = buildFallbackCaption(payload, phase);
+  }
   overlay.appendChild(caption);
 
   return overlay;

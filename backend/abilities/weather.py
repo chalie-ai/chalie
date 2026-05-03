@@ -183,25 +183,57 @@ def _get_fresh_cache(cache_key: str):
 
 
 def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
-    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err)."""
+    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err).
+
+    Routing:
+      - No location_param: prefer Open-Meteo with telemetry coords.
+      - location_param matches telemetry city/country: prefer Open-Meteo with
+        telemetry coords (LLM is just naming the user's home turf).
+      - location_param is a different place: use wttr.in directly (Open-Meteo
+        needs coords we don't have for foreign queries).
+
+    wttr.in is also used as a fallback when Open-Meteo fails. In all wttr.in
+    paths, when we have a clean Nominatim location_name AND the query refers
+    to that same place, we override wttr's mojibake-prone location field.
+    """
     result = None
     open_meteo_err = ""
     wttr_err = ""
+    have_coords = lat is not None and lon is not None
+    use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
 
-    if lat is not None and lon is not None and not location_param:
+    if use_telemetry_coords:
         result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
 
     if result is None and location_param:
         result, wttr_err = _fetch_wttr(location_param)
+        if result is not None and use_telemetry_coords and location_name:
+            result["location"] = location_name
 
     if result is None:
         logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
-        if lat is not None and lon is not None and not location_param:
+        if use_telemetry_coords:
             result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
         if result is None and location_param:
             result, _ = _fetch_wttr(location_param, timeout=5)
+            if result is not None and use_telemetry_coords and location_name:
+                result["location"] = location_name
 
     return result, open_meteo_err, wttr_err
+
+
+def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
+    """True when the LLM-supplied location names the same place as telemetry.
+
+    Case-insensitive substring match in either direction so 'Żabbar' matches
+    'Iż-Żabbar, Malta' and 'malta' matches the country half. Diacritics are
+    not normalised — a partial English/Maltese collision is acceptable.
+    """
+    if not location_param or not location_name:
+        return False
+    p = location_param.strip().lower()
+    n = location_name.strip().lower()
+    return p in n or n in p
 
 
 def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
@@ -315,6 +347,9 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
         url = f"https://wttr.in/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
         resp.raise_for_status()
+        # wttr.in serves JSON without a charset header; requests guesses Latin-1
+        # and mojibakes UTF-8 place names ('Żabbar' → 'Il-AÅ¦Ofra'). Force UTF-8.
+        resp.encoding = "utf-8"
         data = resp.json()
 
         current_conditions = data.get("current_condition")

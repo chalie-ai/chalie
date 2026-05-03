@@ -6,7 +6,8 @@
   /* Card chrome is the canvas itself — strip the default rich-card padding. */
   padding: 0;
   overflow: hidden;
-  max-width: 720px;
+  width: 100%;
+  max-width: 100%;
   background: transparent;
   border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
 }
