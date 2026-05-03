@@ -636,7 +636,8 @@ body.speaker-user   #ambientBloom {
 .conversation-spine {
   position: relative;
   z-index: 10;
-  max-width: min(80%, 1200px);
+  width: 95vw;
+  max-width: 95vw;
   margin: 0 auto;
   padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
   display: flex;
@@ -704,24 +705,16 @@ body.speaker-user   #ambientBloom {
 
 .speech-form--chalie {
   background: var(--bg-surface-chalie);
-  align-self: flex-start;
-  max-width: 90%;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  padding-left: 0;
+  padding-right: 0;
 }
 
+/* Chalie has no accent stripe — full-bleed text on the spine. */
 .speech-form--chalie::before {
-  left: -1px;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    var(--violet) 12%,
-    #B07CFF 38%,
-    var(--violet) 60%,
-    #6E3FE6 80%,
-    transparent 100%);
-  background-size: 100% 240%;
-  animation: stripeFlow 6.5s ease-in-out infinite;
-  filter: saturate(1.15);
-  box-shadow: 0 0 8px var(--violet), 0 0 18px rgba(138, 92, 255, 0.33);
+  display: none;
 }
 
 @keyframes stripeFlow {
