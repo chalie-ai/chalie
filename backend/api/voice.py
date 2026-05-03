@@ -88,6 +88,54 @@ def _download_kokoro_models():
     return model_path, voices_path
 
 
+def _patch_kokoro_speed_dtype(tts):
+    """Fix upstream ``kokoro-onnx==0.5.0`` dtype bug for the HF fp16 schema.
+
+    The library's ``_create_audio`` hardcodes ``speed: int32`` when the model
+    exposes an ``input_ids`` input (the newer
+    ``onnx-community/Kokoro-82M-v1.0-ONNX`` export), but the fp16 graph
+    actually expects ``speed: float32``. ONNXRuntime then rejects every
+    inference call with::
+
+        Unexpected input data type. Actual: (tensor(int32)),
+        expected: (tensor(float))
+
+    We override the bound method on the loaded instance with a corrected
+    version so we don't have to vendor or fork the library. Drop this once
+    upstream releases a fix.
+    """
+    import time
+    import types
+    import numpy as np
+    from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE
+
+    def _create_audio_fixed(self, phonemes, voice, speed):
+        phonemes = phonemes[:MAX_PHONEME_LENGTH]
+        start_t = time.time()
+        tokens = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
+        assert len(tokens) <= MAX_PHONEME_LENGTH
+        voice = voice[len(tokens)]
+        tokens = [[0, *tokens, 0]]
+        if "input_ids" in [i.name for i in self.sess.get_inputs()]:
+            inputs = {
+                "input_ids": tokens,
+                "style": np.array(voice, dtype=np.float32),
+                "speed": np.array([speed], dtype=np.float32),  # was int32 — upstream bug
+            }
+        else:
+            inputs = {
+                "tokens": tokens,
+                "style": voice,
+                "speed": np.ones(1, dtype=np.float32) * speed,
+            }
+        audio = self.sess.run(None, inputs)[0]
+        logger.debug("[Voice] kokoro chunk %.2fs in %.2fs",
+                     len(audio) / SAMPLE_RATE, time.time() - start_t)
+        return audio, SAMPLE_RATE
+
+    tts._create_audio = types.MethodType(_create_audio_fixed, tts)
+
+
 def _ensure_models():
     """Load STT and TTS models on first use. Thread-safe, blocks concurrent loaders."""
     global _stt_model, _tts_model, _stt_sem, _tts_sem, _models_loaded, _models_loading
@@ -121,6 +169,7 @@ def _ensure_models():
         # the matching EP and falls back to CPU if session construction fails.
         kokoro_sess = build_session(model_file, log_prefix="[Voice/Kokoro]")
         tts = Kokoro.from_session(kokoro_sess, voices_file)
+        _patch_kokoro_speed_dtype(tts)
 
         with _load_lock:
             _stt_model = stt
