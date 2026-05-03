@@ -230,8 +230,9 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             f"?latitude={lat}&longitude={lon}"
             "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
             "precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day"
+            "&hourly=temperature_2m,weather_code"
             "&daily=weathercode,precipitation_probability_max,precipitation_sum,"
-            "temperature_2m_max,temperature_2m_min"
+            "temperature_2m_max,temperature_2m_min,sunrise,sunset"
             "&wind_speed_unit=kmh"
             "&timezone=auto"
             "&forecast_days=2"
@@ -258,6 +259,8 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
         tomorrow_precip_mm = None
         tomorrow_max_c = None
         tomorrow_min_c = None
+        sunrise = None
+        sunset = None
         if daily and len(daily.get("time", [])) > 1:
             raw_code = daily.get("weathercode", [None, None])[1]
             if raw_code is not None:
@@ -266,6 +269,12 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             tomorrow_precip_mm = daily.get("precipitation_sum", [None, None])[1]
             tomorrow_max_c = daily.get("temperature_2m_max", [None, None])[1]
             tomorrow_min_c = daily.get("temperature_2m_min", [None, None])[1]
+            sunrise_arr = daily.get("sunrise", [])
+            sunset_arr = daily.get("sunset", [])
+            sunrise = sunrise_arr[0] if sunrise_arr else None
+            sunset = sunset_arr[0] if sunset_arr else None
+
+        hourly_strip = _extract_hourly_strip(data.get("hourly", {}), cc.get("time", ""))
 
         return {
             "location": location_name,
@@ -291,6 +300,9 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             "forecast_tomorrow_min_c": tomorrow_min_c,
             "forecast_tomorrow_precip_chance_pct": tomorrow_precip_chance,
             "forecast_tomorrow_precip_mm": tomorrow_precip_mm,
+            "sunrise": sunrise,
+            "sunset": sunset,
+            "hourly": hourly_strip,
         }, ""
     except Exception as e:
         logger.warning(f"[WEATHER] Open-Meteo failed for ({lat},{lon}): {e}")
@@ -371,10 +383,59 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
             "forecast_tomorrow_min_c": tomorrow_min_c,
             "forecast_tomorrow_precip_chance_pct": tomorrow_precip_chance,
             "forecast_tomorrow_precip_mm": tomorrow_precip_mm,
+            "sunrise": None,
+            "sunset": None,
+            "hourly": [],
         }, ""
     except Exception as e:
         logger.warning(f"[WEATHER] wttr.in failed for '{location}': {e}")
         return None, str(e)
+
+
+def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
+    """Pick the next 8 hourly readings starting from the slot containing current_iso.
+
+    Open-Meteo returns ``hourly.time`` as ``["2026-05-03T09:00", ...]`` aligned
+    with the location's local timezone (``timezone=auto``).  The current time
+    is also a local ISO string with no offset, so simple prefix-match against
+    the ``YYYY-MM-DDTHH`` portion locates the first slot — no parsing needed.
+    """
+    if not hourly:
+        return []
+    times = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+    codes = hourly.get("weather_code", [])
+    if not times or not temps:
+        return []
+
+    start_idx = 0
+    if current_iso:
+        prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
+        for i, t in enumerate(times):
+            if t.startswith(prefix):
+                start_idx = i
+                break
+
+    out = []
+    end_idx = min(start_idx + 8, len(times))
+    for i in range(start_idx, end_idx):
+        try:
+            hour = int(times[i][11:13])
+        except (ValueError, IndexError):
+            hour = None
+        try:
+            temp = round(float(temps[i]))
+        except (TypeError, ValueError, IndexError):
+            temp = None
+        code = None
+        if i < len(codes):
+            try:
+                code = int(codes[i])
+            except (TypeError, ValueError):
+                code = None
+        if hour is not None and temp is not None:
+            out.append({"hour": hour, "temp_c": temp, "code": code})
+    return out
 
 
 def _degrees_to_compass(degrees: float) -> str:

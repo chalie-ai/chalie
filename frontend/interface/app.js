@@ -492,6 +492,18 @@ class ChalieApp {
       });
     });
 
+    // Silent action (rich-card interactions like list checkboxes — no chat bubble).
+    // Caller is responsible for any optimistic UI; onError lets the card revert.
+    document.addEventListener('chalie:silent-action', (e) => {
+      const { payload, onMessage, onError, onDone } = e.detail || {};
+      if (!payload) return;
+      this.ws.sendAction(payload, {
+        onMessage: onMessage || (() => {}),
+        onError: onError || (() => {}),
+        onDone: onDone || (() => {}),
+      });
+    });
+
     // Pin moment event (from remember button on Chalie messages)
     let pinDebounce = 0;
     document.addEventListener('chalie:pin-moment', async (e) => {

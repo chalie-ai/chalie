@@ -1,235 +1,174 @@
 /**
- * Weather card module.
+ * Weather card module — ambient sky variant.
  *
- * Implements the rich-media card contract: exports render(payload, synthesis, root).
- * The card adapts to the existing WeatherAbility dict shape — no field renames.
- * Icon key is derived on the frontend from (condition, is_daylight, is_raining, is_clear).
- * Temperature count-up animates on first render (400ms ease-out).
+ * Renders a hero canvas (gradient sky tinted by local time + condition,
+ * drifting clouds, sun/moon, skyline silhouette), a readout overlay
+ * (big temperature top-left, location + day/time top-right, narrative
+ * caption bottom-left), and an 8-hour rail at the bottom.
+ *
+ * Implements the rich-media card contract: render(payload, synthesis, root).
+ * Payload is the WeatherAbility dict; the new fields it depends on
+ * (`hourly`, `sunrise`, `sunset`) are tolerated as missing — the rail
+ * simply hides if `hourly` is empty, and the gradient falls back to a
+ * plain day/night split when sunrise/sunset are absent.
  */
 
-// ── Icon resolution ──────────────────────────────────────────────────────────
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const ICON_BASE = new URL('./icons/weather/', import.meta.url).href;
+// ── Time-of-day phase ───────────────────────────────────────────────────────
 
 /**
- * Derive the SVG icon filename from condition flags.
- * Order of priority: thunder → snow → rain → fog → clear → partly-cloudy → cloudy.
+ * Pick a sky phase (dawn/day/sunset/night) from the current local hour and
+ * the daily sunrise/sunset times. Falls back to a coarse day/night split
+ * when astro times are missing.
  *
- * @param {string} condition  - Condition string (e.g. "Partly cloudy", "Heavy rain")
- * @param {boolean} isDaylight
- * @param {boolean} isRaining
- * @param {boolean} isClear
- * @returns {string} SVG file path
+ * @param {Date}    now      - Current local time (already adjusted for location)
+ * @param {string}  sunrise  - ISO local string e.g. "2026-05-03T06:14"
+ * @param {string}  sunset   - ISO local string e.g. "2026-05-03T20:08"
+ * @returns {'dawn'|'day'|'sunset'|'night'}
  */
-function iconPath(condition, isDaylight, isRaining, isClear) {
-  const cond = (condition || '').toLowerCase();
+function pickPhase(now, sunrise, sunset) {
+  const sr = parseLocalISO(sunrise);
+  const ss = parseLocalISO(sunset);
+  if (!sr || !ss) return now.getHours() >= 6 && now.getHours() < 20 ? 'day' : 'night';
 
-  if (cond.includes('thunder')) {
-    return ICON_BASE + 'thunderstorm.svg';
-  }
-  if (cond.includes('snow') || cond.includes('blizzard') || cond.includes('sleet')) {
-    return ICON_BASE + 'snow.svg';
-  }
-  if (isRaining || cond.includes('rain') || cond.includes('drizzle') || cond.includes('shower')) {
-    return ICON_BASE + 'rain.svg';
-  }
-  if (cond.includes('fog') || cond.includes('mist') || cond.includes('haze')) {
-    return ICON_BASE + 'fog.svg';
-  }
-  if (isClear || cond.includes('clear') || cond.includes('sunny') || cond.includes('mainly clear')) {
-    return isDaylight ? ICON_BASE + 'clear-day.svg' : ICON_BASE + 'clear-night.svg';
-  }
-  if (cond.includes('partly')) {
-    return isDaylight ? ICON_BASE + 'partly-cloudy-day.svg' : ICON_BASE + 'partly-cloudy-night.svg';
-  }
-  return ICON_BASE + 'cloudy.svg';
+  const t = now.getTime();
+  const ms = 60 * 60 * 1000;
+  if (t >= sr.getTime() - ms && t < sr.getTime() + ms) return 'dawn';
+  if (t >= ss.getTime() - ms && t < ss.getTime() + ms) return 'sunset';
+  if (t >= sr.getTime() && t < ss.getTime()) return 'day';
+  return 'night';
 }
 
-// ── Count-up animation ───────────────────────────────────────────────────────
-
-/**
- * Animate a numeric count-up from 0 to target over durationMs.
- *
- * @param {HTMLElement} el       - Element whose textContent is mutated
- * @param {number}      target   - Target numeric value
- * @param {string}      suffix   - Unit suffix (e.g. "°C")
- * @param {number}      [duration=400]
- */
-function countUp(el, target, suffix, duration = 400) {
-  const startTime = performance.now();
-  const startVal = 0;
-
-  function step(now) {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    // Ease-out cubic
-    const eased = 1 - Math.pow(1 - progress, 3);
-    const current = Math.round(startVal + (target - startVal) * eased);
-    el.textContent = current + suffix;
-    if (progress < 1) {
-      requestAnimationFrame(step);
-    }
-  }
-
-  requestAnimationFrame(step);
+/** Parse an Open-Meteo local ISO ("YYYY-MM-DDTHH:MM") into a Date. */
+function parseLocalISO(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 }
 
-// ── Card DOM construction ────────────────────────────────────────────────────
+// ── Card construction ───────────────────────────────────────────────────────
 
-/**
- * Format a direction + speed string. Returns "" if wind is falsy.
- */
-function windStr(dir, kmh) {
-  if (!kmh) return '';
-  const speed = Math.round(kmh);
-  return dir ? `${dir} ${speed} km/h` : `${speed} km/h`;
-}
-
-/**
- * Build and mount the weather card DOM into root.
- *
- * @param {object}      payload   - Parsed WeatherAbility dict
- * @param {string}      synthesis - LLM synthesis text (displayed at bottom)
- * @param {HTMLElement} root      - Container element supplied by registry caller
- */
 export function render(payload, synthesis, root) {
   const card = document.createElement('div');
   card.className = 'rich-card weather-card';
 
-  // ── Location ───────────────────────────────────────────────────────────────
-  const locationEl = document.createElement('div');
-  locationEl.className = 'weather-card__location';
-  locationEl.textContent = payload.location || '';
-  card.appendChild(locationEl);
+  const now = new Date();
+  const phase = pickPhase(now, payload.sunrise, payload.sunset);
+  card.dataset.phase = phase;
 
-  // ── Main row: icon + temp + condition ─────────────────────────────────────
-  const { mainEl, tempEl, tempTarget } = buildMainRow(payload);
-  card.appendChild(mainEl);
+  card.appendChild(buildSky(payload, synthesis, now, phase));
 
-  // ── Detail pills ──────────────────────────────────────────────────────────
-  const detailsEl = buildDetailPills(payload);
-  if (detailsEl) card.appendChild(detailsEl);
-
-  // ── Forecast ──────────────────────────────────────────────────────────────
-  appendForecast(card, payload);
-
-  // ── Synthesis (LLM interpretation) ───────────────────────────────────────
-  if (synthesis) {
-    const synDivider = document.createElement('div');
-    synDivider.className = 'rich-card__divider';
-    card.appendChild(synDivider);
-
-    const synEl = document.createElement('div');
-    synEl.className = 'rich-card__synthesis';
-    synEl.textContent = synthesis;
-    card.appendChild(synEl);
-  }
+  const rail = buildRail(payload.hourly || [], now);
+  if (rail) card.appendChild(rail);
 
   root.appendChild(card);
-
-  // Start count-up after mount (rAF ensures layout is done)
-  requestAnimationFrame(() => {
-    countUp(tempEl, tempTarget, '°C');
-  });
 }
 
-// ── Private helpers ──────────────────────────────────────────────────────────
+function buildSky(payload, synthesis, now, phase) {
+  const sky = document.createElement('div');
+  sky.className = 'weather-card__sky';
 
-function buildMainRow(payload) {
-  const mainEl = document.createElement('div');
-  mainEl.className = 'weather-card__main';
+  const sun = document.createElement('div');
+  sun.className = 'weather-card__sun';
+  sky.appendChild(sun);
 
-  const iconEl = document.createElement('div');
-  iconEl.className = 'weather-card__icon';
-  const img = document.createElement('img');
-  img.src = iconPath(payload.condition, payload.is_daylight, payload.is_raining, payload.is_clear);
-  img.alt = payload.condition || 'Weather icon';
-  iconEl.appendChild(img);
-  mainEl.appendChild(iconEl);
+  for (let i = 1; i <= 2; i++) {
+    const cloud = document.createElement('div');
+    cloud.className = `weather-card__cloud weather-card__cloud--${i}`;
+    sky.appendChild(cloud);
+  }
 
-  const tempBlock = document.createElement('div');
-  tempBlock.className = 'weather-card__temp-block';
+  const skyline = document.createElement('div');
+  skyline.className = 'weather-card__skyline';
+  sky.appendChild(skyline);
 
-  const tempEl = document.createElement('div');
-  tempEl.className = 'weather-card__temp';
-  const tempTarget = Math.round(payload.temperature_c ?? 0);
-  tempEl.textContent = '0°C';
-  tempBlock.appendChild(tempEl);
-
-  const condEl = document.createElement('div');
-  condEl.className = 'weather-card__condition';
-  condEl.textContent = payload.condition || '';
-  tempBlock.appendChild(condEl);
-
-  mainEl.appendChild(tempBlock);
-  return { mainEl, tempEl, tempTarget };
+  sky.appendChild(buildOverlay(payload, synthesis, now, phase));
+  return sky;
 }
 
-function buildDetailPills(payload) {
-  const details = [];
-  if (payload.feels_like_c != null) {
-    details.push(`Feels ${Math.round(payload.feels_like_c)}°`);
-  }
-  if (payload.humidity_pct != null) {
-    details.push(`${payload.humidity_pct}%`);
-  }
-  const wind = windStr(payload.wind_direction, payload.wind_kmh);
-  if (wind) details.push(wind);
+function buildOverlay(payload, synthesis, now, phase) {
+  const overlay = document.createElement('div');
+  overlay.className = 'weather-card__overlay';
 
-  if (details.length === 0) return null;
+  const readout = document.createElement('div');
+  readout.className = 'weather-card__readout';
 
-  const detailsEl = document.createElement('div');
-  detailsEl.className = 'weather-card__details';
-  for (const text of details) {
-    const pill = document.createElement('span');
-    pill.className = 'weather-card__detail-pill';
-    pill.textContent = text;
-    detailsEl.appendChild(pill);
-  }
-  return detailsEl;
+  const temp = document.createElement('div');
+  temp.className = 'weather-card__temp';
+  const t = Math.round(payload.temperature_c ?? 0);
+  temp.innerHTML = `${t}<sup>°</sup>`;
+  readout.appendChild(temp);
+
+  const loc = document.createElement('div');
+  loc.className = 'weather-card__loc';
+  const locLine = document.createElement('div');
+  locLine.textContent = payload.location || '—';
+  const timeLine = document.createElement('div');
+  timeLine.textContent = `${DAYS[now.getDay()]} · ${formatHM(now)}`;
+  loc.appendChild(locLine);
+  loc.appendChild(timeLine);
+  readout.appendChild(loc);
+
+  overlay.appendChild(readout);
+
+  const caption = document.createElement('div');
+  caption.className = 'weather-card__caption';
+  caption.textContent = synthesis || buildFallbackCaption(payload, phase);
+  overlay.appendChild(caption);
+
+  return overlay;
 }
 
-function appendForecast(card, payload) {
-  const hasForecast = payload.forecast_tomorrow_condition
-    || payload.forecast_tomorrow_max_c != null
-    || payload.forecast_tomorrow_min_c != null;
+function buildFallbackCaption(payload, phase) {
+  const cond = (payload.condition || '').toLowerCase();
+  const feels = payload.feels_like_c == null ? '' : ` Feels like ${Math.round(payload.feels_like_c)}°.`;
+  if (phase === 'sunset') return `Golden hour in ${payload.location || 'your area'}.${feels}`;
+  if (phase === 'dawn') return `Sun's coming up over ${payload.location || 'your area'}.${feels}`;
+  if (phase === 'night') return `Quiet night in ${payload.location || 'your area'}.${feels}`;
+  return `${payload.condition || 'Steady weather'} in ${payload.location || 'your area'}.${feels}`;
+}
 
-  if (!hasForecast) return;
+function buildRail(hourly, now) {
+  if (!hourly || hourly.length === 0) return null;
 
-  const divider = document.createElement('div');
-  divider.className = 'rich-card__divider';
-  card.appendChild(divider);
+  const rail = document.createElement('div');
+  rail.className = 'weather-card__rail';
 
-  const forecastEl = document.createElement('div');
-  forecastEl.className = 'weather-card__forecast';
+  const temps = hourly.map(h => h.temp_c).filter(t => t != null);
+  const min = temps.length ? Math.min(...temps) : 0;
+  const max = temps.length ? Math.max(...temps) : 1;
+  const span = Math.max(1, max - min);
+  const peakTemp = max;
+  const currentHour = now.getHours();
 
-  const label = document.createElement('span');
-  label.className = 'weather-card__forecast-label';
-  label.textContent = 'Tomorrow';
-  forecastEl.appendChild(label);
+  for (const h of hourly) {
+    const cell = document.createElement('div');
+    cell.className = 'weather-card__hour';
+    if (h.hour === currentHour) cell.classList.add('weather-card__hour--cur');
+    if (h.temp_c === peakTemp) cell.classList.add('weather-card__hour--peak');
 
-  if (payload.forecast_tomorrow_max_c != null || payload.forecast_tomorrow_min_c != null) {
-    const tempRange = document.createElement('span');
-    tempRange.className = 'weather-card__forecast-temp';
-    const hi = payload.forecast_tomorrow_max_c == null ? '–' : Math.round(payload.forecast_tomorrow_max_c);
-    const lo = payload.forecast_tomorrow_min_c == null ? '–' : Math.round(payload.forecast_tomorrow_min_c);
-    tempRange.textContent = `${hi}°/${lo}°`;
-    forecastEl.appendChild(tempRange);
+    const hourLabel = document.createElement('span');
+    hourLabel.className = 'weather-card__hour-label';
+    hourLabel.textContent = String(h.hour);
+    cell.appendChild(hourLabel);
+
+    const tempEl = document.createElement('b');
+    tempEl.className = 'weather-card__hour-temp';
+    tempEl.textContent = `${h.temp_c}°`;
+    cell.appendChild(tempEl);
+
+    const bar = document.createElement('div');
+    bar.className = 'weather-card__hour-bar';
+    const pct = 35 + Math.round(((h.temp_c - min) / span) * 65);
+    bar.style.width = `${pct}%`;
+    cell.appendChild(bar);
+
+    rail.appendChild(cell);
   }
+  return rail;
+}
 
-  if (payload.forecast_tomorrow_condition) {
-    const cond = document.createElement('span');
-    cond.className = 'weather-card__forecast-condition';
-    cond.textContent = payload.forecast_tomorrow_condition;
-    forecastEl.appendChild(cond);
-  }
-
-  if (payload.forecast_tomorrow_precip_chance_pct != null) {
-    const rain = document.createElement('span');
-    rain.className = 'weather-card__forecast-rain';
-    rain.textContent = `${payload.forecast_tomorrow_precip_chance_pct}%`;
-    forecastEl.appendChild(rain);
-  }
-
-  card.appendChild(forecastEl);
+function formatHM(d) {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }

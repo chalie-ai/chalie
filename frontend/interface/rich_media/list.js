@@ -83,8 +83,34 @@ export function render(payload, synthesis, root) {
     row.appendChild(text);
 
     row.addEventListener('click', () => {
+      if (row.dataset.busy === '1') return;
+      const wasDone = row.classList.contains('list-card__item--done');
+      const nextChecked = !wasDone;
+
+      // Optimistic flip — revert on backend error.
       row.classList.toggle('list-card__item--done');
       updateProgress(card);
+      row.dataset.busy = '1';
+
+      const revert = () => {
+        row.classList.toggle('list-card__item--done');
+        updateProgress(card);
+        delete row.dataset.busy;
+      };
+
+      document.dispatchEvent(new CustomEvent('chalie:silent-action', {
+        detail: {
+          payload: {
+            skill: 'list',
+            action: 'check',
+            name: name,
+            items: [{ content: item.content, checked: nextChecked }],
+          },
+          onMessage: () => { delete row.dataset.busy; },
+          onError: revert,
+          onDone: () => { delete row.dataset.busy; },
+        },
+      }));
     });
 
     itemsContainer.appendChild(row);
