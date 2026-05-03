@@ -704,8 +704,10 @@ body.speaker-user   #ambientBloom {
 }
 
 .speech-form--chalie {
-  background: transparent;
-  border-color: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   align-self: stretch;
