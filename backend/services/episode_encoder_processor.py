@@ -5,8 +5,6 @@ Reads a formatted transcript window (plus any referenced episodes) and asks
 the LLM to return a JSON array of episode snapshots. The caller owns parsing
 and storage — this processor returns the raw LLM text via send().
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-Plan: /Volumes/llm/chalie-plans/v0.3.3/episodic-simplification.md § Commit B
 """
 
 from services.message_processor import MessageProcessor

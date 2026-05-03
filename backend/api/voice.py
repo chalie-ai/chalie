@@ -36,7 +36,7 @@ TTS_CONCURRENCY = 2
 
 # Kokoro model files — downloaded lazily into data/models/kokoro/
 _KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
-_KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+_KOKORO_MODEL_URL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_fp16.onnx"
 _KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Dependency detection ────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ def _download_kokoro_models():
 
     os.makedirs(_KOKORO_MODEL_DIR, exist_ok=True)
 
-    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0.onnx")
+    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0-fp16.onnx")
     voices_path = os.path.join(_KOKORO_MODEL_DIR, "voices-v1.0.bin")
 
     for url, path in [(_KOKORO_MODEL_URL, model_path), (_KOKORO_VOICES_URL, voices_path)]:

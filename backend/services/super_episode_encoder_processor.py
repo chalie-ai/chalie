@@ -15,7 +15,6 @@ The processor is self-gating:
   4. Per-cluster failures are caught and logged — one bad cluster does not block
      the rest.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import json

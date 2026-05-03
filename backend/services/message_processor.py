@@ -9,8 +9,6 @@
 """
 MessageProcessor — abstract base class for all LLM message processors.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-
 Lifecycle: one instance per turn. Two turns never share the same object.
 Do not add `.instance()` / singleton accessors.
 
@@ -368,8 +366,7 @@ class MessageProcessor:
     def getPreviousMessages(self, token_budget: int | None = None) -> str:
         """Assemble the ## Previous Messages block for this channel.
 
-        Format (locked by the north star,
-        ``/Volumes/llm/chalie-plans/message-processing.md`` § "Literal format"):
+        Format (locked by the north star § "Literal format"):
 
         - Input rows  : ``[YYYY-MM-DD HH:MM] <role>: <content>``
                         — role rendered **lowercase** for transcript input

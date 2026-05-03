@@ -4,8 +4,6 @@ SubagentProcessor — Focused subagent execution with per-type tool surfaces.
 MessageProcessor v2 subclass. CHANNEL is flat 'subagent'. sub_id is stored
 in metadata only, not embedded in the channel string.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-
 Overflow strategy: SubagentProcessor overrides ``_handle_overflow()`` to call
 ``SubagentTrailCompactionProcessor`` instead of the UMP continuity path. The
 subagent compresses its accumulated tool trail in-place and continues the

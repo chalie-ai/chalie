@@ -10,7 +10,6 @@ writes both synopses back to data_graph as ``kind='system'`` rows.
 arrived since the last synthesis.  Triggered once per :class:`SubconsciousWorker`
 tick (v0.5.0 §5 step 4); the sentinel keeps repeated ticks idempotent.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import json

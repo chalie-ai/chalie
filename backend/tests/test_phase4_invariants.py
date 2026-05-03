@@ -157,8 +157,6 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
 # Test 4 — per-processor ALWAYS_AVAILABLE / DISCOVERABLE matches the spec
 # ---------------------------------------------------------------------------
 #
-# Spec source: /Volumes/llm/chalie-plans/v0.4.0/processor-tool-scope.md
-#
 # Every processor declares two ClassVars:
 #   * ALWAYS_AVAILABLE — list of tool names pre-injected into the native
 #     tools array on every iteration.
@@ -252,7 +250,7 @@ def test_per_processor_tool_scope_matches_spec():
         assert not leaked_externals, (
             f"{name}.ALWAYS_AVAILABLE leaks discoverable externals "
             f"{sorted(leaked_externals)}. These MUST be surfaced via find_tools "
-            "only — see /Volumes/llm/chalie-plans/v0.4.0/processor-tool-scope.md."
+            "only."
         )
 
         if name != "PatternMatchProcessor":

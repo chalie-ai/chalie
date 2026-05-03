@@ -170,18 +170,10 @@ def _init_dashboard_gateway(app):
     DB, and creates a ChalieClient for proxying signals/context to the backend.
     All runs inside the same Flask process — no separate server or proxy needed.
     """
-    import sys
-
-    # Ensure the repo root is on sys.path so `frontend.server` is importable.
-    # In Docker: /app is the repo root, /app/backend is the working dir.
-    repo_root = str(_BACKEND_DIR.parent)
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
-
-    from frontend.server import db as dashboard_db
-    from frontend.server.gateway import gateway_bp, init_gateway
-    from frontend.server.interfaces import interfaces_bp as apps_bp, init_interfaces
-    from frontend.server.chalie_client import ChalieClient
+    from gateway import db as dashboard_db
+    from gateway.gateway import gateway_bp, init_gateway
+    from gateway.interfaces import interfaces_bp as apps_bp, init_interfaces
+    from gateway.chalie_client import ChalieClient
 
     from runtime_config import get as rc_get
 
