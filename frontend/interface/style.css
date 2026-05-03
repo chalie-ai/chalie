@@ -745,6 +745,10 @@ body.speaker-user   #ambientBloom {
   .speech-form--user:hover {
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 240, 255, 0.05) inset;
   }
+  [data-theme="light"] .speech-form:hover,
+  [data-theme="light"] .speech-form--user:hover {
+    box-shadow: none;
+  }
 }
 
 /* Sender glyph — fused at the cap of the accent stripe. Constellation for
