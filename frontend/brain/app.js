@@ -1687,6 +1687,7 @@ function loadCognitionSubtab(subtab) {
         tools: loadToolsObs,
         tasks: loadTasksObs,
         worldstate: loadWorldStateObs,
+        errors: loadErrorsObs,
     };
     if (loaders[subtab]) loaders[subtab]();
 }
@@ -1950,6 +1951,44 @@ async function loadWorldStateObs() {
     } catch (e) {
         console.warn('[brain/app] failed to load world state data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load world state data.</div>';
+    }
+}
+
+// ── Error Log ──
+
+async function loadErrorsObs() {
+    const el = document.getElementById('subtab-errors');
+    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(120);
+    try {
+        const res = await apiFetch('/system/observability/errors');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        obsLoaded.errors = true;
+        obsSetTimestamp(data.generated_at);
+
+        const errors = data.errors || [];
+        if (errors.length === 0) {
+            el.innerHTML = '<div class="obs-empty">No errors logged.</div>';
+            return;
+        }
+        const frag = document.createDocumentFragment();
+        for (const entry of errors) {
+            const row = document.createElement('div');
+            row.className = 'error-log-row';
+            const ts = document.createElement('time');
+            ts.dateTime = entry.timestamp;
+            ts.textContent = entry.timestamp;
+            const msg = document.createElement('span');
+            msg.textContent = entry.message;
+            row.appendChild(ts);
+            row.appendChild(msg);
+            frag.appendChild(row);
+        }
+        el.innerHTML = '';
+        el.appendChild(frag);
+    } catch (e) {
+        console.warn('[brain/app] failed to load error log:', e);
+        el.innerHTML = '<div class="obs-empty">Could not load error log.</div>';
     }
 }
 
