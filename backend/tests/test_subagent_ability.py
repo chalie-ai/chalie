@@ -132,6 +132,49 @@ class TestEnvelopeFormatFailure:
 
 
 # ---------------------------------------------------------------------------
+# A10. Wait-cap / dispatch-TIMEOUT consistency
+#
+# wait=true blocks the parent ACT iteration up to SUBAGENT_TYPES[t]['wait_cap']
+# seconds. The dispatcher then enforces SubagentAbility.TIMEOUT on top of
+# that. If wait_cap > TIMEOUT, a legitimate sync run gets killed by the
+# dispatcher with the generic "Action exceeded Ns timeout" string instead of
+# returning the canonical [subagent(...)] tag. This is the kind of latent
+# desync that bites months after a one-line cap bump.
+# ---------------------------------------------------------------------------
+
+
+class TestWaitCapDispatchTimeoutConsistency:
+    def test_dispatch_timeout_covers_largest_wait_cap(self):
+        """SubagentAbility.TIMEOUT must be >= max(wait_cap) across all
+        SUBAGENT_TYPES (with a small buffer for envelope render). Bumping a
+        per-type wait_cap without bumping TIMEOUT in lock-step would let the
+        dispatcher kill a legitimate sync run before it returns."""
+        from abilities.subagent import SUBAGENT_TYPES, SubagentAbility
+
+        max_wait_cap = max(t["wait_cap"] for t in SUBAGENT_TYPES.values())
+        assert SubagentAbility.TIMEOUT >= max_wait_cap, (
+            f"SubagentAbility.TIMEOUT={SubagentAbility.TIMEOUT}s is below the "
+            f"largest wait_cap={max_wait_cap}s. The dispatcher will kill any "
+            "wait=true call that uses the larger cap before the SubagentProcessor "
+            "finishes. Bump TIMEOUT in lock-step with wait_cap."
+        )
+
+    def test_every_wait_cap_is_at_most_default_timeout(self):
+        """wait_cap must never exceed default_timeout — the SubagentProcessor's
+        own deadline is set from min(default_timeout, override) and a wait_cap
+        higher than default_timeout would be unreachable in practice and
+        misleading in the docs."""
+        from abilities.subagent import SUBAGENT_TYPES
+
+        for agent_type, entry in SUBAGENT_TYPES.items():
+            assert entry["wait_cap"] <= entry["default_timeout"], (
+                f"{agent_type}: wait_cap={entry['wait_cap']}s exceeds "
+                f"default_timeout={entry['default_timeout']}s — the wait_cap "
+                "would be silently ignored."
+            )
+
+
+# ---------------------------------------------------------------------------
 # AC1. Action-envelope collision guard
 #
 # Regression for the incident on 2026-05-02 where INPUT_SCHEMA declared a
