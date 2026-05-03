@@ -241,7 +241,7 @@ Per-ability implementation notes:
 - `review_tool_calls` — returns `dict` directly.
 - `schedule` — atomic dedup `INSERT...WHERE NOT EXISTS` preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`.
 - `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`.
-- `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared.
+- `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared. Open-Meteo response also carries `hourly=temperature_2m,weather_code` and `daily=…,sunrise,sunset`; `_extract_hourly_strip` slices the 8 entries starting from the current local hour (matched by `YYYY-MM-DDTHH` prefix against `current.time`) and the payload exposes `sunrise`, `sunset`, `hourly` for the FE ambient-sky card. wttr.in fallback returns these as `None`/`[]` so the FE shape stays stable.
 
 ### Pattern-match helpers — plain classes, not Ability subclasses
 

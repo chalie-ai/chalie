@@ -102,15 +102,26 @@ Rich-media cards are tool-driven structured renders that appear inline with text
 ```
 frontend/interface/rich_media/
   registry.js        — tag-prefix → module map
-  weather.js         — weather card: render(payload, synthesis, root)
-  weather.css        — weather-specific styles
+  weather.js / .css  — ambient-sky weather card
+  article.js / .css  — news + search (shared layout)
+  scheduler.js / .css — schedule card (date block + same-day list)
+  list.js / .css     — checklist with click-to-toggle persistence
   base_card.css      — shared Radiant card chrome (border, padding, entrance keyframes)
-  icons/weather/     — semantic SVGs (sunny, rain, cloudy, partly_cloudy, snow, …)
+  icons/weather/     — semantic SVGs (clear-day, clear-night, partly-cloudy-*, rain, snow, fog, thunderstorm, cloudy)
 ```
 
 `registry.js` extracts the prefix from the tag (e.g. `weather` from `weather_1`) and delegates to the matching module's `render(payload, synthesis, root)`. Unknown prefixes fall back silently to a text bubble using the synthesis string.
 
-**Animation scope (v1, Radiant restraint rule).** Entrance only: card fades in and lifts 8 px on mount (200 ms ease-out). Numeric count-up on first render where the module opts in (e.g. temperature). No looping animations, no live ticking, no parallax. Animation lives entirely inside the card module; the framework imposes nothing.
+**Animation scope.** Entrance: card fades in and lifts 8 px on mount (200 ms ease-out). The weather card additionally runs ambient loops on the hero canvas — sun bob (12 s), cloud drift (26–38 s) — because the canvas *is* the answer ("vibe, not data"). All other cards stay still. No live ticking, no parallax. Animation lives entirely inside the card module; the framework imposes nothing.
+
+**Weather payload (ambient-sky variant).** Beyond the original fields, `WeatherAbility` (Open-Meteo path) now emits:
+
+- `sunrise`, `sunset` — local ISO timestamps from the Open-Meteo `daily` block, used by the FE to pick a phase (`dawn` / `day` / `sunset` / `night`).
+- `hourly` — array of 8 `{hour, temp_c, code}` entries starting from the slot containing the current observation. Drives the bottom rail. wttr.in fallback returns `[]`; the rail simply hides.
+
+The card renders a gradient sky tinted by phase, drifting cloud blobs, a sun (day/dawn/sunset) or moon (night), a low skyline silhouette, and an overlay with the big top-left temperature, location + day/time top-right, and a narrative caption (the LLM synthesis or a phase-aware fallback). The hour rail highlights the current hour (violet) and the daily peak (amber).
+
+**Interactive cards — silent action channel.** Cards that mutate server state (currently the list card's check toggles) dispatch a `chalie:silent-action` `CustomEvent` on `document` with `detail = { payload, onMessage, onError, onDone }`. `app.js` listens and forwards `payload` to `ws.sendAction(...)` without rendering an ACT cycle or chat bubble — the card already owns the visual feedback (optimistic UI, revert on error). The matching backend path is unchanged: `WS message {type:'action'} → _handle_action → ActDispatcherService.dispatch_action('action_button', …)`. Channel `'action_button'` is **not** `'user'`, so no rich-media ordinal is injected and the response is a plain dict, never a card.
 
 **Lazy-load conventions.** Media inside cards that should load asynchronously uses the standard data-attributes: `[data-lazy-embed]` for embeds, `[data-lazy-thumb]` for thumbnails, `[data-lazy-src]` for media URLs. The existing lazy-load observer in the chat surface handles these without card-specific wiring.
 
