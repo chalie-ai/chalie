@@ -1,33 +1,31 @@
 /**
  * Timer card module — live countdown.
  *
- * Implements the rich-media card contract: exports render(payload, synthesis, root).
- * Renders a 56px progress ring + title + "MM:SS remaining · ends HH:MM" line +
- * pause/play and stop buttons. When the countdown reaches zero, an alarm beep
- * loop plays via the Web Audio API until the user clicks stop.
+ * Renders a 56px progress ring + title + "MM:SS remaining · ends HH:MM:SS"
+ * line + pause/resume and stop buttons. When the countdown reaches zero, an
+ * alarm beep loop plays via the Web Audio API until the user clicks Stop.
  *
  * Payload shape (post-parser):
- *   { title, duration_seconds, started_at }  // started_at is ISO 8601 UTC.
+ *   { title, duration_seconds, started_at }
  *
- * `started_at` is NOT produced by TimerAbility — the LLM never sees it. It is
- * grafted onto the payload by RichMediaParser from the tool_calls row's
- * created_at column. This keeps the wall-clock invisible to the model while
- * still giving the FE a reload-safe anchor.
+ * `started_at` is grafted onto the payload by TimerAbility.enrich_rich_payload
+ * from the tool_calls row's created_at — the LLM never sees it.
  *
- * Reload-safe: the remaining time is computed from `now() - started_at` on
- * every tick, so refreshing the page resumes the countdown from real elapsed.
- * Pause is in-memory only — refreshing while paused will resume the timer.
+ * The single source of truth is `endsAtMs` (real wall-clock end time). Display
+ * reads it; a single setTimeout fires the alarm at it. Pause stashes the
+ * remaining ms and clears the alarm; Resume recomputes endsAtMs from now() +
+ * remaining and reschedules. Reload-safe: nothing is stored in JS memory that
+ * isn't reconstructible from `started_at + duration_seconds`.
  */
 
-const RING_PATH_LENGTH = 100; // matches `pathLength="100"` on the SVG circle.
+const RING_PATH_LENGTH = 100;
 const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 20,12 6,20"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>';
 
-// Grace window: if the first render lands within this many ms of the natural
-// end, treat the timer as "just finished now" and let the alarm play. Past
-// that window the timer is considered stale (page reload of an old turn) —
-// render Done silently so we don't blare alarms on every conversation reload.
+// Grace window for stale-reload: if we open a conversation containing a timer
+// that already finished more than this ago, render "Ended" silently rather
+// than blasting the alarm on every page load.
 const STALE_RELOAD_GRACE_MS = 60 * 1000;
 
 export function render(payload, synthesis, root) {
@@ -39,24 +37,116 @@ export function render(payload, synthesis, root) {
     return;
   }
 
-  const card = document.createElement('div');
-  card.className = 'rich-card timer-card';
+  const card = buildCard(title);
+  root.appendChild(card.el);
+
+  const totalMs = totalSeconds * 1000;
+  let endsAtMs = startedAtMs + totalMs;
+  let pausedRemainingMs = null;
+  let displayId = null;
+  let alarmId = null;
+  let alarm = null;
+  let observer = null;
+
+  // Stale-reload guard — past the grace window, render quiet Ended.
+  if (Date.now() - endsAtMs > STALE_RELOAD_GRACE_MS) {
+    card.timeEl.innerHTML = '<b>Ended</b>';
+    card.el.classList.add('timer-card--done');
+    card.pauseBtn.disabled = true;
+    card.stopBtn.disabled = true;
+    card.ring.setProgress(1);
+    return;
+  }
+
+  const update = () => {
+    const remainingMs = pausedRemainingMs ?? endsAtMs - Date.now();
+    const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    card.ring.setProgress(Math.min(1, 1 - remainingSeconds / totalSeconds));
+    if (remainingMs > 0) {
+      card.timeEl.innerHTML =
+        `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHMS(new Date(endsAtMs))}`;
+    }
+  };
+
+  const onExpire = () => {
+    alarmId = null;
+    if (displayId != null) { clearInterval(displayId); displayId = null; }
+    card.timeEl.innerHTML = '<b>Done</b>';
+    card.el.classList.add('timer-card--done');
+    card.ring.setProgress(1);
+    alarm = startAlarm();
+  };
+
+  const cleanup = () => {
+    if (displayId != null) { clearInterval(displayId); displayId = null; }
+    if (alarmId != null) { clearTimeout(alarmId); alarmId = null; }
+    if (alarm) { alarm.stop(); alarm = null; }
+    if (observer) { observer.disconnect(); observer = null; }
+  };
+
+  card.pauseBtn.addEventListener('click', () => {
+    if (pausedRemainingMs == null) {
+      pausedRemainingMs = Math.max(0, endsAtMs - Date.now());
+      if (alarmId != null) { clearTimeout(alarmId); alarmId = null; }
+      card.pauseBtn.innerHTML = ICON_PLAY;
+      card.pauseBtn.title = 'Resume';
+    } else {
+      endsAtMs = Date.now() + pausedRemainingMs;
+      alarmId = setTimeout(onExpire, pausedRemainingMs);
+      pausedRemainingMs = null;
+      card.pauseBtn.innerHTML = ICON_PAUSE;
+      card.pauseBtn.title = 'Pause';
+    }
+    update();
+  });
+
+  card.stopBtn.addEventListener('click', () => {
+    cleanup();
+    card.el.classList.add('timer-card--stopped');
+    card.pauseBtn.disabled = true;
+    card.stopBtn.disabled = true;
+    card.timeEl.innerHTML = '<b>Stopped</b>';
+    card.ring.setProgress(0);
+  });
+
+  // Schedule alarm + display loop. If we land already past endsAtMs but within
+  // the grace window, fire onExpire synchronously so Done renders immediately.
+  const remainingMs = endsAtMs - Date.now();
+  if (remainingMs <= 0) {
+    onExpire();
+  } else {
+    alarmId = setTimeout(onExpire, remainingMs);
+    update();
+    displayId = setInterval(update, 1000);
+  }
+
+  // DOM-detach cleanup — without this the AudioContext + setTimeout chain
+  // would outlive the card on conversation clear / SPA nav.
+  observer = new MutationObserver(() => {
+    if (!document.contains(card.el)) cleanup();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── DOM construction ───────────────────────────────────────────────────────
+
+function buildCard(title) {
+  const el = document.createElement('div');
+  el.className = 'rich-card timer-card';
 
   const ring = buildRing();
-  card.appendChild(ring.el);
+  el.appendChild(ring.el);
 
   const info = document.createElement('div');
   info.className = 'timer-card__info';
-
   const titleEl = document.createElement('h4');
   titleEl.className = 'timer-card__title';
   titleEl.textContent = title;
   info.appendChild(titleEl);
-
   const timeEl = document.createElement('div');
   timeEl.className = 'timer-card__time';
   info.appendChild(timeEl);
-  card.appendChild(info);
+  el.appendChild(info);
 
   const actions = document.createElement('div');
   actions.className = 'timer-card__actions';
@@ -64,127 +154,9 @@ export function render(payload, synthesis, root) {
   const stopBtn = makeBtn('Stop', ICON_STOP);
   actions.appendChild(pauseBtn);
   actions.appendChild(stopBtn);
-  card.appendChild(actions);
+  el.appendChild(actions);
 
-  root.appendChild(card);
-
-  const state = {
-    totalSeconds,
-    startedAtMs,
-    pausedAtMs: null,
-    accumulatedPausedMs: 0,
-    intervalId: null,
-    audioCtx: null,
-    alarmTimer: null,
-    alarmPlaying: false,
-    stopped: false,
-    domObserver: null,
-  };
-
-  // Stale-reload guard: a finished timer reloaded from /conversation/recent
-  // would otherwise fire its alarm on every page open. If we're already past
-  // the natural end by more than the grace window, render the Done state
-  // silently and skip the tick loop entirely.
-  const initialElapsedMs = Date.now() - startedAtMs;
-  const overshootMs = initialElapsedMs - totalSeconds * 1000;
-  if (overshootMs > STALE_RELOAD_GRACE_MS) {
-    timeEl.innerHTML = '<b>Ended</b>';
-    card.classList.add('timer-card--done');
-    pauseBtn.disabled = true;
-    stopBtn.disabled = true;
-    ring.setProgress(1);
-    return;
-  }
-
-  pauseBtn.addEventListener('click', () => {
-    if (state.stopped) return;
-    if (state.pausedAtMs == null) {
-      state.pausedAtMs = Date.now();
-      pauseBtn.innerHTML = ICON_PLAY;
-      pauseBtn.title = 'Resume';
-    } else {
-      state.accumulatedPausedMs += Date.now() - state.pausedAtMs;
-      state.pausedAtMs = null;
-      pauseBtn.innerHTML = ICON_PAUSE;
-      pauseBtn.title = 'Pause';
-    }
-    tick();
-  });
-
-  stopBtn.addEventListener('click', () => {
-    cleanup(state);
-    card.classList.add('timer-card--stopped');
-    pauseBtn.disabled = true;
-    stopBtn.disabled = true;
-    timeEl.innerHTML = '<b>Stopped</b>';
-    ring.setProgress(0);
-  });
-
-  const tick = () => {
-    if (state.stopped) return;
-    const elapsedMs = effectiveElapsedMs(state);
-    const remainingSeconds = Math.max(0, state.totalSeconds - Math.floor(elapsedMs / 1000));
-    const progress = Math.max(0, Math.min(1, 1 - remainingSeconds / state.totalSeconds));
-    ring.setProgress(progress);
-
-    if (remainingSeconds > 0) {
-      // endsAt only counts pauses already concluded (accumulatedPausedMs).
-      // The in-progress pause is excluded so the displayed end-time freezes
-      // through the hold and visibly jumps forward by the pause duration the
-      // moment the user resumes — that jump is the feedback that proves the
-      // pause shifted the schedule.
-      const endsAt = new Date(
-        state.startedAtMs + state.accumulatedPausedMs + state.totalSeconds * 1000,
-      );
-      timeEl.innerHTML = `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHM(endsAt)}`;
-    } else {
-      timeEl.innerHTML = '<b>Done</b>';
-      card.classList.add('timer-card--done');
-      if (!state.alarmPlaying) {
-        startAlarm(state);
-      }
-      // Stop the 1Hz tick once the countdown is exhausted — the alarm has its
-      // own self-rescheduling setTimeout chain. Without this clearInterval the
-      // tick would keep firing forever on every completed timer in the DOM.
-      if (state.intervalId != null) {
-        clearInterval(state.intervalId);
-        state.intervalId = null;
-      }
-    }
-  };
-
-  tick();
-  state.intervalId = setInterval(tick, 1000);
-
-  // Lifecycle cleanup: if the card element is detached (conversation cleared,
-  // history reloaded, SPA nav) while alarm/interval are live, the closures
-  // would otherwise keep an AudioContext + setTimeout chain alive forever.
-  state.domObserver = new MutationObserver(() => {
-    if (!document.contains(card)) {
-      cleanup(state);
-    }
-  });
-  state.domObserver.observe(document.body, { childList: true, subtree: true });
-}
-
-function cleanup(state) {
-  state.stopped = true;
-  stopAlarm(state);
-  if (state.intervalId != null) {
-    clearInterval(state.intervalId);
-    state.intervalId = null;
-  }
-  if (state.domObserver) {
-    state.domObserver.disconnect();
-    state.domObserver = null;
-  }
-}
-
-function effectiveElapsedMs(state) {
-  if (state.pausedAtMs != null) {
-    return state.pausedAtMs - state.startedAtMs - state.accumulatedPausedMs;
-  }
-  return Date.now() - state.startedAtMs - state.accumulatedPausedMs;
+  return { el, ring, timeEl, pauseBtn, stopBtn };
 }
 
 function buildRing() {
@@ -202,7 +174,7 @@ function buildRing() {
   return {
     el: wrap,
     setProgress(p) {
-      fill.style.strokeDashoffset = `${RING_PATH_LENGTH * (1 - p)}`;
+      fill.style.strokeDashoffset = `${RING_PATH_LENGTH * (1 - Math.max(0, Math.min(1, p)))}`;
     },
   };
 }
@@ -216,6 +188,15 @@ function makeBtn(title, svg) {
   btn.innerHTML = svg;
   return btn;
 }
+
+function appendError(root, msg) {
+  const card = document.createElement('div');
+  card.className = 'rich-card timer-card timer-card--error';
+  card.textContent = msg;
+  root.appendChild(card);
+}
+
+// ── Formatting ─────────────────────────────────────────────────────────────
 
 function parseStartedAt(s) {
   if (!s) return null;
@@ -231,67 +212,56 @@ function formatRemaining(totalSeconds) {
   return `${pad2(m)}:${pad2(s)}`;
 }
 
-function formatHM(d) {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+function formatHMS(d) {
+  return d.toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
 }
 
 function pad2(n) {
   return n < 10 ? `0${n}` : String(n);
 }
 
-function appendError(root, msg) {
-  const card = document.createElement('div');
-  card.className = 'rich-card timer-card timer-card--error';
-  card.textContent = msg;
-  root.appendChild(card);
-}
-
 // ── Alarm (Web Audio API) ──────────────────────────────────────────────────
 
-function startAlarm(state) {
-  state.alarmPlaying = true;
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    state.audioCtx = new Ctx();
-    const playBurst = () => {
-      if (!state.alarmPlaying || !state.audioCtx) return;
-      const ctx = state.audioCtx;
-      const now = ctx.currentTime;
-      // Three short 880Hz beeps per burst.
-      for (let i = 0; i < 3; i++) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = 880;
-        const start = now + i * 0.22;
-        const end = start + 0.16;
-        gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
-        gain.gain.setValueAtTime(0.18, end - 0.04);
-        gain.gain.linearRampToValueAtTime(0, end);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(start);
-        osc.stop(end);
-      }
-      state.alarmTimer = setTimeout(playBurst, 1400);
-    };
-    playBurst();
-  } catch (e) {
-    // Audio is best-effort; failing to play does not break the card.
-    state.alarmPlaying = false;
-  }
-}
+function startAlarm() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return { stop() {} };
+  let ctx;
+  try { ctx = new Ctx(); } catch (e) { return { stop() {} }; }
 
-function stopAlarm(state) {
-  state.alarmPlaying = false;
-  if (state.alarmTimer != null) {
-    clearTimeout(state.alarmTimer);
-    state.alarmTimer = null;
-  }
-  if (state.audioCtx) {
-    try { state.audioCtx.close(); } catch (e) { /* already closed */ }
-    state.audioCtx = null;
-  }
+  let timer = null;
+  let alive = true;
+
+  const burst = () => {
+    if (!alive) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      const start = now + i * 0.22;
+      const end = start + 0.16;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+      gain.gain.setValueAtTime(0.18, end - 0.04);
+      gain.gain.linearRampToValueAtTime(0, end);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(end);
+    }
+    timer = setTimeout(burst, 1400);
+  };
+
+  burst();
+
+  return {
+    stop() {
+      alive = false;
+      if (timer != null) { clearTimeout(timer); timer = null; }
+      try { ctx.close(); } catch (e) { /* already closed */ }
+    },
+  };
 }
