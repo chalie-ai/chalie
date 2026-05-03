@@ -211,7 +211,10 @@ export class Renderer {
     if (!actEl) return;
     const slot = actEl.querySelector(':scope > .act-row > .act-narrative');
     if (!slot) return;
-    slot.textContent = text || '';
+    // Trust the backend chokepoint (services.markup.sanitize → nh3) — same
+    // path chat bubbles use. textContent would render any LLM-emitted tags
+    // (e.g. <p>) as literal characters in the inline status line.
+    renderMarkupTo(slot, text || '');
     if (step != null) slot.dataset.step = String(step);
     this._scrollToBottom();
   }

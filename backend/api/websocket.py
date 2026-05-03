@@ -545,9 +545,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                     # Reuse the outer `store` from ws_chat (line 113) — no need
                     # to create a second MemoryClient connection per narration
                     # (Commit 8 critic P2-1).
+                    # Run narration through the same nh3 chokepoint chat
+                    # bubbles use — the frontend renders this via innerHTML
+                    # and trusts the backend has already stripped anything
+                    # outside the LLM tag allowlist.
                     store.set(f"output:{narration_id}", _json.dumps({
                         'type': 'act_narration',
-                        'text': text,
+                        'text': sanitize(text),
                         'step': step,
                     }), ex=300)
                     store.publish(f"sse:{request_id}", narration_id)
