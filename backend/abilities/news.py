@@ -27,14 +27,14 @@ _RICH_MEDIA_INSTRUCTION = (
     "<span id='{tag}'>The EU opened its first audits under the AI Act today, "
     "targeting three major companies you've been tracking.</span>\""
     "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
-    "array, each entry has a `url` and `ocr_text` (text scanned by local OCR). "
-    "If exactly one candidate clearly depicts what you are synthesising — judged "
-    "by its OCR text and the article it accompanies — you MAY add a "
-    "`data-image='<that url>'` attribute to the span, e.g. "
+    "array, each entry has a `url`, the `source_title` of the article it came "
+    "from, and `ocr_text` (text scanned by local OCR — often empty for photos). "
+    "If a candidate's source article matches the story you are synthesising, "
+    "add `data-image='<that url>'` to the span, e.g. "
     "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
-    "Use a URL verbatim from `image_candidates`. If no candidate is a clear "
-    "match, omit the attribute — a missing thumbnail is better than a "
-    "misleading one."
+    "Use a URL verbatim from `image_candidates`. Match by `source_title` first; "
+    "treat empty `ocr_text` as neutral (most news photos have no embedded text). "
+    "Only omit `data-image` if no candidate's source matches your synthesis."
 )
 
 
@@ -134,7 +134,7 @@ class NewsAbility(Ability):
 def _serialise_rich(articles, ordinal: int) -> str:
     tag = f"news_{ordinal}"
     results = []
-    image_urls: list[str] = []
+    image_items: list[tuple[str, str]] = []
     for a in articles:
         entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
         if a.description:
@@ -142,13 +142,13 @@ def _serialise_rich(articles, ordinal: int) -> str:
         results.append(entry)
         img = getattr(a, "image_url", "") or ""
         if img:
-            image_urls.append(img)
+            image_items.append((img, a.title or ""))
 
     payload: dict = {"results": results}
-    if image_urls:
+    if image_items:
         try:
             from services.image_candidate_service import build_image_candidates
-            candidates = build_image_candidates(image_urls)
+            candidates = build_image_candidates(image_items)
         except Exception as exc:
             logger.warning("[news-tool] image candidate shortlist failed: %s", exc)
             candidates = []

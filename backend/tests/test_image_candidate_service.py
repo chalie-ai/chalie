@@ -137,3 +137,25 @@ class TestBuildImageCandidates:
         url = f"{base}/anything.png"
         out = build_image_candidates([url])
         assert out[0]["url"] == url
+
+    def test_bare_url_yields_empty_source_title(self, image_server):
+        from services.image_candidate_service import build_image_candidates
+        base, handler = image_server
+        handler.images["/x.png"] = _png_with_text("X")
+        out = build_image_candidates([f"{base}/x.png"])
+        assert out[0]["source_title"] == ""
+
+    def test_tuple_input_carries_source_title(self, image_server):
+        from services.image_candidate_service import build_image_candidates
+        base, handler = image_server
+        handler.images["/a.png"] = _png_with_text("A")
+        handler.images["/b.png"] = _png_with_text("B")
+        items = [
+            (f"{base}/a.png", "Reuters: Election called"),
+            (f"{base}/b.png", "Politico: Snap election"),
+        ]
+        out = build_image_candidates(items)
+        assert [c["source_title"] for c in out] == [
+            "Reuters: Election called",
+            "Politico: Snap election",
+        ]

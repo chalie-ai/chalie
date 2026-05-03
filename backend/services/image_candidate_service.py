@@ -2,16 +2,16 @@
 
 Used by search and news abilities to give the LLM enough information to pick
 a meaningful thumbnail for the rich-media card without forcing it to fetch
-images itself. Each candidate carries the image URL plus the text RapidOCR
-extracted from the image — so the LLM can match a candidate against the
-result it cites and decide whether to render it (or skip the image slot).
+images itself. Each candidate carries the image URL, the source article title
+(so the LLM can match thumbnail → article), and the text RapidOCR extracted
+from the image (often empty for photos — useful for screenshots/charts).
 
 Public API:
-    build_image_candidates(urls: list[str], top_n: int = 3) -> list[dict]
+    build_image_candidates(items, top_n=3) -> list[dict]
 
-Each returned dict is ``{"url": str, "ocr_text": str}``. Failed fetches and
-images that yield no text are dropped silently — the LLM only sees viable
-candidates.
+``items`` is an iterable of either bare URLs (legacy) or ``(url, source_title)``
+tuples. Each returned dict is ``{"url": str, "source_title": str, "ocr_text": str}``.
+Failed fetches are dropped silently — the LLM only sees viable candidates.
 """
 
 from __future__ import annotations
@@ -31,31 +31,36 @@ _OCR_TEXT_CAP = 300
 _USER_AGENT = "Chalie-RichMedia/1.0 (image-candidate)"
 
 
-def build_image_candidates(urls: Iterable[str], top_n: int = 3) -> list[dict]:
-    """Shortlist up to top_n image URLs, fetch and OCR each, return survivors.
+def build_image_candidates(items: Iterable, top_n: int = 3) -> list[dict]:
+    """Shortlist up to top_n images, fetch and OCR each, return survivors.
 
+    ``items`` may be bare URL strings or ``(url, source_title)`` tuples.
     URLs are deduplicated in input order. Fetching is parallel; OCR is
     sequential because RapidOCR's lazy engine init is lock-protected and
     parallel inference offers no measured win against fast text-light images.
     """
-    candidates: list[str] = []
+    pairs: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for url in urls:
-        if not url or not isinstance(url, str):
+    for item in items:
+        if isinstance(item, tuple) and len(item) == 2:
+            url, source_title = item
+        elif isinstance(item, str):
+            url, source_title = item, ""
+        else:
             continue
-        if url in seen:
+        if not url or not isinstance(url, str) or url in seen:
             continue
         seen.add(url)
-        candidates.append(url)
-        if len(candidates) >= top_n:
+        pairs.append((url, source_title or ""))
+        if len(pairs) >= top_n:
             break
 
-    if not candidates:
+    if not pairs:
         return []
 
     fetched: dict[str, bytes] = {}
-    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
-        futures = {pool.submit(_fetch_image_bytes, url): url for url in candidates}
+    with ThreadPoolExecutor(max_workers=len(pairs)) as pool:
+        futures = {pool.submit(_fetch_image_bytes, url): url for url, _ in pairs}
         for future in as_completed(futures):
             url = futures[future]
             try:
@@ -67,12 +72,12 @@ def build_image_candidates(urls: Iterable[str], top_n: int = 3) -> list[dict]:
                 fetched[url] = data
 
     out: list[dict] = []
-    for url in candidates:
+    for url, source_title in pairs:
         data = fetched.get(url)
         if not data:
             continue
         text = _ocr_bytes(data)
-        out.append({"url": url, "ocr_text": text})
+        out.append({"url": url, "source_title": source_title, "ocr_text": text})
     return out
 
 
