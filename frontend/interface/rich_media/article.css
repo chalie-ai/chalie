@@ -7,6 +7,8 @@
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: 18px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .article-card--no-image {
@@ -84,14 +86,6 @@
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-secondary);
-  text-decoration: none;
-  transition: all 160ms ease;
-  cursor: pointer;
-}
-
-.article-card__src:hover {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
 }
 
 .article-card__src-ico {

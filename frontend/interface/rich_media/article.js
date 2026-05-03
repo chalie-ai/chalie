@@ -68,31 +68,34 @@ export function render(payload, synthesis, root) {
   dek.textContent = synthesis || '';
   body.appendChild(dek);
 
-  if (results.length > 0) {
+  const domains = [];
+  const seen = new Set();
+  for (const r of results) {
+    const d = r.url ? extractDomain(r.url) : (r.source || '');
+    if (!d || seen.has(d)) continue;
+    seen.add(d);
+    domains.push(d);
+  }
+
+  if (domains.length > 0) {
     const sources = document.createElement('div');
     sources.className = 'article-card__sources';
 
-    const shown = results.slice(0, 4);
-    const remaining = results.length - shown.length;
+    const shown = domains.slice(0, 4);
+    const remaining = domains.length - shown.length;
 
-    for (const r of shown) {
-      const domain = r.url ? extractDomain(r.url) : (r.source || '');
-      const a = document.createElement('a');
-      a.className = 'article-card__src';
-      if (r.url) {
-        a.href = r.url;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-      }
+    for (const domain of shown) {
+      const pill = document.createElement('span');
+      pill.className = 'article-card__src';
 
       const ico = document.createElement('span');
       ico.className = 'article-card__src-ico';
       ico.style.background = pickColor(domain);
       ico.textContent = initials(domain);
-      a.appendChild(ico);
+      pill.appendChild(ico);
 
-      a.appendChild(document.createTextNode(domain));
-      sources.appendChild(a);
+      pill.appendChild(document.createTextNode(domain));
+      sources.appendChild(pill);
     }
 
     if (remaining > 0) {
