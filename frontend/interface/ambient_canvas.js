@@ -23,8 +23,12 @@ export class AmbientCanvas {
     // Check for reduced motion preference
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     if (prefersReduced.matches) {
-      // Draw a single static frame
+      // Draw a single static frame, and redraw when the theme flips so the
+      // canvas keeps up without an animation loop.
       this._drawFrame(ctx, canvas, 0);
+      document.addEventListener('chalie:theme-changed', () => {
+        this._drawFrame(ctx, canvas, 0);
+      });
       return;
     }
 
@@ -43,9 +47,17 @@ export class AmbientCanvas {
     const h = canvas.height;
     const m = Math.min(w, h);
 
-    // Near-black base. The orbs are the only light source.
-    ctx.fillStyle = '#06080e';
+    // Theme-aware base + orb intensity. Light mode reads from a warm-paper
+    // bg with softer, multiply-style orbs; dark mode keeps near-black with
+    // brighter additive orbs.
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    if (isLight) {
+      ctx.fillStyle = '#F6F4F1';
+    } else {
+      ctx.fillStyle = '#06080e';
+    }
     ctx.fillRect(0, 0, w, h);
+    const alphaMul = isLight ? 0.55 : 1.0;
 
     // Restrained orbs — think distant nebulae, not lava lamps.
     // Two warm (violet / magenta) and one cool (cyan) for contrast.
@@ -69,7 +81,7 @@ export class AmbientCanvas {
       const x = w * (orb.cx + orb.dx * Math.sin(t * orb.sx + orb.phase));
       const y = h * (orb.cy + orb.dy * Math.cos(t * orb.sy + orb.phase * 0.7));
       const r = m * orb.r * (1 + orb.rBreath * Math.sin(t * 0.5 + orb.phase));
-      const a = orb.alpha * (0.75 + 0.25 * Math.cos(t * 0.3 + orb.phase));
+      const a = orb.alpha * (0.75 + 0.25 * Math.cos(t * 0.3 + orb.phase)) * alphaMul;
 
       const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
       const [cr, cg, cb] = orb.color;
