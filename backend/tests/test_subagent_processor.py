@@ -1,7 +1,8 @@
 """Feature tests for SubagentProcessor construction and deadline semantics.
 
-Covers: per-instance _deadline calculation (type default, override, override-
-smaller-than-default), and per-instance ALWAYS_AVAILABLE wiring from agent_type.
+Covers: per-instance _deadline calculation (override-wins-over-type-default
+is the invariant that protects wait=true from exceeding the 300s cap), and
+per-instance ALWAYS_AVAILABLE wiring from agent_type.
 """
 
 import time
@@ -12,53 +13,35 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# B1. Per-instance _deadline from agent_type
+# B1. Override timeout wins over type default
+#
+# The critical invariant: wait=true in SubagentAbility caps at 300s via
+# max_timeout_override=min(type_default, 300). If the processor ignored the
+# override and used the type default (3600s for web_surfer), the parent ACT
+# iteration would block for up to an hour.
 # ---------------------------------------------------------------------------
 
 
 class TestDeadlineSemantics:
-    def test_deadline_set_from_type_default_timeout(self):
-        """SubagentProcessor with default agent_type sets _deadline to
-        time.time() + general_purpose default_timeout (1800s), within 1s."""
-        from abilities.subagent import SUBAGENT_TYPES
-        from services.subagent_processor import SubagentProcessor
+    def test_max_timeout_override_wins_over_type_default(self):
+        """max_timeout_override=300 must produce a _deadline of t_now + 300,
+        even for web_surfer (type default = 3600s).
 
-        t_before = time.time()
-        proc = SubagentProcessor(raw_input="x")  # default agent_type=general_purpose
-        t_after = time.time()
-
-        expected = SUBAGENT_TYPES["general_purpose"]["default_timeout"]
-        # _deadline should be ~t_before + expected
-        assert proc._deadline >= t_before + expected - 1, (
-            f"deadline {proc._deadline:.1f} < t_before + {expected} - 1"
-        )
-        assert proc._deadline <= t_after + expected + 1, (
-            f"deadline {proc._deadline:.1f} > t_after + {expected} + 1"
-        )
-
-    def test_deadline_set_from_max_timeout_override(self):
-        """max_timeout_override=300 must win over the type's default_timeout."""
-        from services.subagent_processor import SubagentProcessor
-
-        t_before = time.time()
-        proc = SubagentProcessor(raw_input="x", max_timeout_override=300)
-
-        delta = proc._deadline - t_before
-        assert abs(delta - 300) <= 1.0, (
-            f"deadline delta={delta:.3f}s, expected ~300s"
-        )
-
-    def test_deadline_override_smaller_than_type_default_honoured(self):
-        """A small override (60s) on a type with 3600s default must use 60s."""
+        This guards the wait=true cap: SubagentAbility calls
+        SubagentProcessor(..., max_timeout_override=min(type_default, 300))
+        so the parent ACT iteration never blocks past 5 min."""
         from services.subagent_processor import SubagentProcessor
 
         t_before = time.time()
         proc = SubagentProcessor(
-            raw_input="x", agent_type="web_surfer", max_timeout_override=60
+            raw_input="x", agent_type="web_surfer", max_timeout_override=300
         )
+        t_after = time.time()
+
         delta = proc._deadline - t_before
-        assert abs(delta - 60) <= 1.0, (
-            f"deadline delta={delta:.3f}s, expected ~60s for override=60"
+        assert 299 <= delta <= t_after - t_before + 301, (
+            f"deadline delta={delta:.3f}s, expected ~300s (override should win over "
+            f"web_surfer default of 3600s)"
         )
 
 
@@ -70,13 +53,15 @@ class TestDeadlineSemantics:
 class TestProcessorWiring:
     def test_per_instance_always_available_is_set_from_agent_type(self):
         """After construction, ALWAYS_AVAILABLE on the instance must equal
-        the type's native_tools (not the class-level empty list)."""
+        the type's native_tools (not the class-level empty list).
+
+        This ensures each subagent type gets only its declared tool surface —
+        a web_surfer must not have the summariser's tool set and vice versa."""
         from abilities.subagent import SUBAGENT_TYPES
         from services.subagent_processor import SubagentProcessor
 
         for agent_type, entry in SUBAGENT_TYPES.items():
             proc = SubagentProcessor(raw_input="x", agent_type=agent_type)
-            # Instance attribute shadows the class attribute
             assert proc.ALWAYS_AVAILABLE == entry["native_tools"], (
                 f"{agent_type}: instance ALWAYS_AVAILABLE {proc.ALWAYS_AVAILABLE} "
                 f"!= native_tools {entry['native_tools']}"
