@@ -286,6 +286,20 @@ The chat interface is built from focused ES6 modules wired together by a thin or
 
 **HTML Markup Format:** all LLM-to-client content is a single `content` string of HTML tags from a fixed allowlist. Backend `services.markup.sanitize()` (nh3, the OWASP-aligned ammonia sanitiser) is the single chokepoint — every assistant response is sanitised before reaching the frontend. Tags / attributes outside the allowlist are stripped; the frontend renders the result via `innerHTML` and trusts the chokepoint.
 
+**Rich-Media Segments:** certain tools (currently `weather`) opt into structured card rendering by appending a rich-media instruction trailer to their return string. The trailer tells the LLM to wrap its synthesis in `<span id='<tool>_<N>'>…</span>`. The sanitiser whitelists `<span id>` so the tag survives the nh3 pass intact. `RichMediaParser.parse(content, tool_calls)` (`backend/services/rich_media_parser.py`) then runs at two sites — the WebSocket `message` event assembly and the `/conversation/recent` refresh path — and converts the sanitised text plus the turn's `tool_calls` rows into an ordered `segments` array:
+
+```
+[
+  {"type": "text",  "content": "…"},
+  {"type": "rich",  "tag": "weather_1", "payload": {…}, "synthesis": "…"},
+  …
+]
+```
+
+Both sites produce byte-identical output because both read `tool_calls` from the database (including `ephemeral=1` rows), not from in-memory state.
+
+**Channel gate — subagent isolation.** `ActDispatcherService.dispatch_action()` injects `_rich_media_ordinal` into the action dict only when `channel == 'user'`. Subagent dispatches never receive the ordinal, so a rich-media tool returns a plain dict on those calls with no instruction trailer. Additionally, `services.rich_media_parser.strip_spans(text)` scrubs any `<span id='name_N'>…</span>` wrappers from text before returning it to the parent — both `SubagentAbility._run_sync` and `_run_async` apply this scrub at the boundary. Even a hallucinated or leaked span never crosses into the parent's ACT trail. See `docs/superpowers/specs/2026-05-02-rich-media-cards-design.md` for the full protocol.
+
 **LLM-emittable tags (8):**
 - `<b>`, `<i>`, `<u>` — inline emphasis
 - `<h1>` — heading
@@ -343,7 +357,7 @@ These are invariants, not conventions. Violating them creates systemic problems.
 |------|---------|
 | **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
 | **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `subagent`). |
-| **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. |
+| **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. Rich-media turns additionally carry a `segments` array (see Rich-Media Segments above). |
 | **DMN** | Default Mode Network — Step 5 of the subconscious worker tick. Reflective pass that reads the user synthesis + recent user-channel episodes and saves findings via the memory tool. No chat-UI broadcast. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
 | **Data Graph** | Structured knowledge store with canonicalisation, typed edges, and per-kind decay. |

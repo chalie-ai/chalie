@@ -91,6 +91,31 @@ Structured responses render as typed cards rather than prose. All cards share th
 - **Goal** — title, progress bar, target date, status (active/completed/abandoned), update actions
 - **Knowledge** — concept name and strength, related concepts, last accessed
 
+## Rich-Media Cards
+
+Rich-media cards are tool-driven structured renders that appear inline with text bubbles in the chat surface. They follow the same Radiant conventions (near-black surface, 1 px violet/cyan accent edge, hover glow) and are the only component class that may use entrance animation.
+
+**Segment iteration.** `appendChalieForm(content, meta, opts)` and `prependChalieForm(content, meta, opts)` in `frontend/interface/renderer.js` iterate `meta.segments` when present. Each segment is either `{type:"text"}` — rendered as a normal text bubble via `_appendTextBubble` — or `{type:"rich", tag, payload, synthesis}` — rendered via `_appendRichCard`. When `segments` is absent the renderer falls back to a single text bubble using `content`, keeping the change backward-compatible.
+
+**Module registry.** `frontend/interface/rich_media/registry.js` maps tag prefixes to card modules:
+
+```
+frontend/interface/rich_media/
+  registry.js        — tag-prefix → module map
+  weather.js         — weather card: render(payload, synthesis, root)
+  weather.css        — weather-specific styles
+  base_card.css      — shared Radiant card chrome (border, padding, entrance keyframes)
+  icons/weather/     — semantic SVGs (sunny, rain, cloudy, partly_cloudy, snow, …)
+```
+
+`registry.js` extracts the prefix from the tag (e.g. `weather` from `weather_1`) and delegates to the matching module's `render(payload, synthesis, root)`. Unknown prefixes fall back silently to a text bubble using the synthesis string.
+
+**Animation scope (v1, Radiant restraint rule).** Entrance only: card fades in and lifts 8 px on mount (200 ms ease-out). Numeric count-up on first render where the module opts in (e.g. temperature). No looping animations, no live ticking, no parallax. Animation lives entirely inside the card module; the framework imposes nothing.
+
+**Lazy-load conventions.** Media inside cards that should load asynchronously uses the standard data-attributes: `[data-lazy-embed]` for embeds, `[data-lazy-thumb]` for thumbnails, `[data-lazy-src]` for media URLs. The existing lazy-load observer in the chat surface handles these without card-specific wiring.
+
+See `docs/superpowers/specs/2026-05-02-rich-media-cards-design.md` for the full card protocol, weather payload shape, and acceptance criteria.
+
 ## Voice I/O
 
 Voice is optional. If the voice service is unavailable, the mic button and all speaker icons are hidden automatically.
