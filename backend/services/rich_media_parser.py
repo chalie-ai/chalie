@@ -37,6 +37,29 @@ _TAG_RE = re.compile(
 )
 
 
+def strip_spans(content: str) -> str:
+    """Remove every ``<span id='name_N'>…</span>`` wrapper, keeping inner text.
+
+    Used at the subagent → parent boundary as a defensive scrub: subagents are
+    architecturally prevented from receiving the rich-media trailer (the
+    dispatcher gates ordinal injection on ``channel == 'user'``), but if a
+    subagent ever emits a stray span — via memorised prior turns, hallucination,
+    or a future tool-trailer leak — we still strip it before the text reaches
+    the parent. Idempotent: a string with no spans is returned unchanged.
+
+    Args:
+        content: Arbitrary text that may contain rich-media span wrappers.
+
+    Returns:
+        The same text with every matching span tag replaced by its inner
+        synthesis text. Whitespace is preserved as-is so the caller can decide
+        whether to re-strip.
+    """
+    if not content:
+        return content
+    return _TAG_RE.sub(lambda m: m.group(3), content)
+
+
 def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
     """Convert sanitised assistant text + tool_calls rows to a segment list.
 

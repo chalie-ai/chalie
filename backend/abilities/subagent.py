@@ -21,6 +21,7 @@ import uuid
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
+from services.rich_media_parser import strip_spans
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SUBAGENT SKILL]"
@@ -328,7 +329,7 @@ Briefing rules:
                     agent_type=agent_type,
                     max_timeout_override=timeout,
                 ).send()
-                response_text = (response_text or "").strip()
+                response_text = strip_spans((response_text or "").strip()).strip()
                 if not response_text:
                     response_text = "Subagent completed but produced no output."
 
@@ -364,7 +365,7 @@ Briefing rules:
                 agent_type=agent_type,
                 max_timeout_override=timeout,
             ).send()
-            response_text = (response_text or "").strip()
+            response_text = strip_spans((response_text or "").strip()).strip()
         except Exception as exc:
             return {
                 "text": _skill_tag(

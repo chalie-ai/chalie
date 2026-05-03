@@ -127,12 +127,18 @@ class ActDispatcherService:
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
 
-        # Bump the per-turn ordinal for this tool name before invoking the handler.
-        # The ordinal is injected into the action dict so tools that support
-        # rich-media rendering can read it via action['_rich_media_ordinal'].
-        self._turn_ordinals[action_type] = self._turn_ordinals.get(action_type, 0) + 1
+        # Rich-media ordinal is injected ONLY for the user-facing channel.
+        # Subagents (and any other internal channel) must never see the trailer
+        # because their natural-language synthesis is consumed by the parent
+        # rather than rendered to the user — a span emitted at that hop has no
+        # tool_calls row paired to it and would either be paraphrased away by
+        # the parent or leak through as raw markup. Stripping the ordinal here
+        # is the single physical chokepoint that prevents the trailer from
+        # ever reaching a non-user dispatch path.
         action = dict(action)
-        action['_rich_media_ordinal'] = self._turn_ordinals[action_type]
+        if channel == 'user':
+            self._turn_ordinals[action_type] = self._turn_ordinals.get(action_type, 0) + 1
+            action['_rich_media_ordinal'] = self._turn_ordinals[action_type]
 
         # Get handler
         handler = self.handlers.get(action_type)
