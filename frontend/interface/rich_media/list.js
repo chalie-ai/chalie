@@ -77,13 +77,10 @@ export function render(payload, synthesis, root) {
     check.innerHTML = CHECK_SVG;
     row.appendChild(check);
 
-    const body = document.createElement('div');
-    body.className = 'list-card__body';
     const text = document.createElement('div');
     text.className = 'list-card__text';
     text.textContent = item.content || '';
-    body.appendChild(text);
-    row.appendChild(body);
+    row.appendChild(text);
 
     row.addEventListener('click', () => {
       row.classList.toggle('list-card__item--done');
