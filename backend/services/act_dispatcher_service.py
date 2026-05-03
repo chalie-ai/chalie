@@ -17,6 +17,26 @@ import logging
 from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
 
 
+def _load_tool_telemetry() -> dict | None:
+    """Pull a flattened telemetry dict for the active client context.
+
+    Returns ``None`` when no client context is stored yet (fresh boot, no
+    heartbeat) so abilities can fall back gracefully. Any failure is logged
+    and treated as no-telemetry rather than raising — abilities must remain
+    callable even when the telemetry table is empty or malformed.
+    """
+    try:
+        from services.client_context_service import ClientContextService
+        from services.tool_output_utils import build_tool_telemetry
+        ctx = ClientContextService().get()
+        if not ctx:
+            return None
+        return build_tool_telemetry(ctx)
+    except Exception as e:
+        logging.warning(f"[ACT DISPATCH] telemetry load failed: {e}")
+        return None
+
+
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
     """Estimate confidence based on action type and result richness.
 
@@ -90,8 +110,11 @@ class ActDispatcherService:
         self._turn_ordinals: Dict[str, int] = {}
 
         # Register every ability from the registry as a handler.
-        # Each handler calls ability.execute(channel, params, telemetry=None).
-        # The dispatcher unwraps the returned dict's 'text' key automatically.
+        # Each handler calls ability.execute(channel, params, telemetry).
+        # Telemetry is fetched fresh per dispatch so abilities see current
+        # coordinates, location_name, locale, etc. — without it, location-aware
+        # tools like weather fall through to inferior fallbacks (e.g. wttr.in
+        # returns mojibake for Maltese place names).
         from abilities._registry import AbilityRegistry
         for ability in AbilityRegistry.all():
             _ability = ability  # capture for closure
@@ -99,7 +122,7 @@ class ActDispatcherService:
                 lambda channel, action, _a=_ability: _a.execute(
                     channel,
                     {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
-                    None,
+                    _load_tool_telemetry(),
                 )
             )
 

@@ -28,12 +28,6 @@
   max-width: 480px;
   margin: 6px 0;
   animation: card-enter 200ms ease-out both;
-  transition: box-shadow 200ms ease, border-color 200ms ease;
-}
-
-.rich-card:hover {
-  box-shadow: 0 0 0 1px var(--card-border), 0 4px 24px var(--card-glow);
-  border-color: color-mix(in oklab, var(--violet) 38%, transparent);
 }
 
 .rich-card__divider {
