@@ -13,6 +13,8 @@ from .auth import require_session
 
 logger = logging.getLogger(__name__)
 
+_ERR_PROVIDER_NOT_FOUND = "Provider not found"
+
 providers_bp = Blueprint('providers', __name__, url_prefix='/providers')
 
 # SSRF hard denies — cloud metadata, link-local, and common cloud-provider
@@ -155,7 +157,7 @@ def get_provider(provider_id):
         provider = service.get_provider_by_id(provider_id)
 
         if not provider:
-            return jsonify({"error": "Provider not found"}), 404
+            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
 
         # Omit api_key value
         if provider.get("api_key"):
@@ -300,7 +302,7 @@ def test_provider():
             service = get_provider_service()
             stored = service.get_provider_by_id(int(provider_id))
             if not stored:
-                return jsonify({"success": False, "error": "Provider not found"}), 200
+                return jsonify({"success": False, "error": _ERR_PROVIDER_NOT_FOUND}), 200
             config = {k: v for k, v in stored.items() if v is not None}
 
         # Overlay fields from request body (so a new api_key / host can be tested)
@@ -445,7 +447,7 @@ def set_selected_provider():
         # Validate the provider exists
         provider = service.get_provider_by_id(int(provider_id))
         if not provider:
-            return jsonify({"error": "Provider not found"}), 404
+            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
 
         service.set_selected_provider(int(provider_id))
 

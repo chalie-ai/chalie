@@ -1,0 +1,81 @@
+/* ==========================================================================
+   Scheduler Card (theme-aware)
+   ========================================================================== */
+
+.scheduler-card {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.scheduler-card__when {
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--violet) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--violet) 26%, transparent);
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.scheduler-card__when-day {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--violet) 80%, var(--text-secondary));
+}
+
+.scheduler-card__when-date {
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 2px 0;
+  color: var(--text-primary);
+}
+
+.scheduler-card__when-mon {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.scheduler-card__title {
+  font-size: 0.96rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  margin: 0 0 2px;
+  color: var(--text-primary);
+}
+
+.scheduler-card__meta {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.74rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+.scheduler-card__meta b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.scheduler-card__btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--violet);
+  background: var(--violet);
+  color: white;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.scheduler-card__btn:hover {
+  background: var(--violet-hover, #9B6FFF);
+  border-color: var(--violet-hover, #9B6FFF);
+}

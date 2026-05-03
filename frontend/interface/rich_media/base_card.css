@@ -1,7 +1,6 @@
 /* ==========================================================================
    Rich Media Card — shared chrome
-   Radiant design system: near-black surface, precision accent borders,
-   entrance-only animation. Restraint principle: glow only where it matters.
+   Uses theme.css variables for automatic light/dark support.
    ========================================================================== */
 
 @keyframes card-enter {
@@ -16,11 +15,11 @@
 }
 
 .rich-card {
-  --card-bg:      rgba(10, 8, 20, 0.85);
-  --card-border:  rgba(138, 92, 255, 0.22);
-  --card-radius:  16px;
+  --card-bg: color-mix(in oklab, var(--violet) 4%, var(--bg-surface));
+  --card-border: color-mix(in oklab, var(--violet) 22%, transparent);
+  --card-radius: 16px;
   --card-padding: 20px 22px;
-  --card-glow:    rgba(138, 92, 255, 0.08);
+  --card-glow: color-mix(in oklab, var(--violet) 8%, transparent);
 
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -34,18 +33,18 @@
 
 .rich-card:hover {
   box-shadow: 0 0 0 1px var(--card-border), 0 4px 24px var(--card-glow);
-  border-color: rgba(138, 92, 255, 0.38);
+  border-color: color-mix(in oklab, var(--violet) 38%, transparent);
 }
 
 .rich-card__divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--border);
   margin: 14px 0;
 }
 
 .rich-card__synthesis {
   font-size: 0.8125rem;
-  color: rgba(234, 230, 242, 0.55);
+  color: var(--text-secondary);
   font-style: italic;
   line-height: 1.5;
   margin-top: 2px;

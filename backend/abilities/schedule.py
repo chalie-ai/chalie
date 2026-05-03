@@ -21,6 +21,14 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 # ISO 8601 with offset, used by TimeFormatterService.local() to render due_at in the user's timezone.
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a scheduler card; without it, the user sees only "
+    "plain text. Write a brief confirmation. Example: "
+    "\"<span id='{tag}'>Done — 30 min with Mira on Thursday at 14:30.</span>\""
+)
+
 
 class ScheduleAbility(Ability):
     NAME = "schedule"
@@ -107,8 +115,9 @@ class ScheduleAbility(Ability):
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list").lower()
+        ordinal = params.get("_rich_media_ordinal")
 
         if action == "create":
             result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
@@ -118,6 +127,9 @@ class ScheduleAbility(Ability):
             result = _cancel(params)
         else:
             result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
+
+        if ordinal is not None and action == "create" and result.get("status") == "success":
+            return _serialise_rich(result, action, ordinal)
 
         body = json.dumps(result)
         return {"text": _skill_tag("schedule", body, action=action)}
@@ -527,3 +539,15 @@ def _normalize_hhmm(time_str: str) -> str | None:
         return f"{hour:02d}:{minute:02d}"
     except Exception:
         return None
+
+
+def _serialise_rich(result: dict, action: str, ordinal: int) -> str:
+    tag = f"schedule_{ordinal}"
+    payload = {"action_performed": action}
+    if "record" in result:
+        payload["record"] = result["record"]
+    elif "records" in result:
+        payload["records"] = result["records"]
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"

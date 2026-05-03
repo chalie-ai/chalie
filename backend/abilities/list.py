@@ -2,6 +2,11 @@
 ListAbility — Manage deterministic lists via the ACT loop.
 
 Actions: add, check, remove, view, list_all, clear, rename, history
+
+Rich-media rendering:
+  When ``_rich_media_ordinal`` is present (user channel only), actions that
+  return a list (add, check, view) emit a structured JSON payload +
+  instruction trailer so the frontend renders a checklist card.
 """
 
 import json
@@ -12,6 +17,14 @@ from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
+
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a checklist card; without it, the user sees only "
+    "plain text. Write a brief acknowledgement. Example: "
+    "\"<span id='{tag}'>Added milk and eggs to your grocery list.</span>\""
+)
 
 _AMBIGUOUS_LIST_NAME = "Multiple lists exist. Specify 'name'."
 
@@ -80,8 +93,9 @@ class ListAbility(Ability):
 
     _DEFAULT_LIST_NAME: ClassVar[str] = "Shopping List"
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_all")
+        ordinal = params.get("_rich_media_ordinal")
 
         try:
             from services.list_service import ListService
@@ -93,6 +107,11 @@ class ListAbility(Ability):
         except Exception as e:
             logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
             body = _fail(str(e))
+
+        if ordinal is not None and action in ("add", "check", "view"):
+            rich = _try_serialise_rich(body, action, ordinal)
+            if rich is not None:
+                return rich
 
         return {"text": _skill_tag("list", body, action=action)}
 
@@ -334,3 +353,17 @@ def _handle_history(service, params: dict) -> str:
         lines.append(f"  [{ts_str}] {ev['event_type']}{content_part}")
 
     return "\n".join(lines)
+
+
+def _try_serialise_rich(body: str, action: str, ordinal: int) -> str | None:
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if parsed.get("status") != "success" or parsed.get("list") is None:
+        return None
+    tag = f"list_{ordinal}"
+    payload = parsed["list"]
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"

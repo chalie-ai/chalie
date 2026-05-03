@@ -41,9 +41,10 @@ logger = logging.getLogger(__name__)
 # Used by _run_full_compaction to extract the stored result from raw LLM output.
 
 _SUMMARY_RE = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.DOTALL | re.IGNORECASE)
+_COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
 
 
-def _extract_compaction_summary(raw: str) -> 'str | None':
+def _extract_compaction_summary(raw: 'str | None') -> 'str | None':
     """Extract the body of a <summary>…</summary> block from raw LLM output.
 
     Returns the stripped inner text on success.
@@ -1006,7 +1007,6 @@ class MessageProcessor:
             for ``status=success``).
         """
         from services import compaction_persistence
-        from services.compaction_message_processor import ContinuityCompactionProcessor
 
         prior = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = prior['compacted_up_to_id'] if prior else 0
@@ -1030,59 +1030,17 @@ class MessageProcessor:
             )
             return None
 
-        def _format_entry(entry: dict) -> str:
-            role = entry.get('role', 'unknown')
-            # Use "you:" for assistant turns per continuity-first envelope spec
-            # (scoped to compaction only — does not affect downstream consumers).
-            display_role = 'you' if role == 'assistant' else role
-            content = entry.get('content', '')
-            raw_ts = entry.get('created_at') or ''
-            ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
-            return f"[{ts_label}] {display_role}: {content}"
-
-        def _build_input(rendered_entries: list[str]) -> str:
-            chunks: list[str] = []
-            if prev_text:
-                chunks.append(f"## Previous Summary\n{prev_text}")
-            else:
-                chunks.append("## Previous Summary\n(none — first compaction.)")
-            chunks.append("## New Conversation Turns")
-            chunks.extend(rendered_entries)
-            chunks.append("\n---\nEnd of input. Reference material only.\n"
-                          "Now write <analysis>...</analysis> then <summary>...</summary>.")
-            return '\n\n'.join(chunks)
-
-        rendered = [_format_entry(e) for e in entries]
-        compaction_input = _build_input(rendered)
+        rendered = [_format_compaction_entry(e) for e in entries]
+        compaction_input = _build_compaction_input(prev_text, rendered)
         in_chars = len(compaction_input)
 
-        proc = ContinuityCompactionProcessor(raw_input=compaction_input)
-        raw_output = ''
-        try:
-            raw_output = (proc.send() or '').strip()
-        except PayloadTooLargeError as exc:
-            reason = f"compaction LLM hit HTTP 413: {exc}"
-            logger.error("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
-            self._write_compaction_audit_row(
-                watermark=watermark, status='failure', summary='', reason=reason
-            )
+        raw_output, _ = self._dispatch_compaction_llm(compaction_input, watermark)
+        if raw_output is None:
             return None
-        except Exception as exc:
-            reason = f"LLM error: {exc}"
-            logger.error(
-                "[COMPACTION] %s: continuity failure — reason=%s",
-                self.CHANNEL, reason, exc_info=True,
-            )
-            self._write_compaction_audit_row(
-                watermark=watermark, status='failure', summary='', reason=reason
-            )
-            return None
-        finally:
-            self._metrics.merge(proc._metrics)
 
         if not raw_output:
             reason = "LLM returned empty output"
-            logger.warning("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
+            logger.warning(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason)
             self._write_compaction_audit_row(
                 watermark=watermark, status='failure', summary='', reason=reason
             )
@@ -1091,7 +1049,7 @@ class MessageProcessor:
         summary = _extract_compaction_summary(raw_output)
         if not summary:
             reason = "no <summary> tags in LLM output"
-            logger.warning("[COMPACTION] %s: continuity failure — reason=%s", self.CHANNEL, reason)
+            logger.warning(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason)
             self._write_compaction_audit_row(
                 watermark=watermark, status='failure', summary='', reason=reason
             )
@@ -1111,6 +1069,40 @@ class MessageProcessor:
             self.CHANNEL, in_chars, out_chars, watermark, new_watermark,
         )
         return summary
+
+    def _dispatch_compaction_llm(
+        self, compaction_input: str, watermark: int
+    ) -> 'tuple[str | None, object]':
+        """Invoke ContinuityCompactionProcessor and return (raw_output, proc).
+
+        Dispatches a single LLM call for continuity compaction. Handles
+        PayloadTooLargeError and generic exceptions by writing a failure audit
+        row and returning (None, proc) so the caller can bail cleanly.
+
+        Never raises — callers rely on the (None, proc) sentinel to skip
+        downstream processing.
+        """
+        from services.compaction_message_processor import ContinuityCompactionProcessor
+        proc = ContinuityCompactionProcessor(raw_input=compaction_input)
+        try:
+            raw_output = (proc.send() or '').strip()
+            return raw_output, proc
+        except PayloadTooLargeError as exc:
+            reason = f"compaction LLM hit HTTP 413: {exc}"
+            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason)
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
+            )
+            return None, proc
+        except Exception as exc:
+            reason = f"LLM error: {exc}"
+            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason, exc_info=True)
+            self._write_compaction_audit_row(
+                watermark=watermark, status='failure', summary='', reason=reason
+            )
+            return None, proc
+        finally:
+            self._metrics.merge(proc._metrics)
 
     def _write_compaction_audit_row(
         self,
@@ -1392,6 +1384,34 @@ class MessageProcessor:
 #: ``created_at`` value. Must be exactly 16 characters so the
 #: ``[YYYY-MM-DD HH:MM]`` column width in Previous Messages stays stable.
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
+
+
+def _format_compaction_entry(entry: dict) -> str:
+    """Render a single transcript row for the continuity-compaction envelope.
+
+    Uses "you:" for assistant turns per the continuity-first envelope spec
+    (scoped to compaction only — does not affect downstream consumers).
+    """
+    role = entry.get('role', 'unknown')
+    display_role = 'you' if role == 'assistant' else role
+    content = entry.get('content', '')
+    raw_ts = entry.get('created_at') or ''
+    ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
+    return f"[{ts_label}] {display_role}: {content}"
+
+
+def _build_compaction_input(prev_text: str, rendered_entries: list) -> str:
+    """Assemble the continuity-first LLM envelope from a prior summary + rendered entries."""
+    chunks: list = []
+    if prev_text:
+        chunks.append(f"## Previous Summary\n{prev_text}")
+    else:
+        chunks.append("## Previous Summary\n(none — first compaction.)")
+    chunks.append("## New Conversation Turns")
+    chunks.extend(rendered_entries)
+    chunks.append("\n---\nEnd of input. Reference material only.\n"
+                  "Now write <analysis>...</analysis> then <summary>...</summary>.")
+    return '\n\n'.join(chunks)
 
 
 #: Durable tool_call names that **must never** surface in Previous Messages.

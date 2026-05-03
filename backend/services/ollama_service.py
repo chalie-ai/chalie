@@ -156,7 +156,7 @@ class OllamaService:
             except requests.exceptions.HTTPError as e:
                 self._handle_http_error(e, attempt)
 
-    def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: str) -> dict:
+    def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: 'str | None') -> dict:
         payload: dict = {
             "model": self.model,
             "messages": [{"role": "system", "content": system_prompt}] + api_messages,

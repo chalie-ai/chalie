@@ -103,6 +103,39 @@ export function render(payload, synthesis, root) {
   card.appendChild(locationEl);
 
   // ── Main row: icon + temp + condition ─────────────────────────────────────
+  const { mainEl, tempEl, tempTarget } = buildMainRow(payload);
+  card.appendChild(mainEl);
+
+  // ── Detail pills ──────────────────────────────────────────────────────────
+  const detailsEl = buildDetailPills(payload);
+  if (detailsEl) card.appendChild(detailsEl);
+
+  // ── Forecast ──────────────────────────────────────────────────────────────
+  appendForecast(card, payload);
+
+  // ── Synthesis (LLM interpretation) ───────────────────────────────────────
+  if (synthesis) {
+    const synDivider = document.createElement('div');
+    synDivider.className = 'rich-card__divider';
+    card.appendChild(synDivider);
+
+    const synEl = document.createElement('div');
+    synEl.className = 'rich-card__synthesis';
+    synEl.textContent = synthesis;
+    card.appendChild(synEl);
+  }
+
+  root.appendChild(card);
+
+  // Start count-up after mount (rAF ensures layout is done)
+  requestAnimationFrame(() => {
+    countUp(tempEl, tempTarget, '°C');
+  });
+}
+
+// ── Private helpers ──────────────────────────────────────────────────────────
+
+function buildMainRow(payload) {
   const mainEl = document.createElement('div');
   mainEl.className = 'weather-card__main';
 
@@ -129,9 +162,10 @@ export function render(payload, synthesis, root) {
   tempBlock.appendChild(condEl);
 
   mainEl.appendChild(tempBlock);
-  card.appendChild(mainEl);
+  return { mainEl, tempEl, tempTarget };
+}
 
-  // ── Detail pills ──────────────────────────────────────────────────────────
+function buildDetailPills(payload) {
   const details = [];
   if (payload.feels_like_c != null) {
     details.push(`Feels ${Math.round(payload.feels_like_c)}°`);
@@ -142,78 +176,60 @@ export function render(payload, synthesis, root) {
   const wind = windStr(payload.wind_direction, payload.wind_kmh);
   if (wind) details.push(wind);
 
-  if (details.length > 0) {
-    const detailsEl = document.createElement('div');
-    detailsEl.className = 'weather-card__details';
-    for (const text of details) {
-      const pill = document.createElement('span');
-      pill.className = 'weather-card__detail-pill';
-      pill.textContent = text;
-      detailsEl.appendChild(pill);
-    }
-    card.appendChild(detailsEl);
-  }
+  if (details.length === 0) return null;
 
-  // ── Forecast ──────────────────────────────────────────────────────────────
+  const detailsEl = document.createElement('div');
+  detailsEl.className = 'weather-card__details';
+  for (const text of details) {
+    const pill = document.createElement('span');
+    pill.className = 'weather-card__detail-pill';
+    pill.textContent = text;
+    detailsEl.appendChild(pill);
+  }
+  return detailsEl;
+}
+
+function appendForecast(card, payload) {
   const hasForecast = payload.forecast_tomorrow_condition
     || payload.forecast_tomorrow_max_c != null
     || payload.forecast_tomorrow_min_c != null;
 
-  if (hasForecast) {
-    const divider = document.createElement('div');
-    divider.className = 'rich-card__divider';
-    card.appendChild(divider);
+  if (!hasForecast) return;
 
-    const forecastEl = document.createElement('div');
-    forecastEl.className = 'weather-card__forecast';
+  const divider = document.createElement('div');
+  divider.className = 'rich-card__divider';
+  card.appendChild(divider);
 
-    const label = document.createElement('span');
-    label.className = 'weather-card__forecast-label';
-    label.textContent = 'Tomorrow';
-    forecastEl.appendChild(label);
+  const forecastEl = document.createElement('div');
+  forecastEl.className = 'weather-card__forecast';
 
-    if (payload.forecast_tomorrow_max_c != null || payload.forecast_tomorrow_min_c != null) {
-      const tempRange = document.createElement('span');
-      tempRange.className = 'weather-card__forecast-temp';
-      const hi = payload.forecast_tomorrow_max_c != null ? Math.round(payload.forecast_tomorrow_max_c) : '–';
-      const lo = payload.forecast_tomorrow_min_c != null ? Math.round(payload.forecast_tomorrow_min_c) : '–';
-      tempRange.textContent = `${hi}°/${lo}°`;
-      forecastEl.appendChild(tempRange);
-    }
+  const label = document.createElement('span');
+  label.className = 'weather-card__forecast-label';
+  label.textContent = 'Tomorrow';
+  forecastEl.appendChild(label);
 
-    if (payload.forecast_tomorrow_condition) {
-      const cond = document.createElement('span');
-      cond.className = 'weather-card__forecast-condition';
-      cond.textContent = payload.forecast_tomorrow_condition;
-      forecastEl.appendChild(cond);
-    }
-
-    if (payload.forecast_tomorrow_precip_chance_pct != null) {
-      const rain = document.createElement('span');
-      rain.className = 'weather-card__forecast-rain';
-      rain.textContent = `${payload.forecast_tomorrow_precip_chance_pct}%`;
-      forecastEl.appendChild(rain);
-    }
-
-    card.appendChild(forecastEl);
+  if (payload.forecast_tomorrow_max_c != null || payload.forecast_tomorrow_min_c != null) {
+    const tempRange = document.createElement('span');
+    tempRange.className = 'weather-card__forecast-temp';
+    const hi = payload.forecast_tomorrow_max_c == null ? '–' : Math.round(payload.forecast_tomorrow_max_c);
+    const lo = payload.forecast_tomorrow_min_c == null ? '–' : Math.round(payload.forecast_tomorrow_min_c);
+    tempRange.textContent = `${hi}°/${lo}°`;
+    forecastEl.appendChild(tempRange);
   }
 
-  // ── Synthesis (LLM interpretation) ───────────────────────────────────────
-  if (synthesis) {
-    const synDivider = document.createElement('div');
-    synDivider.className = 'rich-card__divider';
-    card.appendChild(synDivider);
-
-    const synEl = document.createElement('div');
-    synEl.className = 'rich-card__synthesis';
-    synEl.textContent = synthesis;
-    card.appendChild(synEl);
+  if (payload.forecast_tomorrow_condition) {
+    const cond = document.createElement('span');
+    cond.className = 'weather-card__forecast-condition';
+    cond.textContent = payload.forecast_tomorrow_condition;
+    forecastEl.appendChild(cond);
   }
 
-  root.appendChild(card);
+  if (payload.forecast_tomorrow_precip_chance_pct != null) {
+    const rain = document.createElement('span');
+    rain.className = 'weather-card__forecast-rain';
+    rain.textContent = `${payload.forecast_tomorrow_precip_chance_pct}%`;
+    forecastEl.appendChild(rain);
+  }
 
-  // Start count-up after mount (rAF ensures layout is done)
-  requestAnimationFrame(() => {
-    countUp(tempEl, tempTarget, '°C');
-  });
+  card.appendChild(forecastEl);
 }

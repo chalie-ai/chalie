@@ -228,7 +228,7 @@ class TestSchemaCollisionPrevention:
 
 
 class TestHandleToolDispatchCollisionGuard:
-    def test_handleTool_routes_subagent_even_when_input_contains_type_key(self):
+    def test_handle_tool_routes_subagent_even_when_input_contains_type_key(self):
         """handleTool() must dispatch to the 'subagent' handler even when the
         LLM-emitted tool call input dict contains a key literally named 'type'
         (the pre-fix collision vector).

@@ -179,7 +179,7 @@ class TestRichMediaParserIntegration:
         assert rich_seg["tag"] == "weather_1"
         assert rich_seg["synthesis"] == "Partly cloudy, 12°C."
         assert rich_seg["payload"]["location"] == "London, GB"
-        assert rich_seg["payload"]["temperature_c"] == 12.4
+        assert rich_seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
     def test_parse_two_cities_produces_two_rich_segments(self):
         from services.rich_media_parser import parse

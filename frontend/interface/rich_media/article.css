@@ -1,0 +1,113 @@
+/* ==========================================================================
+   Article Card — shared layout for News + Web Search (theme-aware)
+   Image is optional — when absent, body spans full width.
+   ========================================================================== */
+
+.article-card {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+}
+
+.article-card--no-image {
+  grid-template-columns: 1fr;
+}
+
+.article-card__thumb {
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      color-mix(in oklab, var(--violet) 16%, transparent),
+      color-mix(in oklab, var(--violet) 16%, transparent) 6px,
+      color-mix(in oklab, var(--violet) 8%, transparent) 6px,
+      color-mix(in oklab, var(--violet) 8%, transparent) 12px
+    );
+  border: 1px solid color-mix(in oklab, var(--violet) 24%, transparent);
+  display: flex;
+  align-items: flex-end;
+  padding: 12px;
+  min-height: 130px;
+  overflow: hidden;
+}
+
+.article-card__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  position: absolute;
+  inset: 0;
+}
+
+.article-card__thumb--has-img {
+  position: relative;
+  padding: 0;
+}
+
+.article-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.article-card__dek {
+  font-size: 1rem;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
+}
+
+.article-card__dek em {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.article-card__sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.66rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.06em;
+}
+
+.article-card__src {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: all 160ms ease;
+  cursor: pointer;
+}
+
+.article-card__src:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.article-card__src-ico {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.52rem;
+  font-weight: 600;
+  color: white;
+  flex-shrink: 0;
+}
+
+.article-card__meta {
+  margin-left: 4px;
+  color: var(--text-tertiary);
+}

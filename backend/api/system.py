@@ -468,7 +468,7 @@ def _tail_error_lines() -> list[dict]:
         for raw in fh:
             try:
                 entry = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 continue
             if entry.get("level") in _ERROR_LEVELS:
                 errors.append({"timestamp": entry.get("timestamp", ""), "message": entry.get("message", "")})

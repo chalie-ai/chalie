@@ -123,7 +123,7 @@ class TestConversationRecentSegments:
         assert seg["tag"] == "weather_1"
         assert seg["synthesis"] == "Partly cloudy, 12°C."
         assert seg["payload"]["location"] == "London, GB"
-        assert seg["payload"]["temperature_c"] == 12.4
+        assert seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
     def test_ephemeral_tool_calls_included_in_pairing(self, db):
         """ephemeral=1 rows (inline weather results) must be included."""

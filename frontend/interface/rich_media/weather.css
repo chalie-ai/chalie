@@ -1,22 +1,20 @@
 /* ==========================================================================
-   Weather Card — Radiant skin
+   Weather Card — Radiant skin (theme-aware)
    ========================================================================== */
 
 .weather-card {
-  --icon-glow: rgba(0, 240, 255, 0.18);
+  --icon-glow: color-mix(in oklab, var(--cyan) 18%, transparent);
 }
 
-/* Location header */
 .weather-card__location {
   font-size: 0.8rem;
   font-weight: 600;
-  color: rgba(234, 230, 242, 0.50);
+  color: var(--text-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   margin-bottom: 14px;
 }
 
-/* Main data row: icon + temp + condition */
 .weather-card__main {
   display: flex;
   align-items: center;
@@ -36,26 +34,29 @@
   height: 100%;
 }
 
-.weather-card__temp-block {}
+.weather-card__temp-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
 
 .weather-card__temp {
   font-size: 2rem;
   font-weight: 700;
   line-height: 1;
-  color: rgba(234, 230, 242, 0.95);
+  color: var(--text-primary);
   letter-spacing: -0.02em;
 }
 
 .weather-card__condition {
   font-size: 0.8125rem;
-  color: rgba(234, 230, 242, 0.60);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
-/* Detail pills row */
 .weather-card__details {
   font-size: 0.75rem;
-  color: rgba(234, 230, 242, 0.45);
+  color: var(--text-tertiary);
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
@@ -63,9 +64,9 @@
 }
 
 .weather-card__detail-pill::before {
-  content: '·';
+  content: '\00b7';
   margin-right: 4px;
-  color: rgba(138, 92, 255, 0.50);
+  color: color-mix(in oklab, var(--violet) 50%, transparent);
 }
 
 .weather-card__detail-pill:first-child::before {
@@ -73,18 +74,17 @@
   margin-right: 0;
 }
 
-/* Forecast row */
 .weather-card__forecast {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 0.75rem;
-  color: rgba(234, 230, 242, 0.48);
+  color: var(--text-tertiary);
 }
 
 .weather-card__forecast-label {
   font-weight: 600;
-  color: rgba(234, 230, 242, 0.35);
+  color: var(--text-subtle);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 0.7rem;
@@ -92,7 +92,7 @@
 }
 
 .weather-card__forecast-temp {
-  color: rgba(234, 230, 242, 0.60);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -106,5 +106,5 @@
 
 .weather-card__forecast-rain {
   flex-shrink: 0;
-  color: rgba(0, 240, 255, 0.55);
+  color: color-mix(in oklab, var(--cyan) 55%, var(--text-secondary));
 }

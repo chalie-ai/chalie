@@ -4,6 +4,11 @@ SearchAbility — Multi-provider search with semantic routing.
 Routes queries to best provider(s) via embedding similarity,
 or allows explicit provider selection. Falls back to DDG.
 
+Rich-media rendering:
+  When ``_rich_media_ordinal`` is present (user channel only), returns a
+  structured JSON payload + instruction trailer so the frontend renders an
+  article card (shared layout with news).
+
 The search assets (search_tool_providers.sqlite, fetcher, router) stay in
 tools/search/ until Phase 4 — this ability imports them from there.
 """
@@ -19,6 +24,17 @@ from abilities._base import Ability
 from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
 
 logger = logging.getLogger(__name__)
+
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a search results card; without it, the user sees "
+    "only plain text. Write a single paragraph that synthesises the findings "
+    "for the user. Example: \"Based on what I found — "
+    "<span id='{tag}'>The Rust Foundation has cycled through three executive "
+    "directors in four years, each departure hinging on the same question of "
+    "how much a non-profit steward should do.</span>\""
+)
 
 
 class SearchAbility(Ability):
@@ -60,17 +76,17 @@ class SearchAbility(Ability):
     }
     TIMEOUT = 20
 
-    # Path to the search providers SQLite — stays in tools/search/assets/ until Phase 4
     _DB: ClassVar[str] = str(
         Path(__file__).resolve().parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
     )
     _providers: ClassVar[dict | None] = None
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         query = (params.get("query") or "").strip()
         if not query:
             return {"text": "EMPTY: no query supplied. Tell the user no search was performed."}
 
+        ordinal = params.get("_rich_media_ordinal")
         limit = max(1, min(10, int(params["limit"]) if params.get("limit") is not None else 5))
         forced = (params.get("provider") or "").strip().lower()
 
@@ -98,10 +114,15 @@ class SearchAbility(Ability):
                 "Tell the user honestly that nothing was found and offer to refine the query."
             )}
 
-        return {"text": json.dumps({"results": [
+        structured = [
             {"title": r.get("title", ""), "desc": r.get("snippet", ""), "url": r.get("url", "")}
             for r in results
-        ]})}
+        ]
+
+        if ordinal is None:
+            return {"text": json.dumps({"results": structured})}
+
+        return _serialise_rich(structured, ordinal)
 
     @classmethod
     def _load_providers(cls) -> dict:
@@ -148,3 +169,11 @@ class SearchAbility(Ability):
             logger.warning("[SEARCH] router error, falling back to DDG: %s", e)
 
         return fetch_ddg_fallback(query, limit), ["ddg"], {"routing_method": "fallback"}
+
+
+def _serialise_rich(results: list, ordinal: int) -> str:
+    tag = f"search_{ordinal}"
+    payload = {"results": results}
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"

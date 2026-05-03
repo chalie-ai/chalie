@@ -48,7 +48,7 @@ class TestRecordTiming:
         trace_id = metrics.start_trace()
         metrics.record_timing(trace_id, "classification", 42.0)
         data = metrics.get_trace(trace_id)
-        assert data["timings"]["classification"] == 42.0
+        assert data["timings"]["classification"] == pytest.approx(42.0, abs=1e-9)
 
     def test_timing_idempotent_on_unknown_trace(self, metrics):
         # Must not raise when trace doesn't exist
@@ -75,6 +75,6 @@ class TestDashboardData:
         # get_dashboard_data (also uses today's key), so they match if same day.
         if emb:
             assert emb["count"] == 2
-            assert emb["avg_ms"] == 150.0
-            assert emb["min_ms"] == 100.0
-            assert emb["max_ms"] == 200.0
+            assert emb["avg_ms"] == pytest.approx(150.0, abs=1e-9)
+            assert emb["min_ms"] == pytest.approx(100.0, abs=1e-9)
+            assert emb["max_ms"] == pytest.approx(200.0, abs=1e-9)

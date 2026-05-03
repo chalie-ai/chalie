@@ -12,19 +12,24 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="rich_media/base_card.css">
   <link rel="stylesheet" href="rich_media/weather.css">
+  <link rel="stylesheet" href="rich_media/article.css">
+  <link rel="stylesheet" href="rich_media/scheduler.css">
+  <link rel="stylesheet" href="rich_media/list.css">
   <script>globalThis.__chaliePage = 'chat';</script>
   <script>
     // Theme bootstrap — runs before paint to avoid a dark→light flash on
     // light-mode preference. Honours saved choice; falls back to system.
     (function () {
+      function pickTheme(saved) {
+        if (saved === 'light' || saved === 'dark') return saved;
+        return globalThis.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
       try {
         var saved = localStorage.getItem('chalie-theme');
-        var theme = (saved === 'light' || saved === 'dark')
-          ? saved
-          : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-        document.documentElement.setAttribute('data-theme', theme);
-      } catch (_) {
-        document.documentElement.setAttribute('data-theme', 'dark');
+        document.documentElement.dataset.theme = pickTheme(saved);
+      } catch (err) {
+        console.warn('theme-persist failed', err);
+        document.documentElement.dataset.theme = 'dark';
       }
     })();
   </script>
@@ -446,10 +451,10 @@
       var btn = document.getElementById('themeToggle');
       if (!btn) return;
       btn.addEventListener('click', function () {
-        var current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        var current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
         var next = current === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', next);
-        try { localStorage.setItem('chalie-theme', next); } catch (_) {}
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('chalie-theme', next); } catch (err) { console.warn('theme-persist failed', err); }
         document.dispatchEvent(new CustomEvent('chalie:theme-changed', { detail: { theme: next } }));
       });
     })();

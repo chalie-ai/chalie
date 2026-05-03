@@ -169,13 +169,25 @@ class ActDispatcherService:
         if ability_timeout and ability_timeout > effective_timeout:
             effective_timeout = float(ability_timeout)
 
-        # Execute with timeout. We copy the calling thread's contextvars into
-        # the worker so abilities can resolve current_processor() (and any
-        # other ContextVar-backed state bound by MessageProcessor.send()).
-        # Without this copy the spawned Thread starts with a fresh context
-        # and current_processor() returns None — silently breaking budget
-        # counters and decay-tracking on processor-innate abilities like
-        # save_pattern / save_graph.
+        return self._execute_with_timeout(action_type, channel, action, handler, effective_timeout, start_time)
+
+
+    def _execute_with_timeout(
+        self,
+        action_type: str,
+        channel: str,
+        action: Dict[str, Any],
+        handler: Any,
+        effective_timeout: float,
+        start_time: float,
+    ) -> Dict[str, Any]:
+        """Run handler in a daemon thread with timeout; return a result dict.
+
+        Copies calling thread's contextvars so abilities can resolve
+        current_processor() (and any ContextVar-backed state bound by
+        MessageProcessor.send()). Without this copy the spawned Thread starts
+        with a fresh context and current_processor() returns None.
+        """
         try:
             result_container = {'result': None, 'error': None}
             ctx = contextvars.copy_context()
@@ -194,7 +206,6 @@ class ActDispatcherService:
 
             execution_time = time.time() - start_time
 
-            # Check results
             if thread.is_alive():
                 return {
                     'action_type': action_type,
@@ -215,32 +226,7 @@ class ActDispatcherService:
                     'notes': '',
                 }
 
-            raw_result = result_container['result']
-
-            # Handle structured skill results (dict with text + reply_actions)
-            reply_actions = None
-            _discovered_tools = None
-            if isinstance(raw_result, dict) and 'text' in raw_result:
-                reply_actions = raw_result.get('reply_actions')
-                _discovered_tools = raw_result.get('_discovered_tools')
-                raw_result = raw_result['text']
-
-            confidence = _estimate_confidence(action_type, raw_result)
-            notes = _extract_notes(action_type, action, raw_result)
-
-            dispatch_result = {
-                'action_type': action_type,
-                'status': 'success',
-                'result': raw_result,
-                'execution_time': execution_time,
-                'confidence': confidence,
-                'notes': notes,
-            }
-            if reply_actions:
-                dispatch_result['reply_actions'] = reply_actions
-            if _discovered_tools:
-                dispatch_result['_discovered_tools'] = _discovered_tools
-            return dispatch_result
+            return self._build_success_result(action_type, action, result_container['result'], execution_time)
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -254,6 +240,37 @@ class ActDispatcherService:
                 'notes': '',
             }
 
+    def _build_success_result(
+        self,
+        action_type: str,
+        action: Dict[str, Any],
+        raw_result: Any,
+        execution_time: float,
+    ) -> Dict[str, Any]:
+        """Build the success result dict from a raw handler return value."""
+        reply_actions = None
+        _discovered_tools = None
+        if isinstance(raw_result, dict) and 'text' in raw_result:
+            reply_actions = raw_result.get('reply_actions')
+            _discovered_tools = raw_result.get('_discovered_tools')
+            raw_result = raw_result['text']
+
+        confidence = _estimate_confidence(action_type, raw_result)
+        notes = _extract_notes(action_type, action, raw_result)
+
+        dispatch_result = {
+            'action_type': action_type,
+            'status': 'success',
+            'result': raw_result,
+            'execution_time': execution_time,
+            'confidence': confidence,
+            'notes': notes,
+        }
+        if reply_actions:
+            dispatch_result['reply_actions'] = reply_actions
+        if _discovered_tools:
+            dispatch_result['_discovered_tools'] = _discovered_tools
+        return dispatch_result
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

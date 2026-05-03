@@ -55,9 +55,7 @@ class ListService:
         self.db = db_service
         self._write_queue = get_write_queue()
 
-    # ─────────────────────────────────────────────
     # List operations
-    # ─────────────────────────────────────────────
 
     def create_list(
         self,
@@ -352,9 +350,7 @@ class ListService:
             logger.error(f"[LISTS] get_all_lists failed: {e}")
             return []
 
-    # ─────────────────────────────────────────────
     # Item operations (batch)
-    # ─────────────────────────────────────────────
 
     def add_items(
         self,
@@ -652,7 +648,6 @@ class ListService:
             return 0
 
     # History & context
-    # ─────────────────────────────────────────────
 
     def get_history(
         self,
@@ -785,9 +780,7 @@ class ListService:
 
         return "\n".join(lines)
 
-    # ─────────────────────────────────────────────
     # Internal helpers
-    # ─────────────────────────────────────────────
 
     def _resolve_list(self, name_or_id: str) -> Optional[Dict[str, Any]]:
         """

@@ -32,12 +32,12 @@ logger = logging.getLogger(__name__)
 # Group 2: ordinal string (e.g. "1")
 # Group 3: inner synthesis text (may span multiple lines)
 _TAG_RE = re.compile(
-    r"""<span\s+id=['""]([a-z][a-z0-9_]*)_(\d+)['""][ \t]*>(.*?)</span>""",
+    r"""<span\s+id=['"]([a-z][a-z0-9_]*)_(\d+)['"][ \t]*>(.*?)</span>""",
     re.DOTALL | re.IGNORECASE,
 )
 
 
-def strip_spans(content: str) -> str:
+def strip_spans(content: str | None) -> str | None:
     """Remove every ``<span id='name_N'>…</span>`` wrapper, keeping inner text.
 
     Used at the subagent → parent boundary as a defensive scrub: subagents are
@@ -82,42 +82,47 @@ def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
     cursor = 0
 
     for match in _TAG_RE.finditer(content):
-        # Emit any leading prose before this tag as a text segment
-        if match.start() > cursor:
-            head = content[cursor:match.start()].strip()
-            if head:
-                segments.append({"type": "text", "content": head})
-
-        tool_name = match.group(1)
-        ordinal = match.group(2)
-        tag = f"{tool_name}_{ordinal}"
-        synthesis = match.group(3).strip()
-
-        payload = _find_payload(tag, tool_calls)
-        if payload is not None:
-            segments.append({
-                "type": "rich",
-                "tag": tag,
-                "synthesis": synthesis,
-                "payload": payload,
-            })
-        else:
-            logger.warning("rich_media: orphan tag %s — no matching tool_call result found", tag)
-            if synthesis:
-                segments.append({"type": "text", "content": synthesis})
-
+        _append_leading_prose(content, cursor, match.start(), segments)
+        _append_tag_segment(match, tool_calls, segments)
         cursor = match.end()
 
-    # Emit any trailing prose after the last tag
     tail = content[cursor:].strip()
     if tail:
         segments.append({"type": "text", "content": tail})
 
-    # If nothing matched, return the full content as a single text segment
     if not segments and content.strip():
         segments.append({"type": "text", "content": content.strip()})
 
     return segments
+
+
+def _append_leading_prose(content: str, cursor: int, match_start: int, segments: list) -> None:
+    """Emit any prose that precedes a tag match as a text segment."""
+    if match_start > cursor:
+        head = content[cursor:match_start].strip()
+        if head:
+            segments.append({"type": "text", "content": head})
+
+
+def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: list) -> None:
+    """Resolve a span tag to a rich or text segment and append it."""
+    tool_name = match.group(1)
+    ordinal = match.group(2)
+    tag = f"{tool_name}_{ordinal}"
+    synthesis = match.group(3).strip()
+
+    payload = _find_payload(tag, tool_calls)
+    if payload is not None:
+        segments.append({
+            "type": "rich",
+            "tag": tag,
+            "synthesis": synthesis,
+            "payload": payload,
+        })
+    else:
+        logger.warning("rich_media: orphan tag %s — no matching tool_call result found", tag)
+        if synthesis:
+            segments.append({"type": "text", "content": synthesis})
 
 
 def _find_payload(tag: str, tool_calls: list[dict]) -> dict | str | None:
@@ -161,5 +166,5 @@ def _extract_data(result: str) -> dict | str:
     head = result.split("\n\n", 1)[0].strip()
     try:
         return json.loads(head)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         return head

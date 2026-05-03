@@ -80,8 +80,8 @@ class TestBuildToolTelemetry:
             "device": {},
         }
         out = build_tool_telemetry(raw)
-        assert out["lat"] == 51.5
-        assert out["lon"] == -0.1
+        assert out["lat"] == pytest.approx(51.5, abs=1e-9)
+        assert out["lon"] == pytest.approx(-0.1, abs=1e-9)
         assert out["city"] == "London"
         assert out["country"] == "UK"
         assert out["time"] == "14:30"

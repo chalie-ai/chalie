@@ -9,11 +9,16 @@
  */
 
 import * as weatherModule from './weather.js';
+import * as articleModule from './article.js';
+import * as schedulerModule from './scheduler.js';
+import * as listModule from './list.js';
 
 const REGISTRY = {
   weather: weatherModule,
-  // search: searchModule,   — future
-  // browser: browserModule, — future
+  news: articleModule,
+  search: articleModule,
+  schedule: schedulerModule,
+  list: listModule,
 };
 
 /**

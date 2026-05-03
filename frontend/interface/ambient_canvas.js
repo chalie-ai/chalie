@@ -50,14 +50,14 @@ export class AmbientCanvas {
     // Theme-aware base + orb intensity. Light mode reads from a warm-paper
     // bg with softer, multiply-style orbs; dark mode keeps near-black with
     // brighter additive orbs.
-    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    const isLight = document.documentElement.dataset.theme === 'light';
     if (isLight) {
       ctx.fillStyle = '#F6F4F1';
     } else {
       ctx.fillStyle = '#06080e';
     }
     ctx.fillRect(0, 0, w, h);
-    const alphaMul = isLight ? 0.55 : 1.0;
+    const alphaMul = isLight ? 0.55 : 1;
 
     // Restrained orbs — think distant nebulae, not lava lamps.
     // Two warm (violet / magenta) and one cool (cyan) for contrast.

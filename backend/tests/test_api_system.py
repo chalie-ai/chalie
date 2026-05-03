@@ -26,7 +26,6 @@ class TestSystemAPI:
             yield
 
     # GET /health
-    # ────────────────────────────────────────────
 
     def test_get_health_returns_ok_and_version(self, client):
         """GET /health returns status 'ok' and the current APP_VERSION."""
@@ -40,7 +39,6 @@ class TestSystemAPI:
         assert 'attention' not in data
 
     # POST /health
-    # ────────────────────────────────────────────
 
     def test_post_health_saves_context_and_returns_ok(self, client):
         """POST /health saves client context and returns status ok (no attention field)."""
@@ -69,7 +67,6 @@ class TestSystemAPI:
         assert 'attention' not in data
 
     # GET /metrics
-    # ────────────────────────────────────────────
 
     def test_get_metrics_returns_dashboard_data(self, client):
         """GET /metrics proxies MetricsService.get_dashboard_data()."""
@@ -94,7 +91,6 @@ class TestSystemAPI:
         assert 'error' in data
 
     # GET /system/status
-    # ────────────────────────────────────────────
 
     def test_system_status_returns_expected_keys(self, client, db):
         """GET /system/status returns status, memory, storage, queues top-level keys."""
@@ -143,7 +139,6 @@ class TestSystemAPI:
         assert 'memory_store_error' in data
 
     # GET /system/observability/records
-    # ────────────────────────────────────────────
 
     def test_records_episodes_source_returns_gist_and_id(self, client, db):
         """Episodes source returns key=id, value=gist, ordered by last_accessed DESC (NULLs last)."""
@@ -297,7 +292,6 @@ class TestSystemAPI:
         assert resp_user.get_json()['returned'] == 0
 
     # GET /system/observability/tools
-    # ────────────────────────────────────────────
 
     def test_observability_tools_returns_stats(self, client, db):
         """GET /system/observability/tools returns per-tool usage counts from tool_calls.
@@ -380,7 +374,6 @@ class TestSystemAPI:
 
 
     # GET /system/observability/tasks
-    # ────────────────────────────────────────────
 
     def test_observability_tasks_returns_generated_at(self, client):
         """GET /system/observability/tasks returns generated_at."""
@@ -399,9 +392,7 @@ class TestSystemAPI:
         data = resp.get_json()
         assert 'generated_at' in data
 
-    # ────────────────────────────────────────────
     # generated_at field on all observability endpoints
-    # ────────────────────────────────────────────
 
     def test_observability_tools_includes_generated_at(self, client, db):
         """GET /system/observability/tools includes a generated_at ISO timestamp."""
@@ -414,7 +405,6 @@ class TestSystemAPI:
         assert parsed.tzinfo is not None
 
     # GET /ready
-    # ────────────────────────────────────────────
 
     def _ready_patches(self, db_ok=True, store_ok=True):
         """Build patch context for /ready — database and store can be individually broken.

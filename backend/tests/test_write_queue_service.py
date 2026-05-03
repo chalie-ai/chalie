@@ -10,6 +10,10 @@ import pytest
 
 from services.write_queue_service import WriteQueueService
 
+
+def _raise(exc):
+    raise exc
+
 pytestmark = pytest.mark.unit
 
 
@@ -30,7 +34,7 @@ class TestSubmitSync:
 
     def test_exception_propagates_to_caller(self, wq):
         with pytest.raises(ValueError, match="boom"):
-            wq.submit_sync(lambda: (_ for _ in ()).throw(ValueError("boom")))
+            wq.submit_sync(lambda: _raise(ValueError("boom")))
 
     def test_preserves_fifo_ordering(self, wq):
         results = []
@@ -53,7 +57,7 @@ class TestSubmit:
         # Fire-and-forget exceptions are logged but NOT stored (no result
         # container), so they cannot be counted in stats.  They must never
         # propagate to the caller — that's the contract under test.
-        wq.submit(lambda: (_ for _ in ()).throw(RuntimeError("silent")))
+        wq.submit(lambda: _raise(RuntimeError("silent")))
         # Flush to ensure the item was processed.
         wq.submit_sync(lambda: None)
         # Not asserting errors count — fire-and-forget has no result tracking.
@@ -73,7 +77,7 @@ class TestGetStats:
 
     def test_errors_incremented_on_sync_failure(self, wq):
         with pytest.raises(RuntimeError, match="e"):
-            wq.submit_sync(lambda: (_ for _ in ()).throw(RuntimeError("e")))
+            wq.submit_sync(lambda: _raise(RuntimeError("e")))
         stats = wq.get_stats()
         assert stats["errors"] == 1
 
