@@ -773,10 +773,22 @@ body.speaker-user   #ambientBloom {
   }
 }
 
-/* Light theme: no drop shadows on bubbles (rest, active, or otherwise). */
-[data-theme="light"] .speech-form,
-[data-theme="light"] .speech-form--active {
-  box-shadow: none;
+/* Hard rule — NO shadows anywhere inside chat bubbles. Every theme,
+   every state, every descendant. Catches stripe glows, hover lifts,
+   active drop, glyph drop-shadows, action-btn glows, and anything
+   added later. */
+.speech-form,
+.speech-form *,
+.speech-form::before,
+.speech-form::after,
+.speech-form *::before,
+.speech-form *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+.speech-form .sender-glyph,
+.speech-form__header .sender-glyph {
+  filter: none !important;
 }
 
 /* Sender glyph — fused at the cap of the accent stripe. Constellation for
