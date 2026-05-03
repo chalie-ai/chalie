@@ -15,14 +15,14 @@ import os
 
 import pytest
 
+import paths
 from services.deliberation_score_service import DeliberationScoreService
 from services.onnx_inference_service import OnnxInferenceService
 
 pytestmark = pytest.mark.integration
 
-_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_MODELS_DIR = os.path.join(_BACKEND_ROOT, "data", "models")
-_DEFAULT_PRETRAINED_DIR = os.path.join(_BACKEND_ROOT, "data", "pre-trained")
+_DEFAULT_MODELS_DIR = str(paths.MODELS_DIR)
+_DEFAULT_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
 _ENCODER_PATH = os.path.join(
     _DEFAULT_MODELS_DIR, "gte-modernbert-base", "onnx", "model.onnx"
 )
@@ -90,6 +90,26 @@ class TestDeliberationScoreServiceBucketing:
         # Score must be comfortably below the high threshold — not clamped to 1.0.
         assert result < _HIGH_THR, (
             f"Simple factual question scored {result:.4f} — expected < {_HIGH_THR}"
+        )
+
+    @pytest.mark.parametrize("reflexive_input", ["hmm", "ok", "interesting"])
+    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input):
+        """Reflexive single-word acknowledgments must score <= 0.5.
+
+        Migrated from deleted nightly scenario 013 — classifier input/output
+        contracts belong here as deterministic unit-style assertions, not in
+        end-to-end nightly flow tests.
+        """
+        _require_encoder()
+        svc = _real_svc()
+        result = svc.classify(reflexive_input)
+        assert result is not None, (
+            f"classify({reflexive_input!r}) returned None — head unavailable?"
+        )
+        assert math.isfinite(result)
+        assert result <= 0.5, (
+            f"{reflexive_input!r} scored {result:.4f} — expected <= 0.5 "
+            f"(reflexive single-word inputs must land in the low band)"
         )
 
     def test_classify_two_different_inputs_produce_different_scores(self):

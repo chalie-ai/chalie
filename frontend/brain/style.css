@@ -1106,6 +1106,11 @@ body::before {
     100% { background-position: -200% 0; }
 }
 
+/* Error log rows */
+.error-log-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.error-log-row time { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.error-log-row span { font-size: 13px; color: var(--text-primary); }
+
 /* Understanding (Autobiography + Traits) */
 .obs-understanding-updated { font-size: 11px; color: var(--text-secondary); font-weight: 400; text-transform: none; margin-left: 8px; }
 

@@ -5,8 +5,6 @@ A single daemon thread that owns latent cognition: super-episode consolidation,
 decay, pattern extraction, user synthesis, and background DMN reflection.
 Fires only when the user is not active.
 
-Spec: ``/Volumes/llm/chalie-plans/v0.5.0/2026-04-24-subconscious-worker-design.md``.
-
 Tick body (sequential, per §5.3):
     1. Consolidate episodes → super-episodes  (channel='user' only — §B masterplan).
     2. Run decay engine.

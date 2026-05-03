@@ -32,7 +32,6 @@ export class VoicePlayer {
     this._getHost = getHost;
 
     this._overlay = null;
-    this._titleEl = null;
     this._playBtn = null;
     this._bkBtn = null;
     this._ffBtn = null;
@@ -76,7 +75,6 @@ export class VoicePlayer {
     this._overlay = document.getElementById('voicePlayerOverlay');
     if (!this._overlay) return;
 
-    this._titleEl = this._overlay.querySelector('.voice-player__title');
     this._playBtn = this._overlay.querySelector('#vpPlayBtn');
     this._bkBtn = this._overlay.querySelector('#vpBkBtn');
     this._ffBtn = this._overlay.querySelector('#vpFfBtn');
@@ -145,10 +143,6 @@ export class VoicePlayer {
     this._showOverlay();
     this._showLoading(true);
     this._showError(null);
-
-    if (this._titleEl) {
-      this._titleEl.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
-    }
 
     try {
       const host = this._getHost?.() || '';

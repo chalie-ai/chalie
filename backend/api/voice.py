@@ -19,6 +19,7 @@ import threading
 
 from flask import Blueprint, request, jsonify
 
+import paths
 from services.markup import extract_plaintext
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,9 @@ MAX_AUDIO_SECONDS = 660
 STT_CONCURRENCY = 1
 TTS_CONCURRENCY = 2
 
-# Kokoro model files — downloaded lazily into backend/data/models/kokoro/
-_KOKORO_MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "models", "kokoro",
-)
-_KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+# Kokoro model files — downloaded lazily into data/models/kokoro/
+_KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
+_KOKORO_MODEL_URL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_fp16.onnx"
 _KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Dependency detection ────────────────────────────────────────────────────
@@ -70,7 +68,7 @@ def _download_kokoro_models():
 
     os.makedirs(_KOKORO_MODEL_DIR, exist_ok=True)
 
-    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0.onnx")
+    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0-fp16.onnx")
     voices_path = os.path.join(_KOKORO_MODEL_DIR, "voices-v1.0.bin")
 
     for url, path in [(_KOKORO_MODEL_URL, model_path), (_KOKORO_VOICES_URL, voices_path)]:
@@ -88,6 +86,54 @@ def _download_kokoro_models():
         logger.info("[Voice] Downloaded %s (%.1f MB)", fname, os.path.getsize(path) / 1e6)
 
     return model_path, voices_path
+
+
+def _patch_kokoro_speed_dtype(tts):
+    """Fix upstream ``kokoro-onnx==0.5.0`` dtype bug for the HF fp16 schema.
+
+    The library's ``_create_audio`` hardcodes ``speed: int32`` when the model
+    exposes an ``input_ids`` input (the newer
+    ``onnx-community/Kokoro-82M-v1.0-ONNX`` export), but the fp16 graph
+    actually expects ``speed: float32``. ONNXRuntime then rejects every
+    inference call with::
+
+        Unexpected input data type. Actual: (tensor(int32)),
+        expected: (tensor(float))
+
+    We override the bound method on the loaded instance with a corrected
+    version so we don't have to vendor or fork the library. Drop this once
+    upstream releases a fix.
+    """
+    import time
+    import types
+    import numpy as np
+    from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE
+
+    def _create_audio_fixed(self, phonemes, voice, speed):
+        phonemes = phonemes[:MAX_PHONEME_LENGTH]
+        start_t = time.time()
+        tokens = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
+        assert len(tokens) <= MAX_PHONEME_LENGTH
+        voice = voice[len(tokens)]
+        tokens = [[0, *tokens, 0]]
+        if "input_ids" in [i.name for i in self.sess.get_inputs()]:
+            inputs = {
+                "input_ids": tokens,
+                "style": np.array(voice, dtype=np.float32),
+                "speed": np.array([speed], dtype=np.float32),  # was int32 — upstream bug
+            }
+        else:
+            inputs = {
+                "tokens": tokens,
+                "style": voice,
+                "speed": np.ones(1, dtype=np.float32) * speed,
+            }
+        audio = self.sess.run(None, inputs)[0]
+        logger.debug("[Voice] kokoro chunk %.2fs in %.2fs",
+                     len(audio) / SAMPLE_RATE, time.time() - start_t)
+        return audio, SAMPLE_RATE
+
+    tts._create_audio = types.MethodType(_create_audio_fixed, tts)
 
 
 def _ensure_models():
@@ -123,6 +169,7 @@ def _ensure_models():
         # the matching EP and falls back to CPU if session construction fails.
         kokoro_sess = build_session(model_file, log_prefix="[Voice/Kokoro]")
         tts = Kokoro.from_session(kokoro_sess, voices_file)
+        _patch_kokoro_speed_dtype(tts)
 
         with _load_lock:
             _stt_model = stt

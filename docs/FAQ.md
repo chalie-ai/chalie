@@ -107,7 +107,7 @@ Memories also decay naturally over time without any intervention.
 
 ## Where does Chalie store its data?
 
-Everything is in a single SQLite database at `backend/data/chalie.db`. No cloud storage, no external databases. You can back it up by copying that file.
+Everything is in a single SQLite database at `data/chalie.db` (sibling of `backend/` at the repo root). No cloud storage, no external databases. You can back it up by copying that file.
 
 ---
 

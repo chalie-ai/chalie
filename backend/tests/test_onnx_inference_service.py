@@ -2,8 +2,8 @@
 
 These tests exercise the full classifier pipeline end-to-end:
 
-1. Real ``gte-modernbert-base`` encoder ONNX (cached at backend/data/models/).
-2. Real shipped deliberation_score head (backend/data/pre-trained/deliberation_score/).
+1. Real ``gte-modernbert-base`` encoder ONNX (cached at data/models/).
+2. Real shipped deliberation_score head (resources/pre-trained/deliberation_score/).
 3. Tmpdir-injected heads to simulate corruption, contract violations, and missing
    assets — written as real ``.npz`` + ``meta.json`` files on disk, loaded by the
    real ``_register_task`` codepath. **Zero mocks, zero stubs.**
@@ -26,6 +26,7 @@ import os
 import numpy as np
 import pytest
 
+import paths
 from services.deliberation_score_service import DeliberationScoreService
 from services.embedding_service import _get_session_and_tokenizer
 from services.onnx_inference_service import (
@@ -34,10 +35,9 @@ from services.onnx_inference_service import (
 )
 
 
-# Default repo paths for real assets — resolved relative to backend/.
-_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_MODELS_DIR = os.path.join(_BACKEND_ROOT, "data", "models")
-_DEFAULT_PRETRAINED_DIR = os.path.join(_BACKEND_ROOT, "data", "pre-trained")
+# Default repo paths for real assets — resolved via canonical paths module.
+_DEFAULT_MODELS_DIR = str(paths.MODELS_DIR)
+_DEFAULT_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
 
 
 def _real_encoder_sha() -> str:

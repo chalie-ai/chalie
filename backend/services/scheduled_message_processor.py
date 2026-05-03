@@ -4,8 +4,6 @@ ScheduledMessageProcessor — Executes scheduled prompts via the standard tool l
 MessageProcessor v2 subclass. CHANNEL is flat 'scheduled' (collapsed from
 the old 'scheduled:{item_id}' format). item_id is stored in metadata only.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-Plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md § Commit 9
 """
 
 import logging

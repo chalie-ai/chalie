@@ -5,7 +5,6 @@ MessageProcessor v2 subclass. Hardcodes CHANNEL='dmn', ROLE='proactive_thought'.
 Builds its own context from data_graph (user synthesis) and the episodes table.
 All findings are saved via the memory tool — no UI broadcast, no OutputService call.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import logging

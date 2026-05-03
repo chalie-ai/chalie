@@ -17,6 +17,28 @@ const SPEAK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
   <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
 </svg>`;
 
+// Sender glyph — fused at the cap of the accent stripe.
+// Constellation (4 dots + 3 hairlines) for Chalie, single spark for the user.
+const CHALIE_GLYPH = `<svg class="sender-glyph" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+  <line x1="4" y1="14" x2="9" y2="5" stroke="currentColor" stroke-width="0.6" opacity="0.45"></line>
+  <line x1="9" y1="5" x2="14" y2="11" stroke="currentColor" stroke-width="0.6" opacity="0.45"></line>
+  <line x1="4" y1="14" x2="14" y2="11" stroke="currentColor" stroke-width="0.6" opacity="0.45"></line>
+  <circle class="sender-glyph__dot" cx="4" cy="14" r="1.4" fill="currentColor"></circle>
+  <circle class="sender-glyph__dot" cx="9" cy="5" r="1.6" fill="currentColor"></circle>
+  <circle class="sender-glyph__dot" cx="14" cy="11" r="1.3" fill="currentColor"></circle>
+  <circle class="sender-glyph__dot" cx="11" cy="2" r="0.9" fill="currentColor" opacity="0.65"></circle>
+</svg>`;
+
+const USER_GLYPH = `<svg class="sender-glyph" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+  <path d="M9 2 L11 7 L16 9 L11 11 L9 16 L7 11 L2 9 L7 7 Z" fill="currentColor" opacity="0.85"></path>
+</svg>`;
+
+function _attachGlyph(el, role) {
+  const wrapper = document.createElement('template');
+  wrapper.innerHTML = role === 'chalie' ? CHALIE_GLYPH : USER_GLYPH;
+  el.appendChild(wrapper.content.firstElementChild);
+}
+
 export class Renderer {
   /**
    * @param {HTMLElement} spine — the .conversation-spine element
@@ -42,6 +64,7 @@ export class Renderer {
   appendUserForm(text, ts = null, { inWorkingMemory = true } = {}, imageIds = []) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     if (!inWorkingMemory) el.classList.add('message--faded');
+    _attachGlyph(el, 'user');
 
     // Render image thumbnails above the text when images are attached
     if (imageIds.length > 0) {
@@ -64,13 +87,6 @@ export class Renderer {
     textEl.textContent = text;
     el.appendChild(textEl);
 
-    // Append meta row with timestamp
-    const metaRow = this._createEl('div', 'speech-form__meta');
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(ts);
-    metaRow.appendChild(timestampEl);
-    el.appendChild(metaRow);
-
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
@@ -85,15 +101,10 @@ export class Renderer {
   prependUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     if (!inWorkingMemory) el.classList.add('message--faded');
+    _attachGlyph(el, 'user');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = text;
     el.appendChild(textEl);
-
-    const metaRow = this._createEl('div', 'speech-form__meta');
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(ts);
-    metaRow.appendChild(timestampEl);
-    el.appendChild(metaRow);
 
     this._spine.prepend(el);
     return el;
@@ -207,7 +218,10 @@ export class Renderer {
     if (!actEl) return;
     const slot = actEl.querySelector(':scope > .act-row > .act-narrative');
     if (!slot) return;
-    slot.textContent = text || '';
+    // Trust the backend chokepoint (services.markup.sanitize → nh3) — same
+    // path chat bubbles use. textContent would render any LLM-emitted tags
+    // (e.g. <p>) as literal characters in the inline status line.
+    renderMarkupTo(slot, text || '');
     if (step != null) slot.dataset.step = String(step);
     this._scrollToBottom();
   }
@@ -326,6 +340,7 @@ export class Renderer {
   replaceActWithError(actEl, message) {
     if (actEl?.isConnected) actEl.remove();
     const el = this._createEl('div', 'speech-form speech-form--chalie speech-form--error');
+    el.appendChild(this._buildChalieHeader({}));
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = message;
     el.appendChild(textEl);
@@ -347,6 +362,7 @@ export class Renderer {
   _appendTextBubble(content, meta, inWorkingMemory) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
+    el.appendChild(this._buildChalieHeader(meta));
     const textEl = this._createEl('div', 'speech-form__text');
     renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
@@ -360,6 +376,7 @@ export class Renderer {
   _prependTextBubble(content, meta, inWorkingMemory) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
+    el.appendChild(this._buildChalieHeader(meta));
     const textEl = this._createEl('div', 'speech-form__text');
     renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
@@ -405,15 +422,21 @@ export class Renderer {
     return wrapper;
   }
 
+  _buildChalieHeader(meta) {
+    const header = this._createEl('div', 'speech-form__header');
+    const wrapper = document.createElement('template');
+    wrapper.innerHTML = CHALIE_GLYPH;
+    header.appendChild(wrapper.content.firstElementChild);
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
+    header.appendChild(timestampEl);
+    return header;
+  }
+
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
 
     const metaRow = this._createEl('div', 'speech-form__meta');
-
-    // Timestamp — always shown
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
-    metaRow.appendChild(timestampEl);
 
     // Mode badge — only for non-default modes (skip RESPOND)
     if (meta.mode && MODE_LABELS[meta.mode]) {
@@ -421,20 +444,6 @@ export class Renderer {
       badge.className = 'meta-mode-badge';
       badge.textContent = MODE_LABELS[meta.mode];
       metaRow.appendChild(badge);
-    }
-
-    // Confidence dot — color reflects routing confidence
-    if (meta.confidence > 0) {
-      const dot = document.createElement('span');
-      dot.className = 'meta-confidence-dot';
-      const c = meta.confidence;
-      const isHigh = c >= 0.85;
-      const isMid = c >= 0.65;
-      const confidenceClass = isHigh ? '--high' : (isMid ? '--mid' : '--low');
-      const label = isHigh ? 'Highly' : (isMid ? 'Moderately' : 'Less');
-      dot.classList.add(confidenceClass);
-      dot.title = `${label} confident (${Math.round(c * 100)}%)`;
-      metaRow.appendChild(dot);
     }
 
     // Remember (pin) button — always shown on Chalie messages
@@ -486,13 +495,40 @@ export class Renderer {
     window.addEventListener('scroll', () => {
       const scrollBottom = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
       this._userScrolledUp = scrollBottom > 100;
-    });
+      this._updateAmbientBloom();
+    }, { passive: true });
+    window.addEventListener('resize', () => this._updateAmbientBloom(), { passive: true });
+  }
+
+  /**
+   * Reactive ambient bloom — pick the speech-form whose top edge is highest
+   * above the viewport mid-line and tag <body> with .speaker-user / .speaker-chalie
+   * accordingly. CSS in #ambientBloom fades a violet/cyan tint to match.
+   * No-op when no forms are visible yet (keeps the canvas neutral on cold start).
+   */
+  _updateAmbientBloom() {
+    const forms = this._spine?.querySelectorAll(':scope > .speech-form');
+    if (!forms || forms.length === 0) {
+      document.body.classList.remove('speaker-user', 'speaker-chalie');
+      return;
+    }
+    const midline = window.innerHeight * 0.55;
+    let active = null;
+    for (const f of forms) {
+      if (f.getBoundingClientRect().top < midline) active = f;
+    }
+    document.body.classList.toggle('speaker-user',   !!active && active.classList.contains('speech-form--user'));
+    document.body.classList.toggle('speaker-chalie', !!active && active.classList.contains('speech-form--chalie'));
   }
 
   _scrollToBottom() {
-    if (this._userScrolledUp) return;
+    if (this._userScrolledUp) {
+      this._updateAmbientBloom();
+      return;
+    }
     requestAnimationFrame(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      this._updateAmbientBloom();
     });
   }
 

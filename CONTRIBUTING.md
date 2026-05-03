@@ -163,7 +163,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration details.
 ## Debugging
 
 - **All logs**: `python backend/run.py` (single process, all logs to stdout)
-- **Database**: SQLite file at `backend/data/chalie.db` — inspect with `sqlite3` CLI
+- **Database**: SQLite file at `data/chalie.db` (sibling of `backend/`) — inspect with `sqlite3` CLI
 - **API requests**: Add logging to Flask blueprints
 - **WebSocket**: Browser DevTools → Network → WS tab
 - **Memory state**: Use REST API endpoints to inspect state

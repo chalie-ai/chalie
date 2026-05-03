@@ -365,12 +365,12 @@ class WriteQueueService:
         """
         import sqlite3
 
-        from services.database_service import get_db_path
+        from services.database_service import get_shared_db_service
 
         exc_to_raise: Optional[Exception] = None
 
         try:
-            conn = sqlite3.connect(get_db_path(), timeout=30)
+            conn = sqlite3.connect(get_shared_db_service().db_path, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")

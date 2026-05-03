@@ -16,7 +16,6 @@ Retrieval pipeline:
 Single production entry point: ``retrieve()``.  No class — this is a module-
 level function API so there is no per-call EpisodicService construction cost.
 
-Plan: /Volumes/llm/chalie-plans/v0.3.3/episodic-simplification.md § Retrieval
 """
 
 import logging

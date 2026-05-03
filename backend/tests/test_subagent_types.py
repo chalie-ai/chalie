@@ -1,75 +1,13 @@
-"""Feature tests for the v0.6.0 subagent async-return flow, SubagentReturnProcessor,
-and pending_steers drain.
+"""Feature tests for subagent async-return flow and _pending_steers drain.
 
 Covers:
-  - _deliver_envelope Case B: idle parent spawns a daemon thread via _spawn_return_processor
-  - SubagentReturnProcessor inherits UserMessageProcessor with ROLE=subagent_return
-  - _pending_steers drained into _act_trail by UMP.getUserPrompt()
+  - _pending_steers drained into _act_trail by UMP.getUserPrompt() (north star
+    invariant: steers accumulated mid-ACT must be visible to the next iteration)
 """
-
-import threading
 
 import pytest
 
 pytestmark = pytest.mark.unit
-
-
-# ---------------------------------------------------------------------------
-# T2. _deliver_envelope Case B — idle parent spawns daemon thread
-# ---------------------------------------------------------------------------
-
-
-class TestAsyncSteerCaseB:
-    def test_spawn_return_processor_returns_daemon_thread(self):
-        """_spawn_return_processor() returns a daemon thread named 'subagent-return'
-        whose target is callable. We assert spawn mechanics — not the thread's
-        execution (that requires a live LLM + DB and is covered by nightly scenarios).
-        """
-        from abilities.subagent import _spawn_return_processor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nbody\n[end:subagent.complete]"
-
-        # Capture threads spawned during this call
-        before_names = {t.name for t in threading.enumerate()}
-        _spawn_return_processor(envelope)
-        after_threads = {t for t in threading.enumerate() if t.name not in before_names}
-
-        spawned = [t for t in after_threads if t.name == "subagent-return"]
-        assert len(spawned) == 1, (
-            f"Expected exactly 1 'subagent-return' thread, found: {[t.name for t in after_threads]}"
-        )
-        assert spawned[0].daemon is True, (
-            "subagent-return thread must be a daemon so it does not block process exit"
-        )
-        assert callable(spawned[0]._target), (
-            "subagent-return thread must have a callable target"
-        )
-
-
-# ---------------------------------------------------------------------------
-# T3. SubagentReturnProcessor inherits UserMessageProcessor
-# ---------------------------------------------------------------------------
-
-
-class TestSubagentReturnProcessor:
-    def test_subagent_return_processor_inherits_user_message_processor(self):
-        """SubagentReturnProcessor is a UserMessageProcessor subclass with
-        ROLE='subagent_return' and inherits CHANNEL='user'."""
-        from services.user_message_processor import (
-            SubagentReturnProcessor,
-            UserMessageProcessor,
-        )
-
-        assert issubclass(SubagentReturnProcessor, UserMessageProcessor), (
-            "SubagentReturnProcessor must inherit UserMessageProcessor"
-        )
-
-        assert SubagentReturnProcessor.ROLE == "subagent_return", (
-            f"Expected ROLE='subagent_return', got '{SubagentReturnProcessor.ROLE}'"
-        )
-        assert SubagentReturnProcessor.CHANNEL == "user", (
-            f"Expected CHANNEL='user' (inherited), got '{SubagentReturnProcessor.CHANNEL}'"
-        )
 
 
 # ---------------------------------------------------------------------------

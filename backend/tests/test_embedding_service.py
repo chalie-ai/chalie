@@ -1,7 +1,7 @@
 """Tests for services/embedding_service.py — real ONNX model, no mocking.
 
 These tests trigger model download on first run (~300MB, cached after that at
-backend/data/models/gte-modernbert-base/onnx/model.onnx). They exist to catch
+data/models/gte-modernbert-base/onnx/model.onnx). They exist to catch
 regressions in the ONNX pipeline end-to-end: load, tokenize, infer, normalize.
 """
 

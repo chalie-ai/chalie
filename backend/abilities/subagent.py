@@ -11,7 +11,10 @@ the parent agent's ACT loop (Case A: parent mid-turn) or spawns a fresh
 user-channel turn via SubagentReturnProcessor (Case B: parent idle).
 
 When wait=true the parent ACT iteration blocks until the subagent finishes,
-capped at 300 s regardless of type default.
+capped per-type by ``wait_cap``: web_surfer caps at 30 min (web research is
+slow), summariser and general_purpose cap at 5 min. Prefer wait=false for
+web_surfer — multi-site crawls regularly run for many minutes and blocking
+the parent that long stalls every other reply.
 """
 
 import json
@@ -100,10 +103,20 @@ Output guardrails (apply always):
 
 # ── Type registry ─────────────────────────────────────────────────────────────
 
+# default_timeout = the absolute wall-clock the SubagentProcessor is allowed
+#                   to run before its own deadline kicks in (fire-and-forget).
+# wait_cap        = the maximum the parent ACT iteration may block when the
+#                   caller passes wait=true. Always <= default_timeout.
+#                   web_surfer's cap is intentionally generous (30 min) because
+#                   real-world multi-site crawls regularly exceed 5 min and a
+#                   sync subagent that times out at 300s is useless. Other
+#                   types stay at 300s — anything that needs longer should
+#                   dispatch async.
 SUBAGENT_TYPES: dict[str, dict] = {
     "web_surfer": {
         "native_tools": ["read", "search", "browser", "news", "memory", "find_tools"],
         "default_timeout": 3600,   # 60 min
+        "wait_cap": 1800,          # 30 min sync cap — web research is slow
         "description": (
             "Search and crawl web pages and return a summary. "
             "Has web browsing capabilities."
@@ -113,12 +126,14 @@ SUBAGENT_TYPES: dict[str, dict] = {
     "summariser": {
         "native_tools": ["read", "search", "document", "find_tools"],
         "default_timeout": 600,    # 10 min
+        "wait_cap": 300,           # 5 min sync cap
         "description": "Read and summarise long documents or web pages.",
         "system_prompt": _SUMMARISER_PROMPT,
     },
     "general_purpose": {
         "native_tools": ["memory", "find_tools"],
         "default_timeout": 1800,   # 30 min
+        "wait_cap": 300,           # 5 min sync cap
         "description": (
             "Parallelise different long-running work — duplicate yourself "
             "to do different types of work in parallel."
@@ -211,27 +226,43 @@ class SubagentAbility(Ability):
     NAME = "subagent"
     SUMMARY = """\
 Spawn a subagent to handle long-running, parallel, or context-heavy work.
-Each subagent gets its own tool surface based on `type`:
+Each subagent gets its own tool surface based on `agent_type`:
 
 - web_surfer (60m): search and crawl web pages; can browse. Use for
-  multi-source web research and live page lookups.
+  multi-source web research and live page lookups. Web research is SLOW —
+  multi-site crawls routinely take many minutes. **Strongly prefer
+  wait=false** (fire-and-forget). The result is delivered back to you
+  asynchronously when ready, so you can keep talking to the user or fan
+  out more subagents in parallel.
 - summariser (10m): read and summarise long documents or web pages.
   Use to compress large content before pulling it into your context.
 - general_purpose (30m): parallelise different long-running work — spawn
   multiple subagents to do different things at once.
 
+Sync vs async (wait):
+- wait=false (default): returns immediately with an ack. The completed
+  envelope arrives later as a steer or a fresh turn. Use this for any
+  web_surfer call and for anything you don't need to act on inside this
+  same turn.
+- wait=true: blocks the parent ACT iteration until the subagent finishes.
+  Capped per type — web_surfer 30 min, summariser/general_purpose 5 min.
+  Only use this when the subagent's answer is the next thing you must
+  reason about and the task is genuinely fast.
+
+Parallelism:
+- Fan out aggressively. Three wait=false web_surfers (one per source) beat
+  one monolith trying to crawl everything sequentially.
+
 When NOT to use:
 - For a single quick lookup with a known URL or query — use the tool
   directly.
 - For tasks under ~30 seconds that fit in your turn — answer inline.
-- When you need the result NOW and inline is faster than spawning.
 
 Briefing rules:
 - The subagent has none of your conversation context. State the task
   fully.
 - Include success criteria and any data you already have.
-- Be specific about output shape (summary length, format, key fields).
-- Launch as many bounded subagents as you need; parallelise aggressively.\
+- Be specific about output shape (summary length, format, key fields).\
 """
     EXAMPLES = [
         "research the top 3 health benefits of cold water swimming as a background task",
@@ -255,12 +286,15 @@ Briefing rules:
                     "(summary length, bullet list vs prose, key fields)."
                 ),
             },
-            "type": {
+            "agent_type": {
                 "type": "string",
                 "enum": ["web_surfer", "summariser", "general_purpose"],
                 "description": (
                     "web_surfer (60m): search and crawl web pages; can browse. "
-                    "Use for multi-source web research and live page lookups.\n"
+                    "Use for multi-source web research and live page lookups. "
+                    "Web research is SLOW (multi-site crawls regularly take "
+                    "many minutes) — strongly prefer wait=false so you are not "
+                    "blocked.\n"
                     "summariser (10m): read and summarise long documents or web "
                     "pages. Use to compress large content before pulling it into "
                     "your context.\n"
@@ -273,37 +307,50 @@ Briefing rules:
             "wait": {
                 "type": "boolean",
                 "description": (
-                    "Set this to true to make the request synchronous. "
-                    "Request will be hard capped to 5 minutes, else leave it "
-                    "False and you will be notified automatically once the "
-                    "request is completed."
+                    "false (default, recommended): fire-and-forget. Returns an "
+                    "ack immediately and the completed envelope arrives back "
+                    "later as a steer or a fresh turn. ALWAYS use this for "
+                    "web_surfer — multi-site crawls regularly run for many "
+                    "minutes and blocking your turn that long is wasteful. "
+                    "true: synchronous — blocks this ACT iteration until the "
+                    "subagent finishes. Hard capped per type: web_surfer 30 "
+                    "min, summariser and general_purpose 5 min. Only use when "
+                    "the subagent's answer is the very next thing you need to "
+                    "reason about."
                 ),
                 "default": False,
             },
         },
         "required": ["prompt"],
     }
-    # Parent-dispatch timeout. wait=false returns in ms so 305 is harmless;
-    # wait=true blocks the parent ACT iteration up to 300s (the wait-true cap)
-    # plus a small buffer for envelope render + record. Anything below 305
-    # short-circuits a legitimate sync run with "Action exceeded Ns timeout"
-    # before SubagentProcessor finishes — the result column then carries the
-    # generic timeout string instead of the canonical [subagent(...)] tag.
-    TIMEOUT = 305
+    # Parent-dispatch timeout. wait=false returns in ms; wait=true blocks the
+    # parent ACT iteration up to the per-type wait_cap (currently max 1800s
+    # for web_surfer) plus a small buffer for envelope render + record.
+    # This ceiling MUST be >= max(wait_cap) across SUBAGENT_TYPES, otherwise
+    # the dispatcher kills a legitimate sync run with "Action exceeded Ns
+    # timeout" before SubagentProcessor finishes — the result column would
+    # then carry the generic timeout string instead of the canonical
+    # [subagent(...)] tag.
+    TIMEOUT = 1805
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         prompt = params.get("prompt", "").strip()
         if not prompt:
             return {"text": _skill_tag("subagent", error="prompt-required")}
 
-        agent_type = params.get("type", "general_purpose")
+        agent_type = params.get("agent_type", "general_purpose")
         if agent_type not in SUBAGENT_TYPES:
             return {"text": _skill_tag("subagent", error=f"invalid-type:{agent_type}")}
 
         wait = params.get("wait", False)
-        timeout = SUBAGENT_TYPES[agent_type]["default_timeout"]
+        type_entry = SUBAGENT_TYPES[agent_type]
+        timeout = type_entry["default_timeout"]
         if wait:
-            timeout = min(timeout, 300)
+            # wait=true caps per-type via wait_cap. web_surfer = 1800s (web
+            # research is genuinely slow); other types = 300s. Always <=
+            # default_timeout so the SubagentProcessor's own deadline still
+            # bounds it.
+            timeout = min(timeout, type_entry["wait_cap"])
 
         sub_id = uuid.uuid4().hex
 

@@ -9,9 +9,6 @@
 """
 UserMessageProcessor — user-channel subclass of MessageProcessor v2.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-Refactor plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md (Commit 8)
-
 Lifecycle: one instance per user turn. Constructed by websocket.py,
 called as:
     proc = UserMessageProcessor(raw_input=text, metadata=metadata,

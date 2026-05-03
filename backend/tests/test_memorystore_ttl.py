@@ -158,7 +158,6 @@ class TestAppUpdateServiceTTL:
                    return_value="installed"), \
              patch("services.app_update_service.AppUpdateService.get_current_version",
                    return_value="0.2.0"), \
-             patch("services.app_update_service.AppUpdateService.backup_database"), \
              patch("services.app_update_service.AppUpdateService.download_and_validate",
                    side_effect=RuntimeError("abort early for test")):
             from services.app_update_service import AppUpdateService, IN_PROGRESS_KEY

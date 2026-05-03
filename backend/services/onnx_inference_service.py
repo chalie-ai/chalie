@@ -10,16 +10,17 @@
 ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 
 Architecture:
-    1 shared ONNX encoder (gte-modernbert-base, downloaded into backend/data/models/)
+    1 shared ONNX encoder (gte-modernbert-base, downloaded into ``data/models/``)
     N 2-layer MLP heads loaded from per-task .npz files (shipped in
-    backend/data/pre-trained/<task>/)
+    ``resources/pre-trained/<task>/``).
 
-Pre-shipped classifier files (meta + .npz) live under backend/data/pre-trained/
+Pre-shipped classifier files (meta + .npz) live under ``resources/pre-trained/``
 and are tracked in git. Runtime-downloaded models (encoders, voice, doc2query)
-stay under backend/data/models/ and are NOT tracked.
+stay under ``data/models/`` and are NOT tracked. All paths are hard-coded in
+:mod:`paths`.
 
 Boot-time sha256 pin:
-    Computed once (streaming) against backend/data/models/gte-modernbert-base/onnx/model.onnx.
+    Computed once (streaming) against ``data/models/gte-modernbert-base/onnx/model.onnx``.
     Must match classifier_meta.json::base_encoder_sha256 for every registered task.
     On mismatch: RuntimeError raised, task not registered.
 
@@ -29,7 +30,6 @@ Thread-safe — multiple workers can call predict() / predict_scalar() concurren
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
@@ -166,8 +166,8 @@ class OnnxInferenceService:
     Shared gte-modernbert encoder + swappable 2-layer MLP classifier heads.
 
     Classifier heads (meta + .npz) are pre-shipped under
-    backend/data/pre-trained/<task>/. The shared encoder ONNX is downloaded
-    into backend/data/models/gte-modernbert-base/. No network access for heads.
+    ``resources/pre-trained/<task>/``. The shared encoder ONNX is downloaded
+    into ``data/models/gte-modernbert-base/``. No network access for heads.
 
     Usage:
         svc = get_onnx_inference_service()
@@ -659,19 +659,10 @@ def get_onnx_inference_service() -> OnnxInferenceService:
         if _instance is not None:
             return _instance
 
-        import runtime_config
+        import paths
 
-        _backend_data = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-        _default_models = os.path.join(_backend_data, "models")
-        _default_pretrained = os.path.join(_backend_data, "pre-trained")
-        models_dir = runtime_config.get(
-            "models_dir",
-            os.environ.get("MODELS_DIR", _default_models),
-        )
-        pretrained_dir = runtime_config.get(
-            "pretrained_dir",
-            os.environ.get("PRETRAINED_DIR", _default_pretrained),
-        )
+        models_dir = str(paths.MODELS_DIR)
+        pretrained_dir = str(paths.PRETRAINED_DIR)
 
         _instance = OnnxInferenceService(models_dir, pretrained_dir)
         logger.info(

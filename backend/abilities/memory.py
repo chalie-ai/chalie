@@ -23,8 +23,7 @@ LOG_PREFIX = "[MEMORY]"
 # Composition: effective_input = BASELINE × narrow_factor × expand_factor
 # `episodic_retrieval_service.retrieve` then applies its own population-aware
 # adaptive shrink on top. All eight constants are tuned by the meta-harness
-# loop (loop_improve.sh) against the d1-context-recall benchmark suite —
-# see /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
+# loop (loop_improve.sh) against the d1-context-recall benchmark suite.
 #
 # Do NOT read these values from config/env at import time. They are literal
 # ClassVar floats so the meta-harness can diff-patch them mechanically.
