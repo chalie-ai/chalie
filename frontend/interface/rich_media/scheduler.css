@@ -2,9 +2,13 @@
    Scheduler Card (theme-aware)
    ========================================================================== */
 
+.rich-card.scheduler-card {
+  max-width: 620px;
+}
+
 .scheduler-card {
   display: grid;
-  grid-template-columns: 52px 1fr auto;
+  grid-template-columns: 52px 1fr;
   gap: 16px;
   align-items: center;
 }
@@ -62,20 +66,49 @@
   font-weight: 500;
 }
 
-.scheduler-card__btn {
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--violet);
-  background: var(--violet);
-  color: white;
-  font-family: inherit;
-  font-size: 0.82rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 160ms ease;
+.scheduler-card__same-day {
+  grid-column: 1 / -1;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
 }
 
-.scheduler-card__btn:hover {
-  background: var(--violet-hover, #9B6FFF);
-  border-color: var(--violet-hover, #9B6FFF);
+.scheduler-card__same-day-label {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.scheduler-card__same-day-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 35%, transparent);
+}
+
+.scheduler-card__same-day-item:last-child {
+  border-bottom: none;
+}
+
+.scheduler-card__same-day-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scheduler-card__same-day-time {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
 }

@@ -129,7 +129,8 @@ class ScheduleAbility(Ability):
             result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
 
         if ordinal is not None and action == "create" and result.get("status") == "success":
-            return _serialise_rich(result, action, ordinal)
+            same_day = _fetch_same_day_items(result.get("record", {}))
+            return _serialise_rich(result, action, ordinal, same_day)
 
         body = json.dumps(result)
         return {"text": _skill_tag("schedule", body, action=action)}
@@ -541,13 +542,78 @@ def _normalize_hhmm(time_str: str) -> str | None:
         return None
 
 
-def _serialise_rich(result: dict, action: str, ordinal: int) -> str:
+def _serialise_rich(result: dict, action: str, ordinal: int, same_day: list | None = None) -> str:
     tag = f"schedule_{ordinal}"
     payload = {"action_performed": action}
     if "record" in result:
         payload["record"] = result["record"]
     elif "records" in result:
         payload["records"] = result["records"]
+    if same_day:
+        payload["same_day_items"] = same_day
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
     return f"{data_json}\n\n{instruction}"
+
+
+def _fetch_same_day_items(new_record: dict) -> list:
+    """Return other pending items that share the same local calendar day.
+
+    Excludes the just-created item (matched by id). Returns an empty list on
+    any failure — the rich-media payload is the only consumer and the missing
+    section degrades gracefully on the client.
+    """
+    new_id = new_record.get("id")
+    new_due_local = new_record.get("due_at")
+    if not new_id or not new_due_local:
+        return []
+
+    try:
+        from services.database_service import get_shared_db_service
+        from services.client_context_service import ClientContextService
+        from services.time_formatter_service import TimeFormatterService
+        from services.time_utils import parse_utc
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(ClientContextService().get().get("timezone", "UTC"))
+        except Exception:
+            tz = timezone.utc
+
+        new_due_utc = parse_utc(new_due_local)
+        if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
+            return []
+
+        local_dt = new_due_utc.astimezone(tz)
+        start_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = start_utc + timedelta(days=1)
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, message, due_at, recurrence
+                FROM scheduled_items
+                WHERE status = 'pending'
+                  AND hidden = 0
+                  AND id != ?
+                  AND due_at >= ?
+                  AND due_at < ?
+                ORDER BY due_at ASC
+            """, (new_id, start_utc.strftime("%Y-%m-%d %H:%M:%S"), end_utc.strftime("%Y-%m-%d %H:%M:%S")))
+            rows = cursor.fetchall()
+
+        items = []
+        for item_id, message, due_at, recurrence in rows:
+            local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or str(due_at)
+            items.append({
+                "id": item_id,
+                "message": message,
+                "due_at": local_due,
+                "recurrence": recurrence,
+            })
+        return items
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} same-day fetch failed: {e}")
+        return []
