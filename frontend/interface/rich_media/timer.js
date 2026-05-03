@@ -108,6 +108,7 @@ export function render(payload, synthesis, root) {
       pauseBtn.innerHTML = ICON_PAUSE;
       pauseBtn.title = 'Pause';
     }
+    tick();
   });
 
   stopBtn.addEventListener('click', () => {
@@ -127,11 +128,13 @@ export function render(payload, synthesis, root) {
     ring.setProgress(progress);
 
     if (remainingSeconds > 0) {
-      // Account for any in-progress pause so the displayed end-time freezes
-      // alongside the countdown rather than ticking forward during a hold.
-      const currentPauseMs = state.pausedAtMs != null ? Date.now() - state.pausedAtMs : 0;
+      // endsAt only counts pauses already concluded (accumulatedPausedMs).
+      // The in-progress pause is excluded so the displayed end-time freezes
+      // through the hold and visibly jumps forward by the pause duration the
+      // moment the user resumes — that jump is the feedback that proves the
+      // pause shifted the schedule.
       const endsAt = new Date(
-        state.startedAtMs + state.accumulatedPausedMs + currentPauseMs + state.totalSeconds * 1000,
+        state.startedAtMs + state.accumulatedPausedMs + state.totalSeconds * 1000,
       );
       timeEl.innerHTML = `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHM(endsAt)}`;
     } else {
