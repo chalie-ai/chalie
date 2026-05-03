@@ -131,7 +131,7 @@ export class Renderer {
   appendChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
-    _attachGlyph(el, 'chalie');
+    el.appendChild(this._buildChalieHeader(meta));
     const textEl = this._createEl('div', 'speech-form__text');
     renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
@@ -154,7 +154,7 @@ export class Renderer {
   prependChalieForm(content, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
-    _attachGlyph(el, 'chalie');
+    el.appendChild(this._buildChalieHeader(meta));
     const textEl = this._createEl('div', 'speech-form__text');
     renderMarkupTo(textEl, content || '');
     el.appendChild(textEl);
@@ -333,7 +333,7 @@ export class Renderer {
   replaceActWithError(actEl, message) {
     if (actEl?.isConnected) actEl.remove();
     const el = this._createEl('div', 'speech-form speech-form--chalie speech-form--error');
-    _attachGlyph(el, 'chalie');
+    el.appendChild(this._buildChalieHeader({}));
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = message;
     el.appendChild(textEl);
@@ -351,15 +351,21 @@ export class Renderer {
   // Private helpers
   // ---------------------------------------------------------------------------
 
+  _buildChalieHeader(meta) {
+    const header = this._createEl('div', 'speech-form__header');
+    const wrapper = document.createElement('template');
+    wrapper.innerHTML = CHALIE_GLYPH;
+    header.appendChild(wrapper.content.firstElementChild);
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
+    header.appendChild(timestampEl);
+    return header;
+  }
+
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
 
     const metaRow = this._createEl('div', 'speech-form__meta');
-
-    // Timestamp — always shown
-    const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
-    metaRow.appendChild(timestampEl);
 
     // Mode badge — only for non-default modes (skip RESPOND)
     if (meta.mode && MODE_LABELS[meta.mode]) {
@@ -367,20 +373,6 @@ export class Renderer {
       badge.className = 'meta-mode-badge';
       badge.textContent = MODE_LABELS[meta.mode];
       metaRow.appendChild(badge);
-    }
-
-    // Confidence dot — color reflects routing confidence
-    if (meta.confidence > 0) {
-      const dot = document.createElement('span');
-      dot.className = 'meta-confidence-dot';
-      const c = meta.confidence;
-      const isHigh = c >= 0.85;
-      const isMid = c >= 0.65;
-      const confidenceClass = isHigh ? '--high' : (isMid ? '--mid' : '--low');
-      const label = isHigh ? 'Highly' : (isMid ? 'Moderately' : 'Less');
-      dot.classList.add(confidenceClass);
-      dot.title = `${label} confident (${Math.round(c * 100)}%)`;
-      metaRow.appendChild(dot);
     }
 
     // Remember (pin) button — always shown on Chalie messages

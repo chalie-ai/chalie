@@ -704,12 +704,39 @@ body.speaker-user   #ambientBloom {
 }
 
 .speech-form--chalie {
-  background: var(--bg-surface-chalie);
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   align-self: stretch;
   width: 100%;
   max-width: 100%;
   padding-left: 0;
   padding-right: 0;
+}
+
+/* Header row — glyph + timestamp inline at the top of every Chalie turn. */
+.speech-form--chalie .speech-form__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-sm);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.speech-form--chalie .speech-form__header .sender-glyph {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  width: 18px;
+  height: 18px;
+  color: var(--violet);
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.speech-form--chalie .speech-form__header .speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
 }
 
 /* Chalie has no accent stripe — full-bleed text on the spine. */
@@ -1145,7 +1172,11 @@ body.speaker-user   #ambientBloom {
   transition: color var(--duration-fast), box-shadow var(--duration-fast);
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }
+.speech-form__remember-btn svg { width: 24px; height: 24px; }
 
 .speech-form__remember-btn:hover {
   color: var(--accent-primary);
@@ -1172,7 +1203,11 @@ body.speaker-user   #ambientBloom {
   transition: color var(--duration-fast);
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }
+.speech-form__speak-btn svg { width: 24px; height: 24px; }
 
 .speech-form__speak-btn:hover {
   color: var(--dusk-blue);
@@ -2439,20 +2474,6 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   vertical-align: middle;
   animation: meta-fade-in 150ms ease both;
 }
-
-.meta-confidence-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-left: 6px;
-  vertical-align: middle;
-  animation: meta-fade-in 150ms ease 60ms both;
-}
-
-.meta-confidence-dot.--high { background: rgba(138, 92, 255, 0.6); }
-.meta-confidence-dot.--mid  { background: rgba(234, 230, 242, 0.3); }
-.meta-confidence-dot.--low  { background: rgba(255, 180, 50, 0.45); }
 
 @keyframes meta-fade-in {
   from { opacity: 0; }
