@@ -235,8 +235,8 @@ class TestParseImageChoice:
     """
 
     _CANDIDATES = [
-        {"url": "https://example.com/a.jpg", "ocr_text": "Headline A"},
-        {"url": "https://example.com/b.jpg", "ocr_text": "Headline B"},
+        {"url": "https://example.com/a.jpg", "caption": "Headline A"},
+        {"url": "https://example.com/b.jpg", "caption": "Headline B"},
     ]
 
     def _tool_result(self) -> str:
