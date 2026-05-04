@@ -204,3 +204,26 @@ class TestResolveOgDescription:
         handler.pages["/long-desc"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/long-desc"])
         assert len(out[f"{base}/long-desc"]["description"]) <= 200
+
+    def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server):
+        """Google News article pages bury og:image past ~575KB of inline scripts.
+
+        Regression guard: the byte cap MUST be high enough that a meta tag
+        living at byte ~600K is still scanned. If this test fails after a
+        cap reduction, news thumbnails will silently disappear.
+        """
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        # Pad the head with ~600KB of garbage before the og:image tag —
+        # this matches the layout of real Google News article pages.
+        padding = ("<!--" + "x" * 100 + "-->") * 5800  # ~610KB
+        body = (
+            "<html><head>"
+            + padding
+            + '<meta property="og:image" content="https://cdn.example.com/buried.jpg">'
+            + "<title>Buried</title></head><body>x</body></html>"
+        ).encode()
+        assert len(body) > 600 * 1024, "fixture must exceed 600KB to exercise the cap"
+        handler.pages["/buried"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/buried"])
+        assert out.get(f"{base}/buried", {}).get("image_url") == "https://cdn.example.com/buried.jpg"

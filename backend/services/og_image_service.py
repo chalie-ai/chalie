@@ -25,7 +25,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 _FETCH_TIMEOUT = 3.0
-_MAX_BYTES = 256 * 1024  # head usually well under this; cap to avoid huge pages
+# Google News article pages bury og:image after ~575KB of inline JSON/scripts,
+# so the cap has to sit above ~600KB or news thumbnails never come through.
+_MAX_BYTES = 1024 * 1024
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
