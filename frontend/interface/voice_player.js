@@ -518,6 +518,13 @@ export class VoicePlayer {
     this._boundKeydown = (e) => {
       if (!this._overlay?.open) return;
       if (e.key === 'Escape') { this._close(); return; }
+      const t = e.target;
+      const editable = t && (
+        t.tagName === 'INPUT'
+        || t.tagName === 'TEXTAREA'
+        || t.isContentEditable
+      );
+      if (editable) return;
       if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); this._togglePlayPause(); return; }
       if (e.key === 'ArrowRight') { this._skipForward(); return; }
       if (e.key === 'ArrowLeft') this._skipBack();
