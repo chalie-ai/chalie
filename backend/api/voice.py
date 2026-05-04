@@ -337,22 +337,26 @@ def voice_synthesize():
         # via GeneratorExit and releases the lock).
         with _tts_lock:
             for i, chunk in enumerate(chunks):
-                samples, _sr = _tts_model.create(
-                    chunk, voice=KOKORO_VOICE, lang="en-us"
-                )
+                try:
+                    samples, _sr = _tts_model.create(
+                        chunk, voice=KOKORO_VOICE, lang="en-us"
+                    )
+                except Exception as e:
+                    logger.error("[Voice] TTS synthesis failed on chunk %d/%d: %s", i + 1, total, e)
+                    break
                 wav_bytes = _audio_to_wav_bytes(samples)
                 yield json.dumps({
                     "index": i,
                     "total": total,
                     "audio": base64.b64encode(wav_bytes).decode("ascii"),
                 }) + "\n"
-            # Sentinel so the client can distinguish a complete stream from
-            # one truncated by a server crash. If the FE doesn't see this
-            # line it shows an "audio cut short" error rather than silently
-            # treating partial audio as the full message.
             yield json.dumps({"done": True, "total": total}) + "\n"
 
-    return Response(stream(), mimetype="application/x-ndjson")
+    return Response(
+        stream(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])

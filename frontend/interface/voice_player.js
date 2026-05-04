@@ -325,6 +325,13 @@ export class VoicePlayer {
   _playBufferFrom(buffer, offset) {
     if (!this._audioCtx) return;
 
+    // Browsers may auto-suspend the AudioContext between chunks (no recent
+    // user gesture). resume() transitions state synchronously for scheduling
+    // purposes — queued start() calls execute once the context is running.
+    if (this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
+
     const source = this._audioCtx.createBufferSource();
     source.buffer = buffer;
     source.connect(this._audioCtx.destination);
