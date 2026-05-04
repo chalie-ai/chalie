@@ -76,17 +76,6 @@ export class EventRouter {
       return;
     }
 
-    // TTS streaming — synthesize endpoint publishes WAV chunks + a terminator.
-    // VoicePlayer listens on document; router just forwards.
-    if (data.type === 'tts_chunk') {
-      document.dispatchEvent(new CustomEvent('chalie:tts-chunk', { detail: data }));
-      return;
-    }
-    if (data.type === 'tts_done') {
-      document.dispatchEvent(new CustomEvent('chalie:tts-done', { detail: data }));
-      return;
-    }
-
     const content = data.content || '';
     if (!content) return;
 

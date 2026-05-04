@@ -2,7 +2,8 @@
 
 Spins up a local HTTP server returning canned HTML pages and asserts the
 og:image / twitter:image extractor pulls the right URL out — including
-relative paths resolved against the post-redirect page URL.
+relative paths resolved against the post-redirect page URL — and that
+og:description / og:title / <title> are extracted alongside.
 """
 
 from __future__ import annotations
@@ -59,9 +60,9 @@ def _reset():
     yield
 
 
-def _html(meta_tags: str) -> bytes:
+def _html(meta_tags: str, title: str = "Page Title") -> bytes:
     return (
-        f"<html><head>{meta_tags}<title>x</title></head><body>x</body></html>"
+        f"<html><head>{meta_tags}<title>{title}</title></head><body>x</body></html>"
     ).encode()
 
 
@@ -72,7 +73,7 @@ class TestResolveOgImages:
         body = _html('<meta property="og:image" content="https://cdn.example.com/og.jpg">')
         handler.pages["/article"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/article"])
-        assert out == {f"{base}/article": "https://cdn.example.com/og.jpg"}
+        assert out[f"{base}/article"]["image_url"] == "https://cdn.example.com/og.jpg"
 
     def test_twitter_image_fallback(self, html_server):
         from services.og_image_service import resolve_og_images
@@ -80,7 +81,7 @@ class TestResolveOgImages:
         body = _html('<meta name="twitter:image" content="https://cdn.example.com/tw.jpg">')
         handler.pages["/tw"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/tw"])
-        assert out[f"{base}/tw"] == "https://cdn.example.com/tw.jpg"
+        assert out[f"{base}/tw"]["image_url"] == "https://cdn.example.com/tw.jpg"
 
     def test_relative_url_resolved_against_page(self, html_server):
         from services.og_image_service import resolve_og_images
@@ -88,7 +89,7 @@ class TestResolveOgImages:
         body = _html('<meta property="og:image" content="/img/hero.png">')
         handler.pages["/relative"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/relative"])
-        assert out[f"{base}/relative"] == f"{base}/img/hero.png"
+        assert out[f"{base}/relative"]["image_url"] == f"{base}/img/hero.png"
 
     def test_redirect_followed_and_relative_resolves_to_final(self, html_server):
         from services.og_image_service import resolve_og_images
@@ -98,7 +99,7 @@ class TestResolveOgImages:
         body = _html('<meta property="og:image" content="/img/x.jpg">')
         handler.pages["/final"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/redirect"])
-        assert out[f"{base}/redirect"] == f"{base}/img/x.jpg"
+        assert out[f"{base}/redirect"]["image_url"] == f"{base}/img/x.jpg"
 
     def test_missing_meta_returns_no_entry(self, html_server):
         from services.og_image_service import resolve_og_images
@@ -133,10 +134,8 @@ class TestResolveOgImages:
                                _html('<meta property="og:image" content="https://b.example/b.jpg">'))
         urls = [f"{base}/a", f"{base}/b"]
         out = resolve_og_images(urls)
-        assert out == {
-            f"{base}/a": "https://a.example/a.jpg",
-            f"{base}/b": "https://b.example/b.jpg",
-        }
+        assert out[f"{base}/a"]["image_url"] == "https://a.example/a.jpg"
+        assert out[f"{base}/b"]["image_url"] == "https://b.example/b.jpg"
 
     def test_double_quoted_attribute_order_swapped(self, html_server):
         """Real-world tags often have content before property."""
@@ -145,4 +144,63 @@ class TestResolveOgImages:
         body = _html('<meta content="https://cdn.example.com/swap.jpg" property="og:image"/>')
         handler.pages["/swap"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/swap"])
-        assert out[f"{base}/swap"] == "https://cdn.example.com/swap.jpg"
+        assert out[f"{base}/swap"]["image_url"] == "https://cdn.example.com/swap.jpg"
+
+
+class TestResolveOgDescription:
+    """og:description / og:title / <title> extraction alongside og:image."""
+
+    def test_og_description_extracted(self, html_server):
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        body = _html(
+            '<meta property="og:image" content="https://cdn.example.com/img.jpg">'
+            '<meta property="og:description" content="Scientists find water on Mars.">'
+        )
+        handler.pages["/with-desc"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/with-desc"])
+        assert out[f"{base}/with-desc"]["description"] == "Scientists find water on Mars."
+
+    def test_og_description_short_falls_back_to_og_title(self, html_server):
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        body = _html(
+            '<meta property="og:image" content="https://cdn.example.com/img.jpg">'
+            '<meta property="og:description" content="Too short">'
+            '<meta property="og:title" content="Mars Water Discovery 2026">'
+        )
+        handler.pages["/short-desc"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/short-desc"])
+        assert out[f"{base}/short-desc"]["description"] == "Mars Water Discovery 2026"
+
+    def test_no_description_falls_back_to_title_tag(self, html_server):
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        body = _html(
+            '<meta property="og:image" content="https://cdn.example.com/img.jpg">',
+            title="Article Title From Title Tag",
+        )
+        handler.pages["/title-only"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/title-only"])
+        assert out[f"{base}/title-only"]["description"] == "Article Title From Title Tag"
+
+    def test_description_empty_when_nothing_found(self, html_server):
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        # Page has og:image but no description/title metadata
+        body = b"<html><head><meta property=\"og:image\" content=\"https://cdn.example.com/img.jpg\"/></head></html>"
+        handler.pages["/no-title"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/no-title"])
+        assert out[f"{base}/no-title"]["description"] == ""
+
+    def test_description_capped_at_200_chars(self, html_server):
+        from services.og_image_service import resolve_og_images
+        base, handler = html_server
+        long_desc = "word " * 100  # 500 chars
+        body = _html(
+            f'<meta property="og:image" content="https://cdn.example.com/img.jpg">'
+            f'<meta property="og:description" content="{long_desc}">'
+        )
+        handler.pages["/long-desc"] = (200, {"Content-Type": "text/html"}, body)
+        out = resolve_og_images([f"{base}/long-desc"])
+        assert len(out[f"{base}/long-desc"]["description"]) <= 200

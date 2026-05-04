@@ -35,14 +35,14 @@ _RICH_MEDIA_INSTRUCTION = (
     "directors in four years, each departure hinging on the same question of "
     "how much a non-profit steward should do.</span>\""
     "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
-    "array, each entry has a `url`, the `source_title` of the result it came "
-    "from, and `ocr_text` (text scanned by local OCR — often empty for photos). "
-    "If a candidate's source article matches the topic you are synthesising, "
-    "add `data-image='<that url>'` to the span, e.g. "
+    "array, each entry has `url`, `source_title` (the result it came from), "
+    "and `caption` (a short description derived from the image filename or "
+    "article metadata). Pick the candidate whose `caption` and `source_title` "
+    "together best match the topic of your synthesis. If no candidate is a "
+    "clear match, omit `data-image`. To attach a thumbnail, add "
+    "`data-image='<that url>'` to the span, e.g. "
     "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
-    "Use a URL verbatim from `image_candidates`. Match by `source_title` first; "
-    "treat empty `ocr_text` as neutral (most news photos have no embedded text). "
-    "Only omit `data-image` if no candidate's source matches your synthesis."
+    "Use a URL verbatim from `image_candidates`."
 )
 
 
@@ -83,7 +83,7 @@ class SearchAbility(Ability):
         },
         "required": ["query"],
     }
-    TIMEOUT = 20
+    TIMEOUT = 180
 
     _DB: ClassVar[str] = str(
         Path(__file__).resolve().parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
@@ -198,6 +198,8 @@ def _serialise_rich(
 ) -> str:
     tag = f"search_{ordinal}"
 
+    # og_meta maps image_url → {"image_url", "description"} for caption derivation
+    og_meta: dict = {}
     if len(image_items) < 3 and og_targets:
         from services.og_image_service import resolve_og_images
         try:
@@ -206,9 +208,12 @@ def _serialise_rich(
             logger.warning("[SEARCH] og:image lookup failed: %s", exc)
             og_map = {}
         for article_url, title in og_targets:
-            img = og_map.get(article_url)
-            if img:
+            meta = og_map.get(article_url)
+            if meta:
+                img = meta["image_url"]
                 image_items.append((img, title))
+                # Key by image URL so image_candidate_service can look it up
+                og_meta[img] = meta
             if len(image_items) >= 3:
                 break
 
@@ -216,7 +221,7 @@ def _serialise_rich(
     if image_items:
         try:
             from services.image_candidate_service import build_image_candidates
-            candidates = build_image_candidates(image_items)
+            candidates = build_image_candidates(image_items, og_meta=og_meta or None)
         except Exception as exc:
             logger.warning("[SEARCH] image candidate shortlist failed: %s", exc)
             candidates = []
