@@ -46,19 +46,7 @@ export function render(payload, synthesis, root) {
   const card = document.createElement('div');
   const results = payload.results || [];
   const imageUrl = payload.image_url || null;
-  card.className = 'rich-card article-card' + (imageUrl ? '' : ' article-card--no-image');
-
-  if (imageUrl) {
-    const thumb = document.createElement('div');
-    thumb.className = 'article-card__thumb article-card__thumb--has-img';
-    const img = document.createElement('img');
-    img.src = imageUrl;
-    img.alt = '';
-    img.loading = 'lazy';
-    img.onerror = () => { thumb.remove(); card.classList.add('article-card--no-image'); };
-    thumb.appendChild(img);
-    card.appendChild(thumb);
-  }
+  card.className = 'rich-card article-card';
 
   const body = document.createElement('div');
   body.className = 'article-card__body';
@@ -67,6 +55,16 @@ export function render(payload, synthesis, root) {
   dek.className = 'article-card__dek';
   dek.textContent = synthesis || '';
   body.appendChild(dek);
+
+  if (imageUrl) {
+    const img = document.createElement('img');
+    img.className = 'article-card__img';
+    img.src = imageUrl;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.onerror = () => img.remove();
+    body.appendChild(img);
+  }
 
   const domains = [];
   const seen = new Set();
