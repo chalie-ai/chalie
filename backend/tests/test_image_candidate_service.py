@@ -11,7 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 pytestmark = pytest.mark.unit  # no external deps once the local HTTP server is up
 

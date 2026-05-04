@@ -300,7 +300,6 @@ class TestDeliverEnvelopeDiscriminator:
         import threading
         from abilities.subagent import _deliver_envelope
         from services.user_message_processor import UserMessageProcessor
-        from unittest.mock import patch
 
         envelope = "[subagent.complete(type=web_surfer)]\nTest result\n[end:subagent.complete]"
 
