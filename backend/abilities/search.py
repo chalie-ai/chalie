@@ -173,17 +173,31 @@ class SearchAbility(Ability):
 
     def _search_routed(self, query: str, limit: int):
         try:
-            from tools.search.router import route_query
+            from tools.search.router import route_query, _WEAK_SCORE
             ranked = route_query(query)
             if ranked:
                 providers = self._load_providers()
                 provider_dicts = [providers[p["name"]] for p in ranked if p["name"] in providers]
                 results = fetch_providers(provider_dicts, query, limit)
                 used = [p["name"] for p in provider_dicts]
-                return results, used, {
+                meta: dict = {
                     "routing_method": "auto",
                     "provider_scores": {p["name"]: p["score"] for p in ranked},
                 }
+
+                top_score = ranked[0]["score"]
+                if top_score < _WEAK_SCORE:
+                    ddg_results = fetch_ddg_fallback(query, limit)
+                    if ddg_results:
+                        results = results + ddg_results
+                        used.append("ddg")
+                        meta["ddg_supplement"] = True
+                        logger.info(
+                            "[SEARCH] DDG supplement fired for weak routing score %.4f on query=%r",
+                            top_score, query,
+                        )
+
+                return results, used, meta
         except Exception as e:
             logger.warning("[SEARCH] router error, falling back to DDG: %s", e)
 
