@@ -298,6 +298,12 @@ def voice_synthesize():
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
+    logger.info(
+        "[Voice] synthesize: len=%d head=%r",
+        len(text),
+        text[:80],
+    )
+
     @stream_with_context
     def stream():
         import base64
