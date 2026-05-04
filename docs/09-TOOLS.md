@@ -93,6 +93,6 @@ The `memory` ability preserves its inner per-row marker format inside the body s
 ## Safety constraints
 
 - Tool invocations time out. Exceeded timeouts are logged as failures.
-- Output is sanitized before it enters LLM context: action-like patterns are stripped and the result is truncated.
+- Output is sanitized before it enters LLM context: action-like patterns are stripped.
 - Every invocation is written to an audit trail with the topic, outcome, and execution time.
 - A global kill switch can disable all tools if needed.
