@@ -206,17 +206,18 @@ class TestResolveOgDescription:
         assert len(out[f"{base}/long-desc"]["description"]) <= 200
 
     def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server):
-        """Google News article pages bury og:image past ~575KB of inline scripts.
+        """Real-world parity: Google News article pages bury og:image past ~575KB.
 
-        Regression guard: the byte cap MUST be high enough that a meta tag
-        living at byte ~600K is still scanned. If this test fails after a
-        cap reduction, news thumbnails will silently disappear.
+        Regression guard against re-introducing a byte cap. The fetcher must
+        keep streaming until ``</head>`` regardless of head size; if anyone
+        reintroduces a truncation cap below the head's natural length, news
+        thumbnails will silently disappear and this test will fail.
         """
         from services.og_image_service import resolve_og_images
         base, handler = html_server
-        # Pad the head with ~600KB of garbage before the og:image tag —
-        # this matches the layout of real Google News article pages.
-        padding = ("<!--" + "x" * 100 + "-->") * 5800  # ~610KB
+        # Pad the head with ~610KB of inline content before the og:image tag —
+        # mirrors the layout of real Google News article pages.
+        padding = ("<!--" + "x" * 100 + "-->") * 5800
         body = (
             "<html><head>"
             + padding

@@ -25,9 +25,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 _FETCH_TIMEOUT = 3.0
-# Google News article pages bury og:image after ~575KB of inline JSON/scripts,
-# so the cap has to sit above ~600KB or news thumbnails never come through.
-_MAX_BYTES = 1024 * 1024
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
@@ -116,9 +113,8 @@ def _extract_one(url: str, timeout: float) -> dict:
                 if not chunk:
                     continue
                 buf.extend(chunk)
-                if len(buf) >= _MAX_BYTES:
-                    break
-                # Early exit once </head> seen
+                # Early exit once </head> seen — head is all we need.
+                # The request timeout bounds total work; no byte cap.
                 if b"</head>" in buf or b"</HEAD>" in buf:
                     break
             final_url = str(resp.url)
