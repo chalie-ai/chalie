@@ -19,8 +19,6 @@ from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-_MAX_SNIPPET = 300
-
 
 # ── Field mappings per provider ──────────────────────────────────────────────
 
@@ -166,7 +164,7 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
 
         results.append({
             'title': _clean_html(title or ''),
-            'snippet': _truncate(_clean_html(snippet or ''), _MAX_SNIPPET),
+            'snippet': _clean_html(snippet or ''),
             'url': url or '',
             'provider': provider_name,
             'date': date,
@@ -202,7 +200,7 @@ def _transform_atom(provider_name: str, raw_data, limit: int) -> list:
 
         results.append({
             'title': _clean_whitespace(title),
-            'snippet': _truncate(_clean_whitespace(summary or ''), _MAX_SNIPPET),
+            'snippet': _clean_whitespace(summary or ''),
             'url': url or '',
             'provider': provider_name,
             'date': published[:10] if published else None,
@@ -436,13 +434,6 @@ def _clean_html(text: str) -> str:
 def _clean_whitespace(text: str) -> str:
     """Collapse whitespace runs."""
     return _WHITESPACE_RE.sub(' ', text).strip()
-
-
-def _truncate(text: str, max_len: int) -> str:
-    """Truncate text with ellipsis."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rstrip() + '\u2026'
 
 
 _MEDIA_NS = '{http://search.yahoo.com/mrss/}'

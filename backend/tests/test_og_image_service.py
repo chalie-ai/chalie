@@ -193,18 +193,6 @@ class TestResolveOgDescription:
         out = resolve_og_images([f"{base}/no-title"])
         assert out[f"{base}/no-title"]["description"] == ""
 
-    def test_description_capped_at_200_chars(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        long_desc = "word " * 100  # 500 chars
-        body = _html(
-            f'<meta property="og:image" content="https://cdn.example.com/img.jpg">'
-            f'<meta property="og:description" content="{long_desc}">'
-        )
-        handler.pages["/long-desc"] = (200, {"Content-Type": "text/html"}, body)
-        out = resolve_og_images([f"{base}/long-desc"])
-        assert len(out[f"{base}/long-desc"]["description"]) <= 200
-
     def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server):
         """Real-world parity: Google News article pages bury og:image past ~575KB.
 

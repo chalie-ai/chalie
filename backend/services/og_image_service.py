@@ -58,8 +58,6 @@ _CONTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DESC_CAP = 200
-
 
 def resolve_og_images(
     urls: Iterable[str], max_workers: int = 3, timeout: float = _FETCH_TIMEOUT
@@ -148,8 +146,7 @@ def _extract_image(text: str, final_url: str) -> str:
 def _extract_description(text: str) -> str:
     """Extract og:description (preferred) → og:title → <title>.
 
-    Returns empty string when nothing is found.  Result is capped at
-    ``_DESC_CAP`` characters with trailing whitespace stripped.
+    Returns empty string when nothing is found.
     """
     # og:description or og:title in preference order
     for tag_match in _DESC_META_RE.finditer(text):
@@ -162,11 +159,10 @@ def _extract_description(text: str) -> str:
         if not value:
             continue
         if prop == "og:description" and len(value) >= 20:
-            return value[:_DESC_CAP].rstrip()
+            return value
         if prop == "og:title":
             # Keep looking for og:description — only use og:title as fallback
-            title_fallback = value[:_DESC_CAP].rstrip()
-            # Check if there's a better og:description later; if not, use this
+            title_fallback = value
             remaining = text[tag_match.end():]
             for later in _DESC_META_RE.finditer(remaining):
                 if later.group(1).lower() == "og:description":
@@ -174,10 +170,10 @@ def _extract_description(text: str) -> str:
                     if later_content:
                         later_val = later_content.group(1).strip()
                         if len(later_val) >= 20:
-                            return later_val[:_DESC_CAP].rstrip()
+                            return later_val
             return title_fallback
     # Fall back to <title>
     m = _TITLE_TAG_RE.search(text)
     if m:
-        return m.group(1).strip()[:_DESC_CAP].rstrip()
+        return m.group(1).strip()
     return ""

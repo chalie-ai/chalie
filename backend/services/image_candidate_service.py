@@ -31,8 +31,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 _FETCH_TIMEOUT = 3.0
-_MAX_BYTES = 5 * 1024 * 1024
-_CAPTION_CAP = 200
 _USER_AGENT = "Chalie-RichMedia/1.0 (image-candidate)"
 
 # Wikipedia CDN filenames are prefixed with a pixel-width like "1280px-".
@@ -103,7 +101,13 @@ def build_image_candidates(
 
 
 def _check_image_url(url: str) -> bool:
-    """Return True when the URL responds with a valid image payload."""
+    """Return True when the URL responds with a non-empty image payload.
+
+    The body is never stored, captioned, or forwarded — this is a
+    reachability + content-type probe. A single chunk read is enough
+    to prove the response is non-empty; we close the connection
+    immediately after, so the full image is never streamed.
+    """
     try:
         with requests.get(
             url,
@@ -115,29 +119,22 @@ def _check_image_url(url: str) -> bool:
             content_type = (resp.headers.get("Content-Type") or "").lower()
             if content_type and not content_type.startswith("image/"):
                 return False
-            # Read just enough to confirm the response is non-empty and under cap
-            total = 0
-            for chunk in resp.iter_content(chunk_size=64 * 1024):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > _MAX_BYTES:
-                    return False
-            return total > 0
+            for chunk in resp.iter_content(chunk_size=4096):
+                if chunk:
+                    return True
+            return False
     except Exception as exc:
         logger.debug("image_candidate: GET %s failed: %s", url, exc)
         return False
 
 
 def _derive_caption(image_url: str, og_meta: dict | None) -> str:
-    """Derive a short descriptive caption for an image URL.
+    """Derive a descriptive caption for an image URL.
 
     Priority:
     1. og:description from ``og_meta`` keyed by image URL (≥ 20 chars).
     2. Filename heuristic (Wikipedia descriptive filenames, etc.).
     3. Empty string for opaque/hash filenames.
-
-    The result is capped at ``_CAPTION_CAP`` characters.
     """
     # og_meta is keyed by article URL.  The image URL itself won't match, but
     # callers that pass og_meta also key it by image_url for direct lookup.
@@ -146,7 +143,7 @@ def _derive_caption(image_url: str, og_meta: dict | None) -> str:
         if meta:
             desc = (meta.get("description") or "").strip()
             if len(desc) >= 20:
-                return desc[:_CAPTION_CAP].rstrip()
+                return desc
 
     return _caption_from_filename(image_url)
 
@@ -202,4 +199,4 @@ def _caption_from_filename(url: str) -> str:
     if " " not in caption and _HEX_RE.match(caption):
         return ""
 
-    return caption[:_CAPTION_CAP].rstrip()
+    return caption

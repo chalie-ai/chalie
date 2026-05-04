@@ -200,15 +200,6 @@ class TestCaptionFromFilename:
         caption = _caption_from_filename(url)
         assert caption == ""
 
-    def test_caption_capped_at_200_chars(self):
-        from services.image_candidate_service import _caption_from_filename
-        # Build a long but valid descriptive filename
-        long_name = "_".join(["word"] * 60)
-        url = f"https://example.com/{long_name}.jpg"
-        caption = _caption_from_filename(url)
-        assert len(caption) <= 200
-
-
 class TestCaptionUsesOgDescription:
     """build_image_candidates uses og:description from og_meta when available."""
 
