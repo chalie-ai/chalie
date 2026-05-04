@@ -17,7 +17,7 @@ import struct
 import tempfile
 import threading
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, Response, request, jsonify, stream_with_context
 
 import paths
 from services.markup import extract_plaintext
@@ -31,8 +31,6 @@ voice_bp = Blueprint("voice", __name__)
 MOONSHINE_LANG = "en"
 KOKORO_VOICE = "af_heart"
 MAX_AUDIO_SECONDS = 660
-STT_CONCURRENCY = 1
-TTS_CONCURRENCY = 2
 
 # Kokoro model files — downloaded lazily into data/models/kokoro/
 _KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
@@ -55,11 +53,14 @@ except ImportError:
 
 _stt_model = None
 _tts_model = None
-_stt_sem = None
-_tts_sem = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
+# Serialises access to the shared Moonshine / Kokoro ONNX sessions. The model
+# is shared across request threads; these locks prevent two simultaneous
+# requests from corrupting session state.
+_stt_lock = threading.Lock()
+_tts_lock = threading.Lock()
 
 
 def _download_kokoro_models():
@@ -143,7 +144,7 @@ def _patch_kokoro_speed_dtype(tts):
 
 def _ensure_models():
     """Load STT and TTS models on first use. Thread-safe, blocks concurrent loaders."""
-    global _stt_model, _tts_model, _stt_sem, _tts_sem, _models_loaded, _models_loading
+    global _stt_model, _tts_model, _models_loaded, _models_loading
 
     if _models_loaded:
         return True
@@ -179,8 +180,6 @@ def _ensure_models():
         with _load_lock:
             _stt_model = stt
             _tts_model = tts
-            _stt_sem = threading.Semaphore(STT_CONCURRENCY)
-            _tts_sem = threading.Semaphore(TTS_CONCURRENCY)
             _models_loaded = True
             _models_loading = False
 
@@ -298,17 +297,19 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Generate speech from text, streaming chunks via WebSocket pub/sub.
+    """Synthesise speech and stream WAV chunks back as NDJSON.
 
-    Returns ``{"ok": true, "total": N}`` immediately so the client knows how
-    many chunks to expect. The actual synthesis runs in a daemon thread and
-    publishes each WAV chunk as a ``tts_chunk`` event on the ``output:events``
-    channel (picked up by the WebSocket and forwarded to the client for
-    progressive playback). End-of-stream is signalled with ``tts_done``.
+    The response body is one JSON object per line, each carrying a single
+    chunk's metadata and base64-encoded WAV bytes::
 
-    This replaces the prior single-blob response: on CPU-only hosts the
-    whole-blob path took minutes for long messages and hit client timeouts.
-    Streaming lets playback start as soon as the first chunk is ready.
+        {"index": 0, "total": 3, "audio": "<base64 wav>"}\\n
+        {"index": 1, "total": 3, "audio": "<base64 wav>"}\\n
+        {"index": 2, "total": 3, "audio": "<base64 wav>"}\\n
+
+    Synthesis runs sequentially in the request thread under ``_tts_lock``
+    so the single Kokoro ONNX session never sees concurrent ``run()``
+    calls. Each chunk is yielded as soon as it is ready — playback can
+    begin before the rest of the message has been synthesised.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
@@ -316,71 +317,42 @@ def voice_synthesize():
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
 
-    sem = _tts_sem
-    if sem is None:
-        return jsonify({"error": "Voice models not ready"}), 503
-
     data = request.get_json(silent=True) or {}
-    text = (data.get("text") or "").strip()
+    text = _clean_for_tts((data.get("text") or "").strip())
 
-    if not text:
-        return jsonify({"error": "Text is required"}), 400
-
-    # Clean markdown → natural spoken text
-    text = _clean_for_tts(text)
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
     chunks = _split_sentences(text)
     total = len(chunks)
 
-    if not sem.acquire(blocking=False):
-        return jsonify({"error": "TTS busy — try again shortly"}), 503
+    @stream_with_context
+    def stream():
+        import base64
+        import json
 
-    def _synthesize_and_push():
-        """Synthesize each sentence and publish WAV chunks via pub/sub.
-
-        The whole body runs under a single try/finally so that any failure
-        — an import error, a store-connection failure, a synth crash —
-        still releases the semaphore. A leak here previously locked the
-        TTS service permanently at 503 'busy' until process restart.
-        """
-        try:
-            import base64
-            import json
-            from services.memory_client import MemoryClientService
-
-            store = MemoryClientService.create_connection()
+        # Lock held for the full stream — single-user deployment, one TTS at
+        # a time. A second concurrent request queues here until this one
+        # finishes (or its client disconnects, which closes the generator
+        # via GeneratorExit and releases the lock).
+        with _tts_lock:
             for i, chunk in enumerate(chunks):
-                try:
-                    samples, _sr = _tts_model.create(
-                        chunk, voice=KOKORO_VOICE, lang="en-us"
-                    )
-                    wav_bytes = _audio_to_wav_bytes(samples)
-                    store.publish("output:events", json.dumps({
-                        "type": "tts_chunk",
-                        "index": i,
-                        "total": total,
-                        "text": chunk,
-                        "audio": base64.b64encode(wav_bytes).decode("ascii"),
-                    }))
-                except Exception as chunk_err:
-                    logger.warning(
-                        "[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
-                        len(chunk), chunk_err, chunk,
-                    )
-                    continue
-            store.publish("output:events", json.dumps({
-                "type": "tts_done",
-                "total": total,
-            }))
-        except Exception as e:
-            logger.exception("[Voice] Synth thread crashed before completion: %s", e)
-        finally:
-            sem.release()
+                samples, _sr = _tts_model.create(
+                    chunk, voice=KOKORO_VOICE, lang="en-us"
+                )
+                wav_bytes = _audio_to_wav_bytes(samples)
+                yield json.dumps({
+                    "index": i,
+                    "total": total,
+                    "audio": base64.b64encode(wav_bytes).decode("ascii"),
+                }) + "\n"
+            # Sentinel so the client can distinguish a complete stream from
+            # one truncated by a server crash. If the FE doesn't see this
+            # line it shows an "audio cut short" error rather than silently
+            # treating partial audio as the full message.
+            yield json.dumps({"done": True, "total": total}) + "\n"
 
-    threading.Thread(target=_synthesize_and_push, daemon=True).start()
-    return jsonify({"ok": True, "total": total})
+    return Response(stream(), mimetype="application/x-ndjson")
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
@@ -391,10 +363,6 @@ def voice_transcribe():
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
-
-    sem = _stt_sem
-    if sem is None:
-        return jsonify({"error": "Voice models not ready"}), 503
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -411,14 +379,10 @@ def voice_transcribe():
             "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
         }), 400
 
-    if not sem.acquire(blocking=False):
-        return jsonify({"error": "STT busy — try again shortly"}), 503
-
-    try:
-        text = _transcribe_sync(data)
-        return jsonify({"text": text})
-    except Exception as e:
-        logger.error("[Voice] STT error: %s", e)
-        return jsonify({"error": "Transcription failed"}), 500
-    finally:
-        sem.release()
+    with _stt_lock:
+        try:
+            text = _transcribe_sync(data)
+            return jsonify({"text": text})
+        except Exception as e:
+            logger.error("[Voice] STT error: %s", e)
+            return jsonify({"error": "Transcription failed"}), 500
