@@ -179,9 +179,9 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
 def _apply_image_choice(payload, chosen_image: str):
     """Validate the LLM's chosen image against the candidate list and finalise.
 
-    The tool surfaces ``image_candidates: [{url, ocr_text}]`` so the LLM can
-    decide whether to populate the card thumbnail. The choice arrives via the
-    ``data-image`` span attribute; here we:
+    The tool surfaces ``image_candidates: [{url, source_title, caption}]`` so
+    the LLM can decide whether to populate the card thumbnail. The choice
+    arrives via the ``data-image`` span attribute; here we:
 
     * Drop ``image_candidates`` from the payload — it is LLM-facing context,
       not frontend rendering data.
