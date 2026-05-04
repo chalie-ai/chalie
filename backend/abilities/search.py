@@ -131,8 +131,17 @@ class SearchAbility(Ability):
         if ordinal is None:
             return {"text": json.dumps({"results": structured})}
 
-        image_items = [(r.get("image", ""), r.get("title", "")) for r in results if r.get("image")]
-        return _serialise_rich(structured, ordinal, image_items)
+        image_items: list[tuple[str, str]] = []
+        og_targets: list[tuple[str, str]] = []
+        for r in results:
+            title = r.get("title", "")
+            url = r.get("url", "")
+            img = r.get("image", "")
+            if img:
+                image_items.append((img, title))
+            elif url:
+                og_targets.append((url, title))
+        return _serialise_rich(structured, ordinal, image_items, og_targets)
 
     @classmethod
     def _load_providers(cls) -> dict:
@@ -181,8 +190,28 @@ class SearchAbility(Ability):
         return fetch_ddg_fallback(query, limit), ["ddg"], {"routing_method": "fallback"}
 
 
-def _serialise_rich(results: list, ordinal: int, image_items: list[tuple[str, str]]) -> str:
+def _serialise_rich(
+    results: list,
+    ordinal: int,
+    image_items: list[tuple[str, str]],
+    og_targets: list[tuple[str, str]] | None = None,
+) -> str:
     tag = f"search_{ordinal}"
+
+    if len(image_items) < 3 and og_targets:
+        from services.og_image_service import resolve_og_images
+        try:
+            og_map = resolve_og_images([u for u, _ in og_targets[: 3 - len(image_items)]])
+        except Exception as exc:
+            logger.warning("[SEARCH] og:image lookup failed: %s", exc)
+            og_map = {}
+        for article_url, title in og_targets:
+            img = og_map.get(article_url)
+            if img:
+                image_items.append((img, title))
+            if len(image_items) >= 3:
+                break
+
     payload: dict = {"results": results}
     if image_items:
         try:

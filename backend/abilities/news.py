@@ -135,14 +135,32 @@ def _serialise_rich(articles, ordinal: int) -> str:
     tag = f"news_{ordinal}"
     results = []
     image_items: list[tuple[str, str]] = []
+    needs_og: list[tuple[str, str]] = []
     for a in articles:
         entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
         if a.description:
             entry["desc"] = a.description[:200]
         results.append(entry)
         img = getattr(a, "image_url", "") or ""
+        title = a.title or ""
         if img:
-            image_items.append((img, a.title or ""))
+            image_items.append((img, title))
+        elif entry["url"]:
+            needs_og.append((entry["url"], title))
+
+    if len(image_items) < 3 and needs_og:
+        from services.og_image_service import resolve_og_images
+        try:
+            og_map = resolve_og_images([u for u, _ in needs_og[: 3 - len(image_items)]])
+        except Exception as exc:
+            logger.warning("[news-tool] og:image lookup failed: %s", exc)
+            og_map = {}
+        for article_url, title in needs_og:
+            img = og_map.get(article_url)
+            if img:
+                image_items.append((img, title))
+            if len(image_items) >= 3:
+                break
 
     payload: dict = {"results": results}
     if image_items:
