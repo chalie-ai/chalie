@@ -281,3 +281,142 @@ class TestHandleToolDispatchCollisionGuard:
         assert result_text.startswith("[subagent("), (
             f"Expected ack tag starting with '[subagent(', got: {result_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# AD1. _deliver_envelope discriminator — turn_active Event
+#
+# Regression for the fire-and-forget delivery bug: _deliver_envelope used to
+# check isinstance(parent_ref, UserMessageProcessor) which always returned True
+# even after the parent's turn was over (it's just a Python object reference).
+# The result was silently appended to a dead processor's _pending_steers and
+# never reached the user. Fix: check parent_ref._turn_active.is_set().
+# ---------------------------------------------------------------------------
+
+
+class TestDeliverEnvelopeDiscriminator:
+    def test_case_a_delivers_to_pending_steers_when_parent_active(self):
+        """When parent _turn_active is set, envelope goes to _pending_steers."""
+        import threading
+        from abilities.subagent import _deliver_envelope
+        from services.user_message_processor import UserMessageProcessor
+        from unittest.mock import patch
+
+        envelope = "[subagent.complete(type=web_surfer)]\nTest result\n[end:subagent.complete]"
+
+        # Build a real UMP instance (SKIP_TRANSCRIPT_WRITE avoids DB)
+        parent = UserMessageProcessor.__new__(UserMessageProcessor)
+        parent._pending_steers = []
+        parent._turn_active = threading.Event()
+        parent._turn_active.set()
+        parent._current_iteration = 3
+
+        _deliver_envelope(envelope, parent)
+
+        assert envelope in parent._pending_steers
+
+    def test_case_b_fires_when_parent_turn_finished(self):
+        """When parent _turn_active is cleared, envelope routes to Case B."""
+        import threading
+        from abilities.subagent import _deliver_envelope
+        from services.user_message_processor import UserMessageProcessor
+        from unittest.mock import patch
+
+        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
+
+        parent = UserMessageProcessor.__new__(UserMessageProcessor)
+        parent._pending_steers = []
+        parent._turn_active = threading.Event()
+        parent._turn_active.clear()  # turn is over
+        parent._current_iteration = 5
+
+        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
+            _deliver_envelope(envelope, parent)
+
+        mock_spawn.assert_called_once_with(envelope)
+        assert envelope not in parent._pending_steers
+
+    def test_case_b_fires_when_parent_is_none(self):
+        """When parent_ref is None (no UMP), envelope routes to Case B."""
+        from abilities.subagent import _deliver_envelope
+        from unittest.mock import patch
+
+        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
+
+        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
+            _deliver_envelope(envelope, None)
+
+        mock_spawn.assert_called_once_with(envelope)
+
+
+# ---------------------------------------------------------------------------
+# AD2. _spawn_return_processor wires OutputService
+#
+# Regression: _spawn_return_processor used to call
+# SubagentReturnProcessor.send() and discard the return value. The response
+# never reached the WebSocket. Fix: call OutputService.enqueue_proactive()
+# after send() — same pattern as scheduler_service.py.
+# ---------------------------------------------------------------------------
+
+
+class TestSpawnReturnProcessorOutput:
+    def test_enqueue_proactive_called_with_response(self):
+        """_spawn_return_processor must call OutputService.enqueue_proactive()
+        with the response text after SubagentReturnProcessor.send() returns."""
+        from unittest.mock import patch, MagicMock
+        import threading
+        from abilities.subagent import _spawn_return_processor
+
+        envelope = "[subagent.complete(type=web_surfer)]\nResult text\n[end:subagent.complete]"
+
+        mock_output_svc = MagicMock()
+        mock_proc_instance = MagicMock()
+        mock_proc_instance.send.return_value = "Here is what I found from the subagent."
+
+        with patch(
+            'services.user_message_processor.SubagentReturnProcessor',
+            return_value=mock_proc_instance,
+        ), patch(
+            'services.output_service.OutputService',
+            return_value=mock_output_svc,
+        ):
+            _spawn_return_processor(envelope)
+
+            # Join inside the patch context so the thread resolves mocked imports
+            for t in threading.enumerate():
+                if t.name == "subagent-return":
+                    t.join(timeout=5)
+
+            mock_proc_instance.send.assert_called_once()
+            mock_output_svc.enqueue_proactive.assert_called_once_with(
+                topic='user',
+                response="Here is what I found from the subagent.",
+                source='subagent_return',
+            )
+
+    def test_enqueue_proactive_not_called_on_empty_response(self):
+        """If SubagentReturnProcessor.send() returns empty, do not publish."""
+        from unittest.mock import patch, MagicMock
+        import threading
+        from abilities.subagent import _spawn_return_processor
+
+        envelope = "[subagent.complete(type=web_surfer)]\n\n[end:subagent.complete]"
+
+        mock_output_svc = MagicMock()
+        mock_proc_instance = MagicMock()
+        mock_proc_instance.send.return_value = ""
+
+        with patch(
+            'services.user_message_processor.SubagentReturnProcessor',
+            return_value=mock_proc_instance,
+        ), patch(
+            'services.output_service.OutputService',
+            return_value=mock_output_svc,
+        ):
+            _spawn_return_processor(envelope)
+
+            for t in threading.enumerate():
+                if t.name == "subagent-return":
+                    t.join(timeout=5)
+
+            mock_output_svc.enqueue_proactive.assert_not_called()

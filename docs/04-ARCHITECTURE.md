@@ -113,14 +113,16 @@ The `subagent` ability (`backend/abilities/subagent.py`) is the public surface. 
 1. `SubagentAbility.execute()` captures `current_processor()` (a `contextvars.ContextVar` bound by `send()`) as `parent_ref` before spawning the daemon thread — so the reference is stable even if the parent turn finishes first.
 2. The daemon runs `SubagentProcessor(...).send()` and wraps the result in a canonical `[subagent.complete(...)]` envelope via `_build_envelope()`.
 3. `_deliver_envelope(envelope, parent_ref)` routes:
-   - **Case A** (`isinstance(parent_ref, UserMessageProcessor)` is True): appends the envelope to `parent_ref._pending_steers`. `getUserPrompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
-   - **Case B** (parent idle or non-UMP): spawns a `subagent-return` daemon that runs `SubagentReturnProcessor(envelope).send()`.
+   - **Case A** (`parent_ref._turn_active.is_set()` is True): appends the envelope to `parent_ref._pending_steers`. `getUserPrompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
+   - **Case B** (parent idle — `_turn_active` cleared — or non-UMP): spawns a `subagent-return` daemon that runs `SubagentReturnProcessor(envelope).send()` and publishes the result via `OutputService.enqueue_proactive(source='subagent_return')`.
+
+**Liveness discriminator:** `_turn_active` is a `threading.Event` on every `MessageProcessor` instance. `bind_current_processor()` sets it on entry and clears it on exit. The subagent daemon thread checks `.is_set()` at delivery time — unlike an `isinstance()` check (which always returns True for a valid Python object), this correctly detects that the parent's `send()` has returned. The Event is thread-safe by design.
 
 **`SubagentReturnProcessor`** is a thin `UserMessageProcessor` subclass (`ROLE='subagent_return'`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `ROLE='subagent_return'` causes the input row to be excluded from user-visible history rebuilds.
 
 **`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.getUserPrompt()` drains it. Background processors that do not call `getUserPrompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
 
-**Sync mode (`wait=true`):** `_run_sync()` constructs `SubagentProcessor` inline and calls `.send()` directly from the parent ACT loop iteration. Budget is capped at 300 s regardless of type default. The parent iteration blocks until the subagent returns.
+**Sync mode (`wait=true`):** `_run_sync()` constructs `SubagentProcessor` inline and calls `.send()` directly from the parent ACT loop iteration. Budget is capped per-type via `wait_cap` (web_surfer=1800s, others=300s). The parent iteration blocks until the subagent returns.
 
 **Wall-clock guard:** `SubagentProcessor` sets `self._deadline = time.time() + timeout_seconds` in `__init__`. The base `send()` loop checks `self._deadline` after each iteration and breaks if exceeded. `ITERATION_TIMEOUT` (1800 s, base class constant) provides an additional per-iteration safety wall that applies to all processors including subagents.
 

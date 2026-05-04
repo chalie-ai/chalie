@@ -165,26 +165,27 @@ def _build_envelope(response_text: str, agent_type: str, status: str = "success"
 def _deliver_envelope(envelope: str, parent_ref: object) -> None:
     """Deliver the subagent envelope to the parent agent.
 
-    Case A — parent turn is active (UserMessageProcessor on the call stack):
+    Case A — parent turn is still active (_turn_active Event is set):
       Append the envelope to parent._pending_steers. The next iteration's
       getUserPrompt() drains _pending_steers into _act_trail.
 
-    Case B — parent idle or non-UMP:
+    Case B — parent idle (turn finished, or non-UMP):
       Spawn a daemon thread that runs SubagentReturnProcessor(envelope).send()
-      which produces a normal user-channel ACT turn and emits a 'message' event.
+      which produces a normal user-channel ACT turn and publishes via
+      OutputService.
 
-    The discriminator is ``isinstance(parent_ref, UserMessageProcessor)``.
-    ``current_processor()`` only returns a non-None UMP while ``send()`` is
-    on the call stack (it sets the contextvar on entry and resets on exit),
-    so the type check alone is proof that the parent is mid-turn. We do NOT
-    gate on ``_current_iteration > 0`` — iteration 0 is the first ACT pass
-    and is just as much "mid-turn" as iteration 1+. Gating on > 0 would
-    misroute a fast subagent completing during the parent's first iteration
-    to Case B and spawn an unnecessary synthetic turn.
+    The discriminator is ``parent_ref._turn_active.is_set()`` — a thread-safe
+    Event that bind_current_processor sets on entry and clears on exit.
+    Unlike isinstance() checks (which always return True for a valid Python
+    object), this correctly detects that the parent's send() has already
+    returned.
     """
     from services.user_message_processor import UserMessageProcessor
 
-    if isinstance(parent_ref, UserMessageProcessor):
+    if (
+        isinstance(parent_ref, UserMessageProcessor)
+        and parent_ref._turn_active.is_set()
+    ):
         # Case A: mid-ACT injection via _pending_steers
         try:
             parent_ref._pending_steers.append(envelope)
@@ -204,13 +205,26 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
 
 
 def _spawn_return_processor(envelope: str) -> None:
-    """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope."""
+    """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
+
+    After the ACT loop completes, publishes the response to the WebSocket
+    via OutputService — the same pattern as scheduler_service.py.
+    """
 
     def _run():
         try:
+            from services.output_service import OutputService
             from services.user_message_processor import SubagentReturnProcessor
-            SubagentReturnProcessor(raw_input=envelope).send()
-            logger.info("%s SubagentReturnProcessor completed", LOG_PREFIX)
+
+            response_text = SubagentReturnProcessor(raw_input=envelope).send()
+            response_text = (response_text or '').strip()
+            if response_text:
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=response_text,
+                    source='subagent_return',
+                )
+            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
         except Exception as exc:
             logger.error(
                 "%s SubagentReturnProcessor failed: %s", LOG_PREFIX, exc, exc_info=True

@@ -74,7 +74,7 @@ def test_log_caller_from_bound_processor(logs_dir, monkeypatch):
     _stub_providers(monkeypatch, _make_response())
 
     class FakeUserProc:
-        pass
+        _turn_active = __import__('threading').Event()
 
     with bind_current_processor(FakeUserProc()):
         _send()
