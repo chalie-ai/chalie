@@ -384,8 +384,14 @@ export class VoicePlayer {
       return;
     }
     if (!this._currentSource) {
-      // Nothing playing — likely finished. Restart from first buffer.
-      if (this._bufferQueue.length) {
+      // No source playing. Only restart from the beginning if the stream
+      // is fully finished AND every buffered chunk has played; otherwise
+      // we're between chunks (or pre-first-chunk) and the next arrival
+      // will resume playback automatically. Restarting here would replay
+      // the message from chunk 0 — exactly the "replays chunk 1" bug.
+      if (this._streamDone
+          && this._chunkIdx >= this._bufferQueue.length
+          && this._bufferQueue.length) {
         this._chunkIdx = 0;
         this._playNextChunk();
       }

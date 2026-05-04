@@ -12,7 +12,6 @@ the Flask server while large models download.
 import io
 import logging
 import os
-import re
 import struct
 import tempfile
 import threading
@@ -232,30 +231,6 @@ def _clean_for_tts(text: str) -> str:
     return " ".join(text.split())
 
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-# Kokoro.create() internally re-batches on MAX_PHONEME_LENGTH=510, so this
-# upper bound only controls how much text each outer create() call ingests —
-# fewer calls means less tokenizer + voice-load overhead. 800 halves the call
-# count vs the prior 400 while staying comfortably within phonemizer budget.
-_MAX_CHUNK_CHARS = 800
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text into sentence-sized chunks safe for the ONNX TTS model."""
-    sentences = _SENTENCE_SPLIT.split(text)
-    chunks: list[str] = []
-    buf = ""
-    for s in sentences:
-        if buf and len(buf) + len(s) + 1 > _MAX_CHUNK_CHARS:
-            chunks.append(buf.strip())
-            buf = s
-        else:
-            buf = f"{buf} {s}" if buf else s
-    if buf.strip():
-        chunks.append(buf.strip())
-    return chunks or [text]
-
-
 def _transcribe_sync(data: bytes) -> str:
     """Run Moonshine transcription on raw WAV bytes (blocking)."""
     import moonshine_voice as mv
@@ -297,19 +272,19 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Synthesise speech and stream WAV chunks back as NDJSON.
+    """Synthesise speech and return the full WAV as a single NDJSON line.
 
-    The response body is one JSON object per line, each carrying a single
-    chunk's metadata and base64-encoded WAV bytes::
+    The response body is two NDJSON lines: one ``{index:0, total:1, audio}``
+    payload carrying the entire base64-encoded WAV, then a
+    ``{done:true, total:1}`` sentinel so the client can distinguish a
+    complete response from a truncated one.
 
-        {"index": 0, "total": 3, "audio": "<base64 wav>"}\\n
-        {"index": 1, "total": 3, "audio": "<base64 wav>"}\\n
-        {"index": 2, "total": 3, "audio": "<base64 wav>"}\\n
-
-    Synthesis runs sequentially in the request thread under ``_tts_lock``
-    so the single Kokoro ONNX session never sees concurrent ``run()``
-    calls. Each chunk is yielded as soon as it is ready — playback can
-    begin before the rest of the message has been synthesised.
+    We synthesise the whole message in a single Kokoro call — Kokoro's
+    internal phoneme batching (MAX_PHONEME_LENGTH=510) handles long text
+    safely. The previous sentence-chunked streaming caused mid-message
+    gaps whenever synthesis ran slower than playback: the client would
+    stall between chunks, then resume awkwardly. One blob, one playback,
+    no gaps.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
@@ -323,34 +298,27 @@ def voice_synthesize():
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
-    chunks = _split_sentences(text)
-    total = len(chunks)
-
     @stream_with_context
     def stream():
         import base64
         import json
 
-        # Lock held for the full stream — single-user deployment, one TTS at
-        # a time. A second concurrent request queues here until this one
-        # finishes (or its client disconnects, which closes the generator
-        # via GeneratorExit and releases the lock).
         with _tts_lock:
-            for i, chunk in enumerate(chunks):
-                try:
-                    samples, _sr = _tts_model.create(
-                        chunk, voice=KOKORO_VOICE, lang="en-us"
-                    )
-                except Exception as e:
-                    logger.error("[Voice] TTS synthesis failed on chunk %d/%d: %s", i + 1, total, e)
-                    break
-                wav_bytes = _audio_to_wav_bytes(samples)
-                yield json.dumps({
-                    "index": i,
-                    "total": total,
-                    "audio": base64.b64encode(wav_bytes).decode("ascii"),
-                }) + "\n"
-            yield json.dumps({"done": True, "total": total}) + "\n"
+            try:
+                samples, _sr = _tts_model.create(
+                    text, voice=KOKORO_VOICE, lang="en-us"
+                )
+            except Exception as e:
+                logger.error("[Voice] TTS synthesis failed: %s", e)
+                yield json.dumps({"done": True, "total": 0}) + "\n"
+                return
+            wav_bytes = _audio_to_wav_bytes(samples)
+            yield json.dumps({
+                "index": 0,
+                "total": 1,
+                "audio": base64.b64encode(wav_bytes).decode("ascii"),
+            }) + "\n"
+        yield json.dumps({"done": True, "total": 1}) + "\n"
 
     return Response(
         stream(),

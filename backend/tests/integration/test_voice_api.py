@@ -127,11 +127,14 @@ def test_synthesize_rejects_empty_text(authed_client, text):
 
 
 @pytest.mark.integration
-def test_synthesize_long_text_emits_every_chunk(authed_client):
-    """Long text (>800 chars) splits into multiple chunks — none lost.
+def test_synthesize_long_text_returns_full_audio(authed_client):
+    """Long text returns a single WAV blob covering the whole message.
 
-    This is the regression guard for the 50%-loss bug: every chunk
-    declared by ``total`` MUST land in the response body.
+    Regression guard: the prior chunked-streaming design split long text
+    into many sentence chunks and was prone to mid-message gaps when
+    synthesis lagged behind playback. The blob form synthesises the full
+    text in one Kokoro call (its internal phoneme batching handles the
+    length) and returns a single audio payload of substantial duration.
     """
     client, _db, _store = authed_client
 
@@ -158,32 +161,20 @@ def test_synthesize_long_text_emits_every_chunk(authed_client):
     chunks = [p for p in payloads if not p.get('done')]
     sentinels = [p for p in payloads if p.get('done')]
 
-    assert len(chunks) >= 1, 'Expected at least one audio chunk'
+    assert len(chunks) == 1, f'Expected single audio blob, got {len(chunks)}'
     assert len(sentinels) == 1, 'Expected exactly one done sentinel'
+    assert chunks[0]['total'] == 1
+    assert chunks[0]['index'] == 0
 
-    total = chunks[0]['total']
-    assert total > 1, 'Expected multi-chunk split for >800 char text'
-    assert len(chunks) == total, (
-        f'Chunk loss detected: declared total={total}, received {len(chunks)}'
-    )
-    assert [c['index'] for c in chunks] == list(range(total))
-
-    # Every chunk must be a valid WAV
-    for i, chunk in enumerate(chunks):
-        wav = _decode_chunk_wav(chunk)
-        assert wav[:4] == b'RIFF', f'Chunk {i} missing RIFF'
-        assert wav[8:12] == b'WAVE', f'Chunk {i} missing WAVE'
+    wav = _decode_chunk_wav(chunks[0])
+    assert wav[:4] == b'RIFF'
+    assert wav[8:12] == b'WAVE'
 
     try:
         import soundfile as sf
-        total_duration = 0.0
-        for chunk in chunks:
-            wav = _decode_chunk_wav(chunk)
-            data, samplerate = sf.read(io.BytesIO(wav))
-            total_duration += len(data) / samplerate
-        assert total_duration > 3.0, (
-            f'Expected > 3s cumulative for {total} chunks, got {total_duration:.3f}s'
-        )
+        data, samplerate = sf.read(io.BytesIO(wav))
+        duration = len(data) / samplerate
+        assert duration > 3.0, f'Expected > 3s of audio, got {duration:.3f}s'
     except ImportError:
         pass
 
