@@ -239,7 +239,10 @@ def _spawn_return_processor(envelope: str) -> None:
 class SubagentAbility(Ability):
     NAME = "subagent"
     SUMMARY = """\
-Spawn a subagent to handle long-running, parallel, or context-heavy work.
+ONLY use this tool if multi-step actions are needed OR you need to process
+a large volume of data (call summariser in this case). For a single tool
+lookup, call the tool directly — do not wrap it in a subagent.
+
 Each subagent gets its own tool surface based on `agent_type`:
 
 - web_surfer (60m): search and crawl web pages; can browse. Use for
