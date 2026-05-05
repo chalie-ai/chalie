@@ -53,15 +53,15 @@ class ListAbility(Ability):
                     "clear", "rename", "delete",
                 ],
                 "description": (
-                    "list_all: return all lists with their ids. "
-                    "create: make a new list (uses 'name', optional 'items'). "
-                    "view: read a list by 'id'. "
-                    "add: append items to a list (uses 'id' + 'items' as string array). "
-                    "check: toggle checked state per item (uses 'id' + 'items' as objects with 'content' and 'checked'). "
-                    "remove: remove specific items from a list (uses 'id' + 'items' as string array). "
-                    "clear: empty a list but keep it (uses 'id'). "
-                    "rename: change a list's name (uses 'id' + 'name'). "
-                    "delete: delete a list entirely (uses 'id')."
+                    "list_all: return all lists. "
+                    "create: make a new list. "
+                    "view: read a list. "
+                    "add: append items. "
+                    "check: toggle checked state per item. "
+                    "remove: remove specific items. "
+                    "clear: empty a list but keep it. "
+                    "rename: change a list's name. "
+                    "delete: delete a list entirely."
                 ),
             },
             "id": {
@@ -106,7 +106,7 @@ class ListAbility(Ability):
             body = _fail(str(e))
 
         if ordinal is not None and action in ("create", "add", "check", "view"):
-            rich = _try_serialise_rich(body, ordinal)
+            rich = _try_serialise_rich(body, ordinal, action)
             if rich is not None:
                 return rich
 
@@ -396,7 +396,7 @@ def _handle_delete(service, params: dict) -> str:
     return _success_message(f"List with id: {list_id} was deleted successfully")
 
 
-def _try_serialise_rich(body: str, ordinal: int) -> str | None:
+def _try_serialise_rich(body: str, ordinal: int, action: str) -> str | None:
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
@@ -407,4 +407,4 @@ def _try_serialise_rich(body: str, ordinal: int) -> str | None:
     tag = f"list_{ordinal}"
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
+    return _skill_tag("list", f"{data_json}\n\n{instruction}", action=action)

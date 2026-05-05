@@ -241,6 +241,27 @@ def _enrich_payload(tool_name: str, payload, row: dict):
         return payload
 
 
+_SKILL_TAG_RE = re.compile(
+    r"\A\[(?P<name>\w+)\([^)\n]*\)\]\n(?P<body>.*)\n\[end:(?P=name)\]\s*\Z",
+    re.DOTALL,
+)
+
+
+def _unwrap_skill_tag(result: str) -> str:
+    """Strip a ``[name(...)]\\n…\\n[end:name]`` outer wrapper if present.
+
+    The list ability wraps its rich-media trailer in the canonical skill-output
+    block so every list result has the same on-the-wire shape (plain and
+    rich-media alike). The parser must see the inner ``{json}\\n\\n{instruction}``
+    payload, so this strips the wrapper before splitting on the blank line.
+    Other rich-media abilities don't wrap — for them this is a no-op.
+    """
+    if not isinstance(result, str):
+        return result
+    match = _SKILL_TAG_RE.match(result)
+    return match.group("body") if match else result
+
+
 def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] | None:
     """Scan tool_calls for the row whose rich-media trailer references this tag.
 
@@ -272,10 +293,11 @@ def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] |
         result = row.get("result") or ""
         if not isinstance(result, str):
             continue
+        body = _unwrap_skill_tag(result)
         # Anchor to the trailer section — everything after the first blank line.
         # A span tag present only in the JSON payload body (before \n\n) must
         # not match; only trailer-section occurrences qualify.
-        parts = result.split("\n\n", 1)
+        parts = body.split("\n\n", 1)
         if len(parts) < 2:
             continue
         trailer = parts[1]
@@ -298,8 +320,10 @@ def _extract_data(result: str) -> dict | str:
     Returns:
         Parsed JSON dict, or the raw head string if JSON parsing fails.
     """
-    # Split on first double-newline to separate data from instruction trailer
-    head = result.split("\n\n", 1)[0].strip()
+    # Split on first double-newline to separate data from instruction trailer.
+    # First strip any [name(...)]\n…\n[end:name] outer wrapper (list ability).
+    body = _unwrap_skill_tag(result)
+    head = body.split("\n\n", 1)[0].strip()
     try:
         return json.loads(head)
     except ValueError:

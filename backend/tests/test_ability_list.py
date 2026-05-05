@@ -301,14 +301,27 @@ class TestUnknownAction:
 
 # ─── rich-media envelope ───────────────────────────────────────────────────
 
+def _unwrap_rich(result, action):
+    """Extract (payload, instruction) from a rich-media result.
+
+    Wire format: ``[list(action=X)]\\n{json}\\n\\n{instruction}\\n[end:list]``
+    """
+    assert isinstance(result, str)
+    opener = f"[list(action={action})]\n"
+    closer = "\n[end:list]"
+    assert result.startswith(opener), f"missing opener: {result[:60]!r}"
+    assert result.endswith(closer), f"missing closer: {result[-60:]!r}"
+    inner = result[len(opener):-len(closer)]
+    data_json, instruction = inner.split('\n\n', 1)
+    return json.loads(data_json), instruction
+
+
 class TestRichMedia:
     def test_create_emits_rich_payload_and_instruction(self, ability):
         result = _exec_rich(ability, {
             "action": "create", "name": "Groceries", "items": ["milk"],
         }, ordinal=1)
-        assert isinstance(result, str)
-        data_json, instruction = result.split('\n\n', 1)
-        payload = json.loads(data_json)
+        payload, instruction = _unwrap_rich(result, "create")
         assert payload['name'] == 'Groceries'
         assert 'id' in payload
         assert "list_1" in instruction
@@ -318,8 +331,7 @@ class TestRichMedia:
         result = _exec_rich(ability, {
             "action": "add", "id": list_id, "items": ["milk"],
         }, ordinal=2)
-        data_json, instruction = result.split('\n\n', 1)
-        payload = json.loads(data_json)
+        payload, instruction = _unwrap_rich(result, "add")
         assert payload['id'] == list_id
         assert "list_2" in instruction
 
@@ -330,17 +342,28 @@ class TestRichMedia:
             "action": "check", "id": list_id,
             "items": [{"content": "milk", "checked": True}],
         }, ordinal=3)
-        data_json, _ = result.split('\n\n', 1)
-        payload = json.loads(data_json)
+        payload, _ = _unwrap_rich(result, "check")
         assert payload['items'][0]['checked'] is True
 
     def test_view_emits_rich_payload(self, ability, service):
         list_id = service.create_list("Groceries")
         service.add_items(list_id, ["milk"])
         result = _exec_rich(ability, {"action": "view", "id": list_id}, ordinal=4)
-        data_json, _ = result.split('\n\n', 1)
-        payload = json.loads(data_json)
+        payload, _ = _unwrap_rich(result, "view")
         assert payload['id'] == list_id
+
+    def test_fail_falls_back_to_plain_skill_tag(self, ability):
+        """Rich-media gate skips fail bodies — they go through the plain path
+        with the `[list(action=X)]\\n{json}\\n[end:list]` wrapper and no
+        instruction trailer."""
+        result = _exec_rich(ability, {"action": "view", "id": "nonexist"}, ordinal=5)
+        assert isinstance(result, dict)
+        text = result['text']
+        assert text.startswith("[list(action=view)]\n")
+        assert text.endswith("\n[end:list]")
+        assert "rich-media" not in text
+        body = json.loads(text[len("[list(action=view)]\n"):-len("\n[end:list]")])
+        assert body['status'] == 'fail'
 
     def test_delete_does_not_emit_rich_payload(self, ability, service):
         """Delete returns a message string, not a list. No rich card."""
