@@ -167,6 +167,8 @@ def parse(content, tool_calls):
 
 `_extract_data(result)` splits on the first `\n\n` and returns the head as parsed JSON if possible, else the raw head string. Tools must therefore put their structured data on the first JSON segment of their return, with the instruction trailer separated by a blank line.
 
+`_unwrap_skill_tag(result)` is run by both `_find_payload` and `_extract_data` before the blank-line split. It strips an optional `[<name>(<args>)]\n…\n[end:<name>]` outer wrapper if present, so tools that emit the canonical skill-output block (currently only `list`, which uses the wrapper for both plain and rich-media paths so its on-the-wire shape is uniform) work transparently. Tools that don't wrap (timer, weather, search, news) hit the no-op branch.
+
 **Invariant — single data source:** Both the live path and the refresh path read `tool_calls` from the database, not from in-memory state. The `MessageProcessor`'s atomic store of pending tool_calls completes before the WS `message` event is assembled, so by the time the parser runs the rows are durably persisted under the assistant turn's `transcript_id`. This guarantees the live and refresh paths produce byte-identical segment arrays.
 
 The refresh-path query MUST include rows where `tool_calls.ephemeral = 1` — inline tool_calls (the rows written by `ToolRenderAndRecordService`) carry that flag and are the rows that hold the rich-media instruction trailers. Filtering them out would break refresh rendering.
