@@ -204,46 +204,11 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
     _spawn_return_processor(envelope)
 
 
-_SUCCESS_PREAMBLE = "The subagent has completed the task. Subagent's response:"
-_FAILURE_PREAMBLE = "The subagent failed. Reason:"
-_FAILURE_SUFFIX = "Decide whether to retry, escalate to the user, or fall back."
-
-
-def _extract_envelope_body(envelope: str) -> str:
-    """Extract the subagent's raw output from the canonical envelope wrapper.
-
-    Handles both success and failure envelopes, stripping preamble text and
-    internal routing instructions that should never be user-visible.
-    """
-    lines = envelope.splitlines()
-    body_lines = []
-    in_body = False
-    for line in lines:
-        if line.startswith("[subagent.complete"):
-            in_body = True
-            continue
-        if line.startswith("[end:subagent.complete]"):
-            break
-        if in_body:
-            body_lines.append(line)
-    result = "\n".join(body_lines).strip()
-    if result.startswith(_SUCCESS_PREAMBLE):
-        result = result[len(_SUCCESS_PREAMBLE):].strip()
-    elif result.startswith(_FAILURE_PREAMBLE):
-        result = result[len(_FAILURE_PREAMBLE):].strip()
-        if result.endswith(_FAILURE_SUFFIX):
-            result = result[:-len(_FAILURE_SUFFIX)].strip()
-    return result
-
-
 def _spawn_return_processor(envelope: str) -> None:
     """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
 
     After the ACT loop completes, publishes the response to the WebSocket
     via OutputService — the same pattern as scheduler_service.py.
-
-    Fallback: if SubagentReturnProcessor cap-exits with empty text, delivers
-    the raw subagent output directly. The work was done — never silently drop it.
     """
 
     def _run():
@@ -253,21 +218,13 @@ def _spawn_return_processor(envelope: str) -> None:
 
             response_text = SubagentReturnProcessor(raw_input=envelope).send()
             response_text = (response_text or '').strip()
-            if not response_text:
-                logger.warning(
-                    "%s SubagentReturnProcessor returned empty — falling back to raw envelope",
-                    LOG_PREFIX,
-                )
-                response_text = _extract_envelope_body(envelope)
             if response_text:
                 OutputService().enqueue_proactive(
                     topic='user',
                     response=response_text,
                     source='subagent_return',
                 )
-                logger.info("%s SubagentReturnProcessor delivered (len=%d)", LOG_PREFIX, len(response_text))
-            else:
-                logger.error("%s Both SubagentReturnProcessor and envelope fallback produced empty text", LOG_PREFIX)
+            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
         except Exception as exc:
             logger.error(
                 "%s SubagentReturnProcessor failed: %s", LOG_PREFIX, exc, exc_info=True
@@ -314,8 +271,6 @@ When NOT to use:
 - For a single quick lookup with a known URL or query — use the tool
   directly.
 - For tasks under ~30 seconds that fit in your turn — answer inline.
-- When you're unsure which tool handles the task — call `find_tools`
-  first to discover a purpose-built tool before spawning a subagent.
 
 Briefing rules:
 - The subagent has none of your conversation context. State the task
