@@ -191,7 +191,7 @@ def add_items(list_id):
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
-        added = svc.add_items(list_id, items, auto_create=False)
+        added = svc.add_items(list_id, items)
         return jsonify({"added": added})
     except Exception as e:
         logger.error(f"[LISTS API] add_items error: {e}")

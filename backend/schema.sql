@@ -269,16 +269,8 @@ CREATE TABLE IF NOT EXISTS list_items (
 
 CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE removed_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS list_events (
-    id TEXT PRIMARY KEY,
-    list_id TEXT NOT NULL REFERENCES lists(id),
-    event_type TEXT NOT NULL,
-    item_content TEXT,
-    details TEXT NOT NULL DEFAULT '{}',       -- JSONB
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_list_events_list ON list_events(list_id, created_at DESC);
+-- list_events + idx_list_events_list removed — list history was a pointless
+-- LLM-facing feature; SchemaConvergenceService DROPs both on next boot.
 
 -- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
 -- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs

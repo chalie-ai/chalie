@@ -34,6 +34,7 @@ export function render(payload, synthesis, root) {
   const listData = payload.list || payload;
   const items = listData.items || [];
   const name = listData.name || '';
+  const id = listData.id || '';
   const checkedCount = items.filter(i => i.checked).length;
 
   const card = document.createElement('div');
@@ -103,7 +104,7 @@ export function render(payload, synthesis, root) {
           payload: {
             skill: 'list',
             action: 'check',
-            name: name,
+            id: id,
             items: [{ content: item.content, checked: nextChecked }],
           },
           onMessage: () => { delete row.dataset.busy; },

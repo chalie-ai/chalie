@@ -1,17 +1,21 @@
 """
 ListAbility — Manage deterministic lists via the ACT loop.
 
-Actions: add, check, remove, view, list_all, clear, rename, history
+Strict CRUD interface. Existing lists are addressed by ``id``; ``name`` is
+used only for ``create`` and ``rename``. The LLM discovers ids by calling
+``list_all`` first.
+
+Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
 Rich-media rendering:
   When ``_rich_media_ordinal`` is present (user channel only), actions that
-  return a list (add, check, view) emit a structured JSON payload +
+  return a list (create, add, check, view) emit a structured JSON payload +
   instruction trailer so the frontend renders a checklist card.
 """
 
 import json
 import logging
-from typing import ClassVar, Optional
+from typing import Optional
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -26,21 +30,17 @@ _RICH_MEDIA_INSTRUCTION = (
     "\"<span id='{tag}'>Added milk and eggs to your grocery list.</span>\""
 )
 
-_AMBIGUOUS_LIST_NAME = "Multiple lists exist. Specify 'name'."
-
 
 class ListAbility(Ability):
     NAME = "list"
-    SUMMARY = "Create and manage named lists — shopping, to-do, chores — with add, check, remove, and view actions."
+    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id (call list_all first)."
     EXAMPLES = [
         "create a grocery list and add milk, eggs, and bread",
-        "add bananas and yoghurt to my shopping list",
-        "check off milk from my grocery list",
-        "what's on my to-do list",
-        "delete my grocery list",
         "show me all my lists",
-        "add buy birthday present to my to-do list",
-        "clear everything from my chores list",
+        "add bananas to list abc12345",
+        "check off milk on list abc12345",
+        "rename list abc12345 to weekend chores",
+        "delete list abc12345",
     ]
     INPUT_SCHEMA = {
         "type": "object",
@@ -48,50 +48,47 @@ class ListAbility(Ability):
             "action": {
                 "type": "string",
                 "enum": [
-                    "add", "remove", "check",
-                    "view", "list_all", "clear", "rename", "history",
+                    "list_all", "create", "view",
+                    "add", "check", "remove",
+                    "clear", "rename", "delete",
                 ],
                 "description": (
-                    "add: add items to a list (auto-creates it; items=[] for empty list). "
-                    "remove: remove specific items; omit items to delete the whole list. "
-                    "check: set checked/unchecked state per item. "
-                    "view: show full list. "
-                    "list_all: show all lists. "
-                    "clear: remove all items, keep the list. "
-                    "rename: rename a list. "
-                    "history: show change log."
+                    "list_all: return all lists with their ids. "
+                    "create: make a new list (uses 'name', optional 'items'). "
+                    "view: read a list by 'id'. "
+                    "add: append items to a list (uses 'id' + 'items' as string array). "
+                    "check: toggle checked state per item (uses 'id' + 'items' as objects with 'content' and 'checked'). "
+                    "remove: remove specific items from a list (uses 'id' + 'items' as string array). "
+                    "clear: empty a list but keep it (uses 'id'). "
+                    "rename: change a list's name (uses 'id' + 'name'). "
+                    "delete: delete a list entirely (uses 'id')."
+                ),
+            },
+            "id": {
+                "type": "string",
+                "description": (
+                    "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
+                    "Call list_all first to discover existing list ids."
                 ),
             },
             "name": {
                 "type": "string",
-                "description": (
-                    "List name. Required for clear and rename. "
-                    "Omit for add/remove/check/view — auto-resolves to most recently used list."
-                ),
+                "description": "List name. Required for create and rename.",
             },
             "items": {
                 "type": "array",
                 "items": {},
                 "description": (
-                    "add/remove: string array e.g. [\"milk\", \"eggs\"]. "
-                    "check: object array e.g. [{\"content\": \"milk\", \"checked\": true}]. "
-                    "Always a real JSON array, never a serialised string."
+                    "create/add/remove: string array, e.g. [\"milk\",\"eggs\"]. "
+                    "check: object array, e.g. [{\"content\":\"milk\",\"checked\":true}]. "
+                    "Always a real JSON array, never a serialised string. "
+                    "Optional for create."
                 ),
-            },
-            "new_name": {
-                "type": "string",
-                "description": "rename only: the new list name.",
-            },
-            "since": {
-                "type": "string",
-                "description": "history only: ISO 8601 start date filter.",
             },
         },
         "required": ["action"],
     }
     TIMEOUT = 10
-
-    _DEFAULT_LIST_NAME: ClassVar[str] = "Shopping List"
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_all")
@@ -103,13 +100,13 @@ class ListAbility(Ability):
 
             db = get_shared_db_service()
             service = ListService(db)
-            body = _dispatch(service, action, params, self._DEFAULT_LIST_NAME)
+            body = _dispatch(service, action, params)
         except Exception as e:
             logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
             body = _fail(str(e))
 
-        if ordinal is not None and action in ("add", "check", "view"):
-            rich = _try_serialise_rich(body, action, ordinal)
+        if ordinal is not None and action in ("create", "add", "check", "view"):
+            rich = _try_serialise_rich(body, ordinal)
             if rich is not None:
                 return rich
 
@@ -127,56 +124,62 @@ class ListAbility(Ability):
         Single read path: both the live action handler and the refresh path go
         through ``ListService.get_list``.
         """
-        name = payload.get("name") if isinstance(payload, dict) else None
-        if not name:
+        list_id = payload.get("id") if isinstance(payload, dict) else None
+        if not list_id:
             return payload
         try:
             from services.database_service import get_shared_db_service
             from services.list_service import ListService
 
             service = ListService(get_shared_db_service())
-            fresh = _list_json(service, name)
+            fresh = _list_json(service, list_id)
         except Exception as exc:
-            logger.warning("list.enrich_rich_payload: live re-fetch failed for %r: %s", name, exc)
+            logger.warning("list.enrich_rich_payload: live re-fetch failed for %r: %s", list_id, exc)
             return payload
         return fresh if fresh else payload
 
 
-def _dispatch(service, action: str, params: dict, default_list_name: str) -> str:
-    if action == "add":
-        return _handle_add(service, params, default_list_name)
-    elif action == "remove":
-        return _handle_remove(service, params, default_list_name)
-    elif action == "check":
-        return _handle_check(service, params, default_list_name)
-    elif action == "view":
-        return _handle_view(service, params, default_list_name)
-    elif action in ("list_all", "list"):
+def _dispatch(service, action: str, params: dict) -> str:
+    if action == "list_all":
         return _handle_list_all(service)
-    elif action == "clear":
+    if action == "create":
+        return _handle_create(service, params)
+    if action == "view":
+        return _handle_view(service, params)
+    if action == "add":
+        return _handle_add(service, params)
+    if action == "check":
+        return _handle_check(service, params)
+    if action == "remove":
+        return _handle_remove(service, params)
+    if action == "clear":
         return _handle_clear(service, params)
-    elif action == "rename":
+    if action == "rename":
         return _handle_rename(service, params)
-    elif action == "history":
-        return _handle_history(service, params)
-    else:
-        valid = "add, remove, check, view, list_all, clear, rename, history"
-        return _fail(f"Unknown action '{action}'. Use: {valid}")
+    if action == "delete":
+        return _handle_delete(service, params)
+    valid = "list_all, create, view, add, check, remove, clear, rename, delete"
+    return _fail(f"Unknown action '{action}'. Use: {valid}")
 
 
 def _success(list_data: Optional[dict]) -> str:
     return json.dumps({"status": "success", "list": list_data})
 
 
+def _success_message(message: str) -> str:
+    return json.dumps({"status": "success", "message": message})
+
+
 def _fail(message: str) -> str:
     return json.dumps({"status": "fail", "message": message})
 
 
-def _list_json(service, name: str) -> Optional[dict]:
-    lst = service.get_list(name)
+def _list_json(service, list_id: str) -> Optional[dict]:
+    lst = service.get_list(list_id)
     if not lst:
         return None
     return {
+        "id": lst["id"],
         "name": lst["name"],
         "items": [
             {"content": item["content"], "checked": bool(item["checked"])}
@@ -185,26 +188,7 @@ def _list_json(service, name: str) -> Optional[dict]:
     }
 
 
-def _resolve_name(service, params: dict, default_list_name: str) -> Optional[str]:
-    name = params.get("name", "").strip()
-    if name:
-        return name
-
-    lists = service.get_all_lists()
-    if not lists:
-        return default_list_name
-
-    if len(lists) == 1:
-        return lists[0]["name"]
-
-    most_recent = service.get_most_recent_list()
-    if most_recent:
-        return most_recent["name"]
-
-    return None
-
-
-def _normalize_items(params: dict) -> list:
+def _normalize_string_items(params: dict) -> list:
     items = params.get("items", [])
     if isinstance(items, str):
         try:
@@ -212,184 +196,215 @@ def _normalize_items(params: dict) -> list:
             items = parsed if isinstance(parsed, list) else [items]
         except ValueError:
             items = [items]
-    return [i for i in items if isinstance(i, str) and i.strip()]
+    return [i.strip() for i in items if isinstance(i, str) and i.strip()]
 
 
-def _handle_add(service, params: dict, default_list_name: str) -> str:
-    items = _normalize_items(params)
+def _require_id(params: dict) -> tuple[Optional[str], Optional[str]]:
+    list_id = (params.get("id") or "").strip()
+    if not list_id:
+        return None, _fail("'id' is required. Call list_all to discover list ids.")
+    return list_id, None
 
-    name = params.get("name", "").strip()
+
+def _require_name(params: dict) -> tuple[Optional[str], Optional[str]]:
+    name = (params.get("name") or "").strip()
     if not name:
-        lists = service.get_all_lists()
-        if not lists:
-            name = default_list_name
-        elif len(lists) == 1:
-            name = lists[0]["name"]
-        else:
-            most_recent = service.get_most_recent_list()
-            name = most_recent["name"] if most_recent else default_list_name
-
-    if not items:
-        try:
-            service.create_list(name)
-        except ValueError:
-            pass
-        return _success(_list_json(service, name))
-
-    added = service.add_items(name, items, auto_create=True)
-
-    if added == 0 and not service.get_list(name):
-        return _fail(f"Failed to add items to '{name}'.")
-
-    return _success(_list_json(service, name))
+        return None, _fail("'name' is required.")
+    return name, None
 
 
-def _handle_remove(service, params: dict, default_list_name: str) -> str:
-    items = _normalize_items(params)
-
-    name = _resolve_name(service, params, default_list_name)
-    if not name:
-        return _fail(_AMBIGUOUS_LIST_NAME)
-
-    if not items:
-        success = service.delete_list(name)
-        if not success:
-            return _fail(f"List '{name}' not found.")
-        return _success(None)
-
-    service.remove_items(name, items)
-    lst_data = _list_json(service, name)
-    if lst_data is None:
-        return _fail(f"List '{name}' not found.")
-
-    return _success(lst_data)
-
-
-def _split_check_items(raw_items: list) -> tuple[list, list]:
-    """Partition raw items into (to_check, to_uncheck) by their `checked` flag."""
-    to_check, to_uncheck = [], []
-    for item in raw_items:
-        if isinstance(item, dict):
-            content = item.get("content", "").strip()
-            if not content:
-                continue
-            (to_check if item.get("checked", True) else to_uncheck).append(content)
-        elif isinstance(item, str) and item.strip():
-            to_check.append(item.strip())
-    return to_check, to_uncheck
-
-
-def _handle_check(service, params: dict, default_list_name: str) -> str:
-    raw_items = params.get("items", [])
-    if not isinstance(raw_items, list):
-        return _fail("'items' must be an array of {content, checked} objects.")
-
-    name = _resolve_name(service, params, default_list_name)
-    if not name:
-        return _fail(_AMBIGUOUS_LIST_NAME)
-
-    to_check, to_uncheck = _split_check_items(raw_items)
-    if not to_check and not to_uncheck:
-        return _fail("No valid items provided. Each item must have 'content' and 'checked'.")
-
-    if to_check:
-        service.check_items(name, to_check)
-    if to_uncheck:
-        service.uncheck_items(name, to_uncheck)
-
-    lst_data = _list_json(service, name)
-    if lst_data is None:
-        return _fail(f"List '{name}' not found.")
-
-    return _success(lst_data)
-
-
-def _handle_view(service, params: dict, default_list_name: str) -> str:
-    name = _resolve_name(service, params, default_list_name)
-    if not name:
-        return _fail(_AMBIGUOUS_LIST_NAME)
-
-    lst_data = _list_json(service, name)
-    if lst_data is None:
-        return _fail(f"List '{name}' not found.")
-
-    return _success(lst_data)
+def _require_items(params: dict) -> tuple[Optional[list], Optional[str]]:
+    raw = params.get("items")
+    if not isinstance(raw, list) or not raw:
+        return None, _fail("'items' must be a non-empty array.")
+    return raw, None
 
 
 def _handle_list_all(service) -> str:
     lists = service.get_all_lists()
-    if not lists:
-        return "[LIST] No lists found."
+    payload = [
+        {
+            "id": lst["id"],
+            "name": lst["name"],
+            "item_count": lst["item_count"],
+            "checked_count": lst["checked_count"],
+        }
+        for lst in lists
+    ]
+    return json.dumps({"status": "success", "lists": payload})
 
-    lines = ["[LIST] All lists:"]
-    for lst in lists:
-        count = lst["item_count"]
-        checked = lst["checked_count"]
-        count_str = f"{count} items" + (f", {checked} checked" if checked else "")
-        lines.append(f"  · {lst['name']} ({count_str})")
-    return "\n".join(lines)
+
+def _handle_create(service, params: dict) -> str:
+    name, err = _require_name(params)
+    if err:
+        return err
+
+    items = _normalize_string_items(params)
+
+    try:
+        list_id = service.create_list(name)
+    except ValueError as e:
+        return _fail(str(e))
+
+    if items:
+        added = service.add_items(list_id, items)
+        if added < len(items):
+            logger.info(
+                "[LIST SKILL] create: added %d/%d items to list '%s' (id=%s) — some skipped (dedupe or empty)",
+                added, len(items), name, list_id,
+            )
+
+    return _success(_list_json(service, list_id))
+
+
+def _handle_view(service, params: dict) -> str:
+    list_id, err = _require_id(params)
+    if err:
+        return err
+
+    lst_data = _list_json(service, list_id)
+    if lst_data is None:
+        return _fail(f"List with id: {list_id} not found.")
+
+    return _success(lst_data)
+
+
+def _handle_add(service, params: dict) -> str:
+    list_id, err = _require_id(params)
+    if err:
+        return err
+
+    items, err = _require_items(params)
+    if err:
+        return err
+
+    if service.get_list(list_id) is None:
+        return _fail(f"List with id: {list_id} not found.")
+
+    cleaned = _normalize_string_items(params)
+    if not cleaned:
+        return _fail("'items' must contain at least one non-empty string.")
+
+    added = service.add_items(list_id, cleaned)
+    if added == 0:
+        return _fail("No items added (all duplicates or empty).")
+
+    return _success(_list_json(service, list_id))
+
+
+def _handle_check(service, params: dict) -> str:
+    list_id, err = _require_id(params)
+    if err:
+        return err
+
+    items, err = _require_items(params)
+    if err:
+        return err
+
+    lst = service.get_list(list_id)
+    if lst is None:
+        return _fail(f"List with id: {list_id} not found.")
+
+    to_check, to_uncheck = _split_check_items(items)
+    if not to_check and not to_uncheck:
+        return _fail("Each item must have 'content' (string) and 'checked' (bool).")
+
+    checked_count = service.check_items(list_id, to_check) if to_check else 0
+    unchecked_count = service.uncheck_items(list_id, to_uncheck) if to_uncheck else 0
+
+    if checked_count == 0 and unchecked_count == 0:
+        return _fail(f"No matching items found in list '{lst['name']}'.")
+
+    return _success(_list_json(service, list_id))
+
+
+def _split_check_items(raw_items: list) -> tuple[list, list]:
+    to_check, to_uncheck = [], []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        content = (item.get("content") or "").strip()
+        if not content:
+            continue
+        if "checked" not in item:
+            continue
+        (to_check if item["checked"] else to_uncheck).append(content)
+    return to_check, to_uncheck
+
+
+def _handle_remove(service, params: dict) -> str:
+    list_id, err = _require_id(params)
+    if err:
+        return err
+
+    items, err = _require_items(params)
+    if err:
+        return err
+
+    lst = service.get_list(list_id)
+    if lst is None:
+        return _fail(f"List with id: {list_id} not found.")
+
+    cleaned = _normalize_string_items(params)
+    if not cleaned:
+        return _fail("'items' must contain at least one non-empty string.")
+
+    removed = service.remove_items(list_id, cleaned)
+    if removed == 0:
+        return _fail(f"No matching items found in list '{lst['name']}'.")
+
+    return _success(_list_json(service, list_id))
 
 
 def _handle_clear(service, params: dict) -> str:
-    name = params.get("name", "").strip()
-    if not name:
-        return "[LIST] 'name' is required to clear a list."
+    list_id, err = _require_id(params)
+    if err:
+        return err
 
-    count = service.clear_list(name)
+    count = service.clear_list(list_id)
     if count == -1:
-        return f"[LIST] List '{name}' not found."
-    return f"[LIST] Cleared {count} item(s) from '{name}'."
+        return _fail(f"List with id: {list_id} not found.")
+
+    return _success(_list_json(service, list_id))
 
 
 def _handle_rename(service, params: dict) -> str:
-    name = params.get("name", "").strip()
-    new_name = params.get("new_name", "").strip()
-    if not name or not new_name:
-        return "[LIST] 'name' and 'new_name' are required to rename a list."
+    list_id, err = _require_id(params)
+    if err:
+        return err
 
-    success = service.rename_list(name, new_name)
-    if success:
-        return f"[LIST] Renamed '{name}' → '{new_name}'."
-    return f"[LIST] Failed to rename '{name}' — list not found or new name already in use."
+    new_name, err = _require_name(params)
+    if err:
+        return err
 
+    success = service.rename_list(list_id, new_name)
+    if not success:
+        return _fail(f"Rename failed — list with id: {list_id} not found, or name '{new_name}' is already in use.")
 
-def _handle_history(service, params: dict) -> str:
-    name = params.get("name", "").strip() or None
-    since_str = params.get("since", "").strip() or None
-
-    since = None
-    if since_str:
-        from datetime import datetime, timezone
-        from services.time_utils import parse_utc
-        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
-        since = parse_utc(since_str)
-        if since == _SENTINEL:
-            return "[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
-
-    events = service.get_history(name, since=since, limit=30)
-    if not events:
-        target = f"'{name}'" if name else "any list"
-        return f"[LIST] No history found for {target}."
-
-    from services.time_formatter_service import TimeFormatterService
-    lines = ["[LIST] History:"]
-    for ev in events:
-        ts_str = TimeFormatterService.local(ev["created_at"]) or str(ev["created_at"])
-        content_part = f" — {ev['item_content']}" if ev["item_content"] else ""
-        lines.append(f"  [{ts_str}] {ev['event_type']}{content_part}")
-
-    return "\n".join(lines)
+    return _success(_list_json(service, list_id))
 
 
-def _try_serialise_rich(body: str, action: str, ordinal: int) -> str | None:
+def _handle_delete(service, params: dict) -> str:
+    list_id, err = _require_id(params)
+    if err:
+        return err
+
+    success = service.delete_list(list_id)
+    if not success:
+        return _fail(f"List with id: {list_id} not found.")
+
+    return _success_message(f"List with id: {list_id} was deleted successfully")
+
+
+def _try_serialise_rich(body: str, ordinal: int) -> str | None:
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
         return None
     if parsed.get("status") != "success" or parsed.get("list") is None:
         return None
-    tag = f"list_{ordinal}"
     payload = parsed["list"]
+    tag = f"list_{ordinal}"
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
     return f"{data_json}\n\n{instruction}"

@@ -24,7 +24,6 @@ DATA_TABLES = [
     'scheduled_items',
     'lists',
     'list_items',
-    'list_events',
     'documents',
 ]
 
