@@ -204,14 +204,61 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
     _spawn_return_processor(envelope)
 
 
-def _spawn_return_processor(envelope: str) -> None:
-    """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
+def _extract_envelope_findings(envelope: str) -> str:
+    """Extract verbatim subagent findings from a success envelope.
 
-    After the ACT loop completes, publishes the response to the WebSocket
-    via OutputService — the same pattern as scheduler_service.py.
+    Returns the raw text between the sentinel and trailer on a success
+    envelope. Returns '' for failure envelopes, unparseable input, or any
+    exception — never raises.
+    """
+    try:
+        if not envelope:
+            return ''
+        first_line = envelope.split('\n', 1)[0]
+        if 'status=failure' in first_line:
+            return ''
+        sentinel = "Subagent's response:\n\n"
+        trailer = "\n[end:subagent.complete]"
+        start = envelope.find(sentinel)
+        if start == -1:
+            return ''
+        start += len(sentinel)
+        end = envelope.find(trailer, start)
+        if end == -1:
+            return ''
+        return envelope[start:end]
+    except Exception:
+        return ''
+
+
+def _spawn_return_processor(envelope: str) -> None:
+    """Spawn a daemon thread that delivers the subagent envelope to the user channel.
+
+    Success envelopes: write findings verbatim — LLM relay was unreliable
+    (see scenario 037). Failure envelopes: LLM relay for retry/escalation.
     """
 
     def _run():
+        findings = _extract_envelope_findings(envelope)
+        if findings:
+            # LLM relay was unreliable — see scenario 037
+            try:
+                from services.output_service import OutputService
+                from services.transcript_service import write_assistant_row
+
+                write_assistant_row('user', findings)
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=findings,
+                    source='subagent_return',
+                )
+                logger.info("%s Delivered findings verbatim", LOG_PREFIX)
+            except Exception as exc:
+                logger.error(
+                    "%s Verbatim delivery failed: %s", LOG_PREFIX, exc, exc_info=True
+                )
+            return
+
         try:
             from services.output_service import OutputService
             from services.user_message_processor import SubagentReturnProcessor

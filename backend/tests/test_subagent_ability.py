@@ -360,50 +360,62 @@ class TestDeliverEnvelopeDiscriminator:
 
 class TestSpawnReturnProcessorOutput:
     def test_enqueue_proactive_called_with_response(self):
-        """_spawn_return_processor must call OutputService.enqueue_proactive()
-        with the response text after SubagentReturnProcessor.send() returns."""
+        """On a success envelope, _spawn_return_processor must write verbatim
+        findings via write_assistant_row and enqueue_proactive — without
+        invoking SubagentReturnProcessor at all."""
         from unittest.mock import patch, MagicMock
         import threading
         from abilities.subagent import _spawn_return_processor
 
-        envelope = "[subagent.complete(type=web_surfer)]\nResult text\n[end:subagent.complete]"
+        envelope = (
+            "[subagent.complete(type=web_surfer)]\n"
+            "The subagent has completed the task. Subagent's response:\n\n"
+            "Result text\n"
+            "[end:subagent.complete]"
+        )
 
         mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = "Here is what I found from the subagent."
+        mock_write_row = MagicMock()
 
         with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
             'services.output_service.OutputService',
             return_value=mock_output_svc,
+        ), patch(
+            'services.transcript_service.write_assistant_row',
+            mock_write_row,
         ):
             _spawn_return_processor(envelope)
 
-            # Join inside the patch context so the thread resolves mocked imports
             for t in threading.enumerate():
                 if t.name == "subagent-return":
                     t.join(timeout=5)
 
-            mock_proc_instance.send.assert_called_once()
+            mock_write_row.assert_called_once_with('user', 'Result text')
             mock_output_svc.enqueue_proactive.assert_called_once_with(
                 topic='user',
-                response="Here is what I found from the subagent.",
+                response='Result text',
                 source='subagent_return',
             )
 
     def test_enqueue_proactive_not_called_on_empty_response(self):
-        """If SubagentReturnProcessor.send() returns empty, do not publish."""
+        """A failure envelope falls through to the LLM relay path.
+        When send() returns empty, neither enqueue_proactive nor
+        write_assistant_row is called."""
         from unittest.mock import patch, MagicMock
         import threading
         from abilities.subagent import _spawn_return_processor
 
-        envelope = "[subagent.complete(type=web_surfer)]\n\n[end:subagent.complete]"
+        envelope = (
+            "[subagent.complete(type=web_surfer, status=failure)]\n"
+            "The subagent failed. Reason: Connection timed out.\n\n"
+            "Decide whether to retry, escalate to the user, or fall back.\n"
+            "[end:subagent.complete]"
+        )
 
         mock_output_svc = MagicMock()
         mock_proc_instance = MagicMock()
         mock_proc_instance.send.return_value = ""
+        mock_write_row = MagicMock()
 
         with patch(
             'services.user_message_processor.SubagentReturnProcessor',
@@ -411,6 +423,9 @@ class TestSpawnReturnProcessorOutput:
         ), patch(
             'services.output_service.OutputService',
             return_value=mock_output_svc,
+        ), patch(
+            'services.transcript_service.write_assistant_row',
+            mock_write_row,
         ):
             _spawn_return_processor(envelope)
 
@@ -419,3 +434,60 @@ class TestSpawnReturnProcessorOutput:
                     t.join(timeout=5)
 
             mock_output_svc.enqueue_proactive.assert_not_called()
+            mock_write_row.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# AD3. _extract_envelope_findings helper
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEnvelopeFindings:
+    def test_success_envelope_returns_findings(self):
+        """Returns the verbatim text between sentinel and trailer."""
+        from abilities.subagent import _extract_envelope_findings
+
+        envelope = (
+            "[subagent.complete(type=web_surfer)]\n"
+            "The subagent has completed the task. Subagent's response:\n\n"
+            "Line one\nLine two\nLine three\n"
+            "[end:subagent.complete]"
+        )
+        result = _extract_envelope_findings(envelope)
+        assert result == "Line one\nLine two\nLine three", repr(result)
+
+    def test_failure_envelope_returns_empty(self):
+        """status=failure in the first line → returns ''."""
+        from abilities.subagent import _extract_envelope_findings
+
+        envelope = (
+            "[subagent.complete(type=web_surfer, status=failure)]\n"
+            "The subagent failed. Reason: timeout.\n\n"
+            "Decide whether to retry.\n"
+            "[end:subagent.complete]"
+        )
+        assert _extract_envelope_findings(envelope) == ''
+
+    def test_missing_sentinel_returns_empty(self):
+        """No sentinel → returns ''."""
+        from abilities.subagent import _extract_envelope_findings
+
+        envelope = "[subagent.complete(type=web_surfer)]\nSome text\n[end:subagent.complete]"
+        assert _extract_envelope_findings(envelope) == ''
+
+    def test_missing_trailer_returns_empty(self):
+        """Sentinel present but trailer absent → returns ''."""
+        from abilities.subagent import _extract_envelope_findings
+
+        envelope = (
+            "[subagent.complete(type=web_surfer)]\n"
+            "The subagent has completed the task. Subagent's response:\n\n"
+            "Result text\n"
+        )
+        assert _extract_envelope_findings(envelope) == ''
+
+    def test_empty_string_returns_empty(self):
+        """Empty input → returns ''."""
+        from abilities.subagent import _extract_envelope_findings
+
+        assert _extract_envelope_findings('') == ''
