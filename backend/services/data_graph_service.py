@@ -1424,8 +1424,8 @@ class DataGraphService:
         if row is None:
             return self._make_forget_result("not_found", provided_key, canonical_key, rule, value)
         d = self._row_to_dict(row)
-        self._hard_delete_row(conn, d['id'])
-        return self._make_forget_result("forgotten", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=self._row_date(d))
+        self._log_immutable_conflict(canonical_key)
+        return self._make_forget_result("immutable_blocked", provided_key, canonical_key, rule, value, old_value=d.get('value'), date=self._row_date(d))
 
     def _forget_temporal(self, conn, kind: str, canonical_key: str, provided_key: str, rule: Optional[str], value: Optional[str]) -> dict:
         rows = conn.execute(

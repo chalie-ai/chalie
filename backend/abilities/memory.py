@@ -264,6 +264,10 @@ def _format_forget_response(result: dict) -> str:
         vals_str = ", ".join(f"'{v}'" for v in remaining)
         return f"'{value}' not found in {key_display}. Currently stored: [{vals_str}]."
 
+    if status == "immutable_blocked":
+        old = result.get("old_value") or value
+        return f"{key_display} is immutable and cannot be forgotten — current value '{old}' (set {date})."
+
     if status == "not_found":
         return f"No memory stored under {key_display}. Nothing to forget."
 
