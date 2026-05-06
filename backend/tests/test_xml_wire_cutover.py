@@ -163,7 +163,7 @@ class TestOutputServiceXmlWireFrame:
             svc.enqueue_text(
                 channel="ch-event",
                 response="<p>Background</p>",
-                original_metadata={"source": "proactive"},
+                original_metadata={"source": "task"},
             )
 
         # Find the output:events publish
