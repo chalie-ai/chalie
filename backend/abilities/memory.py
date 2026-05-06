@@ -294,6 +294,29 @@ def _handle_recall(channel: str, params: dict) -> str:
     doc_hits = _search_document_artifacts(query, limit=3)
     results.extend(doc_hits)
 
+    if doc_hits:
+        try:
+            from services.message_processor import current_processor
+            from services.tool_render_and_record_service import ToolRenderAndRecordService
+
+            proc = current_processor()
+            if proc is not None and proc._uid is not None:
+                doc_result = _tag(
+                    "document",
+                    action="recall",
+                    query=query,
+                    results=len(doc_hits),
+                )
+                ToolRenderAndRecordService(
+                    tool_name="document",
+                    params={"action": "recall", "query": query},
+                    result=doc_result,
+                    ephemeral=False,
+                    transcript_id=proc._uid,
+                ).renderAndRecord()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} document attribution record failed: {exc}")
+
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
 
