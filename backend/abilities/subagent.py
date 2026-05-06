@@ -238,51 +238,13 @@ def _spawn_return_processor(envelope: str) -> None:
 
 class SubagentAbility(Ability):
     NAME = "subagent"
-    SUMMARY = """\
-ONLY use this tool if multi-step actions are needed OR you need to process
-a large volume of data (call summariser in this case). For a single tool
-lookup, call the tool directly — do not wrap it in a subagent. Multiple
-calls to the same tool (e.g. weather for two cities) is NOT multi-step —
-call the tool once per item.
-
-Each subagent gets its own tool surface based on `agent_type`:
-
-- web_surfer (60m): search and crawl web pages; can browse. Use for
-  multi-source web research and live page lookups. Web research is SLOW —
-  multi-site crawls routinely take many minutes. **Strongly prefer
-  wait=false** (fire-and-forget). The result is delivered back to you
-  asynchronously when ready, so you can keep talking to the user or fan
-  out more subagents in parallel.
-- summariser (10m): read and summarise long documents or web pages.
-  Use to compress large content before pulling it into your context.
-- general_purpose (30m): parallelise different long-running work — spawn
-  multiple subagents to do different things at once.
-
-Sync vs async (wait):
-- wait=false (default): returns immediately with an ack. The completed
-  envelope arrives later as a steer or a fresh turn. Use this for any
-  web_surfer call and for anything you don't need to act on inside this
-  same turn.
-- wait=true: blocks the parent ACT iteration until the subagent finishes.
-  Capped per type — web_surfer 30 min, summariser/general_purpose 5 min.
-  Only use this when the subagent's answer is the next thing you must
-  reason about and the task is genuinely fast.
-
-Parallelism:
-- Fan out aggressively. Three wait=false web_surfers (one per source) beat
-  one monolith trying to crawl everything sequentially.
-
-When NOT to use:
-- For a single quick lookup with a known URL or query — use the tool
-  directly.
-- For tasks under ~30 seconds that fit in your turn — answer inline.
-
-Briefing rules:
-- The subagent has none of your conversation context. State the task
-  fully.
-- Include success criteria and any data you already have.
-- Be specific about output shape (summary length, format, key fields).\
-"""
+    SUMMARY = (
+        "Spawn a background worker for multi-step research or long-running "
+        "work. ONLY use when a single direct tool call cannot answer — for "
+        "any single lookup (weather, search, news, browser, etc.), call that "
+        "tool directly. Multiple calls to the same tool is NOT multi-step. "
+        "See agent_type for available worker types."
+    )
     EXAMPLES = [
         "research the top 3 health benefits of cold water swimming as a background task",
         "do a deep dive on the competitive landscape for electric vehicles",
