@@ -419,3 +419,22 @@ class TestSpawnReturnProcessorOutput:
                     t.join(timeout=5)
 
             mock_output_svc.enqueue_proactive.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# SubagentReturnProcessor isolation contract
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentReturnProcessorIsolation:
+    def test_skip_input_row_is_true(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.SKIP_INPUT_ROW is True
+
+    def test_channel_is_user(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.CHANNEL == 'user'
+
+    def test_skip_transcript_write_is_false(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.SKIP_TRANSCRIPT_WRITE is False

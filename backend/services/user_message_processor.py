@@ -489,46 +489,26 @@ class UserMessageProcessor(MessageProcessor):
 
 
 class SubagentReturnProcessor(UserMessageProcessor):
-    """Processor that seeds a fresh user-channel ACT loop from a subagent's reply.
+    """Synthesize a subagent's result via a fresh user-channel ACT loop.
 
-    Architecture
-    ────────────
-    Two distinct processor classes govern the two halves of an async subagent
-    round-trip:
+    Flow (isolation contract):
+    1. SubagentProcessor (CHANNEL='subagent') does the work in its own
+       isolated transcript.
+    2. On completion, a daemon thread constructs this processor with the
+       subagent's result as ``raw_input`` and calls ``.send()``.
+    3. SKIP_INPUT_ROW=True — the raw subagent result is NEVER written to
+       the user transcript.  The user channel stays clean.
+    4. The ACT loop synthesizes the result.  The synthesized response is
+       written to transcript (``store()``) and delivered via WS — this is
+       what the user sees.
+    5. On subagent failure, the same flow runs — the ACT loop sees the
+       error envelope and synthesizes a user-friendly response.
 
-    1. **SubagentProcessor** (CHANNEL='subagent') — runs the subagent task
-       itself.  It is dispatched by ``abilities/subagent.py`` (``_run_async``),
-       runs with the 'subagent' channel, and its output text is defensively
-       scrubbed by ``rich_media_parser.strip_spans()`` before being handed back.
-       The dispatcher gates ``_rich_media_ordinal`` injection on
-       ``channel == 'user'``, so subagents never receive the rich-media
-       instruction trailer and cannot emit card spans — stripping is a safety
-       net, not the primary gate.
-
-    2. **SubagentReturnProcessor** (this class, CHANNEL='user') — once the
-       subagent finishes and the parent user-channel is idle, a daemon thread
-       constructs this processor with the subagent's scrubbed reply text as
-       ``raw_input`` and calls ``.send()``.  That reply is the *seed* of a
-       brand-new user-channel ACT loop; it is written to the transcript with
-       ``role='subagent_return'`` so it is invisible to the human user and
-       excluded from history rebuilds (``migrate_transcript_rebuild`` skips
-       ``_SKIP_ROLES``).
-
-    Why CHANNEL='user'
-    ──────────────────
-    The *output* of this ACT loop is a normal user-channel assistant message —
-    fully visible, rich-media-capable.  By inheriting ``CHANNEL='user'`` the
-    dispatcher correctly injects ``_rich_media_ordinal`` for any tool calls
-    Chalie makes while reasoning over the subagent's result, so weather cards,
-    list cards, etc. render as expected.
-
-    This is intentional design, not a leak.  Future maintainers: do NOT add a
-    ``CHANNEL='subagent_return'`` constant or gate ordinal injection on ROLE —
-    both would silently break rich-media cards on subagent-triggered turns.
-
-    No method overrides needed: all UMP behaviour (``ALWAYS_AVAILABLE``,
-    ``DISCOVERABLE``, system prompt, ``postTurn`` fan-out) is inherited
-    unchanged.
+    Why CHANNEL='user': the output of this ACT loop is a normal
+    user-channel assistant message — fully visible, rich-media-capable.
+    Do NOT add a CHANNEL='subagent_return' constant — it would break
+    rich-media card injection for tool calls in this loop.
     """
 
     ROLE = 'subagent_return'
+    SKIP_INPUT_ROW = True

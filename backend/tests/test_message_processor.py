@@ -145,6 +145,54 @@ class TestPerInstanceDeadline:
 
 
 @pytest.mark.unit
+class TestSkipInputRow:
+    def test_skip_input_row_suppresses_write_but_store_runs(self):
+        """SKIP_INPUT_ROW=True: write_input_row is not called, but
+        store() still writes the assistant row via write_assistant_row."""
+        from unittest.mock import patch, MagicMock
+
+        from services.message_processor import MessageProcessor
+        from services.system_message_prompt import DMNSystemMessagePrompt
+
+        class _InputSkipProcessor(MessageProcessor):
+            CHANNEL = "user"
+            ROLE = "subagent_return"
+            SKIP_INPUT_ROW = True
+            SKIP_TRANSCRIPT_WRITE = False
+            SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
+
+            def getUserPrompt(self):
+                return "test"
+
+            def getUserDefinition(self):
+                return "test user"
+
+        fake_response = MagicMock()
+        fake_response.text = "Synthesized response"
+        fake_response.tool_calls = []
+
+        fake_provider = MagicMock()
+        fake_provider.send_messages.return_value = fake_response
+        fake_provider.get_context_limit.return_value = 32_000
+        fake_provider.get_compact_at.return_value = 32_000
+        fake_provider.estimate_payload_tokens.return_value = 100
+
+        with patch("services.providers.Providers") as mock_providers_cls, \
+             patch("services.transcript_service.write_input_row") as mock_input, \
+             patch("services.transcript_service.write_assistant_row") as mock_assistant:
+            mock_providers_cls.instance.return_value = fake_provider
+            mock_assistant.return_value = 999
+
+            proc = _InputSkipProcessor(raw_input="subagent envelope text")
+            result = proc.send()
+
+            mock_input.assert_not_called()
+            mock_assistant.assert_called_once()
+            assert proc._uid is None
+            assert result == "Synthesized response"
+
+
+@pytest.mark.unit
 class TestSanitizeLLMArgs:
     def test_observed_qwen_list_items(self):
         assert _sanitize_llm_args('<|"|milk<|"|') == 'milk'
