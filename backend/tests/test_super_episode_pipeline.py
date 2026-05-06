@@ -264,7 +264,7 @@ class TestFindSuperCandidates:
 
         from services.episodic_service import find_super_candidates
 
-        # 60° apart → cosine ≈ 0.5, well below 0.90 threshold
+        # 60° apart → cosine ≈ 0.5, well below 0.85 threshold
         self._insert_apex(db, _sim_vec(angle_deg=0.0), gist="ep1")
         self._insert_apex(db, _sim_vec(angle_deg=60.0), gist="ep2")
         self._insert_apex(db, _sim_vec(angle_deg=120.0), gist="ep3")
@@ -327,12 +327,12 @@ class TestFindSuperCandidates:
 
         from services.episodic_service import find_super_candidates
 
-        # A–B cosine ≈ 0.966 (15° apart) → above 0.90
-        # B–C cosine ≈ 0.966 (B at 15°, C at 30°)
-        # A–C cosine ≈ 0.866 (30° apart) → BELOW 0.90
+        # A–B cosine ≈ 0.940 (20° apart) → above 0.85
+        # B–C cosine ≈ 0.940 (B at 20°, C at 40°)
+        # A–C cosine ≈ 0.766 (40° apart) → BELOW 0.85
         a = self._insert_apex(db, _sim_vec(angle_deg=0.0), gist="a")
-        b = self._insert_apex(db, _sim_vec(angle_deg=15.0), gist="b")
-        c = self._insert_apex(db, _sim_vec(angle_deg=30.0), gist="c")
+        b = self._insert_apex(db, _sim_vec(angle_deg=20.0), gist="b")
+        c = self._insert_apex(db, _sim_vec(angle_deg=40.0), gist="c")
 
         clusters = find_super_candidates("ch1")
         # Connected components via A–B and B–C edges → single cluster of 3.

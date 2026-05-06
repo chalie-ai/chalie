@@ -6,9 +6,12 @@ them mechanically. Do NOT read these from config/env at import time.
 """
 
 # Pairwise cosine similarity floor for super-episode cluster membership.
-# gte-modernbert packs densely (unrelated English ≈ 0.80-0.85); 0.90 is
-# the "same topic" floor validated by research on that encoder family.
-SUPER_EPISODE_THRESHOLD = 0.90
+# gte-modernbert packs densely (unrelated English ≈ 0.80-0.85). The
+# connected-components clustering only requires *one* edge per chain, so
+# 0.85 catches same-topic discussions that diverge across sub-issues
+# (e.g. one JWT-debugging cluster spanning dotenv ordering, clock drift,
+# and proxy headers) which otherwise stayed isolated at 0.90.
+SUPER_EPISODE_THRESHOLD = 0.85
 
 # Minimum cluster size to fire the SuperEpisodeEncoder LLM call.
 SUPER_EPISODE_MIN_CLUSTER = 3
