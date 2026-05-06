@@ -1,9 +1,9 @@
 """
 Privacy blueprint — /privacy/data-summary, /privacy/export, /privacy/delete-all.
 
-User data tables covered: episodes, transcript, tool_calls, compactions,
-goal_evidence, list_items, data_graph_edges, data_graph, goals,
-lists, scheduled_items, documents, watched_folders, place_fingerprints,
+User data tables covered: episodes, transcript, tool_calls,
+list_items, data_graph_edges, data_graph,
+lists, scheduled_items, documents, watched_folders,
 user_tool_preferences, memory_recall_log, llm_call_log,
 concept_lut_misses, browser_snapshots, browser_credentials.
 """
@@ -27,20 +27,16 @@ privacy_bp = Blueprint('privacy', __name__)
 _DELETE_ALL_TABLES = (
     # ── FK children first ─────────────────────────────────────────────────
     "tool_calls",          # FK → transcript(id)
-    "compactions",         # FK → transcript(id)
-    "goal_evidence",       # FK → goals(id) ON DELETE CASCADE
     "list_items",          # FK → lists(id)
     "data_graph_edges",    # FK → data_graph(id) ON DELETE CASCADE
     # ── Parents / independents ────────────────────────────────────────────
     "transcript",
     "episodes",
     "data_graph",
-    "goals",
     "lists",
     "scheduled_items",
     "documents",
     "watched_folders",
-    "place_fingerprints",
     "user_tool_preferences",
     "memory_recall_log",
     "llm_call_log",
@@ -253,12 +249,10 @@ def delete_all():
     """Nuclear option — clear all stored user data.
 
     Wipes every user-owned table (episodes, transcript, tool_calls,
-    compactions, goal_evidence, list_items, data_graph_edges,
-    data_graph, goals, lists, scheduled_items, documents,
-    watched_folders, place_fingerprints, user_tool_preferences,
-    memory_recall_log, llm_call_log,
-    concept_lut_misses, browser_snapshots, browser_credentials)
-    and clears MemoryStore working_memory keys.
+    list_items, data_graph_edges, data_graph, lists, scheduled_items,
+    documents, watched_folders, user_tool_preferences, memory_recall_log,
+    llm_call_log, concept_lut_misses, browser_snapshots,
+    browser_credentials) and clears MemoryStore working_memory keys.
 
     System / auth / config tables are deliberately excluded.
     """
