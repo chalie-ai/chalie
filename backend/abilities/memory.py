@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 from typing import ClassVar, Dict, List, Optional, Tuple
 
 from abilities._base import Ability
@@ -626,6 +627,51 @@ def _compute_expand_factor(
     return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, factor)), max_drift
 
 
+_QUERY_CLAUSE_SPLITTER = re.compile(r"\s+(?:and|or|but)\s+|[,;?]\s*", re.IGNORECASE)
+
+
+def _split_query_clauses(query: str) -> List[str]:
+    if not query:
+        return []
+    parts = _QUERY_CLAUSE_SPLITTER.split(query.strip())
+    return [p.strip() for p in parts if p and len(p.strip()) > 10]
+
+
+def _intra_query_drift(emb_svc, query: str) -> float:
+    clauses = _split_query_clauses(query)
+    if len(clauses) < 2:
+        return 0.0
+    embeddings = []
+    for c in clauses:
+        try:
+            e = emb_svc.generate_embedding(c)
+            if e:
+                embeddings.append(e)
+        except Exception:
+            continue
+    if len(embeddings) < 2:
+        return 0.0
+    max_d = 0.0
+    for i in range(len(embeddings)):
+        for j in range(i + 1, len(embeddings)):
+            d = _cosine_distance(embeddings[i], embeddings[j])
+            if d > max_d:
+                max_d = d
+    return max_d
+
+
+def _expand_factor_from_drift(drift: float) -> float:
+    if drift <= MemoryAbility.EXPAND_MIN_DIST:
+        return 1.0
+    if drift >= MemoryAbility.EXPAND_MAX_DIST:
+        return MemoryAbility.EXPAND_FACTOR_CEILING
+    span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
+    if span <= 0:
+        return MemoryAbility.EXPAND_FACTOR_CEILING
+    t = (drift - MemoryAbility.EXPAND_MIN_DIST) / span
+    return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)))
+
+
 def _embedding_hash(embedding: List[float]) -> str:
     if not embedding:
         return "empty"
@@ -755,6 +801,9 @@ def recall_episodes(
 
         narrow_factor, _min_dist = _compute_narrow_factor(q_embedding, history)
         expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
+        intra_drift = _intra_query_drift(emb_svc, query)
+        if intra_drift > _max_drift:
+            expand_factor = max(expand_factor, _expand_factor_from_drift(intra_drift))
         input_radius = baseline_radius * narrow_factor * expand_factor
 
         episodes, telemetry = episodic_retrieval_service.retrieve(
