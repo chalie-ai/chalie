@@ -143,12 +143,21 @@ class OutputService:
             # Buffer for catch-up: events published during a brief drift stream
             # reconnect gap are permanently lost from pub/sub. Push to a list so
             # the stream endpoint can drain missed events on next connect.
-            try:
-                self.store.rpush(_KEY_NOTIFICATIONS_RECENT, event_payload)
-                self.store.ltrim(_KEY_NOTIFICATIONS_RECENT, -200, -1)
-                self.store.expire(_KEY_NOTIFICATIONS_RECENT, 86400)  # 24h TTL
-            except Exception as e:
-                logger.warning(f"Notification buffer push failed: {e}")
+            #
+            # Response events are explicitly excluded: they are already persisted
+            # as transcript rows and replayed via /conversation/recent on every
+            # reconnect. Parking them here too causes stale response payloads to
+            # leak into subsequent turns when a new WS connection drains the
+            # buffer (nightly 105 step-5 / step-12 duplicate output_id bug).
+            # Only reminders, tasks, notifications, escalations, and cards —
+            # which have no transcript replay path — belong in this buffer.
+            if event_type != 'response':
+                try:
+                    self.store.rpush(_KEY_NOTIFICATIONS_RECENT, event_payload)
+                    self.store.ltrim(_KEY_NOTIFICATIONS_RECENT, -200, -1)
+                    self.store.expire(_KEY_NOTIFICATIONS_RECENT, 86400)  # 24h TTL
+                except Exception as e:
+                    logger.warning(f"Notification buffer push failed: {e}")
 
         logger.info(
             f"Enqueued TEXT output {output_id} for topic '{_channel}' "

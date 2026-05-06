@@ -95,8 +95,9 @@ class TestOutputService:
         assert "output:events" in channels
 
     def test_enqueue_text_without_sse_uuid_buffers_to_notifications(self, service, mock_store):
-        """Background text is pushed to notifications:recent for catch-up."""
-        metadata = {"source": "proactive"}
+        """Background text with a non-response event type is pushed to notifications:recent."""
+        # 'reminder' maps to event_type='reminder' — should be buffered
+        metadata = {"source": "reminder"}
 
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("topic-1", "Drift", "UNIFIED", 0.8, 0.3, metadata)
@@ -223,7 +224,8 @@ class TestOutputService:
 
     def test_notifications_list_trimmed_to_200(self, service, mock_store):
         """After rpush to notifications:recent, ltrim keeps only the last 200."""
-        metadata = {"source": "proactive"}
+        # 'reminder' maps to event_type='reminder' — eligible for buffering
+        metadata = {"source": "reminder"}
 
         # Pre-populate with 250 items so the trim is verifiable by state
         for i in range(250):
@@ -234,3 +236,47 @@ class TestOutputService:
 
         recent = mock_store.lrange("notifications:recent", 0, -1)
         assert len(recent) <= 200
+
+    # ------------------------------------------------------------------ #
+    # notifications:recent — response events must NOT be buffered
+    # ------------------------------------------------------------------ #
+
+    def test_response_source_not_buffered_in_notifications(self, service, mock_store):
+        """
+        Background outputs whose event_type resolves to 'response' must NOT be
+        pushed to notifications:recent.
+
+        subagent_return is not in source_type_map so it defaults to 'response'.
+        Parking response payloads in the catch-up buffer causes stale events to
+        leak into subsequent WS turns (nightly 105 step-5 / step-12 bug).
+        """
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text(
+                "topic-1",
+                "subagent result",
+                "UNIFIED",
+                1.0,
+                0.0,
+                original_metadata={"source": "subagent_return"},
+            )
+
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) == 0
+
+    def test_task_source_is_buffered_in_notifications(self, service, mock_store):
+        """
+        Background outputs whose event_type resolves to 'task' MUST be pushed
+        to notifications:recent — they have no transcript replay path.
+        """
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text(
+                "topic-1",
+                "task complete",
+                "UNIFIED",
+                1.0,
+                0.0,
+                original_metadata={"source": "task"},
+            )
+
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) > 0
