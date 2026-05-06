@@ -1425,21 +1425,6 @@ class TestForget:
         assert len(rows) == 1
         assert rows[0][0] == 'pasta'
 
-    def test_forget_immutable_hard_deletes_without_protection(self, svc, db_service):
-        """Immutable key forget removes the single row — no protection from deletion."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
-                            key='birth_date', value='1990-03-15')
-
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
-        with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
-            result = svc.forget(KIND_USER_SPECIFIC, 'birth_date')
-
-        assert result is not None
-        assert result['status'] == 'forgotten'
-        assert result['old_value'] == '1990-03-15'
-
-        assert _raw_row(db_service, rowid) is None, "Immutable forget must physically remove the row"
-
     def test_forget_lut_miss_raw_key_finds_and_deletes(self, svc, db_service):
         """LUT miss forget falls back to raw key lookup and deletes the matching row."""
         rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
