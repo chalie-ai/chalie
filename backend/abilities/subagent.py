@@ -212,22 +212,31 @@ def _spawn_return_processor(envelope: str) -> None:
     """
 
     def _run():
+        from services.output_service import OutputService
+
         try:
-            from services.output_service import OutputService
             from services.user_message_processor import SubagentReturnProcessor
 
             response_text = SubagentReturnProcessor(raw_input=envelope).send()
             response_text = (response_text or '').strip()
-            if response_text:
-                OutputService().enqueue_proactive(
-                    topic='user',
-                    response=response_text,
-                    source='subagent_return',
-                )
-            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
+            if not response_text:
+                response_text = "Subagent returned a result but synthesis produced no output."
         except Exception as exc:
             logger.error(
                 "%s SubagentReturnProcessor failed: %s", LOG_PREFIX, exc, exc_info=True
+            )
+            response_text = f"Subagent synthesis failed: {exc}"
+
+        try:
+            OutputService().enqueue_proactive(
+                topic='user',
+                response=response_text,
+                source='subagent_return',
+            )
+            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
+        except Exception as exc:
+            logger.error(
+                "%s SubagentReturnProcessor delivery failed: %s", LOG_PREFIX, exc, exc_info=True
             )
 
     t = threading.Thread(target=_run, daemon=True, name="subagent-return")
@@ -407,7 +416,12 @@ Briefing rules:
                 )
                 envelope = _build_envelope(str(exc), agent_type, status="failure")
 
-            _deliver_envelope(envelope, parent_ref)
+            try:
+                _deliver_envelope(envelope, parent_ref)
+            except Exception as exc:
+                logger.error(
+                    "%s Subagent %s delivery failed: %s", LOG_PREFIX, sub_id[:8], exc, exc_info=True
+                )
 
         t = threading.Thread(target=_run, daemon=True, name=f"subagent-{sub_id[:8]}")
         t.start()
