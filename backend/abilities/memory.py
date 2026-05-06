@@ -9,7 +9,6 @@ import hashlib
 import json
 import logging
 import math
-import re
 from typing import ClassVar, Dict, List, Optional, Tuple
 
 from abilities._base import Ability
@@ -627,14 +626,16 @@ def _compute_expand_factor(
     return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, factor)), max_drift
 
 
-_QUERY_CLAUSE_SPLITTER = re.compile(r"\s+(?:and|or|but)\s+|[,;?]\s*", re.IGNORECASE)
+_CLAUSE_SEPARATORS = (";", "?", ",")
 
 
 def _split_query_clauses(query: str) -> List[str]:
     if not query:
         return []
-    parts = _QUERY_CLAUSE_SPLITTER.split(query.strip())
-    return [p.strip() for p in parts if p and len(p.strip()) > 10]
+    s = query.strip()
+    for ch in _CLAUSE_SEPARATORS:
+        s = s.replace(ch, "\x00")
+    return [p.strip() for p in s.split("\x00") if len(p.strip()) > 10]
 
 
 def _intra_query_drift(emb_svc, query: str) -> float:
@@ -666,8 +667,6 @@ def _expand_factor_from_drift(drift: float) -> float:
     if drift >= MemoryAbility.EXPAND_MAX_DIST:
         return MemoryAbility.EXPAND_FACTOR_CEILING
     span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
-    if span <= 0:
-        return MemoryAbility.EXPAND_FACTOR_CEILING
     t = (drift - MemoryAbility.EXPAND_MIN_DIST) / span
     return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)))
 
