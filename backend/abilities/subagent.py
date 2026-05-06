@@ -241,7 +241,9 @@ class SubagentAbility(Ability):
     SUMMARY = """\
 ONLY use this tool if multi-step actions are needed OR you need to process
 a large volume of data (call summariser in this case). For a single tool
-lookup, call the tool directly — do not wrap it in a subagent.
+lookup, call the tool directly — do not wrap it in a subagent. Multiple
+calls to the same tool (e.g. weather for two cities) is NOT multi-step —
+call the tool once per item.
 
 Each subagent gets its own tool surface based on `agent_type`:
 
