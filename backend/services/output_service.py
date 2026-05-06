@@ -132,7 +132,11 @@ class OutputService:
             self.store.publish(f"sse:{sse_channel}", output_id)
         else:
             # Background output: publish event, web push, and catch-up buffer.
-            self.store.publish('output:events', event_payload)
+            # Response events are persisted as transcript rows and replayed via
+            # /conversation/recent on reconnect — the live drift channel never
+            # needs them, and forwarding them causes phantom duplicates mid-turn.
+            if event_type != 'response':
+                self.store.publish('output:events', event_payload)
 
             try:
                 from api.push import send_push_to_all
@@ -143,12 +147,13 @@ class OutputService:
             # Buffer for catch-up: events published during a brief drift stream
             # reconnect gap are permanently lost from pub/sub. Push to a list so
             # the stream endpoint can drain missed events on next connect.
-            try:
-                self.store.rpush(_KEY_NOTIFICATIONS_RECENT, event_payload)
-                self.store.ltrim(_KEY_NOTIFICATIONS_RECENT, -200, -1)
-                self.store.expire(_KEY_NOTIFICATIONS_RECENT, 86400)  # 24h TTL
-            except Exception as e:
-                logger.warning(f"Notification buffer push failed: {e}")
+            if event_type != 'response':
+                try:
+                    self.store.rpush(_KEY_NOTIFICATIONS_RECENT, event_payload)
+                    self.store.ltrim(_KEY_NOTIFICATIONS_RECENT, -200, -1)
+                    self.store.expire(_KEY_NOTIFICATIONS_RECENT, 86400)  # 24h TTL
+                except Exception as e:
+                    logger.warning(f"Notification buffer push failed: {e}")
 
         logger.info(
             f"Enqueued TEXT output {output_id} for topic '{_channel}' "

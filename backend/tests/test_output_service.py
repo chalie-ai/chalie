@@ -87,16 +87,18 @@ class TestOutputService:
         assert "output:events" not in channels
 
     def test_enqueue_text_without_sse_uuid_publishes_to_output_events(self, service, mock_store):
-        """Background text (no SSE channel) is published to output:events."""
-        metadata = {"source": "proactive"}
-        service.enqueue_text("topic-1", "Drift thought", "UNIFIED", 0.8, 0.3, metadata)
+        """Background text with a non-response source is published to output:events."""
+        metadata = {"source": "task"}
+
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("topic-1", "Drift thought", "UNIFIED", 0.8, 0.3, metadata)
 
         channels = [ch for ch, _ in mock_store._published]
         assert "output:events" in channels
 
     def test_enqueue_text_without_sse_uuid_buffers_to_notifications(self, service, mock_store):
-        """Background text is pushed to notifications:recent for catch-up."""
-        metadata = {"source": "proactive"}
+        """Background text with a non-response source is pushed to notifications:recent."""
+        metadata = {"source": "task"}
 
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("topic-1", "Drift", "UNIFIED", 0.8, 0.3, metadata)
@@ -223,7 +225,7 @@ class TestOutputService:
 
     def test_notifications_list_trimmed_to_200(self, service, mock_store):
         """After rpush to notifications:recent, ltrim keeps only the last 200."""
-        metadata = {"source": "proactive"}
+        metadata = {"source": "task"}
 
         # Pre-populate with 250 items so the trim is verifiable by state
         for i in range(250):
@@ -234,3 +236,59 @@ class TestOutputService:
 
         recent = mock_store.lrange("notifications:recent", 0, -1)
         assert len(recent) <= 200
+
+    # ------------------------------------------------------------------ #
+    # response-source gating — notifications:recent (cycle 181)
+    # ------------------------------------------------------------------ #
+
+    def test_response_source_not_buffered_in_notifications(self, service, mock_store):
+        """source='subagent_return' (maps to event_type='response') must not rpush to notifications:recent."""
+        metadata = {"source": "subagent_return"}
+
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("topic-1", "Async findings", "UNIFIED", 0.9, 0.1, metadata)
+
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) == 0
+
+    def test_task_source_is_buffered_in_notifications(self, service, mock_store):
+        """source='task' (maps to event_type='task') must rpush to notifications:recent."""
+        metadata = {"source": "task"}
+
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("topic-1", "Background update", "UNIFIED", 0.9, 0.1, metadata)
+
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) > 0
+
+    # ------------------------------------------------------------------ #
+    # response-source gating — output:events live publish (cycle 182)
+    # ------------------------------------------------------------------ #
+
+    def test_response_source_not_published_to_output_events(self, service, mock_store):
+        """source='subagent_return' (maps to event_type='response') must not publish to output:events."""
+        metadata = {"source": "subagent_return"}
+
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("topic-1", "Async findings", "UNIFIED", 0.9, 0.1, metadata)
+
+        channels = [ch for ch, _ in mock_store._published]
+        assert "output:events" not in channels
+
+    def test_task_source_is_published_to_output_events(self, service, mock_store):
+        """source='task' (maps to event_type='task') must publish to output:events."""
+        metadata = {"source": "task"}
+
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("topic-1", "Background update", "UNIFIED", 0.9, 0.1, metadata)
+
+        channels = [ch for ch, _ in mock_store._published]
+        assert "output:events" in channels
+
+        # Verify the published payload contains the correct event type
+        for ch, msg in mock_store._published:
+            if ch == "output:events":
+                payload = json.loads(msg)
+                assert payload["type"] == "task"
+                return
+        pytest.fail("No publish to output:events found")
