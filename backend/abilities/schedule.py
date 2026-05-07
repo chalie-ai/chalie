@@ -1,7 +1,7 @@
 """
 ScheduleAbility — Native innate skill for reminders and scheduled tasks.
 
-Backed by SQLite (scheduled_items table). Provides create, list, and cancel actions.
+Backed by SQLite (scheduled_items table). Provides create, list, search, and cancel actions.
 All DB access via get_shared_db_service() (lazy import inside function).
 """
 
@@ -53,7 +53,7 @@ class ScheduleAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "list", "cancel"],
+                "enum": ["create", "list", "search", "cancel"],
                 "description": (
                     "The scheduler action to perform. If the user wants a short "
                     "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
@@ -119,6 +119,12 @@ class ScheduleAbility(Ability):
                     "'soon' = next 6 hours. Default 'all'."
                 ),
             },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Required for search: semantic query to find matching scheduled items."
+                ),
+            },
         },
         "required": ["action"],
     }
@@ -134,6 +140,8 @@ class ScheduleAbility(Ability):
             result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
         elif action == "list":
             result = _list(params)
+        elif action == "search":
+            result = _search(params)
         elif action == "cancel":
             result = _cancel(params)
         else:
@@ -340,6 +348,69 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
         return {"status": "error", "error": f"Create failed: {e}"}
+
+
+def _search(params: dict) -> dict:
+    query = (params.get("query") or "").strip()
+    if not query:
+        return {"status": "error", "error": "query is required for search"}
+
+    limit = params.get("limit", 5)
+
+    try:
+        from services.embedding_service import get_embedding_service
+        from services.database_service import get_shared_db_service
+        from services.embedding_utils import pack_embedding
+        from services.time_formatter_service import TimeFormatterService
+
+        emb = get_embedding_service().generate_embedding(query)
+        if not emb:
+            return {"status": "success", "action_performed": "search", "records": []}
+
+        blob = pack_embedding(emb)
+        if blob is None:
+            return {"status": "success", "action_performed": "search", "records": []}
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT s.id, s.message, s.due_at, s.recurrence, s.status,
+                       s.item_type, v.distance
+                FROM scheduled_items_vec v
+                JOIN scheduled_items s ON s.rowid = v.rowid
+                WHERE v.embedding MATCH ?
+                  AND k = ?
+                  AND s.status = 'pending'
+                  AND s.hidden = 0
+                ORDER BY v.distance
+                """,
+                (blob, limit),
+            )
+            rows = cursor.fetchall()
+
+        records = []
+        for row in rows:
+            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
+            records.append({
+                "id": row["id"],
+                "message": row["message"],
+                "due_at": local_due,
+                "item_type": row["item_type"],
+                "recurrence": row["recurrence"],
+                "status": row["status"],
+                "distance": float(row["distance"]),
+            })
+
+        return {
+            "status": "success",
+            "action_performed": "search",
+            "records": records,
+        }
+
+    except Exception as e:
+        logger.error(f"{LOG_PREFIX} Search failed: {e}", exc_info=True)
+        return {"status": "error", "error": f"Search failed: {e}"}
 
 
 def _list(params: dict) -> dict:
