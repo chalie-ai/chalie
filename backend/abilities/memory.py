@@ -549,13 +549,18 @@ def _cosine_distance(a: List[float], b: List[float]) -> float:
     return 1.0 - sim
 
 
-def _compute_narrow_factor(
+def _compute_radius_factors(
     q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float, float]:
+    """Single-pass narrow + expand factor computation.
+
+    Returns: (narrow_factor, expand_factor, min_dist, max_drift)
+    """
     if not history:
-        return 1.0, float("inf")
+        return 1.0, 1.0, float("inf"), 0.0
 
     min_dist = float("inf")
+    max_drift = 0.0
     for entry in history:
         emb = entry.get("embedding")
         if not emb:
@@ -563,48 +568,38 @@ def _compute_narrow_factor(
         d = _cosine_distance(q_embedding, emb)
         if d < min_dist:
             min_dist = d
-
-    if min_dist == float("inf") or min_dist >= MemoryAbility.NARROW_MIN_DIST:
-        return 1.0, min_dist
-
-    if min_dist <= MemoryAbility.NARROW_MAX_DIST:
-        return MemoryAbility.NARROW_FACTOR_FLOOR, min_dist
-
-    span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
-    if span <= 0:
-        return MemoryAbility.NARROW_FACTOR_FLOOR, min_dist
-    t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
-    factor = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
-    return max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, factor)), min_dist
-
-
-def _compute_expand_factor(
-    q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float]:
-    if not history:
-        return 1.0, 0.0
-
-    max_drift = 0.0
-    for entry in history:
-        emb = entry.get("embedding")
-        if not emb:
-            continue
-        d = _cosine_distance(q_embedding, emb)
         if d > max_drift:
             max_drift = d
 
+    # narrow factor
+    if min_dist == float("inf") or min_dist >= MemoryAbility.NARROW_MIN_DIST:
+        narrow_factor = 1.0
+    elif min_dist <= MemoryAbility.NARROW_MAX_DIST:
+        narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
+    else:
+        span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
+        if span <= 0:
+            narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
+        else:
+            t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
+            f = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
+            narrow_factor = max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, f))
+
+    # expand factor
     if max_drift <= MemoryAbility.EXPAND_MIN_DIST:
-        return 1.0, max_drift
+        expand_factor = 1.0
+    elif max_drift >= MemoryAbility.EXPAND_MAX_DIST:
+        expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
+    else:
+        span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
+        if span <= 0:
+            expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
+        else:
+            t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
+            f = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
+            expand_factor = min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, f))
 
-    if max_drift >= MemoryAbility.EXPAND_MAX_DIST:
-        return MemoryAbility.EXPAND_FACTOR_CEILING, max_drift
-
-    span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
-    if span <= 0:
-        return MemoryAbility.EXPAND_FACTOR_CEILING, max_drift
-    t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
-    factor = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
-    return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, factor)), max_drift
+    return narrow_factor, expand_factor, min_dist, max_drift
 
 
 def _embedding_hash(embedding: List[float]) -> str:
@@ -734,8 +729,7 @@ def recall_episodes(
         proc = current_processor()
         history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc)
 
-        narrow_factor, _min_dist = _compute_narrow_factor(q_embedding, history)
-        expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
+        narrow_factor, expand_factor, _min_dist, _max_drift = _compute_radius_factors(q_embedding, history)
         input_radius = baseline_radius * narrow_factor * expand_factor
 
         episodes, telemetry = episodic_retrieval_service.retrieve(
