@@ -26,8 +26,6 @@ import logging
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-
 from services.llm_service import PayloadTooLargeError
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
@@ -155,7 +153,6 @@ class MessageProcessor:
     DISCOVERABLE: list[str] = []
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
-    THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
     # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
     # want compaction to kick in, not an unbounded fetch.
@@ -603,8 +600,7 @@ class MessageProcessor:
           (``_overflow_recovered_this_turn`` guard, shared with the proactive
           threshold path so any combination of trips fires at most one
           compaction per turn).
-        - The exploration pass runs under its own ``THINKING_TIMEOUT`` envelope
-          (independent budget). The ACT loop has no whole-loop wall-clock budget.
+        - The ACT loop has no whole-loop wall-clock budget.
         - Overflow handling does NOT reset the per-instance deadline — the
           wall-clock guard (if set) keeps ticking so subagent turns eventually
           hit the cap.
@@ -672,14 +668,6 @@ class MessageProcessor:
             with self._metrics.stage('thinking_gate'):
                 self._run_thinking_gate()   # CHANNEL='user' only, guarded internally
 
-            # Log exploration injection once per turn — at this single point,
-            # not inside the ACT loop.
-            if self._thinking_exploration:
-                logger.info(
-                    "[THINKING] Chain of Thought injected into user body (chars=%d)",
-                    len(self._thinking_exploration),
-                )
-
             self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -699,7 +687,6 @@ class MessageProcessor:
                 with self._metrics.iteration(self._current_iteration):
                     with self._metrics.stage('prompt_assembly'):
                         user_body = self.getUserPrompt()
-                        user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                         user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
                         system_prompt = self.getSystemPrompt()
                         tools = self.getTools()
@@ -1203,8 +1190,10 @@ class MessageProcessor:
     def _run_thinking_gate(self) -> None:
         """Regression-head deliberation scoring. Writes self._thinking_level.
 
-        No-op for non-user channels (classifier is OOD for autonomous flows).
-        Never raises. On failure → self._thinking_level = 'low', EMA untouched.
+        Runs the ONNX classifier, updates the EMA, assigns the bucket
+        (low/medium/high), and persists the deliberation_score to the transcript
+        row. No-op for non-user channels (classifier is OOD for autonomous
+        flows). Never raises. On failure → self._thinking_level = 'low'.
         """
         if self.CHANNEL != 'user':
             return
@@ -1236,31 +1225,7 @@ class MessageProcessor:
                 self._uid, scalar, ema, bucket,
             )
 
-            if self._thinking_level == 'high':
-                try:
-                    with ThreadPoolExecutor(max_workers=1) as _pool:
-                        _future = _pool.submit(self._run_thinking_exploration)
-                        try:
-                            self._thinking_exploration = _future.result(
-                                timeout=self.THINKING_TIMEOUT
-                            )
-                        except FuturesTimeoutError:
-                            logger.warning(
-                                "[THINKING] exploration exceeded THINKING_TIMEOUT=%ds"
-                                " — proceeding without exploration",
-                                self.THINKING_TIMEOUT,
-                            )
-                            self._thinking_exploration = None
-                except Exception as exc:
-                    logger.info(
-                        "[THINKING] exploration failed (%s) — high turn proceeds "
-                        "without exploration", exc,
-                    )
-                    self._thinking_exploration = None
-                if self._thinking_exploration is not None:
-                    self._persist_exploration_to_tool_calls(self._uid)
-            else:
-                self._thinking_exploration = None
+            self._thinking_exploration = None
 
             if self._uid is not None:
                 from services.database_service import get_shared_db_service
@@ -1283,73 +1248,6 @@ class MessageProcessor:
             self._deliberation_scalar = None
             self._thinking_exploration = None
 
-    def _run_thinking_exploration(self) -> 'str | None':
-        """One same-job exploration pass for high-mode turns.
-
-        Asks the model to think out loud about the user's request: assess
-        gaps in its knowledge, evaluate which tools would help, and flag
-        non-obvious aspects. Output is Chain-of-Thought that gets
-        re-injected into the ACT loop via _wrap_with_exploration so the
-        model can act on its own reasoning.
-
-        Tools schema is sent so the model can reason about available
-        capabilities, but the prompt instructs it not to invoke them.
-        Any tool_calls in the response are discarded (single-pass only).
-
-        The model may output 'NOTHING' if the request is straightforward,
-        in which case None is returned and no exploration is injected.
-
-        Returns None on any failure (network, provider rejection, etc).
-        Logged at INFO. NEVER raises.
-        """
-        from services.providers import Providers
-
-        _EXPLORATION_PREFIX = (
-            "Think out loud about the user's request before responding.\n\n"
-            "Consider:\n"
-            "- What does the ideal response look like? What would make it genuinely useful?\n"
-            "- Do you already know enough to answer well, or are there gaps?\n"
-            "- Would any of your available tools fill those gaps? Which ones, in what order?\n"
-            "- Is there anything non-obvious about this request you might miss on a first read?\n\n"
-            "Whatever you output here will be shown to you as Chain of Thought on the next "
-            "pass — write to your future self. Be specific: name the tools you plan to use, "
-            "flag uncertainties, note key facts you want to remember to include.\n\n"
-            "If the request is straightforward and you have nothing useful to say to yourself, "
-            "output exactly: NOTHING\n\n"
-            "DO NOT INVOKE TOOLS — they are disabled in this phase. Think only."
-            "\n\n---\n\n"
-        )
-
-        try:
-            user_body = self.getUserPrompt()
-            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-            system_prompt = self.getSystemPrompt()
-            tools = self.getTools()
-
-            response = Providers.instance().send_messages(
-                system_prompt,
-                [{'role': 'user', 'content': _EXPLORATION_PREFIX + user_body}],
-                job=self.JOB,
-                tools=tools,
-                thinking_mode='high',
-            )
-            self._metrics.accumulate(response)
-
-            if response.tool_calls:
-                logger.debug(
-                    "[THINKING] exploration model attempted %d tool call(s) — discarded",
-                    len(response.tool_calls),
-                )
-
-            text = (response.text or '').strip()
-            if text.upper() == 'NOTHING':
-                return None
-            return text if text else None
-
-        except Exception as exc:
-            logger.info("[THINKING] exploration failed (%s)", exc)
-            return None
-
     def _get_thinking_mode_for_send(self) -> 'str | None':
         """Map self._thinking_level → provider thinking_mode kwarg.
 
@@ -1364,29 +1262,6 @@ class MessageProcessor:
         if self._thinking_level == 'medium':
             return 'medium'
         return None
-
-    def _persist_exploration_to_tool_calls(self, transcript_id: 'int | None') -> None:
-        """Insert the exploration text as a durable tool_calls row.
-
-        Stored with tool_name='thinking', ephemeral=0 so it survives
-        compaction and surfaces as part of the durable audit trail.
-        Persistence failure logs INFO and does NOT abort the turn.
-        """
-        if transcript_id is None or self._thinking_exploration is None:
-            return
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-        try:
-            ToolRenderAndRecordService(
-                tool_name='thinking',
-                params={},
-                result=self._thinking_exploration,
-                ephemeral=False,
-                transcript_id=transcript_id,
-            ).renderAndRecord()
-        except Exception as exc:
-            logger.info(
-                "[THINKING] failed to persist exploration to tool_calls (%s)", exc
-            )
 
     def postTurn(self) -> None:
         """Per-channel post-turn service fan-out.
@@ -1443,17 +1318,10 @@ def _build_compaction_input(prev_text: str, rendered_entries: list) -> str:
 #: would duplicate the summary on every subsequent turn. (Decision 4B —
 #: resolved 2026-04-10.)
 #:
-#: ``thinking`` — the pre-turn exploration block is stored ``ephemeral=0`` as
-#: an audit row via ``_persist_exploration_to_tool_calls``, but is prepended
-#: live into the ACT-loop user body via ``_wrap_with_exploration`` on every
-#: iteration (cheap string-prefix, single LLM call before the loop). Rendering
-#: it again in Previous Messages would double-inject the exploration text and
-#: pollute the transcript for the LLM.
-#:
 #: ``subagent_trail_compaction`` is stored ``ephemeral=1`` and is already
 #: filtered out of Previous Messages by the durable-only query in
 #: ``getPreviousMessages`` — no explicit entry needed here.
-_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction', 'thinking'})
+_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction'})
 
 
 def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
@@ -1482,45 +1350,6 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
         "---\n"
         "### Current State - What's happening in the current turn\n"
         f"{user_body}"
-    )
-
-
-def _wrap_with_exploration(channel: str, user_body: str) -> str:
-    """Prepend the thinking exploration block to the user-message body.
-
-    Channel-gated: returns ``user_body`` unchanged for any non-user channel so
-    background flows (DMN, goal-pursuit, scheduled) are never affected.
-
-    Reads ``_thinking_exploration`` from the active processor via
-    ``current_processor()``. Returns ``user_body`` unchanged when:
-    - ``channel != 'user'``
-    - no active processor is bound (called outside a turn)
-    - ``_thinking_exploration`` is falsy (None, empty string)
-
-    The exploration LLM call runs ONCE per turn (inside _run_thinking_gate).
-    This helper is called on each ACT iteration to keep the already-computed
-    exploration text in the user body. The INFO log for the injection is
-    emitted once pre-loop inside send() — not here.
-
-    Apply this wrapper BEFORE ``_wrap_with_checkpoint`` so the exploration block
-    sits at the top of ``### Current State`` when a compaction exists.
-    """
-    if channel != 'user':
-        return user_body
-    proc = current_processor()
-    if proc is None:
-        return user_body
-    exploration_text = getattr(proc, '_thinking_exploration', None)
-    if not exploration_text:
-        return user_body
-    return (
-        "## Chain of Thought\n"
-        "Below is your initial reaction to this prompt, played back. "
-        "Use it as grounding but pivot as needed based on the conversation.\n\n"
-        "---\n\n"
-        f"{exploration_text}\n\n"
-        "---\n\n"
-        + user_body
     )
 
 
