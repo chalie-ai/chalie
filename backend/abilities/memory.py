@@ -92,7 +92,8 @@ class MemoryAbility(Ability):
                 "description": (
                     "For recall/reflect: what to search for. One topic per "
                     "call — to fetch memories about different topics, call "
-                    "this tool once for each topic."
+                    "this tool once for each topic. If results are broad or "
+                    "sparse, try searching again with more narrow queries."
                 ),
             },
         },
