@@ -89,7 +89,11 @@ class MemoryAbility(Ability):
             },
             "query": {
                 "type": "string",
-                "description": "For recall: what to search for.",
+                "description": (
+                    "For recall/reflect: what to search for. One topic per "
+                    "call — to fetch memories about different topics, call "
+                    "this tool once for each topic."
+                ),
             },
         },
         "required": ["action"],
