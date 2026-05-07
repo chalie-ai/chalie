@@ -172,11 +172,16 @@ def test_abilities_directory_has_exactly_17_non_underscore_modules():
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "schedule", "subagent", "timer",
+    "read", "review_tool_calls", "schedule", "timer",
 })
 
+# `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
+# must not spawn further subagents, so they subtract it explicitly. Listing it
+# here keeps the leak-check honest: any processor that pre-injects `subagent`
+# into ALWAYS_AVAILABLE will trip the assertion in
+# test_per_processor_tool_scope_matches_spec.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "code_eval", "news", "programming_docs_search", "search", "weather",
+    "browser", "code_eval", "news", "programming_docs_search", "search", "subagent", "weather",
 })
 
 
@@ -184,15 +189,17 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
     # `timer` is dropped: DMN runs in the background without a user-channel
-    # surface, so the rich-media card would never render.
-    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"subagent", "timer"}) | {"news", "search", "browser"},
-                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser"}),
+    # surface, so the rich-media card would never render. `subagent` is
+    # excluded everywhere except UMP so background processes cannot spawn
+    # nested subagents.
+    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
+                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
     # Scheduled has no UI surface either — drop `timer` for the same reason.
-    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "subagent", "timer"}, _DEFAULT_DISCOVERABLE),
+    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "timer"}, _DEFAULT_DISCOVERABLE - {"subagent"}),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
-    "SubagentProcessor":         (frozenset(), frozenset(set(_DEFAULT_DISCOVERABLE) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
+    "SubagentProcessor":         (frozenset(), frozenset((set(_DEFAULT_DISCOVERABLE) - {"subagent"}) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.

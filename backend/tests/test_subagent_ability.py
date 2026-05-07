@@ -393,8 +393,9 @@ class TestSpawnReturnProcessorOutput:
                 source='subagent_return',
             )
 
-    def test_enqueue_proactive_not_called_on_empty_response(self):
-        """If SubagentReturnProcessor.send() returns empty, do not publish."""
+    def test_enqueue_proactive_called_with_fallback_on_empty_response(self):
+        """If SubagentReturnProcessor.send() returns empty, deliver a fallback
+        message — never silently drop the result."""
         from unittest.mock import patch, MagicMock
         import threading
         from abilities.subagent import _spawn_return_processor
@@ -404,6 +405,11 @@ class TestSpawnReturnProcessorOutput:
         mock_output_svc = MagicMock()
         mock_proc_instance = MagicMock()
         mock_proc_instance.send.return_value = ""
+
+        # Drain leaked threads from TestAsyncDispatch before patching.
+        for t in threading.enumerate():
+            if t.name.startswith("subagent"):
+                t.join(timeout=5)
 
         with patch(
             'services.user_message_processor.SubagentReturnProcessor',
@@ -418,4 +424,59 @@ class TestSpawnReturnProcessorOutput:
                 if t.name == "subagent-return":
                     t.join(timeout=5)
 
-            mock_output_svc.enqueue_proactive.assert_not_called()
+            mock_output_svc.enqueue_proactive.assert_called_once()
+            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
+            assert "no output" in response.lower()
+
+    def test_enqueue_proactive_called_with_error_on_send_exception(self):
+        """If SubagentReturnProcessor.send() raises, deliver the error — never
+        silently swallow it."""
+        from unittest.mock import patch, MagicMock
+        import threading
+        from abilities.subagent import _spawn_return_processor
+
+        envelope = "[subagent.complete(type=web_surfer)]\nResult\n[end:subagent.complete]"
+
+        mock_output_svc = MagicMock()
+        mock_proc_instance = MagicMock()
+        mock_proc_instance.send.side_effect = RuntimeError("provider timeout")
+
+        for t in threading.enumerate():
+            if t.name.startswith("subagent"):
+                t.join(timeout=5)
+
+        with patch(
+            'services.user_message_processor.SubagentReturnProcessor',
+            return_value=mock_proc_instance,
+        ), patch(
+            'services.output_service.OutputService',
+            return_value=mock_output_svc,
+        ):
+            _spawn_return_processor(envelope)
+
+            for t in threading.enumerate():
+                if t.name == "subagent-return":
+                    t.join(timeout=5)
+
+            mock_output_svc.enqueue_proactive.assert_called_once()
+            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
+            assert "provider timeout" in response
+
+
+# ---------------------------------------------------------------------------
+# SubagentReturnProcessor isolation contract
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentReturnProcessorIsolation:
+    def test_skip_input_row_is_true(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.SKIP_INPUT_ROW is True
+
+    def test_channel_is_user(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.CHANNEL == 'user'
+
+    def test_skip_transcript_write_is_false(self):
+        from services.user_message_processor import SubagentReturnProcessor
+        assert SubagentReturnProcessor.SKIP_TRANSCRIPT_WRITE is False

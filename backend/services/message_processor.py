@@ -172,6 +172,14 @@ class MessageProcessor:
     # SuperEpisodeEncoderProcessor) that must not pollute the transcript.
     SKIP_TRANSCRIPT_WRITE: bool = False
 
+    # When True, send() skips write_input_row() but store() still writes
+    # the assistant row.  self._uid stays None (tool calls get transcript_id
+    # NULL — safe, all downstream code guards on _uid is not None).
+    # Used by SubagentReturnProcessor: the subagent envelope must never
+    # appear in the user channel transcript, but the synthesized assistant
+    # response must.
+    SKIP_INPUT_ROW: bool = False
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self, raw_input: str, metadata: dict | None = None):
@@ -646,7 +654,9 @@ class MessageProcessor:
             # for ToolRenderAndRecordService during tool dispatch.
             # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
             # they leave no trace in the transcript table.
-            if not self.SKIP_TRANSCRIPT_WRITE:
+            # SKIP_INPUT_ROW suppresses only the input row — store() still
+            # writes the assistant row (SubagentReturnProcessor isolation).
+            if not self.SKIP_TRANSCRIPT_WRITE and not self.SKIP_INPUT_ROW:
                 self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
             # Single dispatcher for the entire turn. Tools discovered

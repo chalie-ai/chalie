@@ -118,7 +118,7 @@ The `subagent` ability (`backend/abilities/subagent.py`) is the public surface. 
 
 **Liveness discriminator:** `_turn_active` is a `threading.Event` on every `MessageProcessor` instance. `bind_current_processor()` sets it on entry and clears it on exit. The subagent daemon thread checks `.is_set()` at delivery time — unlike an `isinstance()` check (which always returns True for a valid Python object), this correctly detects that the parent's `send()` has returned. The Event is thread-safe by design.
 
-**`SubagentReturnProcessor`** is a thin `UserMessageProcessor` subclass (`ROLE='subagent_return'`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `ROLE='subagent_return'` causes the input row to be excluded from user-visible history rebuilds.
+**`SubagentReturnProcessor`** is a `UserMessageProcessor` subclass (`ROLE='subagent_return'`, `SKIP_INPUT_ROW=True`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `SKIP_INPUT_ROW=True` suppresses the input row (the raw subagent envelope never enters the user-channel transcript) while `store()` still writes the synthesized assistant response. `_uid` stays `None` for the turn — all downstream code guards on `_uid is not None`.
 
 **`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.getUserPrompt()` drains it. Background processors that do not call `getUserPrompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
 
@@ -234,7 +234,7 @@ Per-ability implementation notes:
 - `code_eval` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]`; a fresh `dict()` copy is taken per call so state never leaks between executions.
 - `document` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so `api/documents.py` and `services/folder_watcher_service.py` import the same path.
 - `find_tools` — RRF discovery against `abilities.sqlite` (see Tools and Skills section).
-- `subagent` — spawns a daemon thread that runs `SubagentProcessor`. `SubagentProcessor` and `SubagentReturnProcessor` are lazy-imported inside the `_run_async()` closure to avoid import cycles. On completion, `_deliver_envelope()` routes the result: Case A (parent turn active, detected via `current_processor()` contextvar) appends to `parent._pending_steers`; Case B (parent idle) calls `_spawn_return_processor()` which starts a `subagent-return` daemon running `SubagentReturnProcessor(envelope).send()`. `SubagentReturnProcessor` is a thin `UserMessageProcessor` subclass with `ROLE='subagent_return'`; it inherits all UMP behaviour and the `subagent_return` input row is excluded from user-visible history rebuilds.
+- `subagent` — spawns a daemon thread that runs `SubagentProcessor`. `SubagentProcessor` and `SubagentReturnProcessor` are lazy-imported inside the `_run_async()` closure to avoid import cycles. On completion, `_deliver_envelope()` routes the result: Case A (parent turn active, detected via `current_processor()` contextvar) appends to `parent._pending_steers`; Case B (parent idle) calls `_spawn_return_processor()` which starts a `subagent-return` daemon running `SubagentReturnProcessor(envelope).send()`. `SubagentReturnProcessor` is a `UserMessageProcessor` subclass with `ROLE='subagent_return'` and `SKIP_INPUT_ROW=True`; it inherits all UMP behaviour and the raw subagent envelope is never written to the user transcript (only the synthesized assistant response is).
 - `list` — `_DEFAULT_LIST_NAME` as `ClassVar[str]`; handler helpers at module level.
 - `memory` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path.
 - `news` — `_service` classvar lazily initialised via `_get_service()` classmethod.
@@ -257,16 +257,19 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 ## Chat File Attachments
 
-When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It blocks the turn until every referenced document reaches a terminal state or a shared 10-second deadline expires, then attaches structured tags to `metadata['file_tags']`:
+When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It **blocks** the turn until every referenced document reaches a terminal state (`ready` or `failed`) or a shared 5-minute deadline (`_UPLOAD_DEADLINE_S = 300`) expires. Tags use the standard envelope format and are attached to `metadata['file_tags']`:
 
-- `[image id=<doc> ocr="..."]` — ready image, OCR text truncated
-- `[image id=<doc> status=failed|timeout|not_found]` — image that never reached ready
-- `[document id=<doc> summary="..."]` — ready PDF/text document
-- `[document id=<doc> status=failed|timeout|not_found]` — document equivalent
+- `[image(id=<doc>)]ocr text[end:image]` — ready image, OCR text truncated to 500 chars
+- `[image(id=<doc>)]analysis failed[end:image]` — image processing failed
+- `[image(id=<doc>)]image not found[end:image]` — no document record for this ID
+- `[image(id=<doc>)]timeout of 300 seconds exceeded[end:image]` — deadline expired
+- `[document(id=<doc>, name=<filename>)]content[end:document]` — ready PDF/text document
+- `[document(id=<doc>, name=<filename>)]processing failed[end:document]` — extraction failed
+- `[document(id=<doc>, name=<filename>)]timeout of 300 seconds exceeded[end:document]` — deadline expired
 
 `UserMessageProcessor.getUserPrompt()` appends these tags to the turn line so the LLM sees file context inline with the user message. The no-silent-drop invariant applies: every failure mode emits a tag — the model learns a file was attached and what happened to it, never an empty prompt.
 
-Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The 10-second deadline is shared across every file resolved in the turn — worst case one wait, not N.
+Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The deadline is shared across every file resolved in the turn — worst case one wait, not N.
 
 ---
 
