@@ -300,10 +300,6 @@ def _handle_recall(channel: str, params: dict) -> str:
                 'name': 'document',
                 'input': {'action': 'search', 'query': query},
             })
-            proc.handleTool({
-                'name': 'schedule',
-                'input': {'action': 'search', 'query': query},
-            })
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
