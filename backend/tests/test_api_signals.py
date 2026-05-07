@@ -6,6 +6,8 @@ WrapperRateLimiter) so no database or reasoning
 loop is required.
 """
 
+import secrets
+
 import pytest
 from unittest.mock import MagicMock, patch
 from flask import Flask
@@ -30,7 +32,7 @@ def _make_app(wrapper_id=None, _rate_limit_allowed=True):
     app = Flask(__name__)
     app.register_blueprint(signals_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
     return app
 
 
@@ -288,7 +290,7 @@ class TestBearerCapabilityCheck:
         app = Flask(__name__)
         app.register_blueprint(signals_bp)
         app.config["TESTING"] = True
-        app.secret_key = "test-secret"
+        app.secret_key = secrets.token_hex(16)
 
         bearer_svc = MagicMock()
         bearer_svc.validate_bearer.return_value = wrapper_id
@@ -366,7 +368,7 @@ class TestBearerCapabilityCheck:
         app = Flask(__name__)
         app.register_blueprint(signals_bp)
         app.config["TESTING"] = True
-        app.secret_key = "test-secret"
+        app.secret_key = secrets.token_hex(16)
 
         auth_svc = MagicMock()
         auth_svc.validate_bearer.return_value = "wrp_gone"

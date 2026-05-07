@@ -5,6 +5,8 @@ All endpoints require auth.  Tests patch ``validate_session`` to simulate
 a cookie-authenticated chat-UI caller (wrapper_id = '__chat_ui__').
 """
 
+import secrets
+
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
@@ -22,7 +24,7 @@ pytestmark = pytest.mark.unit
 def app():
     """Create a minimal Flask app with the intents blueprint."""
     a = Flask(__name__)
-    a.secret_key = "test-secret"
+    a.secret_key = secrets.token_hex(16)
     a.config["TESTING"] = True
     a.register_blueprint(intents_bp)
     return a

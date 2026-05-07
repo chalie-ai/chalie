@@ -15,6 +15,8 @@ Fixtures:
   bearer_app  — Flask test app where auth succeeds with g.wrapper_id = "wrp_test"
 """
 
+import secrets
+
 import pytest
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
@@ -32,7 +34,7 @@ def _make_app():
     app = Flask(__name__)
     app.register_blueprint(query_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
     return app
 
 

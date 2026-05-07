@@ -6,6 +6,8 @@ or authentication back-end is required.
 """
 
 import json
+import secrets
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -24,7 +26,7 @@ def _make_app():
     app = Flask(__name__)
     app.register_blueprint(updates_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
     return app
 
 

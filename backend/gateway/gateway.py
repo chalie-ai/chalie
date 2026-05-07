@@ -87,15 +87,21 @@ def _daemon_data_dir(interface_id: str) -> str:
 
 def _safe_filename(name: str) -> str | None:
     """Sanitise a filename — reject path traversal attempts."""
-    # Strip leading/trailing whitespace and slashes
     name = name.strip().strip("/\\")
-    # Reject if empty, has path separators, or starts with dot
     if not name or "/" in name or "\\" in name or name.startswith(".."):
         return None
-    # Reject hidden files
     if name.startswith("."):
         return None
     return name
+
+
+def _safe_data_path(interface_id: str, filename: str) -> str | None:
+    """Build a resolved path and verify it stays inside the daemon data dir."""
+    base = os.path.realpath(_daemon_data_dir(interface_id))
+    candidate = os.path.realpath(os.path.join(base, filename))
+    if not candidate.startswith(base + os.sep) and candidate != base:
+        return None
+    return candidate
 
 
 def _get_interface(interface_id: str):
@@ -496,7 +502,9 @@ def get_data_file(interface_id: str, filename: str):
     safe = _safe_filename(filename)
     if not safe:
         return jsonify({"error": _ERR_INVALID_FILENAME}), 400
-    fpath = os.path.join(_daemon_data_dir(interface_id), safe)
+    fpath = _safe_data_path(interface_id, safe)
+    if not fpath:
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     if not os.path.isfile(fpath):
         return jsonify({"error": "File not found"}), 404
     return send_file(fpath, as_attachment=False)
@@ -511,7 +519,9 @@ def put_data_file(interface_id: str, filename: str):
     safe = _safe_filename(filename)
     if not safe:
         return jsonify({"error": _ERR_INVALID_FILENAME}), 400
-    fpath = os.path.join(_daemon_data_dir(interface_id), safe)
+    fpath = _safe_data_path(interface_id, safe)
+    if not fpath:
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     data = request.get_data()
     with open(fpath, "wb") as f:
         f.write(data)
@@ -527,7 +537,9 @@ def delete_data_file(interface_id: str, filename: str):
     safe = _safe_filename(filename)
     if not safe:
         return jsonify({"error": _ERR_INVALID_FILENAME}), 400
-    fpath = os.path.join(_daemon_data_dir(interface_id), safe)
+    fpath = _safe_data_path(interface_id, safe)
+    if not fpath:
+        return jsonify({"error": _ERR_INVALID_FILENAME}), 400
     if not os.path.isfile(fpath):
         return jsonify({"error": "File not found"}), 404
     os.remove(fpath)

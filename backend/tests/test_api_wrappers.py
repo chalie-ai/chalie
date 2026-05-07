@@ -5,6 +5,8 @@ All tests mock WrapperAuthService and cookie session validation so no real
 database or authentication back-end is required.
 """
 
+import secrets
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -64,7 +66,7 @@ def cookie_client():
     app = Flask(__name__)
     app.register_blueprint(wrappers_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
 
     with patch("services.auth_session_service.validate_session", return_value=True):
         with app.test_client() as client:
@@ -77,7 +79,7 @@ def bearer_client():
     app = Flask(__name__)
     app.register_blueprint(wrappers_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
 
     def _make_bearer_app(wrapper_id="wrp_caller"):
         """Return a test client whose requests resolve to a given wrapper_id."""
@@ -99,7 +101,7 @@ def unauthed_client():
     app = Flask(__name__)
     app.register_blueprint(wrappers_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
 
     with patch("services.auth_session_service.validate_session", return_value=False), \
          patch("services.wrapper_auth_service.WrapperAuthService") as mock_cls:
@@ -185,7 +187,7 @@ class TestCreateWrapper:
         app = Flask(__name__)
         app.register_blueprint(wrappers_bp)
         app.config["TESTING"] = True
-        app.secret_key = "test-secret"
+        app.secret_key = secrets.token_hex(16)
 
         bearer_svc = MagicMock()
         bearer_svc.validate_bearer.return_value = "wrp_caller"
@@ -318,7 +320,7 @@ class TestUpdateCapabilities:
         app = Flask(__name__)
         app.register_blueprint(wrappers_bp)
         app.config["TESTING"] = True
-        app.secret_key = "test-secret"
+        app.secret_key = secrets.token_hex(16)
 
         bearer_svc = MagicMock()
         bearer_svc.validate_bearer.return_value = "wrp_own"
@@ -341,7 +343,7 @@ class TestUpdateCapabilities:
         app = Flask(__name__)
         app.register_blueprint(wrappers_bp)
         app.config["TESTING"] = True
-        app.secret_key = "test-secret"
+        app.secret_key = secrets.token_hex(16)
 
         bearer_svc = MagicMock()
         bearer_svc.validate_bearer.return_value = "wrp_caller"

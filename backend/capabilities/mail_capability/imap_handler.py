@@ -156,10 +156,10 @@ class ImapHandler:
     # Understand
     # ------------------------------------------------------------------
 
-    def understand(self, items: list[dict]) -> list[dict]:
-        """Classify + index items: sets triage, is_thread; indexes senders; emits signals."""
+    def understand(self, items: list[dict]) -> None:
+        """Classify + index items in place: sets triage, is_thread; indexes senders."""
         if not items:
-            return items
+            return
         from capabilities.contact_resolver import index_person
         from capabilities.mail_capability.email_triage import classify_email
         for item in items:
@@ -167,7 +167,6 @@ class ImapHandler:
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
                 index_person(item["from_addr"], item.get("from_name"), source="imap")
-        return items
 
     # ------------------------------------------------------------------
     # WorldState inbox hint

@@ -292,25 +292,21 @@ class MemoryStore:
                 lst.insert(0, str(v))
             return len(lst)
 
-    def ltrim(self, key: str, start: int, stop: int):
+    def ltrim(self, key: str, start: int, stop: int) -> bool:
         """Trim the list at ``key`` so it only contains elements in [``start``, ``stop``].
 
         Supports negative indices (Redis-compatible semantics).
-        Is a no-op if the key does not exist.
+        Returns ``False`` if the key does not exist (no-op), ``True`` otherwise.
 
         Args:
             key: List key.
             start: Inclusive start index (may be negative).
             stop: Inclusive stop index (may be negative).
-
-        Returns:
-            ``True`` always.
         """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
-                return True
-            # Python slice: handle negative indexes (Redis-compatible semantics)
+                return False
             length = len(lst)
             if start < 0:
                 start = max(0, length + start)
