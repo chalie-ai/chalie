@@ -291,31 +291,17 @@ def _handle_recall(channel: str, params: dict) -> str:
     hits, _ = _search_episodes(channel, query, limit)
     results.extend(hits)
 
-    doc_hits = _search_document_artifacts(query, limit=3)
-    results.extend(doc_hits)
+    try:
+        from services.message_processor import current_processor
 
-    if doc_hits:
-        try:
-            from services.message_processor import current_processor
-            from services.tool_render_and_record_service import ToolRenderAndRecordService
-
-            proc = current_processor()
-            if proc is not None and proc._uid is not None:
-                doc_result = _tag(
-                    "document",
-                    action="recall",
-                    query=query,
-                    results=len(doc_hits),
-                )
-                ToolRenderAndRecordService(
-                    tool_name="document",
-                    params={"action": "recall", "query": query},
-                    result=doc_result,
-                    ephemeral=False,
-                    transcript_id=proc._uid,
-                ).renderAndRecord()
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} document attribution record failed: {exc}")
+        proc = current_processor()
+        if proc is not None and proc._uid is not None:
+            proc.handleTool({
+                'name': 'document',
+                'input': {'action': 'search', 'query': query},
+            })
+    except Exception as exc:
+        logger.warning(f"{LOG_PREFIX} document recall via handleTool failed: {exc}")
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
@@ -503,39 +489,6 @@ def _relevance_label(score: float) -> str:
     if score >= 0.4:
         return "medium"
     return "low"
-
-
-def _search_document_artifacts(query: str, limit: int = 3) -> List[Dict]:
-    try:
-        from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
-
-        dgs = get_data_graph_service()
-        rows = dgs.recall(query=query, kinds=[KIND_DOCUMENT], limit=limit, expand_graph=False)
-
-        if not rows:
-            return []
-
-        hits = []
-        for row in rows:
-            source = row.get("source", "") or ""
-            if source.startswith("document:"):
-                doc_id = source.split(":", 1)[1]
-            else:
-                parts = (row.get("key", "") or "").split(":")
-                doc_id = parts[1] if len(parts) >= 3 else ""
-
-            hits.append({
-                "id": row.get("key", ""),
-                "text": f"[document(id:{doc_id},type:fragment)] {row.get('value', '')}",
-                "relevance": "high",
-                "confidence": row.get("retrieval_weight", 1.0),
-            })
-
-        return hits
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Document artifact search failed: {e}")
-        return []
 
 
 def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
