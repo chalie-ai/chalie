@@ -27,14 +27,14 @@ class TestFormatToolResult:
     def test_search_results_formats_numbered_list(self):
         result = format_tool_result({
             "results": [
-                {"title": "First", "snippet": "desc", "url": "http://a"},
+                {"title": "First", "snippet": "desc", "url": "https://a"},
                 {"title": "Second", "snippet": "", "url": ""},
             ],
         })
         lines = result.split("\n")
         assert lines[0] == "1. First"
         assert lines[1] == "   desc"
-        assert lines[2] == "   http://a"
+        assert lines[2] == "   https://a"
         assert "2. Second" in result
 
     def test_search_results_shows_count_when_present(self):
