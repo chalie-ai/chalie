@@ -200,7 +200,7 @@ Every ability result uses the canonical tag block format from `backend/services/
 
 This is the single source of truth — no ability constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 
-**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
+**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall) with `_auto=True` so `_handle_recall` skips its `document.search` delegation (the auto-seed runs every turn — it must not pollute the ACT trail with a tool result the LLM never requested). Stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
 
 ---
 
