@@ -21,7 +21,6 @@ level function API so there is no per-call EpisodicService construction cost.
 import logging
 import math
 import re
-import struct
 from typing import Optional
 
 from services.episodic_constants import APEX_TRAVERSAL_MAX_DEPTH
@@ -162,12 +161,6 @@ def _pack_embedding(embedding) -> Optional[bytes]:
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] _pack_embedding failed: {exc}")
         return None
-
-
-def _unpack_blob(blob: bytes) -> list[float]:
-    """Unpack a sqlite-vec binary blob into a list of floats."""
-    n = len(blob) // 4
-    return list(struct.unpack(f'{n}f', blob))
 
 
 def _generate_embedding(text: str) -> Optional[list[float]]:
