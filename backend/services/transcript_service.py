@@ -6,7 +6,6 @@ Stores every exchange turn (user, assistant, tool, internal) in SQLite.
 Key operations:
 - append(): Write a turn to the transcript
 - get_recent(): Retrieve the most recent N entries for a topic
-- prune_old(): Delete entries older than TTL (90 days default)
 """
 
 import logging
@@ -15,9 +14,6 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
-
-# Default TTL for pruning (90 days in seconds)
-_PRUNE_TTL_DAYS = 90
 
 # Rolling episode extraction — DB-state-driven.
 #
@@ -143,27 +139,6 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
         return []
 
 
-def get_latest_id(channel: str) -> Optional[int]:
-    """Get the highest transcript entry ID for a channel (compaction watermark)."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT MAX(id) FROM transcript WHERE channel = ?",
-                (channel,),
-            )
-            row = cursor.fetchone()
-            cursor.close()
-            return row[0] if row and row[0] else None
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} get_latest_id failed: {e}")
-        return None
-
-
 def cleanup_unlinked_entries(channel: str = None) -> int:
     """Delete transcript entries not linked to any episode and below compaction watermark.
 
@@ -260,45 +235,6 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} cleanup_unlinked_entries failed: {e}")
-        return 0
-
-
-def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
-    """Delete transcript entries older than ttl_days. Returns the number deleted."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                SELECT rowid FROM transcript
-                WHERE created_at < datetime('now', ?)
-                """,
-                (f'-{ttl_days} days',),
-            )
-            old_rowids = [r[0] for r in cursor.fetchall()]
-
-            if not old_rowids:
-                cursor.close()
-                return 0
-
-            placeholders = ','.join('?' * len(old_rowids))
-            cursor.execute(
-                f"DELETE FROM transcript WHERE rowid IN ({placeholders})",
-                old_rowids,
-            )
-
-            deleted = len(old_rowids)
-            cursor.close()
-
-        logger.info(f"{LOG_PREFIX} Pruned {deleted} entries older than {ttl_days} days")
-        return deleted
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Pruning failed: {e}")
         return 0
 
 

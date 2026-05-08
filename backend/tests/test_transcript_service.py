@@ -3,7 +3,6 @@
 Tests cover:
 - append()
 - get_recent() with and without since_id
-- get_latest_id()
 - TestDbStateExtractionTrigger: DB-state-driven extraction trigger
 
 All tests use the real production stack against the shared `db` fixture
@@ -108,20 +107,6 @@ class TestGetRecent:
         results = get_recent('topic-a')
         assert len(results) == 1
         assert results[0]['content'] == 'A message'
-
-
-class TestGetLatestId:
-    def test_returns_highest_id(self, db):
-        from services.transcript_service import append, get_latest_id
-
-        append('test', 'user', 'First')
-        id2 = append('test', 'user', 'Second')
-
-        assert get_latest_id('test') == id2
-
-    def test_returns_none_for_empty_topic(self, db):
-        from services.transcript_service import get_latest_id
-        assert get_latest_id('nonexistent') is None
 
 
 class TestDbStateExtractionTrigger:
