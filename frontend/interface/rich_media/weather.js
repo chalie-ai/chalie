@@ -44,7 +44,7 @@ function pickPhase(now, sunrise, sunset) {
 function parseLocalISO(s) {
   if (!s) return null;
   const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 // ── Card construction ───────────────────────────────────────────────────────
@@ -125,7 +125,6 @@ function buildOverlay(payload, synthesis, now, phase) {
 }
 
 function buildFallbackCaption(payload, phase) {
-  const cond = (payload.condition || '').toLowerCase();
   const feels = payload.feels_like_c == null ? '' : ` Feels like ${Math.round(payload.feels_like_c)}°.`;
   if (phase === 'sunset') return `Golden hour in ${payload.location || 'your area'}.${feels}`;
   if (phase === 'dawn') return `Sun's coming up over ${payload.location || 'your area'}.${feels}`;

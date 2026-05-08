@@ -16,7 +16,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 function parseDueAt(dueAtStr) {
   if (!dueAtStr) return null;
   const d = new Date(dueAtStr);
-  if (isNaN(d.getTime())) return null;
+  if (Number.isNaN(d.getTime())) return null;
   return d;
 }
 

@@ -274,7 +274,7 @@ def _handle_add(service, params: dict) -> str:
     if err:
         return err
 
-    items, err = _require_items(params)
+    _, err = _require_items(params)
     if err:
         return err
 
@@ -337,7 +337,7 @@ def _handle_remove(service, params: dict) -> str:
     if err:
         return err
 
-    items, err = _require_items(params)
+    _, err = _require_items(params)
     if err:
         return err
 
