@@ -18,8 +18,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
-_ERR_STREAMING_NOT_SUPPORTED = "Streaming not yet supported"
-
 
 def _strip_think_blocks(text: str) -> str:
     """Remove <think>...</think> chain-of-thought blocks emitted by reasoning
@@ -211,7 +209,7 @@ class FallbackLLMService:
         self._primary = primary
         self._fallback = fallback
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message, falling back to the secondary service on primary failure.
 
         Rate limits from the primary now trigger a fallback attempt —
@@ -221,8 +219,6 @@ class FallbackLLMService:
         Args:
             system_prompt: Instruction context placed in the system role.
             user_message: The user-turn content to send to the model.
-            stream: If ``True``, request streamed output (passed through to
-                the underlying service; not yet supported by most providers).
 
         Returns:
             LLMResponse from whichever service successfully handled the request.
@@ -231,7 +227,7 @@ class FallbackLLMService:
             Exception: If both the primary and fallback services raise errors.
         """
         try:
-            return self._primary.send_message(system_prompt, user_message, stream=stream)
+            return self._primary.send_message(system_prompt, user_message)
         except NonRetryableError:
             # PayloadTooLargeError + other 5xx-derived non-retryables. Re-raise
             # so callers (e.g. MessageProcessor.send) can act — sending the
@@ -239,7 +235,7 @@ class FallbackLLMService:
             raise
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
-            return self._fallback.send_message(system_prompt, user_message, stream=stream)
+            return self._fallback.send_message(system_prompt, user_message)
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
@@ -328,8 +324,8 @@ class LoggingLLMService:
         self._service = service
         self._job_name = job_name
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
-        result = self._service.send_message(system_prompt, user_message, stream=stream)
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
+        result = self._service.send_message(system_prompt, user_message)
         _log_llm_call(self._job_name, result)
         return result
 
@@ -457,7 +453,7 @@ class RefreshableLLMService:
             self._service = primary
             self._version = current_version
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message, refreshing the underlying client if the provider config has changed.
 
         Calls :meth:`_ensure_fresh` before each request so that provider
@@ -467,8 +463,6 @@ class RefreshableLLMService:
         Args:
             system_prompt: Instruction context placed in the system role.
             user_message: The user-turn content to send to the model.
-            stream: If ``True``, request streamed output (passed through to
-                the underlying service; not yet supported by most providers).
 
         Returns:
             LLMResponse from the (potentially freshly re-created) underlying
@@ -478,7 +472,7 @@ class RefreshableLLMService:
             Any exception raised by the underlying LLM service.
         """
         self._ensure_fresh()
-        result = self._service.send_message(system_prompt, user_message, stream=stream)
+        result = self._service.send_message(system_prompt, user_message)
         _log_llm_call(self._agent_name, result)
         return result
 
@@ -589,27 +583,22 @@ class AnthropicService:
         api_key = _resolve_api_key(self._config)
         return anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the Anthropic Messages API.
 
         Args:
             system_prompt: Text placed in the ``system`` role of the request.
             user_message: Text placed in the ``user`` role of the request.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts, and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RateLimitError: If the API returns HTTP 429.
             anthropic.APIError: For other Anthropic API errors after retries
                 are exhausted.
         """
-        if stream:
-            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
-
         import anthropic
 
         client = self._get_client()
@@ -837,7 +826,7 @@ class OpenAIService:
             kwargs['base_url'] = base_url
         return OpenAI(**kwargs)
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the OpenAI Chat Completions API.
 
         When ``format='json'`` is set in the provider config, the request
@@ -847,21 +836,16 @@ class OpenAIService:
         Args:
             system_prompt: Text placed in the ``system`` role of the request.
             user_message: Text placed in the ``user`` role of the request.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts, and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RateLimitError: If the API returns HTTP 429.
             openai.APIError: For other OpenAI API errors after retries are
                 exhausted.
         """
-        if stream:
-            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
-
         import openai as openai_mod
 
         client = self._get_client()
@@ -1150,28 +1134,23 @@ class GeminiService:
         self.model = config.get('model', 'gemini-2.5-flash')
         self.format = config.get('format', 'text')
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the Google Gemini generative AI API.
 
         Args:
             system_prompt: Instruction passed as the system instruction in
                 ``GenerateContentConfig``.
             user_message: The user-turn content to generate a response for.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts (from ``usage_metadata``), and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RuntimeError: If the ``google-genai`` package is not installed.
             RateLimitError: If the API raises ``ResourceExhausted`` (HTTP 429).
             ValueError: If the model returns an empty response.
         """
-        if stream:
-            raise NotImplementedError(_ERR_STREAMING_NOT_SUPPORTED)
-
         try:
             from google import genai
         except ImportError:
