@@ -295,3 +295,68 @@ class TestSynthesiseChunkSafe:
             audio = _synthesise_chunk_safe((4, "***"))
         assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS
         assert audio.size == voice_module._TTS_FALLBACK_SAMPLES
+
+
+@pytest.mark.unit
+class TestTrimChunkSilence:
+    """Kokoro emits 0.4-0.7s of trailing silence per chunk; concatenating
+    a multi-chunk reply produced audible gaps every 3-4s. Trimming brings
+    inter-chunk pauses down to a natural ~100ms."""
+
+    def _voiced(self, n=24_000):
+        # 1s of "voiced" audio above threshold.
+        return np.full(n, 0.1, dtype=np.float32)
+
+    def _silent(self, n=12_000):
+        return np.zeros(n, dtype=np.float32)
+
+    def test_trims_long_trailing_silence(self):
+        from api.voice import _trim_chunk_silence, _TTS_TRAIL_KEEP_SAMPLES
+        audio = np.concatenate([self._voiced(24_000), self._silent(15_000)])
+        out = _trim_chunk_silence(audio)
+        # Trailing silence capped at _TTS_TRAIL_KEEP_SAMPLES (100ms).
+        assert out.size == 24_000 + _TTS_TRAIL_KEEP_SAMPLES
+
+    def test_trims_long_leading_silence(self):
+        from api.voice import _trim_chunk_silence, _TTS_LEAD_KEEP_SAMPLES
+        audio = np.concatenate([self._silent(8_000), self._voiced(24_000)])
+        out = _trim_chunk_silence(audio)
+        # Leading silence capped at _TTS_LEAD_KEEP_SAMPLES (50ms).
+        assert out.size == _TTS_LEAD_KEEP_SAMPLES + 24_000
+
+    def test_short_silence_passes_through(self):
+        # Already under both keep budgets — no trimming.
+        from api.voice import _trim_chunk_silence
+        audio = np.concatenate([
+            np.zeros(800, dtype=np.float32),
+            self._voiced(24_000),
+            np.zeros(1500, dtype=np.float32),
+        ])
+        out = _trim_chunk_silence(audio)
+        assert out.size == audio.size
+
+    def test_all_silent_unchanged(self):
+        # Retry wrapper handles empty-output cases via _TTS_MIN_SAMPLES;
+        # trimmer must NOT mutate length here so that pathway still fires.
+        from api.voice import _trim_chunk_silence
+        audio = np.zeros(5000, dtype=np.float32)
+        out = _trim_chunk_silence(audio)
+        assert out.size == audio.size
+
+    def test_empty_array_unchanged(self):
+        from api.voice import _trim_chunk_silence
+        audio = np.zeros(0, dtype=np.float32)
+        out = _trim_chunk_silence(audio)
+        assert out.size == 0
+
+    def test_voiced_only_unchanged(self):
+        from api.voice import _trim_chunk_silence
+        audio = self._voiced(48_000)
+        out = _trim_chunk_silence(audio)
+        assert out.size == audio.size
+
+    def test_preserves_dtype(self):
+        from api.voice import _trim_chunk_silence
+        audio = np.concatenate([self._voiced(), self._silent(10_000)]).astype(np.float32)
+        out = _trim_chunk_silence(audio)
+        assert out.dtype == np.float32

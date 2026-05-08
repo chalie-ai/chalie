@@ -90,6 +90,16 @@ _TTS_MAX_ATTEMPTS = 2
 _TTS_MIN_SAMPLES = 1200
 _TTS_FALLBACK_SAMPLES = 2400  # 0.1s of silence preserves chunk ordering
 
+# Kokoro emits 0.4-0.7s of trailing silence at the end of every synthesis
+# call. With a 5-chunk reply, that's ~2-3s of accumulated dead air the user
+# hears as gaps every few seconds. Trim leading/trailing silence per chunk
+# so concatenation seams collapse to a natural ~100ms inter-chunk pause.
+# Threshold chosen empirically from a synthesised "Bro!"-style reply: voiced
+# RMS sits at 0.05-0.30; silent regions sit below 0.005.
+_TTS_SILENCE_THRESHOLD = 0.005
+_TTS_LEAD_KEEP_SAMPLES = 1200   # ≤50ms of leading silence preserved
+_TTS_TRAIL_KEEP_SAMPLES = 2400  # ≤100ms of trailing silence preserved
+
 
 def _download_kokoro_models():
     """Download Kokoro model files if not present."""
@@ -267,9 +277,38 @@ def _synthesise_chunk(chunk: str):
             phonemes = inst.tokenizer.phonemize(chunk, lang="en-us")
         voice_style = inst.get_voice_style(KOKORO_VOICE)
         samples, _sr = inst._create_audio(phonemes, voice_style, speed=1.0)
-        return np.asarray(samples, dtype=np.float32).reshape(-1)
+        audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+        return _trim_chunk_silence(audio)
     finally:
         _tts_pool.put(inst)
+
+
+def _trim_chunk_silence(audio):
+    """Trim leading/trailing silence on a Kokoro chunk so concatenation seams
+    don't accumulate into audible gaps.
+
+    Kokoro emits ~0.4-0.7s of trailing silence at the end of every call (a
+    sentence-end pause baked into the model). With multi-chunk replies these
+    pile up as dead air every 3-4 seconds. We slice the array down to the
+    first/last samples above ``_TTS_SILENCE_THRESHOLD`` plus a small pad on
+    each side — leaving a natural ~100ms inter-chunk pause without clipping
+    voiceless fricatives or quiet word endings.
+
+    All-silent arrays pass through untouched; the retry wrapper catches them
+    via ``_TTS_MIN_SAMPLES``.
+    """
+    import numpy as np
+
+    if audio.size == 0:
+        return audio
+    above = np.abs(audio) > _TTS_SILENCE_THRESHOLD
+    if not above.any():
+        return audio
+    first = int(np.argmax(above))
+    last = audio.size - int(np.argmax(above[::-1]))
+    start = max(0, first - _TTS_LEAD_KEEP_SAMPLES)
+    end = min(audio.size, last + _TTS_TRAIL_KEEP_SAMPLES)
+    return audio[start:end]
 
 
 def _synthesise_chunk_safe(idx_chunk):
