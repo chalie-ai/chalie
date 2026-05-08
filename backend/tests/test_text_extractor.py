@@ -159,6 +159,19 @@ class TestExtractHtml:
             result = te.extract_html(html)
         assert result == "Hi."
 
+    def test_include_links_passed_to_trafilatura(self):
+        """trafilatura.extract is always called with include_links=True."""
+        html = "<html><body><p>Article.</p></body></html>"
+        mock_traf = MagicMock()
+        mock_traf.extract.return_value = "Article."
+        with patch.dict('sys.modules', {'trafilatura': mock_traf}):
+            import importlib
+            import services.text_extractor as te
+            importlib.reload(te)
+            te.extract_html(html, url='https://example.com')
+        _, kwargs = mock_traf.extract.call_args
+        assert kwargs.get('include_links') is True
+
 
 # ─── extract_text dispatch ────────────────────────────────────────────────────
 
