@@ -300,6 +300,7 @@ class UserMessageProcessor(MessageProcessor):
         block = AbilityRegistry.get('memory').execute(self.CHANNEL, {
             'action': 'recall',
             'query': query,
+            '_auto': True,
         }, None).get('text', '')
 
         # Row is recorded every turn — the seed dispatch is part of the ACT

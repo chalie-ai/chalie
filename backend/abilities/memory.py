@@ -296,17 +296,18 @@ def _handle_recall(channel: str, params: dict) -> str:
     hits, _ = _search_episodes(channel, query, limit)
     results.extend(hits)
 
-    try:
-        from services.message_processor import current_processor
+    if not params.get('_auto'):
+        try:
+            from services.message_processor import current_processor
 
-        proc = current_processor()
-        if proc is not None and proc._uid is not None:
-            proc.handleTool({
-                'name': 'document',
-                'input': {'action': 'search', 'query': query},
-            })
-    except Exception as exc:
-        logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
+            proc = current_processor()
+            if proc is not None and proc._uid is not None:
+                proc.handleTool({
+                    'name': 'document',
+                    'input': {'action': 'search', 'query': query},
+                })
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
