@@ -85,7 +85,7 @@ class OllamaService:
         # Cached result of _model_supports_thinking(). None = not yet checked.
         self._thinking_supported: bool | None = None
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to Ollama and return the response."""
         url = f"{self.host}/api/generate"
 
