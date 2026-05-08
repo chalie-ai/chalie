@@ -78,6 +78,18 @@ _stt_lock = threading.Lock()
 # the ONNX inference step is genuinely parallel-safe per-instance.
 _phonemize_lock = threading.Lock()
 
+# Per-chunk retry budget. Phonemizer occasionally returns truncated/empty
+# phonemes on chunks dominated by punctuation, em-dashes, or stage-direction
+# brackets — Kokoro then produces near-silent audio. One retry is cheap and
+# clears most transient cases (e.g., the espeak backend's stateful counters
+# self-correcting after a previous mismatch). Persistent failures fall back
+# to a short pad of silence so the rest of the message still plays.
+_TTS_MAX_ATTEMPTS = 2
+# Below ~50ms of audio (24kHz × 0.05) the chunk is effectively silent — the
+# user hears a gap. Treat as failure and retry.
+_TTS_MIN_SAMPLES = 1200
+_TTS_FALLBACK_SAMPLES = 2400  # 0.1s of silence preserves chunk ordering
+
 
 def _download_kokoro_models():
     """Download Kokoro model files if not present."""
@@ -258,6 +270,45 @@ def _synthesise_chunk(chunk: str):
         return np.asarray(samples, dtype=np.float32).reshape(-1)
     finally:
         _tts_pool.put(inst)
+
+
+def _synthesise_chunk_safe(idx_chunk):
+    """Synthesise one chunk with retry-on-failure and retry-on-silent.
+
+    A bare ``_synthesise_chunk`` call can raise (phonemizer mismatch) or
+    return effectively-empty audio (chunk dominated by punctuation that
+    phonemizes to nothing). Both used to either kill the whole synthesis
+    via ``pool.map``'s exception propagation, or land in the concat as a
+    silent gap with no log. We now retry once and, if still bad, fall
+    back to a short pad of silence so neighbouring chunks still play.
+
+    Takes ``(idx, chunk)`` so log lines can identify the offending chunk
+    by position; returns the audio array. Order is preserved by the
+    caller using ``pool.map`` over the enumerated list.
+    """
+    import numpy as np
+
+    idx, chunk = idx_chunk
+    for attempt in range(1, _TTS_MAX_ATTEMPTS + 1):
+        try:
+            audio = _synthesise_chunk(chunk)
+        except Exception as exc:
+            logger.warning(
+                "[Voice] chunk %d raised on attempt %d/%d (%s) head=%r — retrying",
+                idx, attempt, _TTS_MAX_ATTEMPTS, exc, chunk[:60],
+            )
+            continue
+        if audio.size >= _TTS_MIN_SAMPLES:
+            return audio
+        logger.warning(
+            "[Voice] chunk %d empty on attempt %d/%d (samples=%d) head=%r — retrying",
+            idx, attempt, _TTS_MAX_ATTEMPTS, int(audio.size), chunk[:60],
+        )
+    logger.error(
+        "[Voice] chunk %d permanently silent after %d attempts — emitting fallback silence (head=%r)",
+        idx, _TTS_MAX_ATTEMPTS, chunk[:60],
+    )
+    return np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -550,7 +601,13 @@ def voice_synthesize():
             # worker has an instance the moment its turn comes up.
             with ThreadPoolExecutor(max_workers=TTS_POOL_SIZE) as pool:
                 # ``map`` preserves submission order — critical for concat.
-                pieces = list(pool.map(_synthesise_chunk, chunks))
+                # ``_synthesise_chunk_safe`` retries on error/empty per chunk
+                # and degrades to a short pad of silence on persistent failure
+                # so a single bad chunk no longer kills the whole synthesis.
+                pieces = list(pool.map(
+                    _synthesise_chunk_safe,
+                    list(enumerate(chunks)),
+                ))
             full_audio = pieces[0] if len(pieces) == 1 else np.concatenate(pieces)
             logger.info(
                 "[Voice] synthesized %d chunks in %.2fs (%d samples total)",

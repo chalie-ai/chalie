@@ -1,6 +1,15 @@
+from unittest.mock import patch
+
+import numpy as np
 import pytest
 
-from api.voice import _chunk_text_for_tts, _clean_for_tts, _strip_markdown
+from api import voice as voice_module
+from api.voice import (
+    _chunk_text_for_tts,
+    _clean_for_tts,
+    _strip_markdown,
+    _synthesise_chunk_safe,
+)
 
 
 @pytest.mark.unit
@@ -222,3 +231,67 @@ class TestChunkTextForTts:
         text = "Hello.\n\n\n\nWorld."
         chunks = _chunk_text_for_tts(text)
         assert chunks == ["Hello. World."]
+
+
+@pytest.mark.unit
+class TestSynthesiseChunkSafe:
+    """Covers the retry-on-failure / retry-on-silent wrapper around
+    ``_synthesise_chunk``. The phonemizer occasionally returns truncated
+    output for chunks dominated by punctuation/em-dashes, leaving Kokoro
+    to produce near-silent audio; a single bad chunk used to take the
+    whole synthesis down via ``pool.map``'s exception propagation."""
+
+    def test_success_first_try(self):
+        good = np.ones(48_000, dtype=np.float32)
+        with patch.object(voice_module, "_synthesise_chunk", return_value=good) as syn:
+            audio = _synthesise_chunk_safe((0, "hello world"))
+        assert syn.call_count == 1
+        np.testing.assert_array_equal(audio, good)
+
+    def test_retries_on_exception_then_succeeds(self):
+        good = np.ones(48_000, dtype=np.float32)
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            side_effect=[RuntimeError("phonemizer mismatch"), good],
+        ) as syn:
+            audio = _synthesise_chunk_safe((1, "tricky chunk"))
+        assert syn.call_count == 2
+        np.testing.assert_array_equal(audio, good)
+
+    def test_retries_on_silent_then_succeeds(self):
+        silent = np.zeros(50, dtype=np.float32)  # below _TTS_MIN_SAMPLES
+        good = np.ones(48_000, dtype=np.float32)
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            side_effect=[silent, good],
+        ) as syn:
+            audio = _synthesise_chunk_safe((2, "—"))
+        assert syn.call_count == 2
+        np.testing.assert_array_equal(audio, good)
+
+    def test_persistent_failure_returns_silence_pad(self):
+        """All attempts exhausted — must NOT raise; must return short silence
+        so the surrounding chunks still concatenate and play."""
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            side_effect=RuntimeError("perma-fail"),
+        ) as syn:
+            audio = _synthesise_chunk_safe((3, "..."))
+        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS
+        assert audio.size == voice_module._TTS_FALLBACK_SAMPLES
+        assert audio.dtype == np.float32
+        assert float(np.abs(audio).max()) == 0.0  # silent pad
+
+    def test_persistent_silent_returns_silence_pad(self):
+        silent = np.zeros(10, dtype=np.float32)
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            return_value=silent,
+        ) as syn:
+            audio = _synthesise_chunk_safe((4, "***"))
+        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS
+        assert audio.size == voice_module._TTS_FALLBACK_SAMPLES
