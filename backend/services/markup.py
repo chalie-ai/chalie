@@ -27,8 +27,16 @@ nodes are valid HTML, so no wrapping or escaping heuristics are needed.
 from __future__ import annotations
 
 import html as _html
+import re
 
 import nh3
+
+# Block-level tags that must produce a word break in spoken output. Without
+# this, ``<li>A</li><li>B</li>`` collapses to ``AB`` once nh3 strips tags,
+# and phonemizer silently drops the resulting gibberish token. We insert a
+# space at each opening / closing boundary before tag stripping so adjacent
+# items stay separable.
+_BLOCK_BOUNDARY_RE = re.compile(r"</?(?:p|li|ul|h1|br)\b[^>]*>", re.IGNORECASE)
 
 # ── Tag allowlist ───────────────────────────────────────────────────────────
 
@@ -122,5 +130,6 @@ def extract_plaintext(html: str) -> str:
     """
     if not html:
         return ""
-    stripped = nh3.clean(html, tags=set(), clean_content_tags={"actions"})
+    spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
+    stripped = nh3.clean(spaced, tags=set(), clean_content_tags={"actions"})
     return " ".join(_html.unescape(stripped).split()).strip()

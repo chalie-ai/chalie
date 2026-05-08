@@ -149,3 +149,20 @@ class TestExtractPlaintext:
 
     def test_empty(self):
         assert extract_plaintext("") == ""
+
+    def test_minified_list_items_are_separated(self):
+        # Without block-boundary spacing this collapses to ``oneTwoThree`` and
+        # phonemizer drops the gibberish tokens — the "lists skipped" TTS bug.
+        assert (
+            extract_plaintext("<ul><li>one</li><li>two</li><li>three</li></ul>")
+            == "one two three"
+        )
+
+    def test_adjacent_paragraphs_are_separated(self):
+        assert extract_plaintext("<p>first.</p><p>second.</p>") == "first. second."
+
+    def test_h1_followed_by_paragraph_is_separated(self):
+        assert extract_plaintext("<h1>Title</h1><p>Body.</p>") == "Title Body."
+
+    def test_br_separates_inline_text(self):
+        assert extract_plaintext("<p>a<br>b<br>c</p>") == "a b c"
