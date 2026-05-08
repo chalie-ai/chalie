@@ -41,8 +41,11 @@ logger = logging.getLogger(__name__)
 # Parses the <summary>…</summary> block produced by ContinuityCompactionProcessor.
 # Used by _run_full_compaction to extract the stored result from raw LLM output.
 
-_SUMMARY_RE = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.DOTALL | re.IGNORECASE)
+_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
 _COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
+
+# Maximum bytes fed to _SUMMARY_RE; bounds backtracking on malformed LLM output.
+_SUMMARY_RE_CAP = 65_536
 
 
 def _extract_compaction_summary(raw: 'str | None') -> 'str | None':
@@ -55,7 +58,7 @@ def _extract_compaction_summary(raw: 'str | None') -> 'str | None':
     """
     if not raw:
         return None
-    m = _SUMMARY_RE.search(raw)
+    m = _SUMMARY_RE.search(raw[:_SUMMARY_RE_CAP])
     return m.group(1).strip() if m else None
 
 

@@ -40,14 +40,14 @@ _DEFAULT_COOKIES = {
 # Match og:image / twitter:image meta tags — property/name in either order,
 # single or double quotes.
 _IMAGE_META_RE = re.compile(
-    r"""<meta\s+[^>]*?(?:property|name)\s*=\s*['"](og:image(?::secure_url)?|twitter:image)['"][^>]*?>""",
-    re.IGNORECASE | re.DOTALL,
+    r"""<meta\s+[^>]*(?:property|name)\s*=\s*['"](og:image(?::secure_url)?|twitter:image)['"][^>]*>""",
+    re.IGNORECASE,
 )
 
 # Match og:description / og:title meta tags.
 _DESC_META_RE = re.compile(
-    r"""<meta\s+[^>]*?property\s*=\s*['"](og:description|og:title)['"][^>]*?>""",
-    re.IGNORECASE | re.DOTALL,
+    r"""<meta\s+[^>]*property\s*=\s*['"](og:description|og:title)['"][^>]*>""",
+    re.IGNORECASE,
 )
 
 # Match <title>…</title>.

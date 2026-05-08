@@ -279,7 +279,7 @@ def _wav_duration_seconds(data: bytes) -> float:
 # user input. We strip it unconditionally — gating on "<" + ">" was the
 # previous bug (any markdown without HTML tags reached the synthesiser raw).
 
-_MD_FENCE_RE = re.compile(r"```[\w-]*\n?([\s\S]*?)```", re.MULTILINE)
+_MD_FENCE_RE = re.compile(r"```[\w-]*\n?((?:[^`]|`(?!``))*+)```", re.MULTILINE)
 _MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
