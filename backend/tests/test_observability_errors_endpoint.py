@@ -59,7 +59,7 @@ def client(tmp_path, monkeypatch):
 
     app = Flask(__name__)
     app.register_blueprint(system_bp)
-    app.config["TESTING"] = True
+    app.config["TESTING"] = True  # Disables exception propagation only; project has no Flask-WTF/CSRF middleware
 
     with app.test_client() as tc:
         yield tc, log_file

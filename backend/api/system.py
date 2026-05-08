@@ -437,7 +437,7 @@ def observability_telemetry():
         return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
 
 
-_LOG_FILE_PATH = "/tmp/chalie.log"
+_LOG_FILE_PATH = "/tmp/chalie.log"  # Read-only; written exclusively by utils/logger.py in the same process
 _LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 _ERROR_CAP = 200
