@@ -716,54 +716,6 @@ class DocumentService:
             logger.error(f"[DOCS] purge_expired failed: {e}")
             return 0
 
-    def search_by_metadata(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Query documents by extracted_metadata JSON fields.
-        Supported filters: document_type, company, has_expiration.
-        """
-        try:
-            conditions = ["deleted_at IS NULL", "status = 'ready'"]
-            params = []
-
-            if 'document_type' in filters:
-                conditions.append("json_extract(extracted_metadata, '$.document_type.value') = ?")
-                params.append(filters['document_type'])
-
-            if 'company' in filters:
-                conditions.append(
-                    "EXISTS (SELECT 1 FROM json_each(json_extract(extracted_metadata, '$.companies')) c "
-                    "WHERE json_extract(c.value, '$.name') LIKE ?)"
-                )
-                params.append(f"%{filters['company']}%")
-
-            if filters.get('has_expiration'):
-                conditions.append("json_array_length(COALESCE(json_extract(extracted_metadata, '$.expiration_dates'), '[]')) > 0")
-
-            where = " AND ".join(conditions)
-
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(f"""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE {where}
-                    ORDER BY created_at DESC
-                """, params)
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [self._row_to_dict(row) for row in rows]
-
-        except Exception as e:
-            logger.error(f"[DOCS] search_by_metadata failed: {e}")
-            return []
-
     # ─────────────────────────────────────────────
     # Watched folder helpers
     # ─────────────────────────────────────────────
