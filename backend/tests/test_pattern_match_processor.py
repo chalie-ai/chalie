@@ -409,6 +409,7 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
             None,
         )
 
+        assert isinstance(result, dict), f"SaveGraph.execute returned non-dict: {result!r}"
         assert result.get("error") == "invalid_kind", (
             f"Expected error='invalid_kind', got: {result}"
         )
