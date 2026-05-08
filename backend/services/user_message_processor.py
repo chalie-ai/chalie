@@ -48,8 +48,8 @@ class UserMessageProcessor(MessageProcessor):
     # weather/search/news/browser via find_tools rather than appearing as
     # an always-on fallback that biases routing for single-tool lookups.
     ALWAYS_AVAILABLE: list[str] = [
-        "document",
         "find_tools",
+        "document",
         "list",
         "memory",
         "read",
