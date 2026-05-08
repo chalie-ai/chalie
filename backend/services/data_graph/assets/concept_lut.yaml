@@ -13,7 +13,10 @@
 #
 #   Fix: collapse to ~27 semantically distant canonical keys. The VALUE carries
 #   the detail ("job_title: senior engineer" stored under `employment`). Aliases
-#   are documentation only — not embedded separately.
+#   are now embedded as additional lookup labels alongside the canonical_key, each
+#   row pointing back to the same canonical_key + rule.  This is necessary because
+#   cosine similarity of e.g. "birthday" vs "birth_date" under gte-modernbert falls
+#   below the 0.80 LUT threshold, causing canonicalization misses at runtime.
 #
 # Rules:
 #   temporal   - new value replaces old; most recent wins. Supersede + edge.
