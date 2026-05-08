@@ -71,6 +71,12 @@ _models_loading = False
 # Kokoro is concurrent via the pool — no global lock, instances are
 # checked out from ``_tts_pool`` and returned after each synthesis.
 _stt_lock = threading.Lock()
+# phonemizer's EspeakBackend is cached in a process-global dict and carries
+# mutable instance state (_count_txt / _count_phn).  Concurrent threads
+# clobber that state, producing "number of lines in input and output must be
+# equal" errors on multi-chunk requests.  Serialise the phonemize step only;
+# the ONNX inference step is genuinely parallel-safe per-instance.
+_phonemize_lock = threading.Lock()
 
 
 def _download_kokoro_models():
@@ -231,16 +237,24 @@ def _ensure_models():
 def _synthesise_chunk(chunk: str):
     """Synthesise one text chunk on a pooled Kokoro instance.
 
-    Checks an instance out of ``_tts_pool``, runs synthesis, returns the
-    1-D float32 waveform, and always returns the instance to the pool —
-    even on exception. Multiple chunks in flight = multiple instances
-    out simultaneously, capped at ``TTS_POOL_SIZE``.
+    Two-phase execution:
+    1. Phonemize under ``_phonemize_lock`` — espeak's process-global
+       EspeakBackend cache has mutable instance state that is not
+       thread-safe; serialising this step eliminates the race.
+    2. ONNX inference outside the lock — each pooled Kokoro instance
+       owns its own ORT session; inference is genuinely parallel.
+
+    Checks an instance out of ``_tts_pool`` for the inference step and
+    always returns it to the pool, even on exception.
     """
     import numpy as np
 
     inst = _tts_pool.get()
     try:
-        samples, _sr = inst.create(chunk, voice=KOKORO_VOICE, lang="en-us")
+        with _phonemize_lock:
+            phonemes = inst.tokenizer.phonemize(chunk, lang="en-us")
+        voice_style = inst.get_voice_style(KOKORO_VOICE)
+        samples, _sr = inst._create_audio(phonemes, voice_style, speed=1.0)
         return np.asarray(samples, dtype=np.float32).reshape(-1)
     finally:
         _tts_pool.put(inst)
