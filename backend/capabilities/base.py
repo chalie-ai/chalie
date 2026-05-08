@@ -179,8 +179,7 @@ class AbstractCapability(ABC):
 
         Called periodically by the capability scheduler via :meth:`monitor`
         or :meth:`run_monitor`. Should compare current state with previous
-        state, detect new/changed/deleted items, and emit signals via
-        EventBusService.
+        state and detect new/changed/deleted items.
         """
 
     @abstractmethod

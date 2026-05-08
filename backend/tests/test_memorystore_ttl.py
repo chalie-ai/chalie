@@ -96,39 +96,6 @@ class TestOutputServiceQueueTTL:
 
 
 # ---------------------------------------------------------------------------
-# 3. event_bus_service — rpush to event_bus:{event_type}
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestEventBusServiceQueueTTL:
-    """After rpush to event_bus:<type>, expire(event_bus:<type>, 3600) must fire."""
-
-    def test_emit_sets_ttl_on_event_queue(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.event_bus_service import EventBusService, ENCODE_EVENT
-            bus = EventBusService()
-
-        bus.emit(ENCODE_EVENT, {"data": "test"})
-
-        queue_key = f"event_bus:{ENCODE_EVENT}"
-        assert _has_ttl(store, queue_key), f"{queue_key} must have a TTL after rpush"
-
-    def test_emit_custom_event_type_sets_ttl(self):
-        """TTL is applied regardless of the event type string."""
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.event_bus_service import EventBusService
-            bus = EventBusService()
-
-        bus.emit("custom_event", {"key": "value"})
-
-        assert _has_ttl(store, "event_bus:custom_event")
-
-
-# ---------------------------------------------------------------------------
 # 5. app_update_service — set(IN_PROGRESS_KEY, "1", ex=3600)
 # ---------------------------------------------------------------------------
 
