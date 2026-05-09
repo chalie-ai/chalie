@@ -8,7 +8,6 @@ No real external connections. MemoryStore IS the production implementation.
 """
 
 import shutil
-import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -161,7 +160,6 @@ def mock_config():
             'cost_growth_factor': 1.5,
         },
     }
-    agent_prompts = {}
     connections = {
         'memory': {},
         'rest_api': {'host': '0.0.0.0', 'port': 8081},
@@ -169,7 +167,6 @@ def mock_config():
     }
 
     with patch('services.config_service.ConfigService.get_agent_config', side_effect=lambda name: agent_configs.get(name, {})), \
-         patch('services.config_service.ConfigService.get_agent_prompt', side_effect=lambda name: agent_prompts.get(name, '')), \
          patch('services.config_service.ConfigService.connections', return_value=connections):
         yield agent_configs
 
@@ -272,34 +269,6 @@ def tmp_state_file(tmp_path):
     """Temporary state file path for tools using JSON state."""
     state_file = tmp_path / "state.json"
     return state_file
-
-
-@pytest.fixture
-def tmp_sqlite_db(tmp_path):
-    """Temporary SQLite database for scheduler tool/service tests."""
-    db_path = tmp_path / "test.db"
-
-    # Create tables if needed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Create scheduled_items table for scheduler tests
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS scheduled_items (
-            id TEXT PRIMARY KEY,
-            message TEXT NOT NULL,
-            due_at TEXT NOT NULL,
-            type TEXT DEFAULT 'reminder',
-            recurrence TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-    yield str(db_path)
 
 
 @pytest.fixture

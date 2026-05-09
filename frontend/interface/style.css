@@ -13,21 +13,17 @@
    (tokens already defined in theme.css are NOT re-declared here)
    -------------------------------------------------------------------------- */
 :root {
-  /* Radiant semantic aliases used only in this interface */
-  --sand:              #FF2FD1;   /* alias for accent-secondary */
-  --dusk-blue:         #00F0FF;   /* alias for accent-tertiary */
-  --violet:            #8A5CFF;   /* alias for accent-primary */
-  --amber:             #B07CFF;   /* soft violet used on responding state */
+  /* Radiant semantic aliases used only in this interface.
+     `--violet`, `--text-tertiary`, `--border-subtle`, and the user/chalie
+     surfaces are now defined in shared/theme.css so they can flip between
+     dark and light. The aliases below remain interface-local. */
+  --sand:              var(--magenta);     /* alias for accent-secondary */
+  --dusk-blue:         var(--cyan);        /* alias for accent-tertiary */
+  --amber:             #B07CFF;            /* soft violet used on responding state */
 
-  /* Interface surface variants */
-  --bg-surface-user:   rgba(138, 92, 255, 0.07);
-  --bg-surface-chalie: rgba(255, 255, 255, 0.025);
-
-  /* Text tertiary (below text-secondary) */
-  --text-tertiary:     rgba(234, 230, 242, 0.30);
-
-  /* Border variants */
-  --border-subtle:     rgba(255, 255, 255, 0.07);
+  /* Back-compat aliases — themed in shared/theme.css */
+  --bg-surface-user:   var(--bg-user);
+  --bg-surface-chalie: var(--bg-chalie);
 
   /* Spacing scale */
   --space-xs:  4px;
@@ -87,13 +83,39 @@ body {
   pointer-events: none;
 }
 
+/* Reactive ambient bloom — a soft tint overlay on top of the canvas that
+   leans toward whoever spoke last. Driven by body.speaker-user / .speaker-chalie
+   toggled by chat.js based on the form nearest the viewport midline. */
+#ambientBloom {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
+              background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
+  background:
+    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(138, 92, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(0, 240, 255, 0.05), transparent 60%);
+}
+body.speaker-chalie #ambientBloom { opacity: 1; }
+body.speaker-user   #ambientBloom {
+  opacity: 1;
+  background:
+    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(138, 92, 255, 0.05), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(0, 240, 255, 0.20), transparent 55%);
+}
+@media (prefers-reduced-motion: reduce) {
+  #ambientBloom { transition: opacity 200ms linear; }
+}
+
 #grainOverlay {
   position: fixed;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  opacity: 0.04;
-  mix-blend-mode: overlay;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 256px 256px;
@@ -304,7 +326,7 @@ body {
   max-height: 200px;
   overflow-y: auto;
   padding: var(--space-md);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
@@ -348,7 +370,7 @@ body {
 
 .update-dialog__instructions {
   padding: var(--space-md);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
@@ -357,7 +379,7 @@ body {
 }
 
 .update-dialog__instructions code {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.8rem;
@@ -377,10 +399,11 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: rgba(6, 8, 14, 0.92);
+  background: var(--scrim-top);
   backdrop-filter: blur(24px) saturate(120%);
   -webkit-backdrop-filter: blur(24px) saturate(120%);
-  border-bottom: 1px solid rgba(138, 92, 255, 0.08);
+  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
+  transition: background 420ms ease, border-color 420ms ease;
 }
 
 .presence-bar__left {
@@ -397,30 +420,30 @@ body {
 
 #settingsBtn {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   transition: all 220ms ease;
 }
 
 #settingsBtn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(138, 92, 255, 0.25);
-  box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
+  background: var(--bg-surface-2);
+  border-color: color-mix(in oklab, var(--violet) 25%, transparent);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 8%, transparent);
 }
 
 #installBtn {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   transition: all 220ms ease;
 }
 
 #installBtn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(138, 92, 255, 0.25);
-  box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
+  background: var(--bg-surface-2);
+  border-color: color-mix(in oklab, var(--violet) 25%, transparent);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 8%, transparent);
 }
 
 #installBtn:not(.hidden) {
@@ -429,8 +452,55 @@ body {
 
 @keyframes installPulse {
   0%, 100% { box-shadow: none; }
-  50%       { box-shadow: 0 0 0 3px rgba(138, 92, 255, 0.12); }
+  50%       { box-shadow: 0 0 0 3px color-mix(in oklab, var(--violet) 12%, transparent); }
 }
+
+/* Theme toggle — sliding pill with sun/moon glyphs in the track. */
+.theme-toggle {
+  position: relative;
+  width: 56px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  transition: background 220ms ease, border-color 220ms ease;
+}
+.theme-toggle:hover { border-color: var(--border-strong); }
+.theme-toggle:focus-visible {
+  outline: 1.5px solid color-mix(in oklab, var(--violet) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.theme-toggle__track {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 6px;
+  color: var(--text-tertiary);
+}
+.theme-toggle__track svg { width: 12px; height: 12px; stroke-width: 2; }
+
+.theme-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--violet), color-mix(in oklab, var(--magenta) 60%, var(--violet)));
+  box-shadow:
+    0 2px 8px color-mix(in oklab, var(--violet) 35%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--violet) 20%, transparent);
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+[data-theme="light"] .theme-toggle__thumb { transform: translateX(26px); }
 
 /* --------------------------------------------------------------------------
    6. Presence Dot + Animations
@@ -566,7 +636,8 @@ body {
 .conversation-spine {
   position: relative;
   z-index: 10;
-  max-width: min(80%, 1200px);
+  width: 95vw;
+  max-width: 95vw;
   margin: 0 auto;
   padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
   display: flex;
@@ -583,13 +654,13 @@ body {
   position: relative;
   padding: var(--space-lg);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-chalie);
   backdrop-filter: blur(16px) saturate(120%);
   -webkit-backdrop-filter: blur(16px) saturate(120%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
   animation: formEntry 200ms var(--ease-out) both;
-  transition: border-color 400ms ease, box-shadow 400ms ease;
+  transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
 }
 
 @keyframes formEntry {
@@ -618,20 +689,133 @@ body {
 
 .speech-form--user::before {
   right: -1px;
-  background: linear-gradient(180deg, transparent 0%, var(--dusk-blue) 20%, var(--dusk-blue) 80%, transparent 100%);
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--dusk-blue) 12%,
+    #7CFFF6 38%,
+    var(--dusk-blue) 60%,
+    #00B6C6 80%,
+    transparent 100%);
+  background-size: 100% 240%;
+  animation: stripeFlow 7s ease-in-out infinite;
+  filter: saturate(1.15);
   box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px rgba(0, 240, 255, 0.33);
 }
 
 .speech-form--chalie {
-  background: var(--bg-surface-chalie);
-  align-self: flex-start;
-  max-width: 90%;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  padding-left: 0;
+  padding-right: 0;
 }
 
+/* Header row — glyph + timestamp inline at the top of every Chalie turn. */
+.speech-form--chalie .speech-form__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-sm);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.speech-form--chalie .speech-form__header .sender-glyph {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  width: 18px;
+  height: 18px;
+  color: var(--violet);
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.speech-form--chalie .speech-form__header .speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+/* Chalie has no accent stripe — full-bleed text on the spine. */
 .speech-form--chalie::before {
-  left: -1px;
-  background: linear-gradient(180deg, transparent 0%, var(--violet) 20%, var(--violet) 80%, transparent 100%);
-  box-shadow: 0 0 8px var(--violet), 0 0 18px rgba(138, 92, 255, 0.33);
+  display: none;
+}
+
+@keyframes stripeFlow {
+  0%, 100% { background-position: 0% 0%; }
+  50%      { background-position: 0% 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speech-form--user::before,
+  .speech-form--chalie::before { animation: none; }
+}
+
+/* Hover lift — bubble rises ~2px and gains a soft inner ring on accent color.
+   Skipped on touch input where :hover is unreliable. */
+@media (hover: hover) {
+  .speech-form:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(138, 92, 255, 0.04) inset;
+  }
+  .speech-form--user:hover {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 240, 255, 0.05) inset;
+  }
+  [data-theme="light"] .speech-form:hover,
+  [data-theme="light"] .speech-form--user:hover {
+    box-shadow: none;
+  }
+}
+
+/* Hard rule — NO shadows anywhere inside chat bubbles. Every theme,
+   every state, every descendant. Catches stripe glows, hover lifts,
+   active drop, glyph drop-shadows, action-btn glows, and anything
+   added later. */
+.speech-form,
+.speech-form *,
+.speech-form::before,
+.speech-form::after,
+.speech-form *::before,
+.speech-form *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+.speech-form .sender-glyph,
+.speech-form__header .sender-glyph {
+  filter: none !important;
+}
+
+/* Sender glyph — fused at the cap of the accent stripe. Constellation for
+   Chalie, spark for the user. */
+.sender-glyph {
+  position: absolute;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  z-index: 3;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.speech-form--chalie .sender-glyph { left: -9px;  color: var(--violet); }
+.speech-form--user   .sender-glyph { right: -9px; color: var(--dusk-blue); }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot {
+  animation: glyphTwinkle 3.2s ease-in-out infinite;
+}
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(2) { animation-delay: 0.4s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(3) { animation-delay: 0.9s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(4) { animation-delay: 1.4s; }
+@keyframes glyphTwinkle {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sender-glyph circle.sender-glyph__dot { animation: none; opacity: 0.85; }
 }
 
 /* Active form — newest Chalie message gets a top-edge highlight */
@@ -662,6 +846,12 @@ body {
 /* Preserve newlines in user-typed messages */
 .speech-form--user .speech-form__text {
   white-space: pre-wrap;
+  font-weight: 600;
+}
+
+/* Light theme: user bubble = 80% white. */
+[data-theme="light"] .speech-form--user {
+  background: rgba(255, 255, 255, 0.8);
 }
 
 /* Scoped markdown styles — only inside Chalie messages */
@@ -737,8 +927,8 @@ body {
   font-size: 0.85em;
   padding: 0.15em 0.4em;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
   color: var(--text-primary);
 }
 
@@ -747,7 +937,7 @@ body {
   padding: var(--space-md);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -792,7 +982,7 @@ body {
   margin: 0.75em 0;
   padding: 0.6em 1em;
   border-left: 3px solid rgba(138, 92, 255, 0.30);
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in oklab, var(--text) 2%, transparent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-secondary);
   font-style: italic;
@@ -805,7 +995,7 @@ body {
 .speech-form--chalie .speech-form__text hr {
   border: none;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--text) 8%, transparent), transparent);
   margin: 1em 0;
 }
 
@@ -831,7 +1021,7 @@ body {
 
 .speech-form--chalie .speech-form__text td {
   padding: 0.4em 0.75em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid color-mix(in oklab, var(--text) 4%, transparent);
   color: var(--text-primary);
 }
 
@@ -840,7 +1030,7 @@ body {
 }
 
 .speech-form--chalie .speech-form__text tbody tr:nth-child(even) {
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in oklab, var(--text) 2%, transparent);
 }
 
 /* Task lists (GFM checkboxes) */
@@ -857,7 +1047,7 @@ body {
   height: 14px;
   border: 1.5px solid rgba(255, 255, 255, 0.20);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   vertical-align: middle;
   margin-right: 0.5em;
   position: relative;
@@ -974,7 +1164,7 @@ body {
 .speech-form__topic {
   padding: 2px var(--space-sm);
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
   font-size: 0.75rem;
   color: var(--text-secondary);
 }
@@ -1002,7 +1192,11 @@ body {
   transition: color var(--duration-fast), box-shadow var(--duration-fast);
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }
+.speech-form__remember-btn svg { width: 24px; height: 24px; }
 
 .speech-form__remember-btn:hover {
   color: var(--accent-primary);
@@ -1029,7 +1223,11 @@ body {
   transition: color var(--duration-fast);
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }
+.speech-form__speak-btn svg { width: 24px; height: 24px; }
 
 .speech-form__speak-btn:hover {
   color: var(--dusk-blue);
@@ -1128,7 +1326,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 /* States — use Chalie's canonical token colors. Opacity carries the dim. */
 .act-tool--running {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
 }
 
 .act-tool--done {
@@ -1146,8 +1344,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.2);
-  border-top-color: rgba(255, 255, 255, 0.9);
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 20%, transparent);
+  border-top-color: color-mix(in oklab, var(--text-primary) 90%, transparent);
   animation: act-spinner-spin 0.9s linear infinite;
   display: inline-block;
 }
@@ -1168,16 +1366,15 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .steer-bubble {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
-  color: rgba(234, 230, 242, 0.72);
-  padding: 6px 14px;
-  margin: 2px 48px 2px auto;
-  text-align: right;
-  border-right: 2px solid rgba(138, 92, 255, 0.30);
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--dusk-blue);
   font-style: italic;
-  line-height: 1.5;
+  padding: 4px 0;
+  word-break: break-word;
   animation: formEntry 200ms var(--ease-out) both;
-  max-width: 70%;
 }
 
 /* Error form */
@@ -1225,8 +1422,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 .history-end-pill__label {
   font-size: 11px;
   color: rgba(234, 230, 242, 0.3);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   border-radius: 20px;
   padding: 4px 14px;
   letter-spacing: 0.04em;
@@ -1242,7 +1439,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  background: linear-gradient(to top, rgba(6, 8, 14, 0.92) 50%, transparent);
+  background: linear-gradient(to top, var(--scrim-dock) 50%, transparent);
+  transition: background 420ms ease;
 }
 
 .input-dock__outer {
@@ -1258,25 +1456,21 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
   padding: var(--space-sm) var(--space-md);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
-  box-shadow:
-    0 8px 40px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(255, 255, 255, 0.03),
-    0 0 24px rgba(138, 92, 255, 0.08);
-  transition: border-color 220ms ease, box-shadow 220ms ease;
+  box-shadow: var(--shadow-card);
+  transition: background 420ms ease, border-color 220ms ease, box-shadow 220ms ease;
 }
 
 .input-dock__inner:focus-within {
-  border-color: rgba(138, 92, 255, 0.22);
+  border-color: color-mix(in oklab, var(--violet) 45%, transparent);
   box-shadow:
-    0 8px 40px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(138, 92, 255, 0.18),
-    0 0 28px rgba(138, 92, 255, 0.18);
+    var(--shadow-card),
+    0 0 0 4px color-mix(in oklab, var(--violet) 12%, transparent);
 }
 
 .input-dock__textarea {
@@ -1423,8 +1617,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .attach-menu__inner {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
   border-radius: var(--radius-md);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -1468,7 +1662,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   height: 56px;
   border-radius: var(--radius-sm);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   flex-shrink: 0;
 }
 
@@ -1540,7 +1734,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   font-size: 9px;
   line-height: 1;
   pointer-events: none;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in oklab, var(--text) 12%, transparent);
   z-index: 2;
 }
 
@@ -1612,9 +1806,9 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
-  border: 1.5px dashed rgba(255, 255, 255, 0.12);
+  border: 1.5px dashed color-mix(in oklab, var(--text) 12%, transparent);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in oklab, var(--text) 2%, transparent);
   cursor: pointer;
   transition: all 220ms ease;
   margin-bottom: 12px;
@@ -1635,7 +1829,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 .upload-progress__bar {
   height: 2px;
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in oklab, var(--text) 7%, transparent);
   border-radius: 1px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -1673,14 +1867,14 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in oklab, var(--text) 12%, transparent);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 220ms ease;
 }
 
-.upload-duplicate__btn:hover { background: rgba(255, 255, 255, 0.06); }
+.upload-duplicate__btn:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
 
 .upload-duplicate__btn--primary {
   border-color: var(--accent-tertiary);
@@ -1696,7 +1890,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 /* Document synthesis confirmation card */
 .doc-synthesis-card {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   border: 1px solid rgba(0, 240, 255, 0.15);
   border-radius: 10px;
   padding: 16px 18px;
@@ -1746,9 +1940,9 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
   color: var(--text-secondary);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
 }
 
 .doc-synthesis__actions { display: flex; gap: 8px; }
@@ -1757,14 +1951,14 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   font-size: 12px;
   padding: 6px 14px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid color-mix(in oklab, var(--text) 10%, transparent);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 220ms ease;
 }
 
-.doc-synthesis__btn:hover    { background: rgba(255, 255, 255, 0.05); }
+.doc-synthesis__btn:hover    { background: color-mix(in oklab, var(--text) 5%, transparent); }
 .doc-synthesis__btn:disabled { opacity: 0.5; cursor: default; }
 
 .doc-synthesis__btn--confirm {
@@ -1796,8 +1990,8 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   min-height: 60px;
   padding: 10px 12px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid color-mix(in oklab, var(--text) 10%, transparent);
+  background: color-mix(in oklab, var(--text) 2%, transparent);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.5;
@@ -1859,7 +2053,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   background: rgba(12, 14, 24, 0.96);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-xl);
   width: 100%;
@@ -1896,7 +2090,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 .api-key-dialog__input-wrap {
   display: flex;
   align-items: center;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding-right: var(--space-xs);
@@ -1905,7 +2099,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 /* Standalone inputs (login dialog, etc. — not inside __input-wrap) */
 .api-key-dialog__field > .api-key-dialog__input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   outline: none;
@@ -1980,7 +2174,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   background: rgba(12, 14, 24, 0.96);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-xl);
   width: 100%;
@@ -2050,7 +2244,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   margin: 0;
   padding: 0;
   border: none;
-  background: rgba(6, 8, 14, 0.96);
+  background: var(--bg-2);
   color: var(--text-primary);
   z-index: 100;
 }
@@ -2144,9 +2338,9 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   border-radius: var(--radius-md);
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.02) 25%,
-    rgba(255, 255, 255, 0.05) 50%,
-    rgba(255, 255, 255, 0.02) 75%
+    color-mix(in oklab, var(--text) 2%, transparent) 25%,
+    color-mix(in oklab, var(--text) 5%, transparent) 50%,
+    color-mix(in oklab, var(--text) 2%, transparent) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
@@ -2160,7 +2354,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   bottom: 100px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in oklab, var(--text) 7%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 10px 20px;
@@ -2267,7 +2461,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 }
 
 .speech-form--ambient.speech-form--active {
-  border-color: rgba(255, 255, 255, 0.05);
+  border-color: color-mix(in oklab, var(--text) 5%, transparent);
   box-shadow: none;
 }
 
@@ -2293,27 +2487,13 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   letter-spacing: 0.06em;
   padding: 1px 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
   color: rgba(234, 230, 242, 0.5);
   margin-left: 8px;
   vertical-align: middle;
   animation: meta-fade-in 150ms ease both;
 }
-
-.meta-confidence-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-left: 6px;
-  vertical-align: middle;
-  animation: meta-fade-in 150ms ease 60ms both;
-}
-
-.meta-confidence-dot.--high { background: rgba(138, 92, 255, 0.6); }
-.meta-confidence-dot.--mid  { background: rgba(234, 230, 242, 0.3); }
-.meta-confidence-dot.--low  { background: rgba(255, 180, 50, 0.45); }
 
 @keyframes meta-fade-in {
   from { opacity: 0; }
@@ -2430,7 +2610,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 .task-strip__item {
   position: relative;
   padding: 8px 36px 10px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.03);
+  border-top: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
 }
 
 .task-strip__item > .task-strip__dismiss {
@@ -2453,7 +2633,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
 
 .task-strip__progress-bar {
   height: 2px;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
   border-radius: 1px;
   margin-bottom: 4px;
   overflow: hidden;
@@ -2552,7 +2732,7 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   font-size: 11px;
   color: var(--text-tertiary);
   font-style: italic;
-  border-top: 1px solid rgba(255, 255, 255, 0.03);
+  border-top: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
 }
 
 /* Adjust conversation spine when task strip is visible */
@@ -2571,15 +2751,15 @@ body.has-task-strip .conversation-spine {
   max-width: 85vw;
   height: 100vh;
   z-index: 250;
-  background: rgba(8, 10, 18, 0.96);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border-left: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
   transition: transform var(--duration-normal) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
-  box-shadow: -8px 0 40px rgba(0, 0, 0, 0.40);
 }
 
 .apps-panel.open {
@@ -2627,7 +2807,7 @@ body.has-task-strip .conversation-spine {
 }
 
 .app-card:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
 }
 
 .app-card__dot {
@@ -2702,7 +2882,8 @@ body.has-task-strip .conversation-spine {
   position: fixed;
   inset: 0;
   z-index: 260;
-  background: rgba(3, 4, 8, 0.98);
+  background: var(--bg-2);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   animation: fadeIn var(--duration-normal);
@@ -2718,9 +2899,9 @@ body.has-task-strip .conversation-spine {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
   min-height: 48px;
-  background: rgba(8, 10, 18, 0.90);
+  background: var(--bg-surface-2);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -2779,7 +2960,7 @@ body.has-task-strip .conversation-spine {
   width: 36px;
   height: 20px;
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.10);
+  background: color-mix(in oklab, var(--text) 10%, transparent);
   border: none;
   cursor: pointer;
   flex-shrink: 0;
@@ -2839,7 +3020,7 @@ body.has-task-strip .conversation-spine {
   font-size: 0.8rem;
   color: var(--text-primary);
   padding: var(--space-xs) 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
 }
 
 .app-detail__cap-item:last-child {
@@ -2943,7 +3124,7 @@ details.block-section[open] > summary.block-section__title::before {
   display: block;
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -2967,7 +3148,7 @@ details.block-section[open] > summary.block-section__title::before {
   display: block;
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -3006,7 +3187,7 @@ details.block-section[open] > summary.block-section__title::before {
   width: 36px;
   height: 20px;
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.10);
+  background: color-mix(in oklab, var(--text) 10%, transparent);
   border: none;
   cursor: pointer;
   flex-shrink: 0;
@@ -3085,7 +3266,7 @@ details.block-section[open] > summary.block-section__title::before {
   border-radius: var(--radius-sm);
   font-size: 0.85rem;
   border-left: 3px solid var(--text-secondary);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   margin-bottom: var(--space-sm);
 }
 
@@ -3120,7 +3301,7 @@ details.block-section[open] > summary.block-section__title::before {
 .block-loading__spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.10);
+  border: 2px solid color-mix(in oklab, var(--text) 10%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
   animation: blockSpin 0.8s linear infinite;
@@ -3142,7 +3323,7 @@ details.block-section[open] > summary.block-section__title::before {
   gap: 2px;
   padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
   border-left: 3px solid var(--violet);
   min-width: 120px;
   margin-bottom: var(--space-xs);
@@ -3188,8 +3369,8 @@ details.block-section[open] > summary.block-section__title::before {
 /* -- Card -- */
 .block-card {
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 3%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 6%, transparent);
   border-top: 3px solid var(--violet);
   overflow: hidden;
   margin-bottom: var(--space-sm);
@@ -3207,7 +3388,7 @@ details.block-section[open] > summary.block-section__title::before {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid color-mix(in oklab, var(--text) 4%, transparent);
 }
 
 .block-card__icon {
@@ -3296,7 +3477,7 @@ details.block-section[open] > summary.block-section__title::before {
 .block-progress__track {
   height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
   overflow: hidden;
 }
 
@@ -3332,7 +3513,7 @@ details.block-section[open] > summary.block-section__title::before {
   top: 14px;
   bottom: 0;
   width: 1px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
 }
 
 .block-timeline__dot {
@@ -3357,7 +3538,7 @@ details.block-section[open] > summary.block-section__title::before {
 }
 
 .block-timeline__item--pending .block-timeline__dot {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: color-mix(in oklab, var(--text) 12%, transparent);
 }
 
 .block-timeline__content {
@@ -3416,13 +3597,13 @@ details.block-section[open] > summary.block-section__title::before {
 
 /* -- Action button variants -- */
 .block-action-btn--secondary {
-  background: rgba(255, 255, 255, 0.06) !important;
+  background: color-mix(in oklab, var(--text) 6%, transparent) !important;
   color: var(--text-secondary) !important;
   border: 1px solid var(--border-subtle) !important;
 }
 
 .block-action-btn--secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.10) !important;
+  background: color-mix(in oklab, var(--text) 10%, transparent) !important;
   color: var(--text-primary) !important;
 }
 
@@ -3492,10 +3673,10 @@ details.block-section[open] > summary.block-section__title::before {
    32. Backdrop-filter Fallback
    -------------------------------------------------------------------------- */
 @supports not (backdrop-filter: blur(1px)) {
-  .speech-form--chalie  { background: rgba(10, 12, 22, 0.95); }
-  .speech-form--user    { background: rgba(16, 14, 30, 0.95); }
-  .presence-bar         { background: rgba(6, 8, 14, 0.98); }
-  .input-dock           { background: rgba(6, 8, 14, 0.98); }
+  .speech-form--chalie  { background: var(--bg-chalie); }
+  .speech-form--user    { background: var(--bg-user); }
+  .presence-bar         { background: var(--scrim-fallback); }
+  .input-dock           { background: var(--scrim-fallback); }
   .connection-banner    { background: rgba(40, 20, 20, 0.95); }
 }
 
@@ -3523,7 +3704,7 @@ details.block-section[open] > summary.block-section__title::before {
 
 .voice-rec-btn:hover {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
 }
 
 /* Idle state: show only the mic icon */
@@ -3608,28 +3789,16 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-player {
   position: relative;
   width: min(420px, calc(100vw - 32px));
-  background: rgba(12, 14, 22, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow:
-    0 0 0 1px rgba(138, 92, 255, 0.12),
-    0 24px 48px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   padding: var(--space-xl) var(--space-xl) var(--space-lg);
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-}
-
-.voice-player__title {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  line-height: 1.4;
-  margin: 0;
-  max-height: 3.2em;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 /* Loading state */
@@ -3646,7 +3815,7 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-player__spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.12);
+  border: 2px solid color-mix(in oklab, var(--text) 12%, transparent);
   border-top-color: var(--text-secondary);
   border-radius: 50%;
   animation: voiceRecSpin 0.7s linear infinite;
@@ -3673,7 +3842,7 @@ details.block-section[open] > summary.block-section__title::before {
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--text) 8%, transparent);
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -3686,7 +3855,6 @@ details.block-section[open] > summary.block-section__title::before {
   border-radius: 50%;
   background: #8A5CFF;
   cursor: pointer;
-  box-shadow: 0 0 6px rgba(138, 92, 255, 0.5);
 }
 
 .voice-player__progress::-moz-range-thumb {
@@ -3708,41 +3876,43 @@ details.block-section[open] > summary.block-section__title::before {
 .voice-player__btns {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-lg);
+  justify-content: space-between;
+  gap: var(--space-md);
+  width: 100%;
 }
 
 .voice-player__btn {
   background: none;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  border: none;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
-  transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+  transition: color var(--duration-fast), opacity var(--duration-fast);
 }
 
 .voice-player__btn:hover {
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.04);
+  opacity: 0.7;
 }
 
+/* Skip-back / skip-forward — text glyphs aligned with the slider edges */
+.voice-player__btn--seek {
+  font-size: 1.6rem;
+  line-height: 1;
+  font-weight: 500;
+  color: var(--text-secondary);
+  width: auto;
+  height: auto;
+  letter-spacing: -0.02em;
+}
+
+/* Center play button — bigger glyph, no border, no background */
 .voice-player__btn--play {
-  width: 48px;
-  height: 48px;
-  border-color: rgba(138, 92, 255, 0.4);
+  flex: 0 0 auto;
+  margin: 0 auto;
   color: var(--text-primary);
-}
-
-.voice-player__btn--play:hover {
-  border-color: rgba(138, 92, 255, 0.8);
-  background: rgba(138, 92, 255, 0.12);
-  box-shadow: 0 0 12px rgba(138, 92, 255, 0.25);
 }
 
 .voice-player__close {
@@ -3777,7 +3947,7 @@ details.block-section[open] > summary.block-section__title::before {
   position: relative;
   border-top: 3px solid var(--dusk-blue);         /* cyan top accent edge   */
   border-radius: 0 0 var(--radius-md) var(--radius-md);
-  background: rgba(255, 255, 255, 0.04);          /* semi-transparent glass */
+  background: color-mix(in oklab, var(--text) 4%, transparent);          /* semi-transparent glass */
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-left: 1px solid var(--border-subtle);
@@ -3865,7 +4035,7 @@ details.block-section[open] > summary.block-section__title::before {
 .block-thought__btn--dismiss:hover {
   color: var(--text-primary);
   border-color: rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
 }
 
 /* ---- "×" close — ghost, pushed to the far right ------------------------ */

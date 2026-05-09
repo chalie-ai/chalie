@@ -158,30 +158,21 @@ CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     platform TEXT NOT NULL,
-    model TEXT NOT NULL,                     -- default model
-    models TEXT,                             -- JSON array of available models (NULL = [model])
+    model TEXT NOT NULL,                     -- single model for this provider
     host TEXT,
     api_key BLOB,                            -- encrypted storage
     dimensions INTEGER,
     timeout INTEGER DEFAULT 120,
     is_active INTEGER DEFAULT 1,             -- BOOLEAN
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS job_provider_assignments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_name TEXT UNIQUE NOT NULL,
-    provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    model TEXT,                              -- model override (NULL = use provider default)
+    max_tokens INTEGER,
+    compact_at INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_providers_name ON providers(name);
 CREATE INDEX IF NOT EXISTS idx_providers_platform ON providers(platform);
-CREATE INDEX IF NOT EXISTS idx_job_assignments_job ON job_provider_assignments(job_name);
 
 -- ────────────────────────────────────────────────────────────────
 -- SETTINGS — application-wide configuration
@@ -202,6 +193,9 @@ CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key);
 
 INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
 VALUES ('api_key', 'string', 'REST API authentication key (auto-generated on first startup if not set)', 1);
+
+INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
+VALUES ('selected_provider_id', 'int', 'ID of the active LLM provider used for all cognitive jobs', 0);
 
 -- ────────────────────────────────────────────────────────────────
 -- MASTER ACCOUNT
@@ -275,16 +269,8 @@ CREATE TABLE IF NOT EXISTS list_items (
 
 CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE removed_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS list_events (
-    id TEXT PRIMARY KEY,
-    list_id TEXT NOT NULL REFERENCES lists(id),
-    event_type TEXT NOT NULL,
-    item_content TEXT,
-    details TEXT NOT NULL DEFAULT '{}',       -- JSONB
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_list_events_list ON list_events(list_id, created_at DESC);
+-- list_events + idx_list_events_list removed — list history was a pointless
+-- LLM-facing feature; SchemaConvergenceService DROPs both on next boot.
 
 -- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
 -- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs
@@ -517,19 +503,6 @@ CREATE TABLE IF NOT EXISTS transcript (
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
-
--- ────────────────────────────────────────────────────────────────
--- COMPACTIONS — incremental conversation summarization
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS compactions (
-    channel             TEXT PRIMARY KEY,
-    compacted_text      TEXT NOT NULL,
-    compacted_up_to_id  INTEGER NOT NULL,
-    token_count         INTEGER DEFAULT 0,
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    overflow_content    TEXT,
-    FOREIGN KEY (compacted_up_to_id) REFERENCES transcript(id)
-);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOOL CALLS — audit log of every tool invocation per transcript turn

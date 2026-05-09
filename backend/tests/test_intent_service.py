@@ -1,5 +1,5 @@
 """
-Tests for IntentService — emit, get_pending, acknowledge, resolve, expire_stale.
+Tests for IntentService — emit, get_pending, acknowledge, resolve.
 """
 
 import json
@@ -59,14 +59,13 @@ class TestCognitiveIntent:
         assert d["urgency"] == "normal"
         assert isinstance(d["payload"], dict)
 
-    def test_to_json_roundtrip(self):
+    def test_to_json_emits_valid_json_with_all_fields(self):
         intent = _make_intent()
         json_str = intent.to_json()
         data = json.loads(json_str)
-        restored = CognitiveIntent.from_dict(data)
-        assert restored.intent_id == intent.intent_id
-        assert restored.payload == intent.payload
-        assert restored.status == intent.status
+        assert data["intent_id"] == intent.intent_id
+        assert data["payload"] == intent.payload
+        assert data["status"] == intent.status
 
     def test_default_status_is_pending(self):
         intent = _make_intent()
@@ -74,7 +73,7 @@ class TestCognitiveIntent:
 
     def test_default_confidence(self):
         intent = _make_intent()
-        assert intent.confidence == 0.5
+        assert intent.confidence == pytest.approx(0.5, abs=1e-9)
 
     def test_broadcast_intent_has_none_target(self):
         intent = _make_intent(target_wrapper=None)
@@ -289,95 +288,3 @@ class TestResolve:
         stored = json.loads(store.get("intent:test-intent-001"))
         assert stored["status"] == "executed"
 
-
-# ---------------------------------------------------------------------------
-# IntentService.expire_stale
-# ---------------------------------------------------------------------------
-
-class TestExpireStale:
-
-    def test_expire_stale_expires_past_deadline(self):
-        from services.time_utils import utc_now
-        from datetime import timedelta
-
-        svc, store = _make_service()
-        past = (utc_now() - timedelta(hours=2)).isoformat()
-        intent = CognitiveIntent(
-            intent_id="stale-001",
-            intent_type="notify",
-            target_wrapper="wrp_y",
-            payload={},
-            expires_at=past,
-        )
-        svc.emit(intent)
-
-        count = svc.expire_stale()
-        assert count == 1
-
-        stored = json.loads(store.get("intent:stale-001"))
-        assert stored["status"] == "expired"
-
-    def test_expire_stale_ignores_future_deadline(self):
-        from services.time_utils import utc_now
-        from datetime import timedelta
-
-        svc, store = _make_service()
-        future = (utc_now() + timedelta(hours=2)).isoformat()
-        intent = CognitiveIntent(
-            intent_id="future-001",
-            intent_type="notify",
-            target_wrapper="wrp_y",
-            payload={},
-            expires_at=future,
-        )
-        svc.emit(intent)
-
-        count = svc.expire_stale()
-        assert count == 0
-
-        stored = json.loads(store.get("intent:future-001"))
-        assert stored["status"] == "pending"
-
-    def test_expire_stale_ignores_no_expiry(self):
-        svc, store = _make_service()
-        svc.emit(_make_intent())  # no expires_at
-
-        count = svc.expire_stale()
-        assert count == 0
-
-    def test_expire_stale_ignores_already_resolved(self):
-        from services.time_utils import utc_now
-        from datetime import timedelta
-
-        svc, store = _make_service()
-        past = (utc_now() - timedelta(hours=1)).isoformat()
-        intent = CognitiveIntent(
-            intent_id="done-001",
-            intent_type="execute",
-            target_wrapper="wrp_y",
-            payload={},
-            expires_at=past,
-        )
-        svc.emit(intent)
-        svc.resolve("done-001", {"status": "executed"})  # already terminal
-
-        count = svc.expire_stale()
-        assert count == 0  # already executed, not re-expired
-
-    def test_expire_stale_returns_count(self):
-        from services.time_utils import utc_now
-        from datetime import timedelta
-
-        svc, _ = _make_service()
-        past = (utc_now() - timedelta(hours=1)).isoformat()
-        for i in range(3):
-            svc.emit(CognitiveIntent(
-                intent_id=f"stale-{i}",
-                intent_type="notify",
-                target_wrapper="wrp_z",
-                payload={},
-                expires_at=past,
-            ))
-
-        count = svc.expire_stale()
-        assert count == 3

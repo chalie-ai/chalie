@@ -4,8 +4,6 @@ ScheduledMessageProcessor — Executes scheduled prompts via the standard tool l
 MessageProcessor v2 subclass. CHANNEL is flat 'scheduled' (collapsed from
 the old 'scheduled:{item_id}' format). item_id is stored in metadata only.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-Plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md § Commit 9
 """
 
 import logging
@@ -20,7 +18,7 @@ class ScheduledMessageProcessor(MessageProcessor):
     """MessageProcessor subclass for scheduled prompt execution.
 
     Standard limits (30 iterations / 900 s). Excludes 'schedule' (prevent
-    recursive scheduling) and 'goal_pursuit' (prevent background spawning).
+    recursive scheduling) and 'subagent' (prevent background spawning).
 
     CHANNEL is flat 'scheduled' — item_id lives only in metadata, never
     in the channel string (channel collapse from Commit 9).

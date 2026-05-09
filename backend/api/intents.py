@@ -23,6 +23,8 @@ from services.intent_service import IntentService
 
 logger = logging.getLogger(__name__)
 
+_ERR_INTENT_NOT_FOUND = "intent not found"
+
 intents_bp = Blueprint("intents", __name__, url_prefix="/api/intents")
 
 
@@ -100,7 +102,7 @@ def get_intent(intent_id: str):
     intent = svc.get_intent(intent_id)
 
     if intent is None:
-        return jsonify({"error": "intent not found"}), 404
+        return jsonify({"error": _ERR_INTENT_NOT_FOUND}), 404
 
     return jsonify({"intent": intent}), 200
 
@@ -126,7 +128,7 @@ def acknowledge_intent(intent_id: str):
     ok = svc.acknowledge(intent_id, wrapper_id)
 
     if not ok:
-        return jsonify({"error": "intent not found"}), 404
+        return jsonify({"error": _ERR_INTENT_NOT_FOUND}), 404
 
     return jsonify({"ok": True, "intent_id": intent_id}), 200
 
@@ -167,6 +169,6 @@ def resolve_intent(intent_id: str):
     ok = svc.resolve(intent_id, body)
 
     if not ok:
-        return jsonify({"error": "intent not found"}), 404
+        return jsonify({"error": _ERR_INTENT_NOT_FOUND}), 404
 
     return jsonify({"ok": True, "intent_id": intent_id, "status": status}), 200

@@ -15,6 +15,8 @@ Fixtures:
   bearer_app  — Flask test app where auth succeeds with g.wrapper_id = "wrp_test"
 """
 
+import secrets
+
 import pytest
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
@@ -32,7 +34,7 @@ def _make_app():
     app = Flask(__name__)
     app.register_blueprint(query_bp)
     app.config["TESTING"] = True
-    app.secret_key = "test-secret"
+    app.secret_key = secrets.token_hex(16)
     return app
 
 
@@ -179,7 +181,7 @@ class TestRelevanceEndpoint:
                 resp = client.get("/api/query/relevance?q=")
         data = resp.get_json()
         assert data["recommendation"] == "no_query"
-        assert data["relevance"] == 0.0
+        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
 
     def test_missing_q_returns_no_query(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -242,7 +244,7 @@ class TestRelevanceEndpoint:
                 resp = client.get("/api/query/relevance?q=test")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["relevance"] == 0.0
+        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
         assert data["recommendation"] == "defer"
 
     def test_related_traits_present_and_empty_list(self, cookie_app):

@@ -80,18 +80,6 @@ class CognitiveIntent:
         """
         return json.dumps(self.to_dict())
 
-    @classmethod
-    def from_dict(cls, data: dict) -> "CognitiveIntent":
-        """Deserialize a CognitiveIntent from a plain dict.
-
-        Args:
-            data: Dict produced by :meth:`to_dict`.
-
-        Returns:
-            Reconstructed CognitiveIntent instance.
-        """
-        return cls(**data)
-
 
 def _make_intent_id() -> str:
     """Generate a new UUID string for an intent.
@@ -302,45 +290,6 @@ class IntentService:
             intent_id, new_status,
         )
         return True
-
-    def expire_stale(self) -> int:
-        """Expire all intents that have passed their ``expires_at`` timestamp.
-
-        Scans all ``intent:*`` keys in MemoryStore and transitions any
-        ``pending``/``delivered`` intent past its TTL to ``"expired"``.
-
-        Returns:
-            Number of intents expired.
-        """
-        expired_count = 0
-        # MemoryStore exposes _strings directly for key scanning (no SCAN command)
-        try:
-            with self._store._str_lock:
-                all_keys = list(self._store._strings.keys())
-        except AttributeError:
-            return 0
-
-        for key in all_keys:
-            if not key.startswith("intent:"):
-                continue
-            raw = self._store.get(key)
-            if not raw:
-                continue
-            try:
-                intent = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-            if intent.get("status") not in ("pending", "delivered"):
-                continue
-
-            if self._is_expired(intent):
-                intent["status"] = "expired"
-                self._persist_intent(intent)
-                expired_count += 1
-
-        logger.debug("[IntentService] expire_stale: expired %d intents", expired_count)
-        return expired_count
 
     # ------------------------------------------------------------------
     # Internal helpers

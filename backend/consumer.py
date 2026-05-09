@@ -187,7 +187,6 @@ if __name__ == "__main__":
 
     # Deferred imports
     from workers import rest_api_worker
-    from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
 
@@ -221,7 +220,6 @@ if __name__ == "__main__":
     manager = WorkerManager()
 
     # Register service workers (all run as daemon threads)
-    manager.register_service("dmn-service", dmn_worker)
     manager.register_service("rest-api-worker-1", rest_api_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
@@ -229,10 +227,5 @@ if __name__ == "__main__":
     # Moment context enrichment service (6h worker)
     from services.moment_context_service import moment_context_worker
     manager.register_service("moment-context-service", moment_context_worker)
-
-    # Background LLM worker
-    from workers.background_llm_worker import background_llm_worker
-    manager.register_service("background-llm-worker", background_llm_worker)
-
 
     manager.run()

@@ -259,22 +259,3 @@ class TestFallbackMultiTurn:
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
         fallback.send_messages.assert_called_once()
         assert result is expected
-
-
-class TestRefreshableMultiTurn:
-    def test_delegates_to_inner_service(self):
-        from services.llm_service import RefreshableLLMService
-        svc = RefreshableLLMService.__new__(RefreshableLLMService)
-        inner = MagicMock()
-        svc._service = inner
-        svc._agent_name = "test-agent"
-
-        expected = LLMResponse(text="ok", model="test", provider="anthropic")
-        inner.send_messages.return_value = expected
-
-        with patch.object(svc, '_ensure_fresh'), \
-             patch('services.llm_service._log_llm_call'):
-            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
-
-        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None, thinking_mode=None)
-        assert result is expected

@@ -43,6 +43,7 @@ import threading
 from flask import Blueprint, jsonify, redirect, request
 
 from .auth import require_session
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +325,7 @@ def image_status(image_id):
                     # 'processing' or any other interim state
                     return jsonify({'status': 'analyzing', 'result': None})
         except Exception as e:
-            logger.warning(f'[CHAT IMAGE] Document fallback check failed for {image_id}: {e}')
+            logger.warning('[CHAT IMAGE] Document fallback check failed for %s: %s', safe(image_id), e)
 
         return jsonify({'error': 'Image not found'}), 404
 

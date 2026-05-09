@@ -6,7 +6,6 @@ Stores every exchange turn (user, assistant, tool, internal) in SQLite.
 Key operations:
 - append(): Write a turn to the transcript
 - get_recent(): Retrieve the most recent N entries for a topic
-- prune_old(): Delete entries older than TTL (90 days default)
 """
 
 import logging
@@ -15,9 +14,6 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
-
-# Default TTL for pruning (90 days in seconds)
-_PRUNE_TTL_DAYS = 90
 
 # Rolling episode extraction — DB-state-driven.
 #
@@ -143,57 +139,47 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
         return []
 
 
-def get_latest_id(channel: str) -> Optional[int]:
-    """Get the highest transcript entry ID for a channel (compaction watermark)."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT MAX(id) FROM transcript WHERE channel = ?",
-                (channel,),
-            )
-            row = cursor.fetchone()
-            cursor.close()
-            return row[0] if row and row[0] else None
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} get_latest_id failed: {e}")
-        return None
-
-
 def cleanup_unlinked_entries(channel: str = None) -> int:
     """Delete transcript entries not linked to any episode and below compaction watermark.
 
     Returns number of entries deleted.
     """
     try:
+        from services import compaction_persistence
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
+        # Build a list of (channel, watermark) pairs from the append-only
+        # tool_calls compaction audit rows.
+        if channel:
+            row = compaction_persistence.get_compaction(channel)
+            watermarks = [(channel, row['compacted_up_to_id'])] if row else []
+        else:
+            with db.connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT t.channel
+                    FROM tool_calls tc
+                    JOIN transcript t ON t.id = tc.transcript_id
+                    WHERE tc.tool_name = 'compaction'
+                      AND json_extract(tc.params, '$.status') = 'success'
+                    """
+                ).fetchall()
+            channels = [r[0] for r in rows]
+            watermarks = []
+            for ch in channels:
+                row = compaction_persistence.get_compaction(ch)
+                if row:
+                    watermarks.append((ch, row['compacted_up_to_id']))
+
+        if not watermarks:
+            return 0
+
         with db.connection() as conn:
             cursor = conn.cursor()
-
-            if channel:
-                cursor.execute(
-                    "SELECT channel, compacted_up_to_id FROM compactions WHERE channel = ?",
-                    (channel,),
-                )
-            else:
-                cursor.execute("SELECT channel, compacted_up_to_id FROM compactions")
-
-            watermarks = cursor.fetchall()
-
-            if not watermarks:
-                cursor.close()
-                return 0
-
             total_deleted = 0
 
-            for row in watermarks:
-                t, watermark = row[0], row[1]
+            for t, watermark in watermarks:
                 if not watermark:
                     continue
 
@@ -252,51 +238,17 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
         return 0
 
 
-def prune_old(ttl_days: int = _PRUNE_TTL_DAYS) -> int:
-    """Delete transcript entries older than ttl_days. Returns the number deleted."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                SELECT rowid FROM transcript
-                WHERE created_at < datetime('now', ?)
-                """,
-                (f'-{ttl_days} days',),
-            )
-            old_rowids = [r[0] for r in cursor.fetchall()]
-
-            if not old_rowids:
-                cursor.close()
-                return 0
-
-            placeholders = ','.join('?' * len(old_rowids))
-            cursor.execute(
-                f"DELETE FROM transcript WHERE rowid IN ({placeholders})",
-                old_rowids,
-            )
-
-            deleted = len(old_rowids)
-            cursor.close()
-
-        logger.info(f"{LOG_PREFIX} Pruned {deleted} entries older than {ttl_days} days")
-        return deleted
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Pruning failed: {e}")
-        return 0
-
-
 # ── Internal helpers ─────────────────────────────────────────────────
 
 
 def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
     """Fire episode extraction when the channel has accumulated
     _EXTRACTION_THRESHOLD untriggered transcripts.
+
+    Gate: only channel='user' produces episodes. Non-user channels (dmn,
+    scheduled, subagent, self_reflection, etc.) are explicitly excluded —
+    this is the structural invariant that keeps the episodes table clean and
+    makes SubconsciousWorker._step_consolidate() iterate only one channel.
 
     DB-state-driven: counts transcripts with id > MAX(episodes.transcript_id_end)
     for the channel. When count >= threshold, fire. No process-local state,
@@ -305,6 +257,9 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 
     Never raises — failures logged and silently ignored.
     """
+    if channel != 'user':
+        return
+
     try:
         from services.database_service import get_shared_db_service
 

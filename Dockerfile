@@ -17,10 +17,11 @@ RUN apt-get update \
 
 ENV PATH="/root/.deno/bin:${PATH}"
 ENV DENO_DIR=/tmp/deno
-ENV CHALIE_DB_PATH=/data/chalie.db
 
-RUN mkdir -p /data
-VOLUME ["/data"]
+# Persistent runtime state. The application code lives at /root/.chalie/app/,
+# so data/ is alongside backend/ and resolves the same way as a local checkout.
+RUN mkdir -p /root/.chalie/app/data
+VOLUME ["/root/.chalie/app/data"]
 EXPOSE 8081
 
 # Runtime run.sh flags pass through unchanged via ENTRYPOINT + CMD:

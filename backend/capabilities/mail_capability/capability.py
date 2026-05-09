@@ -61,6 +61,12 @@ _MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
 # Credential key names (unified mail namespace)
 # ---------------------------------------------------------------------------
 
+_PLACEHOLDER_USERNAME = "{username}"
+_ERR_IMAP_NOT_CONNECTED = "Mail (IMAP) not connected."
+_ERR_CALDAV_NOT_CONNECTED = "Mail (CalDAV) not connected."
+_ERR_CALDAV_OPEN_FAILED = "Failed to open CalDAV connection."
+_DESC_CALDAV_UID = "CalDAV event UID"
+
 _K_EMAIL = "mail:email"
 _K_PASSWORD = "mail:password"
 _K_PROVIDER = "mail:provider_name"
@@ -202,7 +208,7 @@ class MailCapability(AbstractCapability):
 
         # --- CalDAV ---
         if provider.caldav_url:
-            caldav_url = provider.caldav_url.replace("{username}", email)
+            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
                 client = self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
@@ -217,7 +223,7 @@ class MailCapability(AbstractCapability):
 
         # --- CardDAV ---
         if provider.carddav_url:
-            carddav_url = provider.carddav_url.replace("{username}", email)
+            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
                 client = self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
@@ -308,7 +314,7 @@ class MailCapability(AbstractCapability):
 
         # --- CalDAV ---
         if "caldav" in protocols and provider.caldav_url:
-            caldav_url = provider.caldav_url.replace("{username}", email)
+            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
                 client = self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
@@ -321,7 +327,7 @@ class MailCapability(AbstractCapability):
 
         # --- CardDAV ---
         if "carddav" in protocols and provider.carddav_url:
-            carddav_url = provider.carddav_url.replace("{username}", email)
+            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
                 client = self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
@@ -418,7 +424,7 @@ class MailCapability(AbstractCapability):
 
         if self._caldav_ok and provider.caldav_url:
             try:
-                caldav_url = provider.caldav_url.replace("{username}", email)
+                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
                 client = self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
                 )
@@ -430,7 +436,7 @@ class MailCapability(AbstractCapability):
 
         if self._carddav_ok and provider.carddav_url:
             try:
-                carddav_url = provider.carddav_url.replace("{username}", email)
+                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
                 client = self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
                 )
@@ -524,7 +530,7 @@ class MailCapability(AbstractCapability):
         # --- CalDAV: every 3rd cycle ---
         if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
             try:
-                caldav_url = provider.caldav_url.replace("{username}", email)
+                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
                 client = self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
                 )
@@ -537,7 +543,7 @@ class MailCapability(AbstractCapability):
         # --- CardDAV: every 12th cycle ---
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
             try:
-                carddav_url = provider.carddav_url.replace("{username}", email)
+                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
                 client = self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
                 )
@@ -662,7 +668,7 @@ class MailCapability(AbstractCapability):
             _provider = discover_provider(_email or "")
             if not _provider or not _provider.caldav_url:
                 raise ValueError("CalDAV not available for this provider.")
-            _url = _provider.caldav_url.replace("{username}", _email)
+            _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, _email)
             return cap._caldav_handler.open_client(
                 url=_url, username=_email, password=_password
             )
@@ -674,7 +680,7 @@ class MailCapability(AbstractCapability):
         if self._imap_ok:
             def _search_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
-                    return {"error": "Mail (IMAP) not connected."}
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
                 try:
                     client = _open_imap_client()
                     if client is None:
@@ -691,7 +697,7 @@ class MailCapability(AbstractCapability):
 
             def _read_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
-                    return {"error": "Mail (IMAP) not connected."}
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
                 try:
                     client = _open_imap_client()
                     if client is None:
@@ -708,7 +714,7 @@ class MailCapability(AbstractCapability):
 
             def _send_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
-                    return {"error": "Mail (IMAP) not connected."}
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
                 try:
                     _email = cap.load_credential(_K_EMAIL)
                     _password = cap.load_credential(_K_PASSWORD)
@@ -793,55 +799,55 @@ class MailCapability(AbstractCapability):
         if self._caldav_ok:
             def _list_events(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 return cap._caldav_handler.list_events(params)
 
             def _get_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 return cap._caldav_handler.get_event(params)
 
             def _create_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 try:
                     client = _open_caldav_client()
                     if client is None:
-                        return {"error": "Failed to open CalDAV connection."}
+                        return {"error": _ERR_CALDAV_OPEN_FAILED}
                     return cap._caldav_handler.create_event(client, params)
                 except Exception as exc:
                     return {"error": str(exc)}
 
             def _update_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 try:
                     client = _open_caldav_client()
                     if client is None:
-                        return {"error": "Failed to open CalDAV connection."}
+                        return {"error": _ERR_CALDAV_OPEN_FAILED}
                     return cap._caldav_handler.update_event(client, params)
                 except Exception as exc:
                     return {"error": str(exc)}
 
             def _delete_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 try:
                     client = _open_caldav_client()
                     if client is None:
-                        return {"error": "Failed to open CalDAV connection."}
+                        return {"error": _ERR_CALDAV_OPEN_FAILED}
                     return cap._caldav_handler.delete_event(client, params)
                 except Exception as exc:
                     return {"error": str(exc)}
 
             def _find_free_slots(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 return cap._caldav_handler.find_free_slots(params)
 
             def _get_attendees(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
-                    return {"error": "Mail (CalDAV) not connected."}
+                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
                 return cap._caldav_handler.get_attendees(params)
 
             tools += [
@@ -866,7 +872,7 @@ class MailCapability(AbstractCapability):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "uid": {"type": "string", "description": "CalDAV event UID"},
+                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
                         },
                         "required": ["uid"],
                     },
@@ -897,7 +903,7 @@ class MailCapability(AbstractCapability):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "uid": {"type": "string", "description": "CalDAV event UID"},
+                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
                             "summary": {"type": "string", "description": "New title"},
                             "dtstart": {"type": "string", "description": "New start (ISO 8601 UTC)"},
                             "dtend": {"type": "string", "description": "New end (ISO 8601 UTC)"},
@@ -953,7 +959,7 @@ class MailCapability(AbstractCapability):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "uid": {"type": "string", "description": "CalDAV event UID"},
+                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
                         },
                         "required": ["uid"],
                     },

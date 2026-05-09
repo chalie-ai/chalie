@@ -11,27 +11,9 @@ import pytest
 from services.markup import (
     actions_to_xml,
     escape_attr,
-    escape_text,
     extract_plaintext,
-    is_xml_content,
     sanitize,
-    wrap_text_xml,
 )
-
-
-@pytest.mark.unit
-class TestEscapeText:
-    def test_escapes_ampersand(self):
-        assert escape_text("a & b") == "a &amp; b"
-
-    def test_escapes_lt_gt(self):
-        assert escape_text("<script>") == "&lt;script&gt;"
-
-    def test_passes_normal_text(self):
-        assert escape_text("hello world") == "hello world"
-
-    def test_empty_string(self):
-        assert escape_text("") == ""
 
 
 @pytest.mark.unit
@@ -44,37 +26,6 @@ class TestEscapeAttr:
 
     def test_passes_unicode_unchanged(self):
         assert escape_attr("café ☕") == "café ☕"
-
-
-@pytest.mark.unit
-class TestWrapTextXml:
-    def test_wraps_in_paragraph(self):
-        assert wrap_text_xml("hello") == "<p>hello</p>"
-
-    def test_escapes_content(self):
-        assert wrap_text_xml("a < b") == "<p>a &lt; b</p>"
-
-    def test_empty_returns_empty(self):
-        assert wrap_text_xml("") == ""
-
-    def test_strips_outer_whitespace(self):
-        assert wrap_text_xml("  hello  ") == "<p>hello</p>"
-
-
-@pytest.mark.unit
-class TestIsXmlContent:
-    def test_starts_with_tag_is_xml(self):
-        assert is_xml_content("<p>hi</p>")
-
-    def test_starts_with_text_is_not_xml(self):
-        assert not is_xml_content("hello")
-
-    def test_leading_whitespace_ok(self):
-        assert is_xml_content("  <p>hi</p>")
-
-    def test_empty_is_not_xml(self):
-        assert not is_xml_content("")
-        assert not is_xml_content(None)
 
 
 @pytest.mark.unit
@@ -198,3 +149,20 @@ class TestExtractPlaintext:
 
     def test_empty(self):
         assert extract_plaintext("") == ""
+
+    def test_minified_list_items_are_separated(self):
+        # Without block-boundary spacing this collapses to ``oneTwoThree`` and
+        # phonemizer drops the gibberish tokens — the "lists skipped" TTS bug.
+        assert (
+            extract_plaintext("<ul><li>one</li><li>two</li><li>three</li></ul>")
+            == "one two three"
+        )
+
+    def test_adjacent_paragraphs_are_separated(self):
+        assert extract_plaintext("<p>first.</p><p>second.</p>") == "first. second."
+
+    def test_h1_followed_by_paragraph_is_separated(self):
+        assert extract_plaintext("<h1>Title</h1><p>Body.</p>") == "Title Body."
+
+    def test_br_separates_inline_text(self):
+        assert extract_plaintext("<p>a<br>b<br>c</p>") == "a b c"

@@ -102,6 +102,7 @@ class Logger:
 
         formatter = _ChalieJsonFormatter()
 
+        # api/system.py:observability_errors reads this file to serve the brain dashboard error log.
         file_handler = logging.FileHandler("/tmp/chalie.log")
         file_handler.setFormatter(formatter)
 

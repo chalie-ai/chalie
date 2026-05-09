@@ -1,7 +1,7 @@
 """
 ScheduleAbility — Native innate skill for reminders and scheduled tasks.
 
-Backed by SQLite (scheduled_items table). Provides create, list, and cancel actions.
+Backed by SQLite (scheduled_items table). Provides create, list, search, and cancel actions.
 All DB access via get_shared_db_service() (lazy import inside function).
 """
 
@@ -21,17 +21,30 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 # ISO 8601 with offset, used by TimeFormatterService.local() to render due_at in the user's timezone.
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a scheduler card; without it, the user sees only "
+    "plain text. Write a brief confirmation. Example: "
+    "\"<span id='{tag}'>Done — 30 min with Mira on Thursday at 14:30.</span>\""
+)
+
 
 class ScheduleAbility(Ability):
     NAME = "schedule"
-    SUMMARY = "Create, list, or cancel scheduled reminders and recurring prompts by natural language time expression."
+    SUMMARY = (
+        "Create, list, or cancel persistent reminders and recurring prompts at a "
+        "specific calendar date/time. For a short ephemeral countdown the user wants "
+        "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
+        "use the `timer` tool instead — not `schedule`."
+    )
     EXAMPLES = [
         "remind me to call the dentist tomorrow at 3pm",
         "set a daily reminder at 8am to take my vitamins",
         "what reminders do I have this week",
         "cancel my dentist reminder",
         "schedule a weekly check-in every Monday at 9am",
-        "remind me in 2 hours to check the oven",
+        "remind me to email the quarterly report by Friday 5pm",
         "show me everything coming up in the next hour",
         "set an hourly reminder between 9am and 5pm to drink water",
     ]
@@ -40,8 +53,14 @@ class ScheduleAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "list", "cancel"],
-                "description": "The scheduler action to perform.",
+                "enum": ["create", "list", "search", "cancel"],
+                "description": (
+                    "The scheduler action to perform. If the user wants a short "
+                    "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
+                    "25 minute focus block'), STOP — call the `timer` tool "
+                    "instead of `schedule`. `schedule` is for calendar-anchored "
+                    "reminders that persist across restarts."
+                ),
             },
             "message": {
                 "type": "string",
@@ -100,6 +119,12 @@ class ScheduleAbility(Ability):
                     "'soon' = next 6 hours. Default 'all'."
                 ),
             },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Required for search: semantic query to find matching scheduled items."
+                ),
+            },
         },
         "required": ["action"],
     }
@@ -107,17 +132,24 @@ class ScheduleAbility(Ability):
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list").lower()
+        ordinal = params.get("_rich_media_ordinal")
 
         if action == "create":
             result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
         elif action == "list":
             result = _list(params)
+        elif action == "search":
+            result = _search(params)
         elif action == "cancel":
             result = _cancel(params)
         else:
             result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
+
+        if ordinal is not None and action == "create" and result.get("status") == "success":
+            same_day = _fetch_same_day_items(result.get("record", {}))
+            return _serialise_rich(result, action, ordinal, same_day)
 
         body = json.dumps(result)
         return {"text": _skill_tag("schedule", body, action=action)}
@@ -316,6 +348,69 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
         return {"status": "error", "error": f"Create failed: {e}"}
+
+
+def _search(params: dict) -> dict:
+    query = (params.get("query") or "").strip()
+    if not query:
+        return {"status": "error", "error": "query is required for search"}
+
+    limit = params.get("limit", 5)
+
+    try:
+        from services.embedding_service import get_embedding_service
+        from services.database_service import get_shared_db_service
+        from services.embedding_utils import pack_embedding
+        from services.time_formatter_service import TimeFormatterService
+
+        emb = get_embedding_service().generate_embedding(query)
+        if not emb:
+            return {"status": "success", "action_performed": "search", "records": []}
+
+        blob = pack_embedding(emb)
+        if blob is None:
+            return {"status": "success", "action_performed": "search", "records": []}
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT s.id, s.message, s.due_at, s.recurrence, s.status,
+                       s.item_type, v.distance
+                FROM scheduled_items_vec v
+                JOIN scheduled_items s ON s.rowid = v.rowid
+                WHERE v.embedding MATCH ?
+                  AND k = ?
+                  AND s.status = 'pending'
+                  AND s.hidden = 0
+                ORDER BY v.distance
+                """,
+                (blob, limit),
+            )
+            rows = cursor.fetchall()
+
+        records = []
+        for row in rows:
+            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
+            records.append({
+                "id": row["id"],
+                "message": row["message"],
+                "due_at": local_due,
+                "item_type": row["item_type"],
+                "recurrence": row["recurrence"],
+                "status": row["status"],
+                "distance": float(row["distance"]),
+            })
+
+        return {
+            "status": "success",
+            "action_performed": "search",
+            "records": records,
+        }
+
+    except Exception as e:
+        logger.error(f"{LOG_PREFIX} Search failed: {e}", exc_info=True)
+        return {"status": "error", "error": f"Search failed: {e}"}
 
 
 def _list(params: dict) -> dict:
@@ -527,3 +622,80 @@ def _normalize_hhmm(time_str: str) -> str | None:
         return f"{hour:02d}:{minute:02d}"
     except Exception:
         return None
+
+
+def _serialise_rich(result: dict, action: str, ordinal: int, same_day: list | None = None) -> str:
+    tag = f"schedule_{ordinal}"
+    payload = {"action_performed": action}
+    if "record" in result:
+        payload["record"] = result["record"]
+    elif "records" in result:
+        payload["records"] = result["records"]
+    if same_day:
+        payload["same_day_items"] = same_day
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"
+
+
+def _fetch_same_day_items(new_record: dict) -> list:
+    """Return other pending items that share the same local calendar day.
+
+    Excludes the just-created item (matched by id). Returns an empty list on
+    any failure — the rich-media payload is the only consumer and the missing
+    section degrades gracefully on the client.
+    """
+    new_id = new_record.get("id")
+    new_due_local = new_record.get("due_at")
+    if not new_id or not new_due_local:
+        return []
+
+    try:
+        from services.database_service import get_shared_db_service
+        from services.client_context_service import ClientContextService
+        from services.time_formatter_service import TimeFormatterService
+        from services.time_utils import parse_utc
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(ClientContextService().get().get("timezone", "UTC"))
+        except Exception:
+            tz = timezone.utc
+
+        new_due_utc = parse_utc(new_due_local)
+        if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
+            return []
+
+        local_dt = new_due_utc.astimezone(tz)
+        start_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = start_utc + timedelta(days=1)
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, message, due_at, recurrence
+                FROM scheduled_items
+                WHERE status = 'pending'
+                  AND hidden = 0
+                  AND id != ?
+                  AND due_at >= ?
+                  AND due_at < ?
+                ORDER BY due_at ASC
+            """, (new_id, start_utc.strftime("%Y-%m-%d %H:%M:%S"), end_utc.strftime("%Y-%m-%d %H:%M:%S")))
+            rows = cursor.fetchall()
+
+        items = []
+        for item_id, message, due_at, recurrence in rows:
+            local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or str(due_at)
+            items.append({
+                "id": item_id,
+                "message": message,
+                "due_at": local_due,
+                "recurrence": recurrence,
+            })
+        return items
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} same-day fetch failed: {e}")
+        return []

@@ -15,7 +15,6 @@ The processor is self-gating:
   4. Per-cluster failures are caught and logged — one bad cluster does not block
      the rest.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import json
@@ -97,20 +96,18 @@ def _collect_transcript_ids(episodes: list[dict]) -> set[int]:
     return ids
 
 
-def _fetch_transcript_spans(sources: list[dict], db) -> str:
-    """Fetch and format the raw transcript rows spanning all source episodes.
+def _fetch_transcript_spans(t_ids: set[int], db) -> str:
+    """Fetch and format the raw transcript rows for the given transcript IDs.
 
-    Collects the union of transcript IDs from the source episodes, then
-    fetches those rows and formats them as ``[id] (ts) role: content`` lines.
+    Fetches those rows and formats them as ``[id] (ts) role: content`` lines.
 
     Returns formatted string oldest-first, or '' if no transcript IDs found.
     """
-    all_t_ids = _collect_transcript_ids(sources)
-    if not all_t_ids:
+    if not t_ids:
         return ''
 
     try:
-        placeholders = ','.join('?' * len(all_t_ids))
+        placeholders = ','.join('?' * len(t_ids))
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -120,7 +117,7 @@ def _fetch_transcript_spans(sources: list[dict], db) -> str:
                 WHERE id IN ({placeholders})
                 ORDER BY id ASC
                 """,
-                list(all_t_ids),
+                list(t_ids),
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -163,7 +160,6 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
-    MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True
 
     def __init__(
@@ -299,7 +295,8 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
         if len(sources) < min_cluster:
             return False
 
-        transcript_spans = _fetch_transcript_spans(sources, db)
+        all_t_ids = _collect_transcript_ids(sources)
+        transcript_spans = _fetch_transcript_spans(all_t_ids, db)
 
         # Wire per-cluster state so getUserPrompt() picks it up
         self._sources = sources
@@ -326,14 +323,14 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
             return False
 
         super_ep['channel'] = self._target_channel
-        unique_t_ids = sorted(_collect_transcript_ids(sources))
+        unique_t_ids = sorted(all_t_ids)
         super_ep['transcript_ids'] = unique_t_ids
         super_ep['transcript_id_start'] = min(unique_t_ids) if unique_t_ids else None
         super_ep['transcript_id_end'] = max(unique_t_ids) if unique_t_ids else None
         super_ep['consolidated_from'] = [ep['id'] for ep in sources]
 
-        gist = super_ep.get('gist', '')
-        embedding = emb_svc.generate_embedding(gist) if gist else None
+        gist = super_ep['gist']
+        embedding = emb_svc.generate_embedding(gist)
         novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
         super_ep['salience'] = compute_salience(
             valence=float(super_ep.get('emotional_valence') or 0.0),

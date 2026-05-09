@@ -98,43 +98,34 @@ class TestRenderEmpty:
 
 @pytest.mark.unit
 class TestRenderTelemetry:
-    def test_telemetry_groups_by_top_level_prefix_and_surfaces_every_fe_key(self, db):
-        # End-to-end shape: whatever the FE persists into the telemetry table
-        # must reach the rendered block, grouped by top-level prefix. The
-        # renderer never knows the schema in advance — that's the whole point
-        # of the refactor.
+    def test_telemetry_renders_exact_block(self, db):
+        # End-to-end shape: the FE persists a heartbeat with hidden keys
+        # (connection, behavioral, saved_at, _location_name_stale) plus a
+        # stale local_time string. The rendered block must be exactly the
+        # header + one bullet per surviving group, with local_time recomputed
+        # from the IANA timezone and no blank line under [telemetry].
         _seed_telemetry(db, {
-            "local_time": "10:47",
-            "utc_offset": "+02:00",
-            "location_name": "Valletta, Malta",
+            "timezone": "Europe/Malta",
+            "locale": "en-GB",
+            "language": "en-US",
+            "local_time": "10:47",                       # backend overrides from timezone
             "device": {"name": "MacBook", "battery": 82, "os": "macOS"},
-            "behavioral": {"focus_state": "deep", "tab_count": 7},
+            "behavioral": {"focus_state": "deep", "tab_count": 7},  # hidden group
+            "connection": "4g",                          # hidden key
         })
 
-        result = _fresh().render()
+        from zoneinfo import ZoneInfo
+        from services.time_utils import utc_now
+        expected_lt = utc_now().astimezone(ZoneInfo("Europe/Malta")).strftime("%a %d %b %Y %H:%M")
 
-        assert result.startswith(_HEADER)
-        assert "[telemetry]" in result
+        expected = (
+            f"{_HEADER}\n"
+            "[telemetry]\n"
+            f"* **user**;timezone:Europe/Malta,locale:en-GB,language:en-US,local_time:{expected_lt}\n"
+            "* **device**;name:MacBook,battery:82,os:macOS"
+        )
 
-        # Top-level scalars collapse into a single **user** bullet.
-        user_line = next(ln for ln in result.splitlines() if ln.startswith("* **user**"))
-        assert "local_time:10:47" in user_line
-        assert "utc_offset:+02:00" in user_line
-        assert "location_name:Valletta, Malta" in user_line
-
-        # Each nested dict becomes its own bullet, alphabetically sorted.
-        device_line = next(ln for ln in result.splitlines() if ln.startswith("* **device**"))
-        assert "name:MacBook" in device_line
-        assert "battery:82" in device_line
-        assert "os:macOS" in device_line
-
-        behavioral_line = next(ln for ln in result.splitlines() if ln.startswith("* **behavioral**"))
-        assert "focus_state:deep" in behavioral_line
-        assert "tab_count:7" in behavioral_line
-
-        # Bookkeeping keys must never leak.
-        assert "saved_at" not in result
-        assert "_location_name_stale" not in result
+        assert _fresh().render() == expected
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +216,12 @@ class TestRenderSchedule:
 
 @pytest.mark.unit
 class TestRenderBgProcess:
-    def test_recent_goal_pursuit_appears_with_last_update(self, db):
+    def test_recent_subagent_appears_with_last_update(self, db):
         # A row from ~2 minutes ago must surface with a formatted "Xm ago" timestamp,
         # rendered as a [bg_process(...)] line (not a bullet).
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Researching hotels in Valletta', ?)",
+            "VALUES ('subagent', 'assistant', 'Researching hotels in Valletta', ?)",
             ((utc_now() - timedelta(seconds=125)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         db.commit()
@@ -242,13 +233,13 @@ class TestRenderBgProcess:
         assert "Researching hotels in Valletta" in line
 
     def test_older_than_24h_excluded_and_other_channels_ignored(self, db):
-        # Two rows that must NOT surface: a goal_pursuit row >24h old, and a
-        # recent row on a non-goal_pursuit channel.
+        # Two rows that must NOT surface: a subagent row >24h old, and a
+        # recent row on a non-subagent channel.
         old_iso = _past_iso(1500)  # >24h
         recent_iso = (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Old pursuit', ?)",
+            "VALUES ('subagent', 'assistant', 'Old pursuit', ?)",
             (old_iso,),
         )
         db.execute(
@@ -266,7 +257,7 @@ class TestRenderBgProcess:
         long_content = "word " * 120  # 600 chars
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', ?, ?)",
+            "VALUES ('subagent', 'assistant', ?, ?)",
             (long_content, (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")),
         )
         db.commit()
@@ -318,7 +309,7 @@ class TestRenderFullMix:
         _seed_pending(db, "Team meeting", due_minutes_ahead=60)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('goal_pursuit', 'assistant', 'Active goal', ?)",
+            "VALUES ('subagent', 'assistant', 'Active goal', ?)",
             ((utc_now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         db.commit()

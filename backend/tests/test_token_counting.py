@@ -23,12 +23,12 @@ class TestEstimateTokens:
 
     def test_single_word(self):
         from services.llm_service import estimate_tokens
-        assert estimate_tokens('hello') == 1  # int(1 * 1.3) = 1
+        assert estimate_tokens('hello') == 1  # 1 word times 1.3 rounds down to 1
 
     def test_ten_words(self):
         from services.llm_service import estimate_tokens
         result = estimate_tokens('one two three four five six seven eight nine ten')
-        assert result == 13  # int(10 * 1.3) = 13
+        assert result == 13  # 10 words times 1.3 rounds down to 13
 
     def test_proportional_to_word_count(self):
         from services.llm_service import estimate_tokens
@@ -221,38 +221,6 @@ class TestFallbackDelegation:
         result = svc.count_tokens(msgs, system_prompt="sys")
         assert result == 500
         primary.count_tokens.assert_called_once_with(msgs, "sys", None)
-
-
-# ── RefreshableLLMService ───────────────────────────────────────────
-
-class TestRefreshableDelegation:
-    def test_delegates_context_limit(self):
-        from services.llm_service import RefreshableLLMService
-
-        svc = RefreshableLLMService('test-agent')
-        inner = MagicMock()
-        inner.get_context_limit.return_value = 128_000
-        svc._service = inner
-        svc._version = 'v1'
-
-        # Skip the version check by patching _ensure_fresh
-        with patch.object(svc, '_ensure_fresh'):
-            result = svc.get_context_limit()
-        assert result == 128_000
-
-    def test_delegates_count_tokens(self):
-        from services.llm_service import RefreshableLLMService
-
-        svc = RefreshableLLMService('test-agent')
-        inner = MagicMock()
-        inner.count_tokens.return_value = 1234
-        svc._service = inner
-        svc._version = 'v1'
-
-        with patch.object(svc, '_ensure_fresh'):
-            msgs = [{"role": "user", "content": "test"}]
-            result = svc.count_tokens(msgs, "sys", [{"name": "tool1"}])
-        assert result == 1234
 
 
 # ── ACT Orchestrator Budget ────────────────────────────────────────

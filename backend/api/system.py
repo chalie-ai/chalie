@@ -2,7 +2,9 @@
 System blueprint — /health, /metrics, /system/status, /system/observability/* endpoints.
 """
 
+import json
 import logging
+import os
 
 from flask import Blueprint, jsonify, request
 
@@ -433,6 +435,61 @@ def observability_telemetry():
     except Exception as e:
         logger.error(f"[REST API] observability/telemetry error: {e}")
         return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
+
+
+_LOG_FILE_PATH = "/tmp/chalie.log"  # Read-only; written exclusively by utils/logger.py in the same process
+_LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
+_ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
+_ERROR_CAP = 200
+
+
+def _tail_error_lines() -> list[dict]:
+    """Read the last ~256 KB of /tmp/chalie.log and return ERROR/CRITICAL entries newest-first.
+
+    Written by utils.logger.Logger.start() — see backend/utils/logger.py FileHandler.
+    Skips malformed JSON lines silently. Capped at _ERROR_CAP entries.
+    """
+    try:
+        size = os.path.getsize(_LOG_FILE_PATH)
+    except OSError:
+        return []
+
+    errors: list[dict] = []
+    try:
+        fh_cm = open(_LOG_FILE_PATH, "r", errors="replace")
+    except OSError:
+        return []
+
+    with fh_cm as fh:
+        if size > _LOG_TAIL_BYTES:
+            # Absolute seek — text-mode files only allow 0-byte end-relative seeks.
+            fh.seek(size - _LOG_TAIL_BYTES)
+            fh.readline()   # discard partial first line
+        for raw in fh:
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            if entry.get("level") in _ERROR_LEVELS:
+                errors.append({"timestamp": entry.get("timestamp", ""), "message": entry.get("message", "")})
+
+    errors.reverse()
+    return errors[:_ERROR_CAP]
+
+
+@system_bp.route('/system/observability/errors', methods=['GET'])
+@require_session
+def observability_errors():
+    """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
+
+    Reads only the last ~256 KB of the log file to avoid loading unbounded content.
+    Written by utils.logger.Logger.start() (backend/utils/logger.py).
+    """
+    try:
+        return jsonify({"generated_at": _now_iso(), "errors": _tail_error_lines()}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/errors error: {e}")
+        return jsonify({"error": "Failed to retrieve error log"}), 500
 
 
 # ──────────────────────────────────────────────

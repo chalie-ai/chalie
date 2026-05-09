@@ -22,6 +22,7 @@ import logging
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ def _slice_relevance(query: str) -> dict:
     }
 
 
-def _slice_memory(query: str, k: int) -> dict:
+def _slice_memory(query: str, _k: int) -> dict:
     """Search episodic memory semantically.
 
     Args:
@@ -341,7 +342,7 @@ def get_composite():
             payload = _dispatch_slice(raw_slice)
             results[raw_slice] = payload
         except Exception as e:
-            logger.warning("[Query API] composite slice '%s' failed: %s", raw_slice, e)
+            logger.warning("[Query API] composite slice '%s' failed: %s", safe(raw_slice), e)
             errors.append(raw_slice)
 
     return jsonify({"results": results, "denied": denied, "errors": errors}), 200

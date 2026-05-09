@@ -18,7 +18,7 @@ KNN_DEPTH = 30
 
 class FindToolsAbility(Ability):
     NAME = "find_tools"
-    SUMMARY = "Discover external tools by semantic search — use when built-in skills cannot handle the task."
+    SUMMARY = "Discover tools by semantic search — call this whenever the user names a skill, tool, or capability you don't see in your current toolbox, or when none of your loaded tools can handle the task."
     EXAMPLES = [
         "I want to check if Apple's Q2 earnings report is out yet",
         "can you look up a flight for me",
@@ -214,6 +214,7 @@ def _format_added_tools(tools: List[Dict]) -> str:
 
 def _format_no_tools(query: str) -> str:
     return f'INFO: The best tools for "{query}" are already available.'
+
 
 
 def _fallback_keyword_search(query: str, limit: int, db_path: Path, allow: List[str]) -> dict:

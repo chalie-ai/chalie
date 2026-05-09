@@ -68,25 +68,15 @@
 
             <!-- Sub-tabs with human-language labels -->
             <div class="cognition-subtabs" id="cognitionSubtabs">
-                <button class="filter-tab active" data-subtab="jobs">Jobs</button>
-
-                <button class="filter-tab" data-subtab="memory">Memory</button>
+                <button class="filter-tab active" data-subtab="memory">Memory</button>
                 <button class="filter-tab" data-subtab="tools">Tools</button>
                 <button class="filter-tab" data-subtab="tasks">Working On</button>
                 <button class="filter-tab" data-subtab="worldstate">World State</button>
                 <button class="filter-tab" data-subtab="personality">Personality</button>
+                <button class="filter-tab" data-subtab="errors">Errors</button>
             </div>
 
-            <!-- Jobs sub-panel (existing content, unchanged) -->
-            <div class="cognition-subpanel active" id="subtab-jobs">
-                <p class="panel-desc">Assign providers and models to capability groups. Use Advanced to override individual jobs.</p>
-                <div id="cognitionList" class="cognition-list">
-                    <div class="loading">Loading...</div>
-                </div>
-            </div>
-
-            <!-- Memory sub-panel -->
-            <div class="cognition-subpanel" id="subtab-memory">
+            <div class="cognition-subpanel active" id="subtab-memory">
                 <div class="records-controls">
                     <div class="records-source-switcher" id="recordsSourceSwitcher">
                         <button class="filter-tab active" data-source="episodes">Episodes</button>
@@ -126,6 +116,9 @@
             <div class="cognition-subpanel" id="subtab-worldstate">
                 <div id="worldStateContent"></div>
             </div>
+
+            <!-- Errors sub-panel -->
+            <div class="cognition-subpanel" id="subtab-errors"></div>
 
             <!-- Personality sub-panel -->
             <div class="cognition-subpanel" id="subtab-personality">
@@ -308,7 +301,7 @@
                 <input type="hidden" id="capSetupId">
 
                 <div class="form-group">
-                    <label>Provider</label>
+                    <label for="capProvider">Provider</label>
                     <select id="capProvider">
                         <option value="">Select provider...</option>
                         <option value="google">Google Calendar</option>
@@ -321,18 +314,18 @@
                 </div>
 
                 <div class="form-group hidden" id="capServerUrlGroup">
-                    <label>Server URL</label>
+                    <label for="capServerUrl">Server URL</label>
                     <input type="url" id="capServerUrl" placeholder="https://your-server.example.com">
                     <p class="form-hint">Your server's base URL (self-hosted providers only)</p>
                 </div>
 
                 <div class="form-group">
-                    <label>Username / Email</label>
+                    <label for="capUsername">Username / Email</label>
                     <input type="text" id="capUsername" placeholder="your.email@example.com" autocomplete="username">
                 </div>
 
                 <div class="form-group">
-                    <label>App Password</label>
+                    <label for="capPassword">App Password</label>
                     <input type="password" id="capPassword" placeholder="App-specific password" autocomplete="current-password">
                     <p class="form-hint" id="capPasswordHint"></p>
                 </div>
@@ -356,16 +349,16 @@
             </div>
             <form id="scheduleForm">
                 <div class="form-group">
-                    <label>Prompt / Message</label>
+                    <label for="scheduleMessage">Prompt / Message</label>
                     <textarea id="scheduleMessage" rows="3" maxlength="1000" placeholder="What Chalie should do when this fires"></textarea>
                     <p class="form-hint">Up to 1 000 characters</p>
                 </div>
                 <div class="form-group">
-                    <label id="scheduleDueAtLabel">Due Date &amp; Time</label>
+                    <label id="scheduleDueAtLabel" for="scheduleDueAt">Due Date &amp; Time</label>
                     <input type="datetime-local" id="scheduleDueAt">
                 </div>
                 <div class="form-group">
-                    <label>Type</label>
+                    <label for="scheduleType">Type</label>
                     <select id="scheduleType">
                         <option value="notification">Notification</option>
                         <option value="prompt">Prompt</option>
@@ -373,7 +366,7 @@
                     <p class="form-hint" id="typeHint">Notification surfaces the message directly. Prompt feeds it to Chalie for LLM processing.</p>
                 </div>
                 <div class="form-group">
-                    <label>Recurrence</label>
+                    <label for="scheduleRecurrence">Recurrence</label>
                     <select id="scheduleRecurrence">
                         <option value="">None (one-time)</option>
                         <option value="interval">Every X minutes</option>
@@ -386,12 +379,12 @@
                     <p class="form-hint recurrence-hint" id="recurrenceHint" style="display:none"></p>
                 </div>
                 <div class="form-group" id="intervalGroup" style="display:none">
-                    <label>Interval (minutes)</label>
+                    <label for="scheduleIntervalMinutes">Interval (minutes)</label>
                     <input type="number" id="scheduleIntervalMinutes" min="1" max="1440" value="30" placeholder="30">
                     <p class="form-hint">1–1440 min &nbsp;·&nbsp; Examples: 30 = every 30 min, 90 = every 1.5 h</p>
                 </div>
                 <div class="form-group window-inputs-group" id="windowGroup" style="display:none">
-                    <label>Active Window (local time)</label>
+                    <label for="scheduleWindowStart">Active Window (local time)</label>
                     <div class="window-inputs">
                         <input type="time" id="scheduleWindowStart" placeholder="09:00">
                         <span class="window-sep">to</span>
@@ -441,11 +434,11 @@
             <form id="providerForm">
                 <input type="hidden" id="editProviderId">
                 <div class="form-group">
-                    <label>Provider Name</label>
+                    <label for="editName">Provider Name</label>
                     <input type="text" id="editName" placeholder="e.g. My Ollama" required>
                 </div>
                 <div class="form-group" id="editHostGroup">
-                    <label>Host</label>
+                    <label for="editHost">Host</label>
                     <div class="host-input-row">
                         <input type="text" id="editHost" value="http://localhost:11434">
                         <button type="button" class="btn btn-secondary btn-sm" id="editTestConnectionBtn">Refresh models</button>
@@ -453,7 +446,7 @@
                     <span id="editConnectionStatus"></span>
                 </div>
                 <div class="form-group" id="editApiKeyGroup">
-                    <label>API Key</label>
+                    <label for="editApiKey">API Key</label>
                     <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
                 </div>
                 <div class="form-group" id="ollamaModelListGroup" style="display:none;">
@@ -463,13 +456,10 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label for="editModelTags">Selected models</label>
-                    <div class="model-tags-container" id="editModelTags"></div>
-                    <div class="model-input-row">
-                        <input type="text" id="editModelInput" placeholder="e.g. claude-opus-4" list="editModelSuggestions">
-                        <button type="button" id="addModelBtn" class="btn btn-secondary btn-sm">Add</button>
-                    </div>
-                    <datalist id="editModelSuggestions"></datalist>
+                    <label for="editModel">Model</label>
+                    <select id="editModel">
+                        <option value="">Select model...</option>
+                    </select>
                 </div>
                 <div id="testResult" class="test-result hidden"></div>
                 <div class="form-actions">
@@ -506,7 +496,7 @@
             </div>
             <form id="createListForm">
                 <div class="form-group">
-                    <label>List Name</label>
+                    <label for="createListName">List Name</label>
                     <input type="text" id="createListName" maxlength="200" placeholder="e.g. Shopping List" required>
                 </div>
                 <div class="form-actions">
@@ -528,7 +518,7 @@
             </div>
             <form id="renameListForm">
                 <div class="form-group">
-                    <label>New Name</label>
+                    <label for="renameListName">New Name</label>
                     <input type="text" id="renameListName" maxlength="200" required>
                 </div>
                 <div class="form-actions">
@@ -575,17 +565,17 @@
                 <input type="hidden" id="watchFolderEditId" value="">
                 <input type="hidden" id="watchFolderPath" value="">
                 <div class="form-group">
-                    <label>Label</label>
+                    <label for="watchFolderLabel">Label</label>
                     <input type="text" id="watchFolderLabel" placeholder="My Documents">
                 </div>
                 <div class="form-row">
                     <div class="form-group" style="flex:1">
-                        <label>File Patterns</label>
+                        <label for="watchFolderPatterns">File Patterns</label>
                         <input type="text" id="watchFolderPatterns" value="*" placeholder="*.pdf, *.docx">
                         <small class="form-hint">Comma-separated glob patterns</small>
                     </div>
                     <div class="form-group" style="flex:1">
-                        <label>Ignore</label>
+                        <label for="watchFolderIgnore">Ignore</label>
                         <input type="text" id="watchFolderIgnore" value=".git, node_modules, __pycache__, build, dist, .DS_Store, Thumbs.db">
                         <small class="form-hint">Comma-separated patterns to skip</small>
                     </div>
@@ -595,7 +585,7 @@
                         <input type="checkbox" id="watchFolderRecursive" checked> Scan subdirectories
                     </label>
                     <div class="form-group" style="flex:0 0 160px; margin:0">
-                        <label>Scan interval (sec)</label>
+                        <label for="watchFolderInterval">Scan interval (sec)</label>
                         <input type="number" id="watchFolderInterval" value="300" min="60">
                     </div>
                 </div>

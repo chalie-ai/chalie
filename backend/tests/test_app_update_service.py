@@ -129,18 +129,13 @@ class TestAppUpdateService:
 
     @patch('services.app_update_service.MemoryClientService')
     def test_apply_update_rejected_docker(self, mock_mem):
-        """Docker mode rejects in-place updates.
-
-        The service has no explicit docker-mode guard; the update fails when
-        backup_database() raises FileNotFoundError (no db in test environment).
-        The result is still ok=False with deployment_mode='docker'.
-        """
+        """Docker mode has no explicit guard — falls through to download which fails in test env."""
         store = MemoryStore()
         mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='docker'), \
-             patch.object(svc, 'backup_database', side_effect=FileNotFoundError("no db in test env")):
+             patch.object(svc, 'download_and_validate', side_effect=RuntimeError("no network in test env")):
             result = svc.apply_update("v1.0.0")
         assert result["ok"] is False
         assert result["deployment_mode"] == "docker"
@@ -173,28 +168,6 @@ class TestAppUpdateService:
             result = svc.apply_update("v1.0.0")
         assert result["ok"] is False
         assert "in progress" in result["message"].lower()
-
-    def test_backup_database(self, tmp_path):
-        """Creates backup and cleans old ones."""
-        # Setup fake data dir
-        data_dir = tmp_path / "backend" / "data"
-        data_dir.mkdir(parents=True)
-        db_file = data_dir / "chalie.db"
-        db_file.write_text("fake db content")
-
-        # Create an old backup
-        old_backup = data_dir / "chalie.db.pre-v0.1.0"
-        old_backup.write_text("old backup")
-
-        with patch('services.app_update_service.APP_ROOT', tmp_path), \
-             patch.object(AppUpdateService, 'get_current_version', return_value='0.2.0'):
-            backup_path = AppUpdateService.backup_database()
-
-        assert backup_path.exists()
-        assert backup_path.name == "chalie.db.pre-0.2.0"
-        assert backup_path.read_text() == "fake db content"
-        # Old backup should be cleaned
-        assert not old_backup.exists()
 
     def test_get_current_version(self, tmp_path):
         """Reads version from VERSION file."""

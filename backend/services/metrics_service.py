@@ -8,7 +8,7 @@ No external dependencies required.
 import time
 import json
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from services.memory_client import MemoryClientService
 
 
@@ -82,23 +82,6 @@ class MetricsService:
         pipe.expire(counter_key, 86400 * 7)  # 7-day retention
         pipe.execute()
 
-    def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve a trace by ID.
-
-        Args:
-            trace_id: Trace identifier
-
-        Returns:
-            Trace data dict or None
-        """
-        trace_key = f"trace:{trace_id}"
-        trace_json = self.store.get(trace_key)
-
-        if trace_json:
-            return json.loads(trace_json)
-        return None
-
     def get_dashboard_data(self) -> Dict[str, Any]:
         """
         Get aggregated metrics for dashboard display.
@@ -119,7 +102,7 @@ class MetricsService:
             'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued', 'episodes_generated',
             'user_messages_total',
-            'dmn_turns_total', 'goal_pursuit_turns_total', 'scheduled_turns_total'
+            'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total'
         ]
 
         for name in counter_names:

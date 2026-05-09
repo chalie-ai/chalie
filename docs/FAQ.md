@@ -54,7 +54,7 @@ You can assign different providers to different cognitive functions (e.g., use a
 
 Several things, depending on configuration and activity level:
 
-- **Cognitive drift** — During idle periods, Chalie generates spontaneous thoughts via its Default Mode Network (DMN). These may surface as proactive messages or background plan proposals.
+- **Cognitive drift** — As part of the subconscious worker tick, Chalie's Default Mode Network (DMN) runs a reflective pass over the user picture and recent episodes. Findings are persisted to the data graph; the DMN itself does not push messages to chat.
 - **Memory consolidation** — Episodes are compressed into semantic concepts; memories are decayed.
 - **User summary** — A running synthesis of who you are and what matters to you is updated periodically.
 - **Persistent tasks** — Background tasks continue executing.
@@ -107,7 +107,7 @@ Memories also decay naturally over time without any intervention.
 
 ## Where does Chalie store its data?
 
-Everything is in a single SQLite database at `backend/data/chalie.db`. No cloud storage, no external databases. You can back it up by copying that file.
+Everything is in a single SQLite database at `data/chalie.db` (sibling of `backend/` at the repo root). No cloud storage, no external databases. You can back it up by copying that file.
 
 ---
 

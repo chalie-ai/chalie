@@ -23,8 +23,7 @@ LOG_PREFIX = "[MEMORY]"
 # Composition: effective_input = BASELINE × narrow_factor × expand_factor
 # `episodic_retrieval_service.retrieve` then applies its own population-aware
 # adaptive shrink on top. All eight constants are tuned by the meta-harness
-# loop (loop_improve.sh) against the d1-context-recall benchmark suite —
-# see /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
+# loop (loop_improve.sh) against the d1-context-recall benchmark suite.
 #
 # Do NOT read these values from config/env at import time. They are literal
 # ClassVar floats so the meta-harness can diff-patch them mechanically.
@@ -90,7 +89,12 @@ class MemoryAbility(Ability):
             },
             "query": {
                 "type": "string",
-                "description": "For recall: what to search for.",
+                "description": (
+                    "For recall/reflect: what to search for. One topic per "
+                    "call — to fetch memories about different topics, call "
+                    "this tool once for each topic. If results are broad or "
+                    "sparse, try searching again with more narrow queries."
+                ),
             },
         },
         "required": ["action"],
@@ -292,8 +296,18 @@ def _handle_recall(channel: str, params: dict) -> str:
     hits, _ = _search_episodes(channel, query, limit)
     results.extend(hits)
 
-    doc_hits = _search_document_artifacts(query, limit=3)
-    results.extend(doc_hits)
+    if not params.get('_auto'):
+        try:
+            from services.message_processor import current_processor
+
+            proc = current_processor()
+            if proc is not None and proc._uid is not None:
+                proc.handleTool({
+                    'name': 'document',
+                    'input': {'action': 'search', 'query': query},
+                })
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
@@ -483,39 +497,6 @@ def _relevance_label(score: float) -> str:
     return "low"
 
 
-def _search_document_artifacts(query: str, limit: int = 3) -> List[Dict]:
-    try:
-        from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
-
-        dgs = get_data_graph_service()
-        rows = dgs.recall(query=query, kinds=[KIND_DOCUMENT], limit=limit, expand_graph=False)
-
-        if not rows:
-            return []
-
-        hits = []
-        for row in rows:
-            source = row.get("source", "") or ""
-            if source.startswith("document:"):
-                doc_id = source.split(":", 1)[1]
-            else:
-                parts = (row.get("key", "") or "").split(":")
-                doc_id = parts[1] if len(parts) >= 3 else ""
-
-            hits.append({
-                "id": row.get("key", ""),
-                "text": f"[document(id:{doc_id},type:fragment)] {row.get('value', '')}",
-                "relevance": "high",
-                "confidence": row.get("retrieval_weight", 1.0),
-            })
-
-        return hits
-
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Document artifact search failed: {e}")
-        return []
-
-
 def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
     try:
         from services.data_graph_service import (
@@ -569,13 +550,18 @@ def _cosine_distance(a: List[float], b: List[float]) -> float:
     return 1.0 - sim
 
 
-def _compute_narrow_factor(
+def _compute_radius_factors(
     q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float, float]:
+    """Single-pass narrow + expand factor computation.
+
+    Returns: (narrow_factor, expand_factor, min_dist, max_drift)
+    """
     if not history:
-        return 1.0, float("inf")
+        return 1.0, 1.0, float("inf"), 0.0
 
     min_dist = float("inf")
+    max_drift = 0.0
     for entry in history:
         emb = entry.get("embedding")
         if not emb:
@@ -583,48 +569,38 @@ def _compute_narrow_factor(
         d = _cosine_distance(q_embedding, emb)
         if d < min_dist:
             min_dist = d
-
-    if min_dist == float("inf") or min_dist >= MemoryAbility.NARROW_MIN_DIST:
-        return 1.0, min_dist
-
-    if min_dist <= MemoryAbility.NARROW_MAX_DIST:
-        return MemoryAbility.NARROW_FACTOR_FLOOR, min_dist
-
-    span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
-    if span <= 0:
-        return MemoryAbility.NARROW_FACTOR_FLOOR, min_dist
-    t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
-    factor = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
-    return max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, factor)), min_dist
-
-
-def _compute_expand_factor(
-    q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float]:
-    if not history:
-        return 1.0, 0.0
-
-    max_drift = 0.0
-    for entry in history:
-        emb = entry.get("embedding")
-        if not emb:
-            continue
-        d = _cosine_distance(q_embedding, emb)
         if d > max_drift:
             max_drift = d
 
+    # narrow factor
+    if min_dist == float("inf") or min_dist >= MemoryAbility.NARROW_MIN_DIST:
+        narrow_factor = 1.0
+    elif min_dist <= MemoryAbility.NARROW_MAX_DIST:
+        narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
+    else:
+        span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
+        if span <= 0:
+            narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
+        else:
+            t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
+            f = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
+            narrow_factor = max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, f))
+
+    # expand factor
     if max_drift <= MemoryAbility.EXPAND_MIN_DIST:
-        return 1.0, max_drift
+        expand_factor = 1.0
+    elif max_drift >= MemoryAbility.EXPAND_MAX_DIST:
+        expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
+    else:
+        span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
+        if span <= 0:
+            expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
+        else:
+            t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
+            f = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
+            expand_factor = min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, f))
 
-    if max_drift >= MemoryAbility.EXPAND_MAX_DIST:
-        return MemoryAbility.EXPAND_FACTOR_CEILING, max_drift
-
-    span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
-    if span <= 0:
-        return MemoryAbility.EXPAND_FACTOR_CEILING, max_drift
-    t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
-    factor = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
-    return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, factor)), max_drift
+    return narrow_factor, expand_factor, min_dist, max_drift
 
 
 def _embedding_hash(embedding: List[float]) -> str:
@@ -754,8 +730,7 @@ def recall_episodes(
         proc = current_processor()
         history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc)
 
-        narrow_factor, _min_dist = _compute_narrow_factor(q_embedding, history)
-        expand_factor, _max_drift = _compute_expand_factor(q_embedding, history)
+        narrow_factor, expand_factor, _min_dist, _max_drift = _compute_radius_factors(q_embedding, history)
         input_radius = baseline_radius * narrow_factor * expand_factor
 
         episodes, telemetry = episodic_retrieval_service.retrieve(

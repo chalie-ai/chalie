@@ -195,8 +195,8 @@ def _build_test_processor_class():
     - CHANNEL ≠ 'user' → thinking gate is a no-op.
     - SKIP_TRANSCRIPT_WRITE=True → no SQLite writes (transcript or assistant
       rows). _uid stays None and ToolRenderAndRecordService short-circuits.
-    - _run_full_compaction overridden to return a fixed string so Stage 2's
-      LLM call is replaced; the rest of _run_stage2_act_restart runs real.
+    - _run_full_compaction overridden to return a fixed string so the
+      overflow handler's LLM call is replaced; _handle_overflow runs real.
     """
     from services.message_processor import MessageProcessor
 
@@ -222,8 +222,8 @@ def _build_test_processor_class():
         def getTools(self) -> list[dict]:
             return []
 
-        def _run_full_compaction(self) -> 'str | None':
-            # Stub the LLM call inside Stage 2; everything around it is real.
+        def _run_full_compaction(self, exclude_id=None) -> 'str | None':
+            # Stub the LLM call inside _handle_overflow; everything around it is real.
             self.full_compaction_calls += 1
             return 'COMPACTED'
 
@@ -248,9 +248,14 @@ class TestMessageProcessorSend413Recovery:
         fake = MagicMock()
         fake.send_messages.side_effect = send_messages_side_effects
         fake.get_context_limit.return_value = get_context_limit
+        fake.get_compact_at.return_value = get_context_limit
+        # Threshold check delegates to provider.estimate_payload_tokens; the
+        # 413 path under test is independent of pre-send threshold checking,
+        # so return a value well below compact_at to skip the overflow branch.
+        fake.estimate_payload_tokens.return_value = 100
         return patch.object(Providers, 'instance', return_value=fake), fake
 
-    def test_first_413_runs_stage2_then_succeeds(self):
+    def test_first_413_runs_overflow_handler_then_succeeds(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
@@ -261,16 +266,16 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == 'final answer'
-        assert proc._payload_too_large_recovered is True
-        assert proc.full_compaction_calls == 1, "Stage 2 must run exactly once"
+        assert proc._overflow_recovered_this_turn is True
+        assert proc.full_compaction_calls == 1, "overflow handler must run exactly once"
         assert fake.send_messages.call_count == 2, "one 413 + one success"
 
-    def test_second_413_breaks_to_cap_exit(self):
+    def test_second_413_breaks_to_cap_exit(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
 
-        # Two 413s back-to-back. Second must NOT trigger Stage 2 again.
+        # Two 413s back-to-back. Second must NOT trigger overflow handler again.
         side_effects = [
             PayloadTooLargeError("first 413"),
             PayloadTooLargeError("second 413"),
@@ -280,20 +285,20 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == ''  # cap exit
-        assert proc._payload_too_large_recovered is True
-        assert proc.full_compaction_calls == 1, "Stage 2 must run only once"
+        assert proc._overflow_recovered_this_turn is True
+        assert proc.full_compaction_calls == 1, "overflow handler must run only once"
         assert fake.send_messages.call_count == 2
 
-    def test_stage2_failure_breaks_to_cap_exit(self):
+    def test_overflow_failure_breaks_to_cap_exit(self, db):
         from services.llm_service import PayloadTooLargeError
         processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(processor_cls):
-            def _run_full_compaction(self):
+        class _FailingOverflow(processor_cls):
+            def _run_full_compaction(self, exclude_id=None):
                 self.full_compaction_calls += 1
-                return None  # Stage 2 failure
+                return None  # overflow failure
 
-        proc = _FailingStage2()
+        proc = _FailingOverflow()
         side_effects = [PayloadTooLargeError("simulated 413")]
         ctx, fake = self._patch_providers(side_effects)
         with ctx:
@@ -302,9 +307,9 @@ class TestMessageProcessorSend413Recovery:
         assert result == ''
         assert proc.full_compaction_calls == 1
         assert fake.send_messages.call_count == 1, \
-            "Provider must not be called again after Stage 2 failure"
+            "Provider must not be called again after overflow failure"
 
-    def test_no_413_path_does_not_set_recovery_flag(self):
+    def test_no_413_path_does_not_set_recovery_flag(self, db):
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
 
@@ -313,39 +318,117 @@ class TestMessageProcessorSend413Recovery:
             result = proc.send()
 
         assert result == 'final answer'
-        assert proc._payload_too_large_recovered is False
+        assert proc._overflow_recovered_this_turn is False
         assert proc.full_compaction_calls == 0
 
 
-class TestStage2ClearsThinkingExploration:
-    def test_exploration_cleared_on_restart(self):
-        """Large exploration text would re-inflate user_body after Stage 2.
-        Confirm it's nulled when Stage 2 succeeds."""
+class TestProactiveThresholdLoopGuard:
+    """Regression: threshold trip → compact → threshold STILL trips because
+    static system_prompt + tools schema dominate. The loop must NOT run a
+    second compaction; it must send anyway and rely on the wire-level 413
+    path for genuine overflow.
+    """
+
+    def _patch_providers_persistent_overflow(self):
+        """Threshold ALWAYS exceeds (estimate > compact_at), regardless of
+        how many times it's checked. send_messages returns a clean response
+        on first call so we can verify the loop reached the LLM call after
+        one compaction."""
+        from services.providers import Providers
+        fake = MagicMock()
+        fake.send_messages.side_effect = [_llm_response()]
+        fake.get_context_limit.return_value = 200_000
+        fake.get_compact_at.return_value = 200_000
+        # Always over threshold — simulates static system+tools dominance.
+        fake.estimate_payload_tokens.return_value = 500_000
+        return patch.object(Providers, 'instance', return_value=fake), fake
+
+    def test_persistent_threshold_trip_compacts_once_then_sends_anyway(self, db):
+        """Compact_at is exceeded on every iteration, but compaction must
+        run exactly once per turn. After the one-shot recovery, the loop
+        proceeds to send_messages even though threshold still trips —
+        otherwise the loop would spin forever recompacting."""
+        processor_cls = _build_test_processor_class()
+        proc = processor_cls()
+
+        ctx, fake = self._patch_providers_persistent_overflow()
+        with ctx:
+            result = proc.send()
+
+        assert result == 'final answer'
+        # Compaction ran EXACTLY ONCE despite threshold tripping every iter.
+        assert proc.full_compaction_calls == 1, \
+            f"Expected 1 compaction, got {proc.full_compaction_calls} — runaway loop guard failed"
+        # Provider was called once (after the one compaction).
+        assert fake.send_messages.call_count == 1
+        # Guard flag was set.
+        assert proc._overflow_recovered_this_turn is True
+
+    def test_proactive_overflow_returning_false_falls_through_to_send(self, db):
+        """When _handle_overflow returns False on the proactive threshold path
+        (e.g. SubagentProcessor with an empty trail at iter 0), the loop must
+        NOT break to cap exit. Instead it sets the recovery flag and falls
+        through to send_messages — the LLM call gets a chance to succeed,
+        and the 413 path is the final safety net.
+
+        Regression: scenario 121 was failing because subagent's first iter
+        threshold check tripped (static system+tools dominate), the empty
+        trail caused _handle_overflow to return False, and the loop broke
+        to cap exit before the subagent could even call its tool.
+        """
+        processor_cls = _build_test_processor_class()
+
+        class _NoOpOverflow(processor_cls):
+            # Returns False without calling _run_full_compaction —
+            # mimics SubagentProcessor's empty-trail short-circuit.
+            def _handle_overflow(self):
+                self.full_compaction_calls += 1
+                return False
+
+        proc = _NoOpOverflow()
+        ctx, fake = self._patch_providers_persistent_overflow()
+        with ctx:
+            result = proc.send()
+
+        assert result == 'final answer', \
+            "Loop must reach send_messages and return its text, not cap-exit"
+        assert proc.full_compaction_calls == 1, \
+            "Overflow handler called once; subsequent threshold trips must skip it"
+        assert fake.send_messages.call_count == 1, \
+            "Provider must be called after the failed-overflow fallthrough"
+        assert proc._overflow_recovered_this_turn is True, \
+            "Recovery flag must be set even when overflow returned False"
+
+
+class TestHandleOverflowClearsState:
+    def test_exploration_cleared_on_overflow_success(self):
+        """Large exploration text would re-inflate user_body after overflow.
+        Confirm it's nulled when _handle_overflow succeeds."""
         processor_cls = _build_test_processor_class()
         proc = processor_cls()
         proc._thinking_exploration = "X" * 50_000  # large block
 
-        result = proc._run_stage2_act_restart()
+        result = proc._handle_overflow()
         assert result is True
         assert proc._thinking_exploration is None
         assert proc._act_trail == []
         assert proc._discovered_tools == []
 
-    def test_exploration_preserved_when_stage2_fails(self):
-        """If full_compaction returns None, Stage 2 returns False BEFORE the
-        trail/exploration clears — exploration is preserved (no recovery
-        happened, so the existing state must be intact)."""
+    def test_exploration_preserved_when_overflow_fails(self):
+        """If _run_full_compaction returns None, _handle_overflow returns False
+        BEFORE the trail/exploration clears — exploration is preserved (no
+        recovery happened, so the existing state must be intact)."""
         processor_cls = _build_test_processor_class()
 
-        class _FailingStage2(processor_cls):
-            def _run_full_compaction(self):
+        class _FailingOverflow(processor_cls):
+            def _run_full_compaction(self, exclude_id=None):
                 return None
 
-        proc = _FailingStage2()
+        proc = _FailingOverflow()
         proc._thinking_exploration = "preserved"
         proc._act_trail = ['existing-row']
 
-        result = proc._run_stage2_act_restart()
+        result = proc._handle_overflow()
         assert result is False
         assert proc._thinking_exploration == "preserved"
         assert proc._act_trail == ['existing-row']

@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -46,13 +44,8 @@ def _load_meta() -> dict:
     if _meta_cache is not None:
         return _meta_cache
 
-    import runtime_config
-    _default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pre-trained")
-    pretrained_dir = runtime_config.get(
-        "pretrained_dir",
-        os.environ.get("PRETRAINED_DIR", _default),
-    )
-    meta_path = Path(pretrained_dir) / "deliberation_score" / "deliberation-score-classifier_meta.json"
+    import paths
+    meta_path = paths.PRETRAINED_DIR / "deliberation_score" / "deliberation-score-classifier_meta.json"
     with open(meta_path) as f:
         meta = json.load(f)
 
@@ -124,10 +117,6 @@ class DeliberationEmaService:
             store.delete(self.STATE_KEY)
         except Exception as exc:
             logger.warning("%s reset failed: %s", LOG_PREFIX, exc)
-
-    def resolve_bucket(self, ema: float) -> str:
-        """Resolve a float EMA to 'high' | 'medium' | 'low'. Exposed for tests."""
-        return self._resolve_bucket(ema)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

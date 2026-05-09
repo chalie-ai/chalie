@@ -18,7 +18,7 @@ Inside `send()`:
 2. **Deliberation gate** — a lightweight ONNX classifier reads the message and assigns a continuous deliberation score (0.0–1.0) on the transcript row. Higher scores nudge the prompt toward more careful reasoning; very high scores trigger a one-shot pre-reasoning pass before the tool loop begins.
 3. **ACT loop** — the processor assembles a single user message containing the literal conversation history, world state, memory seed, and the current input, then calls the LLM. If the LLM invokes a tool, the result is appended to the trail and the loop continues. This repeats until the LLM returns a plain text response or hits the iteration cap.
 4. **Atomic write** — one SQLite transaction commits the user turn, every tool call from the loop, and the assistant response. Nothing is written to the database mid-loop.
-5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, save suggestion detection, DMN timer reset, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins.
+5. **Post-turn fan-out** — services that react to a completed turn (conversation phase update, save suggestion detection, metrics) run after the atomic write. The response is already on its way to the client before fan-out begins. (Pre-v0.6.0 also reset a DMN idle-timer here; DMN is now driven entirely by the subconscious worker tick.)
 
 ```
 WebSocket frame
@@ -51,7 +51,7 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 
 History reaches the LLM as a literal `## Previous Messages` text block inside the user message body. The provider always receives a single-element `messages[]` array — not a multi-turn array. This is an intentional design choice: it gives the system full control over what context the model sees on each turn.
 
-Compaction also dispatches through the `MessageProcessor` hierarchy. `FullCompactionProcessor` handles full channel checkpoint summarisation; `TrailCompactionProcessor` handles mid-ACT tool-trail summarisation. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `ALWAYS_AVAILABLE=[]`, `DISCOVERABLE=[]`, and `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. Pure SQL helpers for the `compactions` table (`get_compaction`, `get_entries_since`) live in `compaction_persistence.py`.
+Compaction dispatches through the `MessageProcessor` hierarchy. `ContinuityCompactionProcessor` handles full channel checkpoint summarisation; `SubagentTrailCompactionProcessor` handles mid-ACT trail compression for subagents only. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. The SQL helper `compaction_persistence.get_compaction(channel)` queries `tool_calls` rows with `tool_name='compaction'` — there is no separate `compactions` table.
 
 Internal processors (episode encoders, the user summary synthesiser, and compaction processors) set a flag that suppresses transcript writes — they run the ACT loop without polluting the conversation record.
 
@@ -64,11 +64,11 @@ Four layers, each optimised for a different timescale and purpose:
 | Layer | What it stores | Decays? |
 |-------|---------------|---------|
 | **Transcript** | Append-only conversation record, channel-scoped | No (pruned after 90 days) |
-| **Compaction** | LLM-generated summary of history beyond context limit | No (one per channel) |
+| **Compaction** | LLM-generated continuity summaries stored as `tool_calls` rows with `tool_name='compaction'`; append-only, failure rows kept as audit | No |
 | **Episodes** | Narrative units extracted from transcript windows | Yes — power-law retrieval weight decay |
 | **Data Graph** | Structured knowledge (facts, preferences, moments) | Yes — per-kind decay policy |
 
-**Transcript** is the raw record. `getPreviousMessages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the summary becomes the new floor.
+**Transcript** is the raw record. `getPreviousMessages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the latest success summary becomes the new floor. Compaction results are stored as `tool_calls` rows (`tool_name='compaction'`, `ephemeral=0`), not in a separate table. `compaction_persistence.get_compaction(channel)` retrieves the most recent success row via a join on `transcript.channel`; failure rows are recorded for audit but filtered from the lookup so a bad LLM output cannot poison subsequent prompts.
 
 **Episodes** are extracted automatically by a rolling trigger: when enough new transcript lines have accumulated for a channel, a background processor encodes that window into narrative snapshots with emotional valence, arousal, and salience scores. Similar episodes consolidate into super-episodes over time. Retrieval uses hybrid vector + FTS5 search, adaptive radius, and apex traversal (following consolidation links upward).
 
@@ -82,17 +82,49 @@ Four layers, each optimised for a different timescale and purpose:
 
 Chalie keeps thinking when you are not typing. Background workers run as daemon threads in the same process:
 
-- **Subconscious worker** (v0.5.0 §5) — a single daemon thread (`subconscious-worker`) that owns latent cognition. It ticks every 5 minutes (`SUBCONSCIOUS_TICK_SEC`), and on each tick checks two gates: the **user-active** gate (`WorldState.snapshot().last_user_message_at` within the last 30 min) and the **already-fired** gate (`subconscious_last_fired_at > last_user_message_at`). The already-fired gate also fires after a process restart when `subconscious_last_fired_at` was hydrated from durable storage but no user message has arrived yet — the previous lifetime already covered the open idle window, so the worker waits for fresh signal before running again. When both pass, it runs four steps in order, each isolated in its own try/except so one failure cannot block the rest: (1) consolidate apex episodes into super-episodes per channel via `SuperEpisodeEncoderProcessor`, (2) `DecayEngineService.run_once()` (the engine instance is built once and cached on the worker so the per-tick config read is amortised), (3) `PatternMatchProcessor` (see below), (4) `UserSummaryProcessor.send()`. Steps 3 + 4 are LLM-heavy and are skipped when the background-LLM queue is saturated (`bg_llm:queue` depth ≥ `SUBCONSCIOUS_BG_QUEUE_THRESHOLD`, default 20, leaving headroom under `MAX_QUEUE_DEPTH=25`). Re-entrancy is guarded by a non-blocking lock; concurrent ticks return without doing work. The next tick is anchored to `monotonic()` after the current tick returns, not before — long ticks therefore extend the cycle rather than starve the next gate. State (`subconscious_last_fired_at`) is mirrored to MemoryStore (`subconscious:last_fired_at`) and to `data_graph` (`kind='system'`, `key='subconscious_last_fired_at'`) so the gate state survives restarts.
+- **Subconscious worker** (v0.5.0 §5, extended in v0.6.0) — a single daemon thread (`subconscious-worker`) that is the **sole owner of latent cognition**. It ticks every 5 minutes (`SUBCONSCIOUS_TICK_SEC`), and on each tick checks two gates: the **user-active** gate (`WorldState.snapshot().last_user_message_at` within the last 30 min) and the **already-fired** gate (`subconscious_last_fired_at > last_user_message_at`). The already-fired gate also fires after a process restart when `subconscious_last_fired_at` was hydrated from durable storage but no user message has arrived yet — the previous lifetime already covered the open idle window, so the worker waits for fresh signal before running again. When both pass, it runs **five steps** in this exact order, each isolated in `_safe_step()` so one failure cannot block the rest: (1) consolidate apex episodes into super-episodes per channel via `SuperEpisodeEncoderProcessor` — gated to `channel='user'` upstream by `transcript_service._maybe_trigger_extraction`, so non-user channels (DMN, scheduled, subagent, …) never produce episodes; (2) `DecayEngineService.run_once()` (the engine instance is built once and cached on the worker so the per-tick config read is amortised); (3) `PatternMatchProcessor` (see below); (4) `UserSummaryProcessor.send()` — gated by `_should_synthesise()`, which returns `''` when no new traits or behavioural patterns have arrived since the last successful run; (5) `DMNMessageProcessor.send()` — proactive reflection (see DMN entry below). The tick-complete log line reads `tick complete: consolidate=… decay=… pattern_match=… synthesis=… dmn=…` and is the canonical ordering signal. Re-entrancy is guarded by a non-blocking lock; concurrent ticks return without doing work. The next tick is anchored to `monotonic()` after the current tick returns, not before — long ticks therefore extend the cycle rather than starve the next gate. State (`subconscious_last_fired_at`) is mirrored to MemoryStore (`subconscious:last_fired_at`) and to `data_graph` (`kind='system'`, `key='subconscious_last_fired_at'`) so the gate state survives restarts.
 - **Decay engine** — applies power-law decay to episode retrieval weights and data-graph entries, and purges old transcript entries and tool-call rows. The engine itself (`DecayEngineService`) has no daemon thread of its own; it exposes `run_once()` and is called by the subconscious worker as Step 2 of its tick.
 - **Pattern matcher** — `PatternMatchProcessor` runs as Step 3 of the subconscious worker tick when ≥50 new transcripts have accumulated since the last cursor (`data_graph` kind=`system`, key=`pattern_match_cursor`). One LLM forward pass over the new transcript window with two processor-scoped tools: `save_pattern` (UPSERT a `behavioral_pattern` row with confidence math: new=7, reinforced=`min(10, prev+7)`, capped at 10; budget 20 calls) and `save_graph` (routes through `DataGraphService.store()` for `user_specific` / `misc` / `moment` / `document` kinds; budget 50 calls). The model emits all calls in parallel; `MAX_ITERATIONS=30` bounds runaway loops. After the pass, an in-place SQL decay sweep subtracts 0.005 from every untouched active pattern's confidence; rows that hit 0.0 flip to `active=0` (soft delete). `UserSummaryProcessor` reads active behavioral_pattern rows directly when assembling its synopsis prompt — no tool surface for user turns.
-- **DMN (Default Mode Network)** — after a period of idle time, Chalie initiates a proactive thought using recent or high-salience episodes as context. Uses its own `MessageProcessor` subclass; exits silently when nothing warrants a response.
-- **Goal pursuit** — long-running background tasks spawned by the `goal_pursuit` innate ability. Each runs its own processor with a high iteration cap and surfaces its result as a proactive message when complete.
+- **DMN (Default Mode Network)** — Step 5 of the subconscious worker tick (v0.6.0). `DMNMessageProcessor` runs one ACT pass against `user_summary_long` (fallback `user_summary`, else skip with `status='skipped'`) plus channel='user' episodes (retrieval_weight ≥ 0.3, 30-day window, LIMIT 50). The processor saves findings via the `memory` tool (writes `data_graph` rows) and never broadcasts to the chat UI — there is no `enqueue_proactive` call, no `DMN_NO_ACTION` sentinel, and no proactive output channel. `news`, `search`, and `browser` are ALWAYS_AVAILABLE so the model can chase outside-world context that adds value to the user picture. The pre-v0.6.0 `DMNService` daemon (idle/cadence triggers, OutputService.enqueue_proactive) and the `BackgroundLLMProxy` queue (`background_llm_worker.py`, `background_llm_queue.py`) are deleted — the worker tick is the single trigger.
+- **Subagent** — focused background tasks spawned by the `subagent` innate ability. Each runs a `SubagentProcessor` instance with a per-type tool surface and a per-instance wall-clock deadline. When complete the result is injected into the parent's ACT trail (Case A: parent mid-turn via `_pending_steers`) or spawns a synthetic `SubagentReturnProcessor` turn on the user channel (Case B: parent idle). Three types: `web_surfer` (60 min, web search + browse), `summariser` (10 min, read + compress), `general_purpose` (30 min, arbitrary parallel work). The `wait=true` flag caps any type at 300 s and blocks the parent iteration synchronously. See "Subagent" section below.
 - **Scheduled prompts** — the scheduler fires due reminders and timed tasks via their own processor subclass.
 - **Supporting workers** — world awareness (weather, news), moment context enrichment, document purge, folder watcher, interface health monitor, self-model health signals, and the `SearchExpanderService` (single FIFO consumer that generates + embeds query variants for every new data-graph row). User-summary synthesis and super-episode consolidation no longer run their own daemons — both are driven by the subconscious worker tick.
 - **EmbeddingService** — a module-level singleton that serialises all ONNX inference through a single daemon worker thread via a FIFO queue (`_embedding_queue`). All callers — `generate_embedding(text)`, `generate_embedding_np(text)`, `generate_embeddings_batch(texts)` — check MemoryStore first; cache hits bypass the queue entirely. The worker is started lazily on the first job submission (not at import time) so tests that never call the service never spawn a real ONNX thread. The single-worker model eliminates concurrent `session.run()` calls, which each allocate 500 MB+ of working memory and caused OOM under bulk document ingestion. Session construction routes through `onnx_session.build_session()` (see below).
 - **onnx_session.py** — single chokepoint for all ONNX session construction in the process. `choose_providers(model_path)` returns the ordered provider list, applying the Metal 16384 2D-texture ceiling check for CoreML (any initializer dimension exceeding 16384 triggers automatic removal of `CoreMLExecutionProvider`). `build_session(path, opts, providers, log_prefix)` constructs the session and retries with CPU-only on construction failure. `EmbeddingService`, `VoiceService` (`voice.py`), and `Doc2QueryService` all route through this module — no service constructs `ort.InferenceSession` directly.
 
 No worker shares its processor instance with another. Each channel is fully isolated.
+
+### Subagent
+
+The `subagent` ability (`backend/abilities/subagent.py`) is the public surface. The `SubagentProcessor` (`backend/services/subagent_processor.py`) is the execution engine.
+
+**Three types, registered in `SUBAGENT_TYPES`:**
+
+| Type | Default budget | Tool surface | Use case |
+|------|----------------|--------------|----------|
+| `web_surfer` | 60 min | `read`, `search`, `browser`, `news`, `memory`, `find_tools` | Multi-source web research, live page lookups |
+| `summariser` | 10 min | `read`, `search`, `document`, `find_tools` | Compress long content before pulling into context |
+| `general_purpose` | 30 min | `memory`, `find_tools` | Parallel arbitrary work; use `find_tools` for more capabilities |
+
+**INPUT_SCHEMA:** `prompt` (required string), `type` (enum, default `general_purpose`), `wait` (boolean, default `false`).
+
+**Async return flow (default `wait=false`):**
+
+1. `SubagentAbility.execute()` captures `current_processor()` (a `contextvars.ContextVar` bound by `send()`) as `parent_ref` before spawning the daemon thread — so the reference is stable even if the parent turn finishes first.
+2. The daemon runs `SubagentProcessor(...).send()` and wraps the result in a canonical `[subagent.complete(...)]` envelope via `_build_envelope()`.
+3. `_deliver_envelope(envelope, parent_ref)` routes:
+   - **Case A** (`parent_ref._turn_active.is_set()` is True): appends the envelope to `parent_ref._pending_steers`. `getUserPrompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
+   - **Case B** (parent idle — `_turn_active` cleared — or non-UMP): spawns a `subagent-return` daemon that runs `SubagentReturnProcessor(envelope).send()` and publishes the result via `OutputService.enqueue_proactive(source='subagent_return')`.
+
+**Liveness discriminator:** `_turn_active` is a `threading.Event` on every `MessageProcessor` instance. `bind_current_processor()` sets it on entry and clears it on exit. The subagent daemon thread checks `.is_set()` at delivery time — unlike an `isinstance()` check (which always returns True for a valid Python object), this correctly detects that the parent's `send()` has returned. The Event is thread-safe by design.
+
+**`SubagentReturnProcessor`** is a `UserMessageProcessor` subclass (`ROLE='subagent_return'`, `SKIP_INPUT_ROW=True`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `SKIP_INPUT_ROW=True` suppresses the input row (the raw subagent envelope never enters the user-channel transcript) while `store()` still writes the synthesized assistant response. `_uid` stays `None` for the turn — all downstream code guards on `_uid is not None`.
+
+**`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.getUserPrompt()` drains it. Background processors that do not call `getUserPrompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
+
+**Sync mode (`wait=true`):** `_run_sync()` constructs `SubagentProcessor` inline and calls `.send()` directly from the parent ACT loop iteration. Budget is capped per-type via `wait_cap` (web_surfer=1800s, others=300s). The parent iteration blocks until the subagent returns.
+
+**Wall-clock guard:** `SubagentProcessor` sets `self._deadline = time.time() + timeout_seconds` in `__init__`. The base `send()` loop checks `self._deadline` after each iteration and breaks if exceeded. `ITERATION_TIMEOUT` (1800 s, base class constant) provides an additional per-iteration safety wall that applies to all processors including subagents.
 
 ---
 
@@ -123,15 +155,15 @@ All session construction goes through `backend/services/onnx_session.py`:
 
 ### Asset layout
 
-Two distinct on-disk directories separate runtime-downloaded weights from pre-shipped classifier files, with one extra location for pre-shipped sqlite-vec/FTS5 search indexes:
+Two distinct on-disk directories separate runtime-downloaded weights from pre-shipped classifier files, with one extra location for pre-shipped sqlite-vec/FTS5 search indexes. Both locations are resolved by `backend/paths.py` — the single source of truth for the on-disk layout. There are no env-var or CLI-flag overrides.
 
 | Path | Tracked in git | Contents |
 |------|----------------|----------|
-| `backend/data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
-| `backend/data/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
-| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `data/pre-trained/` and fails the build on drift. `abilities.sqlite` indexes **every** registered ability, including `save_pattern` and `save_graph` (1 SUMMARY row + 6–8 EXAMPLE rows each, all embedded at 768 dim). Discovery scoping is enforced at query time via each processor's `DISCOVERABLE` list, not by excluding rows from the index. Drift sidecar: `backend/data/pre-trained/abilities_sha.json`. |
+| `data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
+| `resources/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
+| `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `resources/pre-trained/` and fails the build on drift. `abilities.sqlite` indexes **every** registered ability, including `save_pattern` and `save_graph` (1 SUMMARY row + 6–8 EXAMPLE rows each, all embedded at 768 dim). Discovery scoping is enforced at query time via each processor's `DISCOVERABLE` list, not by excluding rows from the index. Drift sidecar: `resources/pre-trained/abilities_sha.json`. |
 
-`OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. CLI flags `--models-dir` and `--pretrained-dir` (or env `MODELS_DIR` / `PRETRAINED_DIR`) override the defaults.
+`OnnxInferenceService.__init__(models_dir, pretrained_dir)` takes both. The shared encoder ONNX is resolved against `models_dir`; per-task classifier directories resolve against `pretrained_dir`. The singleton accessor passes `paths.MODELS_DIR` and `paths.PRETRAINED_DIR` — tests pass tmp dirs to exercise corruption / contract paths.
 
 The pre-shipped `<task>-classifier_meta.json` is the authoritative calibration source for each head — alpha, bucket thresholds, sha256 pin. Missing or corrupt meta files raise at boot rather than falling back to baked-in defaults; per-turn callers (e.g. `UserMessageProcessor`) catch the construction error and degrade to a safe default (`thinking_level='low'` for the deliberation gate). If `_preload_models` itself raises before the singleton finishes registering tasks, the outer except annotates `OnnxInferenceService._failed_registrations = [("preload", ...)]` and flips `_ready = True` so the `/health` endpoint can explain the degraded state instead of reporting a generic not-ready.
 
@@ -146,7 +178,7 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 - `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `getTools()`.
 - `DISCOVERABLE` — ability names that `find_tools` may surface for this processor at runtime. The SQL query inside `find_tools` filters candidates to `WHERE name IN (DISCOVERABLE)`, so a processor can never discover anything outside its own list.
 
-`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the eight core cognitive abilities (`document`, `find_tools`, `goal_pursuit`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`.
+`UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the nine core cognitive abilities (`document`, `find_tools`, `list`, `memory`, `read`, `review_tool_calls`, `schedule`, `subagent`, `timer`) and `DISCOVERABLE` to the six first-party external abilities (`browser`, `code_eval`, `news`, `programming_docs_search`, `search`, `weather`). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`. `SubagentProcessor` sets `ALWAYS_AVAILABLE` per-instance from `SUBAGENT_TYPES[agent_type]['native_tools']` and `DISCOVERABLE` to the full external set minus a blocklist (`subagent`, `save_graph`, `detect_pattern`).
 
 **Discoverable abilities** are never pre-injected. The `find_tools` ability performs semantic search against the abilities index at runtime. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All external (first-party + interface) abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
@@ -168,7 +200,7 @@ Every ability result uses the canonical tag block format from `backend/services/
 
 This is the single source of truth — no ability constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 
-**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall), stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
+**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall) with `_auto=True` so `_handle_recall` skips its `document.search` delegation (the auto-seed runs every turn — it must not pollute the ACT trail with a tool result the LLM never requested). Stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
 
 ---
 
@@ -194,7 +226,7 @@ The `execute(channel, params, telemetry)` method is the sole dispatch surface. `
 
 ### Concrete abilities (14 dispatchable)
 
-`abilities/{browser, code_eval, document, find_tools, goal_pursuit, list, memory, news, programming_docs_search, read, review_tool_calls, schedule, search, weather}.py`. `abilities.sqlite` indexes all 14 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
+`abilities/{browser, code_eval, document, find_tools, list, memory, news, programming_docs_search, read, review_tool_calls, schedule, search, subagent, weather}.py`. `abilities.sqlite` indexes all 14 (134 embedded entries total). `abilities_sha.json` mirrors the per-row sha and is checked in CI.
 
 Per-ability implementation notes:
 
@@ -202,7 +234,7 @@ Per-ability implementation notes:
 - `code_eval` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]`; a fresh `dict()` copy is taken per call so state never leaks between executions.
 - `document` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so `api/documents.py` and `services/folder_watcher_service.py` import the same path.
 - `find_tools` — RRF discovery against `abilities.sqlite` (see Tools and Skills section).
-- `goal_pursuit` — `threading.Thread(target=_run, daemon=True)`; `GoalPursuitProcessor` and `OutputService` lazy-imported inside the `_run()` closure to avoid import cycles.
+- `subagent` — spawns a daemon thread that runs `SubagentProcessor`. `SubagentProcessor` and `SubagentReturnProcessor` are lazy-imported inside the `_run_async()` closure to avoid import cycles. On completion, `_deliver_envelope()` routes the result: Case A (parent turn active, detected via `current_processor()` contextvar) appends to `parent._pending_steers`; Case B (parent idle) calls `_spawn_return_processor()` which starts a `subagent-return` daemon running `SubagentReturnProcessor(envelope).send()`. `SubagentReturnProcessor` is a `UserMessageProcessor` subclass with `ROLE='subagent_return'` and `SKIP_INPUT_ROW=True`; it inherits all UMP behaviour and the raw subagent envelope is never written to the user transcript (only the synthesized assistant response is).
 - `list` — `_DEFAULT_LIST_NAME` as `ClassVar[str]`; handler helpers at module level.
 - `memory` — 8 radius constants promoted to `ClassVar` (`RECALL_RADIUS_BASELINE`, `SEED_RADIUS_BASELINE`, etc.) so the meta-harness can patch them by name. Module-level `recall_episodes()` function preserved for importability by the UMP pre-act seed path.
 - `news` — `_service` classvar lazily initialised via `_get_service()` classmethod.
@@ -210,8 +242,8 @@ Per-ability implementation notes:
 - `read` — `requests` at module top; `_BLOCKED_NETS`, `_BROWSER_HEADERS`, `_BLOCKED_PATH_PREFIXES`, `_URL_FETCH_TIMEOUT` as `ClassVar`.
 - `review_tool_calls` — returns `dict` directly.
 - `schedule` — atomic dedup `INSERT...WHERE NOT EXISTS` preserved verbatim; `_PAST_DUE_GRACE_SECONDS` as `ClassVar[int] = 120`.
-- `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`.
-- `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared.
+- `search` — `_DB` path resolves to `tools/search/assets/search_tool_providers.sqlite`; companion router/fetcher/transformers stay under `tools/search/`. The router scores queries via k-NN over pre-embedded `provider_examples` rows (1 190 total); three thresholds govern dispatch: `_MIN_SCORE=0.50` (below = routing miss, DDG-only fallback), `_WEAK_SCORE=0.60` (below but ≥ 0.50 = routed providers AND DDG appended, `meta["ddg_supplement"]=True`), and `_GAP=0.10` (max score distance from top to still include a secondary provider). Extend the example bank with `utils/seed_routing_examples.py` (INSERT OR IGNORE, idempotent), then regenerate with `python -m utils.generate_search_cache`.
+- `weather` — Open-Meteo (primary, coordinate-based) + wttr.in (city-name fallback). `_cache` and `_CACHE_TTL=600` as `ClassVar`s so the 10-minute cache is shared. Open-Meteo response also carries `hourly=temperature_2m,weather_code` and `daily=…,sunrise,sunset`; `_extract_hourly_strip` slices the 8 entries starting from the current local hour (matched by `YYYY-MM-DDTHH` prefix against `current.time`) and the payload exposes `sunrise`, `sunset`, `hourly` for the FE ambient-sky card. wttr.in fallback returns these as `None`/`[]` so the FE shape stays stable.
 
 ### Pattern-match helpers — plain classes, not Ability subclasses
 
@@ -225,16 +257,19 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 ## Chat File Attachments
 
-When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It blocks the turn until every referenced document reaches a terminal state or a shared 10-second deadline expires, then attaches structured tags to `metadata['file_tags']`:
+When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It **blocks** the turn until every referenced document reaches a terminal state (`ready` or `failed`) or a shared 5-minute deadline (`_UPLOAD_DEADLINE_S = 300`) expires. Tags use the standard envelope format and are attached to `metadata['file_tags']`:
 
-- `[image id=<doc> ocr="..."]` — ready image, OCR text truncated
-- `[image id=<doc> status=failed|timeout|not_found]` — image that never reached ready
-- `[document id=<doc> summary="..."]` — ready PDF/text document
-- `[document id=<doc> status=failed|timeout|not_found]` — document equivalent
+- `[image(id=<doc>)]ocr text[end:image]` — ready image, OCR text truncated to 500 chars
+- `[image(id=<doc>)]analysis failed[end:image]` — image processing failed
+- `[image(id=<doc>)]image not found[end:image]` — no document record for this ID
+- `[image(id=<doc>)]timeout of 300 seconds exceeded[end:image]` — deadline expired
+- `[document(id=<doc>, name=<filename>)]content[end:document]` — ready PDF/text document
+- `[document(id=<doc>, name=<filename>)]processing failed[end:document]` — extraction failed
+- `[document(id=<doc>, name=<filename>)]timeout of 300 seconds exceeded[end:document]` — deadline expired
 
 `UserMessageProcessor.getUserPrompt()` appends these tags to the turn line so the LLM sees file context inline with the user message. The no-silent-drop invariant applies: every failure mode emits a tag — the model learns a file was attached and what happened to it, never an empty prompt.
 
-Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The 10-second deadline is shared across every file resolved in the turn — worst case one wait, not N.
+Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The deadline is shared across every file resolved in the turn — worst case one wait, not N.
 
 ---
 
@@ -256,6 +291,22 @@ The chat interface is built from focused ES6 modules wired together by a thin or
 
 **HTML Markup Format:** all LLM-to-client content is a single `content` string of HTML tags from a fixed allowlist. Backend `services.markup.sanitize()` (nh3, the OWASP-aligned ammonia sanitiser) is the single chokepoint — every assistant response is sanitised before reaching the frontend. Tags / attributes outside the allowlist are stripped; the frontend renders the result via `innerHTML` and trusts the chokepoint.
 
+**Rich-Media Segments:** certain tools (currently `weather`, `list`, `timer`) opt into structured card rendering by appending a rich-media instruction trailer to their return string. The trailer tells the LLM to wrap its synthesis in `<span id='<tool>_<N>'>…</span>`. The sanitiser whitelists `<span id>` so the tag survives the nh3 pass intact. `RichMediaParser.parse(content, tool_calls)` (`backend/services/rich_media_parser.py`) then runs at two sites — the WebSocket `message` event assembly and the `/conversation/recent` refresh path — and converts the sanitised text plus the turn's `tool_calls` rows into an ordered `segments` array:
+
+```
+[
+  {"type": "text",  "content": "…"},
+  {"type": "rich",  "tag": "weather_1", "payload": {…}, "synthesis": "…"},
+  …
+]
+```
+
+Both sites produce byte-identical output because both read `tool_calls` from the database (including `ephemeral=1` rows), not from in-memory state.
+
+**Per-ability payload enrichment.** The parser stays tool-agnostic: any card whose runtime state lives outside the LLM-visible tool result implements `Ability.enrich_rich_payload(cls, payload, row)`, called once per rich segment. `TimerAbility` uses it to inject `started_at` from `row.created_at` (the wall-clock anchor stays out of the LLM's reach). `ListAbility` uses it to re-fetch the live list from `ListService.get_list(id)` so checkbox mutations made via the silent-action channel are visible on refresh — without this, `tool_calls.result` would replay a stale snapshot. The default `Ability.enrich_rich_payload` is identity, so cards with no runtime state inherit it for free.
+
+**Channel gate — subagent isolation.** `ActDispatcherService.dispatch_action()` injects `_rich_media_ordinal` into the action dict only when `channel == 'user'`. Subagent dispatches never receive the ordinal, so a rich-media tool returns a plain dict on those calls with no instruction trailer. Additionally, `services.rich_media_parser.strip_spans(text)` scrubs any `<span id='name_N'>…</span>` wrappers from text before returning it to the parent — both `SubagentAbility._run_sync` and `_run_async` apply this scrub at the boundary. Even a hallucinated or leaked span never crosses into the parent's ACT trail. See `docs/superpowers/specs/2026-05-02-rich-media-cards-design.md` for the full protocol.
+
 **LLM-emittable tags (8):**
 - `<b>`, `<i>`, `<u>` — inline emphasis
 - `<h1>` — heading
@@ -276,7 +327,7 @@ The system prompt forbids the LLM from emitting programmatic tags or `<a>`.
 {"type": "message", "content": "<p>Hello <b>world</b></p>", ...}
 ```
 
-**Backend module:** `backend/services/markup.py` — `sanitize()` (nh3 chokepoint), `extract_plaintext()` (TTS — strips tags + drops `<actions>` subtree), `wrap_text_xml`, `actions_to_xml`, `is_xml_content`, `escape_text`, `escape_attr`. Zero hand-rolled tokenisation; nh3 owns all parsing.
+**Backend module:** `backend/services/markup.py` — `sanitize()` (nh3 chokepoint, accepts mixed plain text + allowlisted HTML and passes both through), `extract_plaintext()` (TTS — strips tags + drops `<actions>` subtree), `actions_to_xml`, `escape_attr`. Zero hand-rolled tokenisation; nh3 owns all parsing. There is no "is this XML?" heuristic and no plaintext-to-`<p>` wrapper — text nodes are valid HTML so wrapping was wrong: it turned mixed-mode model output into entity-escaped literals.
 **Frontend module:** `frontend/interface/markup_renderer.js` (innerHTML + linkify + programmatic wiring) + `markup_extract.js` (DOM walk for TTS plaintext). `frontend/interface/vendor/linkify.es.mjs` (linkifyjs 4.3.2, vendored ESM, ~20 KB).
 **No boot migration:** legacy markdown→HTML migration was retired with `markdown_xml_migration.py` after the nh3 cutover. Existing transcripts retain their stored content — sanitisation runs on every render.
 
@@ -312,9 +363,9 @@ These are invariants, not conventions. Violating them creates systemic problems.
 | Term | Meaning |
 |------|---------|
 | **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
-| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `goal_pursuit`). |
-| **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. |
-| **DMN** | Default Mode Network — timer-based proactive intelligence that fires during idle periods. |
+| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `subagent`). |
+| **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. Rich-media turns additionally carry a `segments` array (see Rich-Media Segments above). |
+| **DMN** | Default Mode Network — Step 5 of the subconscious worker tick. Reflective pass that reads the user synthesis + recent user-channel episodes and saves findings via the memory tool. No chat-UI broadcast. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
 | **Data Graph** | Structured knowledge store with canonicalisation, typed edges, and per-kind decay. |
 | **Salience** | Computed importance score [1–10] based on emotional arousal, valence, open loops, and novelty. |

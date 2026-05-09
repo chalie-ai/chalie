@@ -19,6 +19,7 @@ import logging
 import mimetypes
 import os
 import secrets
+from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 from typing import Dict, List, Optional, Any
 
@@ -50,7 +51,6 @@ class FolderWatcherService:
         """
         self.db = db_service
 
-    # ─────────────────────────────────────────────
     # CRUD
     # ─────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ class FolderWatcherService:
         if deleted:
             # Clear scan state cache
             self._clear_scan_cache(folder_id)
-            logger.info(f"[WATCHER] Deleted watched folder {folder_id}")
+            logger.info("[WATCHER] Deleted watched folder %s", safe(folder_id))
         return deleted
 
     def trigger_scan(self, folder_id: str) -> None:
@@ -313,7 +313,6 @@ class FolderWatcherService:
             'directories': directories,
         }
 
-    # ─────────────────────────────────────────────
     # Scanning
     # ─────────────────────────────────────────────
 
@@ -467,7 +466,7 @@ class FolderWatcherService:
                     # Content changed — supersede
                     if enqueued < MAX_ENQUEUE_PER_SCAN:
                         new_doc_id = self._create_watched_document(
-                            doc_svc, folder, abs_path, file_hash, mtime)
+                            doc_svc, folder, abs_path, file_hash)
                         doc_svc.set_supersedes(new_doc_id, existing['id'])
                         # Cascade-delete old artifacts — stale content must not
                         # surface alongside the new version.
@@ -502,7 +501,7 @@ class FolderWatcherService:
                     # New file
                     if enqueued < MAX_ENQUEUE_PER_SCAN:
                         new_doc_id = self._create_watched_document(
-                            doc_svc, folder, abs_path, file_hash, mtime)
+                            doc_svc, folder, abs_path, file_hash)
                         self._process_watched_document(new_doc_id, abs_path)
                         scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
                         result['new'] += 1
@@ -594,7 +593,7 @@ class FolderWatcherService:
                 try:
                     stat = os.stat(abs_path)
                     yield abs_path, stat.st_mtime
-                except (PermissionError, OSError) as e:
+                except OSError as e:
                     logger.debug(f"[WATCHER] Cannot stat {abs_path}: {e}")
 
     def _compute_hash(self, file_path: str) -> str:
@@ -612,7 +611,7 @@ class FolderWatcherService:
                 h.update(chunk)
         return h.hexdigest()
 
-    def _create_watched_document(self, doc_svc, folder, abs_path, file_hash, mtime):
+    def _create_watched_document(self, doc_svc, folder, abs_path, file_hash):
         """Create a document record for a file discovered in a watched folder.
 
         Derives MIME type from the filename extension, creates the database

@@ -16,6 +16,8 @@ Real-stack — no mocks of production code.
     asserting on client.base_url is safe and does not require network access.
 """
 
+import secrets
+
 import pytest
 
 import services.vault_service as _vault_mod
@@ -57,7 +59,7 @@ class TestOpenAICompatibleProvider:
     def test_post_openai_compatible_stores_and_lists_provider(self, authed_client):
         """POST /api/providers with openai_compatible platform stores the row and
         GET /api/providers lists it back with platform and host intact."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
         resp = client.post('/providers', json={
@@ -65,7 +67,7 @@ class TestOpenAICompatibleProvider:
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
-            'api_key': 'sk-minimax-test-key',
+            'api_key': secrets.token_hex(16),
         })
 
         assert resp.status_code == 201, resp.get_data(as_text=True)
@@ -93,15 +95,16 @@ class TestOpenAICompatibleProvider:
     def test_api_key_decrypts_correctly_from_db(self, authed_client):
         """The api_key stored via POST is encrypted in the DB and decrypts to
         the original plaintext when fetched via ProviderDbService."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
+        test_key = secrets.token_hex(16)
         resp = client.post('/providers', json={
             'name': 'minimax-vault-roundtrip',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
-            'api_key': 'sk-roundtrip-secret',
+            'api_key': test_key,
         })
         assert resp.status_code == 201
         provider_id = resp.get_json()['provider']['id']
@@ -113,7 +116,7 @@ class TestOpenAICompatibleProvider:
         provider = svc.get_provider_by_id(provider_id)
 
         assert provider is not None
-        assert provider['api_key'] == 'sk-roundtrip-secret'
+        assert provider['api_key'] == test_key
         assert provider['platform'] == 'openai_compatible'
         assert provider['host'] == 'https://api.minimax.io/v1'
 
@@ -130,7 +133,7 @@ class TestOpenAICompatibleProvider:
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
-            'api_key': 'sk-minimax-test',
+            'api_key': secrets.token_hex(16),
         }
 
         service = create_llm_service(config)
@@ -150,7 +153,7 @@ class TestOpenAICompatibleProvider:
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
-            'api_key': 'sk-minimax-test',
+            'api_key': secrets.token_hex(16),
         }
 
         service = OpenAIService(config)
@@ -170,7 +173,7 @@ class TestOpenAICompatibleProvider:
         config = {
             'platform': 'openai',
             'model': 'gpt-4o-mini',
-            'api_key': 'sk-openai-test',
+            'api_key': secrets.token_hex(16),
         }
 
         service = OpenAIService(config)
@@ -186,14 +189,14 @@ class TestOpenAICompatibleProvider:
     def test_post_openai_compatible_without_host_returns_error(self, authed_client):
         """POST /api/providers with platform='openai_compatible' but no host
         must be rejected with a 4xx response containing a useful error message."""
-        client, db_conn, _store = authed_client
+        client, _, _store = authed_client
         _unlock_vault()
 
         resp = client.post('/providers', json={
             'name': 'minimax-no-host',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
-            'api_key': 'sk-test',
+            'api_key': secrets.token_hex(16),
             # host is intentionally omitted
         })
 

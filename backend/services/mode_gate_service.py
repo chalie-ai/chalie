@@ -31,7 +31,6 @@ import json
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -151,16 +150,8 @@ def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, 
     # Attempt to read calibrated thresholds from classifier_meta.json
     meta_thresholds: dict[str, float] = {}
     try:
-        import os as _os
-        import runtime_config
-        _default_pretrained = _os.path.join(
-            _os.path.dirname(_os.path.dirname(__file__)), "data", "pre-trained"
-        )
-        pretrained_dir = runtime_config.get(
-            "pretrained_dir",
-            _os.environ.get("PRETRAINED_DIR", _default_pretrained),
-        )
-        meta_path = Path(pretrained_dir) / "mode_detector" / "mode-detector-classifier_meta.json"
+        import paths
+        meta_path = paths.PRETRAINED_DIR / "mode_detector" / "mode-detector-classifier_meta.json"
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = json.load(f)
@@ -309,15 +300,6 @@ class ModeGateService:
                 "%s tick failed (%s) — returning empty set",
                 LOG_PREFIX, exc,
             )
-            return set()
-
-    def get_active_modes(self) -> Set[str]:
-        """Return the set of modes whose current state >= activation_threshold."""
-        try:
-            state = self._load_state()
-            return {m for m in self.MODES if state.get(m, 0.0) >= self._activation_threshold}
-        except Exception as exc:
-            logger.warning("%s get_active_modes failed: %s", LOG_PREFIX, exc)
             return set()
 
     def get_state(self) -> Dict[str, float]:

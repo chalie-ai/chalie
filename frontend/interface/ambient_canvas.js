@@ -23,8 +23,12 @@ export class AmbientCanvas {
     // Check for reduced motion preference
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     if (prefersReduced.matches) {
-      // Draw a single static frame
+      // Draw a single static frame, and redraw when the theme flips so the
+      // canvas keeps up without an animation loop.
       this._drawFrame(ctx, canvas, 0);
+      document.addEventListener('chalie:theme-changed', () => {
+        this._drawFrame(ctx, canvas, 0);
+      });
       return;
     }
 
@@ -43,9 +47,17 @@ export class AmbientCanvas {
     const h = canvas.height;
     const m = Math.min(w, h);
 
-    // Near-black base. The orbs are the only light source.
-    ctx.fillStyle = '#06080e';
+    // Theme-aware base + orb intensity. Light mode reads from a warm-paper
+    // bg with softer, multiply-style orbs; dark mode keeps near-black with
+    // brighter additive orbs.
+    const isLight = document.documentElement.dataset.theme === 'light';
+    if (isLight) {
+      ctx.fillStyle = '#F6F4F1';
+    } else {
+      ctx.fillStyle = '#06080e';
+    }
     ctx.fillRect(0, 0, w, h);
+    const alphaMul = isLight ? 0.55 : 1;
 
     // Restrained orbs — think distant nebulae, not lava lamps.
     // Two warm (violet / magenta) and one cool (cyan) for contrast.
@@ -53,7 +65,7 @@ export class AmbientCanvas {
     const orbs = [
       // Large violet field — dominates top-left — this IS the brand color
       { cx: 0.22, cy: 0.20, r: 0.70, color: [100, 60, 220], alpha: 0.08,
-        dx: 0.07, dy: 0.06, sx: 1.0,  sy: 0.75, rBreath: 0.06, phase: 0.0  },
+        dx: 0.07, dy: 0.06, sx: 1,    sy: 0.75, rBreath: 0.06, phase: 0    },
       // Magenta — lower-right — warm human counterpoint
       { cx: 0.78, cy: 0.65, r: 0.55, color: [180, 30, 140], alpha: 0.06,
         dx: 0.06, dy: 0.07, sx: 0.85, sy: 1.1,  rBreath: 0.06, phase: 2.4  },
@@ -62,14 +74,14 @@ export class AmbientCanvas {
         dx: 0.08, dy: 0.05, sx: 0.95, sy: 1.05, rBreath: 0.05, phase: 1.5  },
       // Deep indigo anchor — bottom — grounds the composition
       { cx: 0.40, cy: 0.90, r: 0.50, color: [60, 40, 140],  alpha: 0.06,
-        dx: 0.05, dy: 0.08, sx: 1.10, sy: 0.90, rBreath: 0.06, phase: 4.2  },
+        dx: 0.05, dy: 0.08, sx: 1.1,  sy: 0.9,  rBreath: 0.06, phase: 4.2  },
     ];
 
     for (const orb of orbs) {
       const x = w * (orb.cx + orb.dx * Math.sin(t * orb.sx + orb.phase));
       const y = h * (orb.cy + orb.dy * Math.cos(t * orb.sy + orb.phase * 0.7));
       const r = m * orb.r * (1 + orb.rBreath * Math.sin(t * 0.5 + orb.phase));
-      const a = orb.alpha * (0.75 + 0.25 * Math.cos(t * 0.3 + orb.phase));
+      const a = orb.alpha * (0.75 + 0.25 * Math.cos(t * 0.3 + orb.phase)) * alphaMul;
 
       const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
       const [cr, cg, cb] = orb.color;

@@ -48,15 +48,14 @@ def _populate_healthy_state(store):
 
 
 def _mock_providers_assigned():
-    """Return a provider mock where all critical jobs are assigned."""
+    """Return a provider mock where a provider is selected and active."""
     mock_provider = MagicMock()
     mock_provider.get_all_providers.return_value = [
         {"is_active": True, "platform": "anthropic"},
     ]
-    mock_provider.get_all_job_assignments.return_value = [
-        {"job_name": "frontal-cortex-unified", "provider_id": 1},
-        {"job_name": "cognitive-triage", "provider_id": 1},
-    ]
+    mock_provider.get_selected_provider.return_value = {
+        "id": 1, "is_active": True, "platform": "anthropic", "model": "claude-sonnet-4-6",
+    }
     return mock_provider
 
 
@@ -88,8 +87,8 @@ class TestGetSnapshot:
 
         assert ep["working_memory_depth"] == 4
         assert ep["partial_match_signal"] == 5
-        # warmth = 0.6 * min(1, 4/4) + 0.4 * min(1, 5/5) = 1.0
-        assert ep["context_warmth"] == 1.0
+        # warmth formula: 0.6 * clamped(working_memory/max) + 0.4 * clamped(fok/max), yielding 1.0 here
+        assert ep["context_warmth"] == pytest.approx(1.0, abs=1e-9)
 
     def test_snapshot_epistemic_cold_when_empty(self, mock_store):
         """No working memory and no FOK yields zero warmth."""
@@ -98,7 +97,7 @@ class TestGetSnapshot:
 
         assert ep["working_memory_depth"] == 0
         assert ep["partial_match_signal"] == 0
-        assert ep["context_warmth"] == 0.0
+        assert ep["context_warmth"] == pytest.approx(0.0, abs=1e-9)
 
     def test_snapshot_caches_in_store(self, mock_store):
         """Second call within TTL returns identical snapshot without re-computing."""
@@ -155,19 +154,6 @@ class TestGetSnapshot:
         assert pressure["trait_count"] == 15
         assert "avg_activation" not in pressure
 
-    def test_queue_depth_from_store(self, mock_store):
-        """Queue depths reflect actual list lengths in MemoryStore."""
-        from services.background_llm_queue import QUEUE_KEY
-
-        for i in range(7):
-            mock_store.lpush(QUEUE_KEY, f"job-{i}")
-
-        svc = _make_service()
-        qd = svc.get_snapshot()["operational"]["queue_depth"]
-
-        assert qd["bg_llm"] == 7
-
-
 @pytest.mark.unit
 class TestNoteworthy:
     """Noteworthy detection fires on real degraded state, stays empty when healthy."""
@@ -196,49 +182,8 @@ class TestNoteworthy:
         dead_signals = [n for n in noteworthy if "thread" in n["signal"].lower()]
 
         assert len(dead_signals) == 1
-        assert dead_signals[0]["severity"] == 0.6
+        assert dead_signals[0]["severity"] == pytest.approx(0.6, abs=1e-9)
         assert "dmn-service" in dead_signals[0]["signal"]
-
-    def test_queue_congestion_triggers_noteworthy(self, mock_store):
-        """Queue depth >15 fires a congestion signal with severity 0.4."""
-        from services.background_llm_queue import QUEUE_KEY
-
-        for i in range(20):
-            mock_store.lpush(QUEUE_KEY, f"job-{i}")
-
-        svc = _make_service()
-        noteworthy = svc._refresh()["noteworthy"]
-        queue_signals = [n for n in noteworthy if "queue" in n["signal"].lower()]
-
-        assert len(queue_signals) == 1
-        assert queue_signals[0]["severity"] == 0.4
-        assert "20" in queue_signals[0]["signal"]
-
-    def test_stale_heartbeat_triggers_noteworthy(self, mock_store):
-        """Background LLM heartbeat older than threshold fires signal."""
-        from services.background_llm_queue import HEARTBEAT_KEY
-
-        mock_store.set(HEARTBEAT_KEY, str(time.time() - 60))
-
-        svc = _make_service()
-        noteworthy = svc._refresh()["noteworthy"]
-        hb_signals = [n for n in noteworthy if "heartbeat" in n["signal"].lower()]
-
-        assert len(hb_signals) == 1
-        assert hb_signals[0]["severity"] == 0.5
-
-    def test_no_congestion_below_threshold(self, mock_store):
-        """Queue depth <=15 does NOT produce congestion signal."""
-        from services.background_llm_queue import QUEUE_KEY
-
-        for i in range(10):
-            mock_store.lpush(QUEUE_KEY, f"job-{i}")
-
-        svc = _make_service()
-        noteworthy = svc._refresh()["noteworthy"]
-        queue_signals = [n for n in noteworthy if "queue" in n["signal"].lower()]
-
-        assert len(queue_signals) == 0
 
     def test_noteworthy_item_structure(self, mock_store):
         """Every noteworthy item has signal (str) and severity (float 0-1)."""
@@ -309,7 +254,7 @@ class TestMemoryRichness:
     def test_zero_when_no_data(self, mock_store):
         """Empty system yields zero richness."""
         svc = _make_service()
-        assert svc.get_memory_richness() == 0.0
+        assert svc.get_memory_richness() == pytest.approx(0.0, abs=1e-9)
 
     def test_nonzero_with_episodes(self, mock_store):
         """Even a few episodes push richness above zero due to log curve."""

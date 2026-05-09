@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _INITIAL_DAYS = 7
 _MAX_BODY_CHARS = 4000
+_IMAP_DATE_FMT = "%d-%b-%Y"
+_IMAP_FETCH_HEADER = b"RFC822.HEADER"
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ def _imap_date(iso_str: str) -> str:
     """ISO YYYY-MM-DD → IMAP DD-Mon-YYYY."""
     from datetime import datetime as _dt
     try:
-        return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime("%d-%b-%Y")
+        return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime(_IMAP_DATE_FMT)
     except (ValueError, IndexError):
         return iso_str
 
@@ -134,15 +136,15 @@ class ImapHandler:
         wm = watermark or 0
         try:
             client.select_folder("INBOX", readonly=True)
-            since = (utc_now() - timedelta(days=_INITIAL_DAYS)).strftime("%d-%b-%Y")
+            since = (utc_now() - timedelta(days=_INITIAL_DAYS)).strftime(_IMAP_DATE_FMT)
             uids = client.search(["UID", f"{wm + 1}:*"] if wm else ["SINCE", since])
             if not uids:
                 return [], wm or None
-            raw = client.fetch(uids, [b"RFC822.HEADER"])
+            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             results, max_uid = [], wm
             for u, d in raw.items():
                 if u > wm:
-                    results.append(parse_headers(u, d[b"RFC822.HEADER"]))
+                    results.append(parse_headers(u, d[_IMAP_FETCH_HEADER]))
                     max_uid = max(max_uid, u)
             new_watermark = max_uid if max_uid > wm else (wm or None)
             return results, new_watermark
@@ -154,10 +156,10 @@ class ImapHandler:
     # Understand
     # ------------------------------------------------------------------
 
-    def understand(self, items: list[dict]) -> list[dict]:
-        """Classify + index items: sets triage, is_thread; indexes senders; emits signals."""
+    def understand(self, items: list[dict]) -> None:
+        """Classify + index items in place: sets triage, is_thread; indexes senders."""
         if not items:
-            return items
+            return
         from capabilities.contact_resolver import index_person
         from capabilities.mail_capability.email_triage import classify_email
         for item in items:
@@ -165,7 +167,6 @@ class ImapHandler:
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
                 index_person(item["from_addr"], item.get("from_name"), source="imap")
-        return items
 
     # ------------------------------------------------------------------
     # WorldState inbox hint
@@ -179,15 +180,15 @@ class ImapHandler:
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
-            since = (utc_now() - timedelta(days=3)).strftime("%d-%b-%Y")
+            since = (utc_now() - timedelta(days=3)).strftime(_IMAP_DATE_FMT)
             uids = client.search(["UNSEEN", "SINCE", since])
             if not uids:
                 return
-            raw = client.fetch(uids, [b"RFC822.HEADER"])
+            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             counts: dict[str, int] = {}
             top_actionable = ""
             for u, d in raw.items():
-                item = parse_headers(u, d[b"RFC822.HEADER"])
+                item = parse_headers(u, d[_IMAP_FETCH_HEADER])
                 cat = classify_email(item)
                 counts[cat] = counts.get(cat, 0) + 1
                 if cat == "actionable" and not top_actionable:
@@ -249,18 +250,18 @@ class ImapHandler:
             if params.get("unanswered"):
                 criteria.append("UNANSWERED")
             if not criteria:
-                since = (utc_now() - timedelta(days=7)).strftime("%d-%b-%Y")
+                since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
                 criteria.extend(["SINCE", since])
             uids = client.search(criteria)
             limit = int(params.get("limit", 20))
             uids = uids[-limit:] if len(uids) > limit else uids
             if not uids:
                 return {"emails": [], "count": 0}
-            raw = client.fetch(uids, [b"RFC822.HEADER"])
+            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             triage_filter = (params.get("triage") or "").lower()
             results = []
             for u in sorted(raw.keys(), reverse=True):
-                item = parse_headers(u, raw[u][b"RFC822.HEADER"])
+                item = parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
                 item["triage"] = classify_email(item)
                 item["is_thread"] = bool(item.get("in_reply_to"))
                 if triage_filter and item["triage"] != triage_filter:

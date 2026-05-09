@@ -17,6 +17,26 @@ import logging
 from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
 
 
+def _load_tool_telemetry() -> dict | None:
+    """Pull a flattened telemetry dict for the active client context.
+
+    Returns ``None`` when no client context is stored yet (fresh boot, no
+    heartbeat) so abilities can fall back gracefully. Any failure is logged
+    and treated as no-telemetry rather than raising — abilities must remain
+    callable even when the telemetry table is empty or malformed.
+    """
+    try:
+        from services.client_context_service import ClientContextService
+        from services.tool_output_utils import build_tool_telemetry
+        ctx = ClientContextService().get()
+        if not ctx:
+            return None
+        return build_tool_telemetry(ctx)
+    except Exception as e:
+        logging.warning(f"[ACT DISPATCH] telemetry load failed: {e}")
+        return None
+
+
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
     """Estimate confidence based on action type and result richness.
 
@@ -84,9 +104,17 @@ class ActDispatcherService:
         self.timeout = timeout
         self.handlers = {}
 
+        # Per-turn ordinal counter: maps tool name → call count this turn.
+        # Reset by reset_turn_ordinals() at the start of each ACT turn.
+        # Exposed to tools via the '_rich_media_ordinal' key injected into params.
+        self._turn_ordinals: Dict[str, int] = {}
+
         # Register every ability from the registry as a handler.
-        # Each handler calls ability.execute(channel, params, telemetry=None).
-        # The dispatcher unwraps the returned dict's 'text' key automatically.
+        # Each handler calls ability.execute(channel, params, telemetry).
+        # Telemetry is fetched fresh per dispatch so abilities see current
+        # coordinates, location_name, locale, etc. — without it, location-aware
+        # tools like weather fall through to inferior fallbacks (e.g. wttr.in
+        # returns mojibake for Maltese place names).
         from abilities._registry import AbilityRegistry
         for ability in AbilityRegistry.all():
             _ability = ability  # capture for closure
@@ -94,9 +122,17 @@ class ActDispatcherService:
                 lambda channel, action, _a=_ability: _a.execute(
                     channel,
                     {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
-                    None,
+                    _load_tool_telemetry(),
                 )
             )
+
+    def reset_turn_ordinals(self) -> None:
+        """Reset per-tool ordinal counters at the start of a new ACT turn.
+
+        Must be called once per MessageProcessor turn before any dispatch_action
+        calls so that ordinals are scoped to the turn, not the dispatcher lifetime.
+        """
+        self._turn_ordinals = {}
 
     def dispatch_action(self, channel: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -113,6 +149,19 @@ class ActDispatcherService:
         start_time = time.time()
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
+
+        # Rich-media ordinal is injected ONLY for the user-facing channel.
+        # Subagents (and any other internal channel) must never see the trailer
+        # because their natural-language synthesis is consumed by the parent
+        # rather than rendered to the user — a span emitted at that hop has no
+        # tool_calls row paired to it and would either be paraphrased away by
+        # the parent or leak through as raw markup. Stripping the ordinal here
+        # is the single physical chokepoint that prevents the trailer from
+        # ever reaching a non-user dispatch path.
+        action = dict(action)
+        if channel == 'user':
+            self._turn_ordinals[action_type] = self._turn_ordinals.get(action_type, 0) + 1
+            action['_rich_media_ordinal'] = self._turn_ordinals[action_type]
 
         # Get handler
         handler = self.handlers.get(action_type)
@@ -143,13 +192,25 @@ class ActDispatcherService:
         if ability_timeout and ability_timeout > effective_timeout:
             effective_timeout = float(ability_timeout)
 
-        # Execute with timeout. We copy the calling thread's contextvars into
-        # the worker so abilities can resolve current_processor() (and any
-        # other ContextVar-backed state bound by MessageProcessor.send()).
-        # Without this copy the spawned Thread starts with a fresh context
-        # and current_processor() returns None — silently breaking budget
-        # counters and decay-tracking on processor-innate abilities like
-        # save_pattern / save_graph.
+        return self._execute_with_timeout(action_type, channel, action, handler, effective_timeout, start_time)
+
+
+    def _execute_with_timeout(
+        self,
+        action_type: str,
+        channel: str,
+        action: Dict[str, Any],
+        handler: Any,
+        effective_timeout: float,
+        start_time: float,
+    ) -> Dict[str, Any]:
+        """Run handler in a daemon thread with timeout; return a result dict.
+
+        Copies calling thread's contextvars so abilities can resolve
+        current_processor() (and any ContextVar-backed state bound by
+        MessageProcessor.send()). Without this copy the spawned Thread starts
+        with a fresh context and current_processor() returns None.
+        """
         try:
             result_container = {'result': None, 'error': None}
             ctx = contextvars.copy_context()
@@ -168,7 +229,6 @@ class ActDispatcherService:
 
             execution_time = time.time() - start_time
 
-            # Check results
             if thread.is_alive():
                 return {
                     'action_type': action_type,
@@ -189,32 +249,7 @@ class ActDispatcherService:
                     'notes': '',
                 }
 
-            raw_result = result_container['result']
-
-            # Handle structured skill results (dict with text + reply_actions)
-            reply_actions = None
-            _discovered_tools = None
-            if isinstance(raw_result, dict) and 'text' in raw_result:
-                reply_actions = raw_result.get('reply_actions')
-                _discovered_tools = raw_result.get('_discovered_tools')
-                raw_result = raw_result['text']
-
-            confidence = _estimate_confidence(action_type, raw_result)
-            notes = _extract_notes(action_type, action, raw_result)
-
-            dispatch_result = {
-                'action_type': action_type,
-                'status': 'success',
-                'result': raw_result,
-                'execution_time': execution_time,
-                'confidence': confidence,
-                'notes': notes,
-            }
-            if reply_actions:
-                dispatch_result['reply_actions'] = reply_actions
-            if _discovered_tools:
-                dispatch_result['_discovered_tools'] = _discovered_tools
-            return dispatch_result
+            return self._build_success_result(action_type, action, result_container['result'], execution_time)
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -228,6 +263,37 @@ class ActDispatcherService:
                 'notes': '',
             }
 
+    def _build_success_result(
+        self,
+        action_type: str,
+        action: Dict[str, Any],
+        raw_result: Any,
+        execution_time: float,
+    ) -> Dict[str, Any]:
+        """Build the success result dict from a raw handler return value."""
+        reply_actions = None
+        _discovered_tools = None
+        if isinstance(raw_result, dict) and 'text' in raw_result:
+            reply_actions = raw_result.get('reply_actions')
+            _discovered_tools = raw_result.get('_discovered_tools')
+            raw_result = raw_result['text']
+
+        confidence = _estimate_confidence(action_type, raw_result)
+        notes = _extract_notes(action_type, action, raw_result)
+
+        dispatch_result = {
+            'action_type': action_type,
+            'status': 'success',
+            'result': raw_result,
+            'execution_time': execution_time,
+            'confidence': confidence,
+            'notes': notes,
+        }
+        if reply_actions:
+            dispatch_result['reply_actions'] = reply_actions
+        if _discovered_tools:
+            dispatch_result['_discovered_tools'] = _discovered_tools
+        return dispatch_result
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

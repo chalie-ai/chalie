@@ -17,20 +17,16 @@ let API_BASE = (() => {
 // State
 // ==========================================
 let providers = [];
-let assignments = {};
+let selectedProviderId = null;  // globally selected provider
 let editPlatform = 'ollama';
 let editingProviderId = null;
 let deletingProviderId = null;
-let editModels = [];  // multi-model tag input state
+let editModel = '';             // single model for the provider form
 
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
-let activeSubtab = 'jobs';      // currently active cognition sub-tab
-// ==========================================
-// LLM Jobs — fetched from backend config
-// ==========================================
-let jobs = [];
+let activeSubtab = 'memory';    // currently active cognition sub-tab
 
 // ==========================================
 // Platform Config
@@ -132,6 +128,7 @@ async function init() {
         await loadData();
         startSessionHeartbeat();
     } catch (err) {
+        console.warn('[brain/app] failed to load initial data:', err);
         showToast('Cannot connect to backend. Is the API running?', 'error');
     }
 }
@@ -173,7 +170,7 @@ async function checkSessionAlive() {
             }
             window.location.replace('/login/?next=/brain/');
         }
-    } catch (_) { /* network blip — retry next beat */ }
+    } catch (e) { console.warn('[brain/app] session heartbeat check failed:', e); }
 }
 
 function startSessionHeartbeat() {
@@ -201,27 +198,23 @@ async function loadData() {
             showToast('Failed to load providers', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] failed to load providers:', err);
         showToast('Failed to connect to backend', 'error');
         return;
     }
 
-    await Promise.all([loadAssignments(), loadJobDefinitions()]);
-    renderMain();
-    renderCognition();
-}
-
-async function loadJobDefinitions() {
+    // Fetch selected provider
     try {
-        const res = await apiFetch('/providers/jobs/definitions');
-        if (!res.ok) {
-            console.warn('[Jobs] definitions fetch failed:', res.status);
-            return;
+        const selRes = await apiFetch('/providers/selected');
+        if (selRes.ok) {
+            const selData = await selRes.json();
+            selectedProviderId = selData.provider ? selData.provider.id : null;
         }
-        const data = await res.json();
-        jobs = data.jobs || [];
     } catch (e) {
-        console.warn('[Jobs] definitions fetch error:', e);
+        console.warn('[brain/app] failed to fetch selected provider:', e);
     }
+
+    renderMain();
 }
 
 // ==========================================
@@ -266,61 +259,8 @@ function selectPlatform(platform, context) {
         ollamaListGroup.style.display = platform === 'ollama' ? '' : 'none';
     }
 
-    // Update model input
-    const modelInput = document.getElementById('editModelInput');
-    modelInput.placeholder = config.modelPlaceholder;
-
-    // Update datalist for curated platforms
-    const datalist = document.getElementById('editModelSuggestions');
-    datalist.innerHTML = '';
-    if (config.models.length > 0 && platform !== 'ollama') {
-        config.models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m;
-            datalist.appendChild(opt);
-        });
-    }
-
-    // For Anthropic: fetch models when api key is entered
-    if (platform === 'anthropic') {
-        const apiKeyInput = document.getElementById('editApiKey');
-        apiKeyInput.oninput = debounce(() => {
-            if (apiKeyInput.value.length > 20) {
-                fetchAnthropicModels(apiKeyInput.value, 'editModelSuggestions');
-            }
-        }, 500);
-    }
-}
-
-function debounce(fn, delay) {
-    let timer;
-    return (...args) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => fn(...args), delay);
-    };
-}
-
-async function fetchAnthropicModels(key, datalistId) {
-    try {
-        const res = await apiFetch('/providers/anthropic/models', {
-            method: 'POST',
-            body: JSON.stringify({ api_key: key }),
-        });
-        if (res.ok) {
-            const data = await res.json();
-            const datalist = document.getElementById(datalistId);
-            datalist.innerHTML = '';
-            (data.models || []).forEach(id => {
-                const opt = document.createElement('option');
-                opt.value = id;
-                datalist.appendChild(opt);
-            });
-        } else {
-            console.warn('[providers] Anthropic model fetch failed:', res.status);
-        }
-    } catch (e) {
-        console.warn('[providers] Anthropic model fetch error:', e);
-    }
+    // Update model select
+    populateModelSelect();
 }
 
 async function fetchOllamaModels(host, statusId) {
@@ -342,6 +282,7 @@ async function fetchOllamaModels(host, statusId) {
         statusEl.className = 'status-err';
         return [];
     } catch (e) {
+        console.warn('[brain/app] failed to reach backend for Ollama models:', e);
         statusEl.textContent = '✗ Cannot reach backend';
         statusEl.className = 'status-err';
         return [];
@@ -357,7 +298,6 @@ function renderMain() {
     document.getElementById('mainContent').style.display = '';
     document.getElementById('mainTabs').style.display = '';
     renderProviders();
-    renderCognition();
 }
 
 // ==========================================
@@ -398,18 +338,22 @@ function renderProviders() {
         return;
     }
     el.innerHTML = providers.map(p => {
-        const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
-        const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        const modelDisplay = p.model ? escapeHtml(p.model) : 'no model';
+        const isSelected = p.id === selectedProviderId;
         const warnIcon = p.decrypt_failed
             ? `<span class="provider-warn" title="Provider is misconfigured. Re-enter credentials">&#9888;</span>`
             : '';
         return `
         <div class="provider-card" data-id="${p.id}">
+            <label class="provider-select-radio">
+                <input type="radio" name="selected_provider" value="${p.id}" ${isSelected ? 'checked' : ''}>
+                <span class="radio-label">${isSelected ? 'Active' : 'Select'}</span>
+            </label>
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}${warnIcon}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${escapeHtml(p.platform)}">${escapeHtml(p.platform)}</span>
-                    ${modelsDisplay}
+                    ${modelDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
             </div>
@@ -428,6 +372,36 @@ function renderProviders() {
     el.querySelectorAll('[data-delete-id]').forEach(btn => {
         btn.addEventListener('click', () => confirmDelete(Number(btn.dataset.deleteId), btn.dataset.deleteName));
     });
+
+    // Wire selection radios
+    el.querySelectorAll('input[name="selected_provider"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const id = Number(radio.value);
+            selectProvider(id);
+        });
+    });
+}
+
+async function selectProvider(id) {
+    try {
+        const res = await apiFetch('/providers/selected', {
+            method: 'PUT',
+            body: JSON.stringify({ provider_id: id }),
+        });
+        if (res.ok) {
+            selectedProviderId = id;
+            renderProviders();
+            showToast('Provider selected', 'success');
+        } else {
+            const err = await res.json();
+            showToast(err.error || 'Failed to select provider', 'error');
+            renderProviders(); // revert UI
+        }
+    } catch (e) {
+        console.warn('[brain/app] failed to select provider:', e);
+        showToast('Failed to select provider', 'error');
+        renderProviders(); // revert UI
+    }
 }
 
 document.getElementById('addProviderBtn').addEventListener('click', () => {
@@ -442,22 +416,21 @@ function openEditModal(id) {
 
     // Reset form
     document.getElementById('providerForm').reset();
-    editModels = [];
+    editModel = '';
 
     if (id) {
         const p = providers.find(x => x.id === id);
         if (p) {
             editPlatform = p.platform;
             document.getElementById('editName').value = p.name;
-            // Populate models from array or fall back to single model
-            editModels = (p.models && p.models.length > 0) ? [...p.models] : (p.model ? [p.model] : []);
+            editModel = p.model || '';
             if (p.host) document.getElementById('editHost').value = p.host;
         }
     } else {
         editPlatform = 'ollama';
     }
 
-    renderModelTags();
+    populateModelSelect();
 
     // Clear any previous test result
     const testResult = document.getElementById('testResult');
@@ -475,36 +448,29 @@ function openEditModal(id) {
     }
 }
 
-function renderModelTags() {
-    const container = document.getElementById('editModelTags');
-    container.innerHTML = editModels.map((m, i) => `
-        <span class="model-tag" data-index="${i}">
-            ${escapeHtml(m)}
-            <button type="button" class="model-tag__remove" data-index="${i}">&times;</button>
-        </span>
-    `).join('');
+function populateModelSelect() {
+    const select = document.getElementById('editModel');
+    if (!select) return;
+    select.innerHTML = '<option value="">Select model...</option>';
 
-    // Wire remove buttons
-    container.querySelectorAll('.model-tag__remove').forEach(btn => {
-        btn.addEventListener('click', () => {
-            editModels.splice(Number(btn.dataset.index), 1);
-            renderModelTags();
+    const config = PLATFORM_CONFIG[editPlatform];
+    if (config.models && config.models.length > 0) {
+        config.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            if (m === editModel) opt.selected = true;
+            select.appendChild(opt);
         });
-    });
-}
-
-function addModelFromInput() {
-    const input = document.getElementById('editModelInput');
-    const val = input.value.trim();
-    if (!val) return;
-    if (editModels.includes(val)) {
-        showToast('Model already added', 'info');
-        return;
     }
-    editModels.push(val);
-    input.value = '';
-    renderModelTags();
-    input.focus();
+    // If no curated list and we have a value, add it as an option
+    if (editModel && !Array.from(select.options).some(o => o.value === editModel)) {
+        const opt = document.createElement('option');
+        opt.value = editModel;
+        opt.textContent = editModel;
+        opt.selected = true;
+        select.appendChild(opt);
+    }
 }
 
 document.getElementById('closeProviderModal').addEventListener('click', () => {
@@ -523,15 +489,6 @@ document.getElementById('editPlatformTabs').addEventListener('click', (e) => {
         const testResult = document.getElementById('testResult');
         testResult.className = 'test-result hidden';
         testResult.innerHTML = '';
-    }
-});
-
-// Model tag input — add button and enter key
-document.getElementById('addModelBtn').addEventListener('click', addModelFromInput);
-document.getElementById('editModelInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        addModelFromInput();
     }
 });
 
@@ -555,16 +512,7 @@ function renderOllamaModelList(names) {
     const container = document.getElementById('ollamaModelList');
     if (!container) return;
 
-    // Also keep datalist in sync so the text input autocomplete still works
-    const datalist = document.getElementById('editModelSuggestions');
-    if (datalist) {
-        datalist.innerHTML = '';
-        names.forEach(n => {
-            const opt = document.createElement('option');
-            opt.value = n;
-            datalist.appendChild(opt);
-        });
-    }
+    const select = document.getElementById('editModel');
 
     if (names.length === 0) {
         container.innerHTML = '<span class="ollama-model-empty">No models found — is Ollama running?</span>';
@@ -572,20 +520,31 @@ function renderOllamaModelList(names) {
     }
 
     container.innerHTML = names.map(n => {
-        const selected = editModels.includes(n);
+        const selected = n === editModel;
         return `<button type="button" class="ollama-model-chip${selected ? ' selected' : ''}" data-model="${escapeHtml(n)}">${escapeHtml(n)}</button>`;
     }).join('');
+
+    // Populate the single model select with fetched names
+    if (select) {
+        const prev = select.value;
+        select.innerHTML = '<option value="">Select model...</option>';
+        names.forEach(n => {
+            const opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            if (n === prev || n === editModel) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
 
     container.querySelectorAll('.ollama-model-chip').forEach(chip => {
         chip.addEventListener('click', () => {
             const m = chip.dataset.model;
-            if (editModels.includes(m)) {
-                editModels = editModels.filter(x => x !== m);
-            } else {
-                editModels.push(m);
-            }
-            chip.classList.toggle('selected', editModels.includes(m));
-            renderModelTags();
+            editModel = m;
+            if (select) select.value = m;
+            container.querySelectorAll('.ollama-model-chip').forEach(c => {
+                c.classList.toggle('selected', c.dataset.model === m);
+            });
         });
     });
 }
@@ -614,8 +573,7 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
-    // Test with first model (or whatever is in the input)
-    const testModel = document.getElementById('editModelInput').value.trim() || (editModels.length > 0 ? editModels[0] : '');
+    const testModel = document.getElementById('editModel').value.trim();
     const body = {
         platform,
         model: testModel,
@@ -648,6 +606,7 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
             resultEl.innerHTML = html;
         }
     } catch (e) {
+        console.warn('[brain/app] provider connection test failed:', e);
         resultEl.className = 'test-result test-error';
         resultEl.innerHTML = '✗ Could not reach the backend';
     } finally {
@@ -662,24 +621,17 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
-    // Auto-commit any pending value in the model input so users don't have
-    // to remember to press Enter / click Add before saving.
-    const pendingModel = document.getElementById('editModelInput').value.trim();
-    if (pendingModel && !editModels.includes(pendingModel)) {
-        editModels.push(pendingModel);
-        document.getElementById('editModelInput').value = '';
-        renderModelTags();
-    }
-
-    if (editModels.length === 0) {
-        showToast('Add at least one model', 'error');
+    const modelVal = document.getElementById('editModel').value.trim();
+    if (!modelVal) {
+        showToast('Select a model', 'error');
         return;
     }
+    editModel = modelVal;
 
     const body = {
         name: document.getElementById('editName').value.trim(),
         platform: platform,
-        models: editModels,
+        model: editModel,
     };
 
     if (config.hasHost) {
@@ -707,7 +659,6 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
         }
         document.getElementById('providerModal').classList.add('hidden');
         renderProviders();
-        renderCognition();
         showToast(id ? 'Provider updated' : 'Provider added', 'success');
     } else {
         const err = await res.json();
@@ -744,7 +695,6 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
         document.getElementById('deleteModal').classList.add('hidden');
         deletingProviderId = null;
         renderProviders();
-        renderCognition();
         showToast('Provider deleted', 'success');
     } else {
         const err = await res.json();
@@ -752,444 +702,6 @@ document.getElementById('confirmDeleteBtn').addEventListener('click', async () =
         document.getElementById('deleteModal').classList.add('hidden');
     }
 });
-
-// ==========================================
-// Cognition Tab
-// ==========================================
-async function loadAssignments() {
-    try {
-        const res = await apiFetch('/providers/jobs');
-        if (res.ok) {
-            const data = await res.json();
-            assignments = {};
-            (data.assignments || []).forEach(a => {
-                assignments[a.job_name] = { provider_id: a.provider_id, model: a.model || null };
-            });
-        }
-    } catch (e) {
-        // ignore
-    }
-}
-
-const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification', vision: 'Vision' };
-const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
-
-// ── Group derivation ──
-
-const GROUP_META = {
-    vision:     { name: 'Vision',     desc: 'Jobs requiring visual understanding (OCR, image analysis)', icon: '\u25CE' },
-    reasoning:  { name: 'Reasoning',  desc: 'High reasoning or creativity \u2014 needs your best model', icon: '\u25C6' },
-    analytical: { name: 'Analytical', desc: 'Structured output and classification tasks', icon: '\u25A3' },
-    utility:    { name: 'Utility',    desc: 'Lightweight tasks \u2014 fast/cheap models work well', icon: '\u25AA' },
-};
-
-function computeJobGroup(caps) {
-    if (caps.vision && caps.vision !== 'none') return 'vision';
-    if (caps.reasoning === 'high' || caps.creativity === 'high') return 'reasoning';
-    if (caps.structured === 'high' || caps.classification === 'high') return 'analytical';
-    return 'utility';
-}
-
-function groupJobs(jobList) {
-    const groups = { vision: [], reasoning: [], analytical: [], utility: [] };
-    for (const job of jobList) {
-        const g = computeJobGroup(job.caps || {});
-        groups[g].push(job);
-    }
-    return groups;
-}
-
-function getProviderModels(providerId) {
-    if (!providerId) return [];
-    const p = providers.find(x => x.id === providerId);
-    if (!p) return [];
-    return (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
-}
-
-function renderCognition() {
-    const el = document.getElementById('cognitionList');
-    if (providers.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>No providers configured</h3><p>Add a provider first.</p></div>';
-        return;
-    }
-    if (jobs.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions\u2026</h3></div>';
-        return;
-    }
-
-    const groups = groupJobs(jobs);
-    const groupOrder = ['reasoning', 'analytical', 'vision', 'utility'];
-
-    const cardsHtml = groupOrder.filter(g => groups[g].length > 0).map(groupName => {
-        const meta = GROUP_META[groupName];
-        const groupJobs = groups[groupName];
-
-        // Determine current group-level assignment (only if all jobs share the same provider+model)
-        let groupProviderId = null;
-        let groupModel = null;
-        let isUniform = true;
-        let assignedCount = groupJobs.filter(j => assignments[j.id] && assignments[j.id].provider_id).length;
-
-        const firstAssign = assignments[groupJobs[0].id];
-        if (firstAssign && firstAssign.provider_id) {
-            groupProviderId = firstAssign.provider_id;
-            groupModel = firstAssign.model || null;
-            for (let i = 1; i < groupJobs.length; i++) {
-                const a = assignments[groupJobs[i].id];
-                if (!a || a.provider_id !== groupProviderId || a.model !== groupModel) {
-                    isUniform = false;
-                    groupProviderId = null;
-                    groupModel = null;
-                    break;
-                }
-            }
-        } else {
-            isUniform = false;
-        }
-
-        // Provider dropdown options
-        const providerOptions = providers.map(p =>
-            `<option value="${p.id}" ${isUniform && p.id === groupProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-        ).join('');
-
-        // Model dropdown options (based on selected provider)
-        // When no model override, default to provider's first model (the provider default)
-        const selectedProviderModels = isUniform && groupProviderId ? getProviderModels(groupProviderId) : [];
-        const effectiveGroupModel = groupModel || (selectedProviderModels.length > 0 ? selectedProviderModels[0] : null);
-        const modelOptions = selectedProviderModels.map(m =>
-            `<option value="${escapeHtml(m)}" ${m === effectiveGroupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
-        ).join('');
-
-        let statusText;
-        if (isUniform) {
-            statusText = `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`;
-        } else if (assignedCount === 0) {
-            statusText = `<span class="group-status group-status--unset">Not assigned</span>`;
-        } else if (assignedCount === groupJobs.length) {
-            statusText = `<span class="group-status group-status--mixed">${assignedCount} jobs assigned (mixed)</span>`;
-        } else {
-            statusText = `<span class="group-status group-status--mixed">${assignedCount} of ${groupJobs.length} assigned</span>`;
-        }
-
-        // Advanced individual job overrides
-        const jobRowsHtml = groupJobs.map(job => {
-            const a = assignments[job.id] || {};
-            const jobProviderId = a.provider_id || null;
-            const jobModel = a.model || null;
-
-            const jobProviderOpts = providers.map(p =>
-                `<option value="${p.id}" ${p.id === jobProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-            ).join('');
-
-            const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
-            const effectiveJobModel = jobModel || (jobModels.length > 0 ? jobModels[0] : null);
-            const jobModelDefault = jobProviderId ? '-- default --' : '-- model --';
-            const jobModelOpts = jobModels.map(m =>
-                `<option value="${escapeHtml(m)}" ${m === effectiveJobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
-            ).join('');
-
-            const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
-                `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
-            ).join('');
-
-            return `
-                <div class="job-override-row" data-job-id="${escapeHtml(job.id)}">
-                    <div class="job-override-info">
-                        <span class="job-override-name">${escapeHtml(job.name)}</span>
-                        <span class="job-override-caps">${capsHtml}</span>
-                    </div>
-                    <div class="job-override-selects">
-                        <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
-                            <option value="">Inherit from group</option>
-                            ${jobProviderOpts}
-                        </select>
-                        <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">${jobModelDefault}</option>
-                            ${jobModelOpts}
-                        </select>
-                        <button class="btn-stats" data-stats-job="${escapeHtml(job.id)}" data-stats-name="${escapeHtml(job.name)}" title="Token usage stats">\u229E</button>
-                        <span class="save-indicator" id="save-${escapeHtml(job.id)}">Saved \u2713</span>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div class="group-card" data-group="${escapeHtml(groupName)}">
-                <div class="group-card__header">
-                    <div class="group-card__title">
-                        <span class="group-card__icon">${escapeHtml(meta.icon)}</span>
-                        <span class="group-card__name">${escapeHtml(meta.name)}</span>
-                        <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
-                    </div>
-                    <div class="group-card__desc">${escapeHtml(meta.desc)}</div>
-                </div>
-                <div class="group-card__assign">
-                    <div class="group-card__selects">
-                        <select class="provider-select group-provider-select" data-group="${escapeHtml(groupName)}">
-                            <option value="">${!isUniform && assignedCount > 0 ? `Assign all ${groupJobs.length} jobs` : 'Select provider'}</option>
-                            ${providerOptions}
-                        </select>
-                        <select class="provider-select group-model-select" data-group="${escapeHtml(groupName)}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">Select model</option>
-                            ${modelOptions}
-                        </select>
-                    </div>
-                    ${statusText}
-                </div>
-                <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${escapeHtml(groupName)}">Advanced \u25B8</button>
-                    <div class="group-advanced-body" data-group="${escapeHtml(groupName)}" style="display:none">
-                        ${jobRowsHtml}
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    el.innerHTML = cardsHtml;
-    wireGroupCardEvents(el);
-}
-
-function wireGroupCardEvents(el) {
-    // Group provider select → update model dropdown and assign group
-    el.querySelectorAll('.group-provider-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const groupName = sel.dataset.group;
-            const providerId = parseInt(sel.value) || null;
-            const modelSel = el.querySelector(`.group-model-select[data-group="${groupName}"]`);
-
-            // Repopulate model dropdown
-            const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = '<option value="">Select model</option>' +
-                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
-            modelSel.disabled = models.length === 0;
-
-            // Auto-select first model if only one
-            if (models.length === 1) {
-                modelSel.value = models[0];
-                assignGroup(groupName, providerId, models[0]);
-            } else if (models.length === 0 && providerId) {
-                assignGroup(groupName, providerId, null);
-            }
-        });
-    });
-
-    // Group model select → assign group
-    el.querySelectorAll('.group-model-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const groupName = sel.dataset.group;
-            const providerSel = el.querySelector(`.group-provider-select[data-group="${groupName}"]`);
-            const providerId = parseInt(providerSel.value) || null;
-            const model = sel.value || null;
-            if (providerId) assignGroup(groupName, providerId, model);
-        });
-    });
-
-    // Advanced toggle
-    el.querySelectorAll('.group-advanced-toggle').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const body = el.querySelector(`.group-advanced-body[data-group="${btn.dataset.group}"]`);
-            const isOpen = body.style.display !== 'none';
-            body.style.display = isOpen ? 'none' : 'block';
-            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Per-job assignments \u25BE';
-        });
-    });
-
-    // Individual job provider select → update that job's model dropdown
-    el.querySelectorAll('.job-provider-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const jobId = sel.dataset.job;
-            const providerId = parseInt(sel.value) || null;
-            const row = sel.closest('.job-override-row');
-            const modelSel = row.querySelector('.job-model-select');
-
-            const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = `<option value="">${providerId ? '-- default --' : '-- model --'}</option>` +
-                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
-            modelSel.disabled = models.length === 0;
-
-            if (models.length === 1) {
-                modelSel.value = models[0];
-                assignJob(jobId, providerId, models[0]);
-            } else if (providerId) {
-                assignJob(jobId, providerId, null);
-            }
-        });
-    });
-
-    // Individual job model select → assign job
-    el.querySelectorAll('.job-model-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            const jobId = sel.dataset.job;
-            const row = sel.closest('.job-override-row');
-            const providerSel = row.querySelector('.job-provider-select');
-            const providerId = parseInt(providerSel.value) || null;
-            const model = sel.value || null;
-            if (providerId) assignJob(jobId, providerId, model);
-        });
-    });
-
-    // Stats buttons
-    el.querySelectorAll('[data-stats-job]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            openJobStats(btn.dataset.statsJob, btn.dataset.statsName);
-        });
-    });
-}
-
-async function assignGroup(groupName, providerId, model) {
-    if (!providerId) return;
-
-    try {
-        const res = await apiFetch(`/providers/jobs/groups/${groupName}`, {
-            method: 'PUT',
-            body: JSON.stringify({ provider_id: providerId, model: model }),
-        });
-
-        if (res.ok) {
-            // Update local assignments for all jobs in this group
-            const groups = groupJobs(jobs);
-            const groupJobList = groups[groupName] || [];
-            for (const job of groupJobList) {
-                assignments[job.id] = { provider_id: providerId, model: model };
-            }
-            showToast(`${GROUP_META[groupName].name} group assigned`, 'success');
-            renderCognition();
-        } else {
-            showToast('Failed to save group assignment', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-async function assignJob(jobName, providerId, model) {
-    if (!providerId) return;
-
-    try {
-        const body = { provider_id: providerId };
-        if (model) body.model = model;
-
-        const res = await apiFetch(`/providers/jobs/${jobName}`, {
-            method: 'PUT',
-            body: JSON.stringify(body),
-        });
-
-        if (res.ok) {
-            assignments[jobName] = { provider_id: providerId, model: model };
-            const indicator = document.getElementById(`save-${jobName}`);
-            if (indicator) {
-                indicator.classList.add('visible');
-                setTimeout(() => indicator.classList.remove('visible'), 2000);
-            }
-        } else {
-            showToast('Failed to save assignment', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-// ==========================================
-// Job Stats Modal — Token Usage Statistics
-// ==========================================
-let statsJobName = '';
-
-async function openJobStats(jobId, jobName) {
-    statsJobName = jobId;
-    document.getElementById('jobStatsTitle').textContent = `${jobName} — Token Usage`;
-    document.getElementById('statsSummary').innerHTML = '<div class="loading">Loading stats…</div>';
-    document.getElementById('statsTableWrap').innerHTML = '';
-    document.getElementById('jobStatsModal').classList.remove('hidden');
-
-    // Reset tab selection to 24h
-    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
-    const defaultTab = document.querySelector('#statsPeriodTabs .stats-tab[data-hours="24"]');
-    if (defaultTab) defaultTab.classList.add('active');
-
-    await loadJobStats(jobId, 24);
-}
-
-document.getElementById('closeJobStatsModal').addEventListener('click', () => {
-    document.getElementById('jobStatsModal').classList.add('hidden');
-});
-
-document.getElementById('jobStatsModal').addEventListener('click', (e) => {
-    if (e.target.id === 'jobStatsModal') {
-        document.getElementById('jobStatsModal').classList.add('hidden');
-    }
-});
-
-document.getElementById('statsPeriodTabs').addEventListener('click', async (e) => {
-    const tab = e.target.closest('.stats-tab');
-    if (!tab) return;
-    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    await loadJobStats(statsJobName, parseInt(tab.dataset.hours));
-});
-
-async function loadJobStats(jobId, hours) {
-    const summaryEl = document.getElementById('statsSummary');
-    const tableEl = document.getElementById('statsTableWrap');
-    summaryEl.innerHTML = '<div class="loading">Loading…</div>';
-    tableEl.innerHTML = '';
-
-    try {
-        const res = await apiFetch(`/providers/jobs/${jobId}/stats?hours=${hours}`);
-        if (!res.ok) throw new Error('Failed to load stats');
-        const data = await res.json();
-        const s = data.summary || {};
-
-        summaryEl.innerHTML = `
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_calls || 0).toLocaleString()}</div>
-                <div class="stat-label">Calls</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_tokens_input || 0).toLocaleString()}</div>
-                <div class="stat-label">Tokens In</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${(s.total_tokens_output || 0).toLocaleString()}</div>
-                <div class="stat-label">Tokens Out</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${Math.round(s.avg_latency_ms || 0).toLocaleString()}<span class="stat-unit">ms</span></div>
-                <div class="stat-label">Avg Latency</div>
-            </div>
-        `;
-
-        const calls = data.calls || [];
-        if (calls.length === 0) {
-            tableEl.innerHTML = '<div class="stats-empty">No calls in this period.</div>';
-            return;
-        }
-
-        const rows = calls.slice(0, 200).map(c => {
-            const t = c.created_at ? new Date(c.created_at + 'Z') : null;
-            const time = t ? t.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-            return `<tr>
-                <td>${time}</td>
-                <td>${escapeHtml(c.model || '—')}</td>
-                <td class="num">${(c.tokens_input || 0).toLocaleString()}</td>
-                <td class="num">${(c.tokens_output || 0).toLocaleString()}</td>
-                <td class="num">${(c.latency_ms || 0).toLocaleString()}</td>
-            </tr>`;
-        }).join('');
-
-        tableEl.innerHTML = `
-            <table class="stats-table">
-                <thead><tr>
-                    <th>Time</th><th>Model</th><th class="num">In</th><th class="num">Out</th><th class="num">Latency</th>
-                </tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
-    } catch (e) {
-        summaryEl.innerHTML = '<div class="stats-empty">Failed to load stats.</div>';
-    }
-}
 
 // ==========================================
 // Scheduler Tab
@@ -1339,7 +851,7 @@ function updateScheduleFormHints() {
     }
 
     const date = new Date(dueAtVal);
-    if (isNaN(date.getTime())) {
+    if (Number.isNaN(date.getTime())) {
         hint.style.display = 'none';
         hint.textContent = '';
         return;
@@ -1349,11 +861,15 @@ function updateScheduleFormHints() {
     const dayName = DAYS[date.getDay()];
     const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dom = date.getDate();
-    const domSuffix = dom === 1 ? 'st' : dom === 2 ? 'nd' : dom === 3 ? 'rd' : 'th';
+    let domSuffix;
+    if (dom === 1) domSuffix = 'st';
+    else if (dom === 2) domSuffix = 'nd';
+    else if (dom === 3) domSuffix = 'rd';
+    else domSuffix = 'th';
 
     let pattern = '';
     if (recurrence === 'interval') {
-        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        const mins = Number.parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
         if (mins >= 1 && mins <= 1440) {
             const h = Math.floor(mins / 60), m = mins % 60;
             const parts = [];
@@ -1439,7 +955,7 @@ document.getElementById('scheduleForm').addEventListener('submit', async (e) => 
     // Encode interval:N
     let recurrenceValue = document.getElementById('scheduleRecurrence').value || null;
     if (recurrenceValue === 'interval') {
-        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        const mins = Number.parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
         if (!mins || mins < 1 || mins > 1440) {
             showToast('Interval must be between 1 and 1440 minutes', 'error');
             return;
@@ -1477,6 +993,7 @@ document.getElementById('scheduleForm').addEventListener('submit', async (e) => 
             showToast(data.error || 'Failed to save schedule', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] failed to save schedule:', err);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -1510,6 +1027,7 @@ async function executeCancelSchedule() {
             showToast(err.error || 'Failed to cancel', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to cancel schedule:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1525,6 +1043,7 @@ async function clearHistory() {
             showToast(data.error || 'Failed to clear history', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to clear history:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1532,8 +1051,8 @@ async function clearHistory() {
 function formatRecurrence(recurrence) {
     if (!recurrence) return '';
     if (recurrence.startsWith('interval:')) {
-        const mins = parseInt(recurrence.split(':')[1], 10);
-        if (isNaN(mins)) return recurrence;
+        const mins = Number.parseInt(recurrence.split(':')[1], 10);
+        if (Number.isNaN(mins)) return recurrence;
         const h = Math.floor(mins / 60), m = mins % 60;
         if (h === 0) return `Every ${m}m`;
         if (m === 0) return `Every ${h}h`;
@@ -1642,6 +1161,7 @@ async function loadGroupFires(groupId, container) {
             }).join('')
         }</div>`;
     } catch (e) {
+        console.warn('[brain/app] failed to load schedule history:', e);
         container.innerHTML = '<p class="form-hint">Error loading history.</p>';
     }
 }
@@ -1836,6 +1356,7 @@ async function toggleListExpand(id) {
             expandedListId = null;
         }
     } catch (e) {
+        console.warn('[brain/app] failed to load list:', e);
         showToast('Network error', 'error');
         expandedListId = null;
     }
@@ -1859,6 +1380,7 @@ async function refreshExpandedList(id) {
         }
         renderLists();
     } catch (e) {
+        console.warn('[brain/app] failed to refresh expanded list:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1886,6 +1408,7 @@ async function addListItem(listId) {
             showToast(data.error || 'Failed to add item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to add list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1903,6 +1426,7 @@ async function removeListItem(listId, content) {
             showToast(err.error || 'Failed to remove item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to remove list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -1921,6 +1445,7 @@ async function toggleListItem(listId, content, checked) {
             showToast(err.error || 'Failed to update item', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to toggle list item:', e);
         showToast('Network error', 'error');
     }
 }
@@ -2037,6 +1562,7 @@ document.getElementById('createListForm').addEventListener('submit', async (e) =
             showToast(data.error || 'Failed to create list', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to create list:', e);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -2083,6 +1609,7 @@ document.getElementById('renameListForm').addEventListener('submit', async (e) =
             showToast(data.error || 'Failed to rename list', 'error');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to rename list:', e);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -2116,6 +1643,7 @@ document.getElementById('confirmDeleteListBtn').addEventListener('click', async 
             deletingListId = null;
         }
     } catch (e) {
+        console.warn('[brain/app] failed to delete list:', e);
         showToast('Network error', 'error');
         deletingListId = null;
     }
@@ -2151,7 +1679,6 @@ document.getElementById('obsRefreshBtn').addEventListener('click', () => {
 });
 
 function loadCognitionSubtab(subtab) {
-    if (subtab === 'jobs') return; // Jobs panel uses existing renderCognition()
     if (subtab === 'memory') { loadRecordsObs(); return; }
     if (subtab === 'personality') { loadPersonality(); return; }
     if (obsLoaded[subtab]) return; // Already cached
@@ -2160,6 +1687,7 @@ function loadCognitionSubtab(subtab) {
         tools: loadToolsObs,
         tasks: loadTasksObs,
         worldstate: loadWorldStateObs,
+        errors: loadErrorsObs,
     };
     if (loaders[subtab]) loaders[subtab]();
 }
@@ -2176,7 +1704,7 @@ function obsSetTimestamp(isoStr) {
     try {
         const d = new Date(isoStr);
         el.textContent = 'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch { el.textContent = ''; }
+    } catch (e) { console.warn('[brain/app] obsSetTimestamp failed:', e); el.textContent = ''; }
 }
 
 // ── Memory Records ──
@@ -2250,6 +1778,7 @@ async function _recordsFetch(append) {
             _recordsSetStatus(null);
         }
     } catch (e) {
+        console.warn('[brain/app] failed to load memory records:', e);
         _recordsSetStatus('Could not load records.');
         document.getElementById('recordsLoadMore').classList.add('hidden');
     }
@@ -2311,6 +1840,7 @@ async function loadToolsObs() {
         html += '</tbody></table>';
         el.innerHTML = html;
     } catch (e) {
+        console.warn('[brain/app] failed to load tool data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load tool data.</div>';
     }
 }
@@ -2370,10 +1900,11 @@ async function loadTasksObs() {
                     const r = await apiFetch(`/system/observability/tasks/${taskId}`, { method: 'DELETE' });
                     if (r.ok) loadTasksObs();
                     else alert('Failed to cancel task');
-                } catch { alert('Failed to cancel task'); }
+                } catch (e) { console.warn('[brain/app] task cancel failed:', e); alert('Failed to cancel task'); }
             });
         });
     } catch (e) {
+        console.warn('[brain/app] failed to load task data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load task data.</div>';
     }
 }
@@ -2418,7 +1949,46 @@ async function loadWorldStateObs() {
 
         el.innerHTML = html;
     } catch (e) {
+        console.warn('[brain/app] failed to load world state data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load world state data.</div>';
+    }
+}
+
+// ── Error Log ──
+
+async function loadErrorsObs() {
+    const el = document.getElementById('subtab-errors');
+    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(120);
+    try {
+        const res = await apiFetch('/system/observability/errors');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        obsLoaded.errors = true;
+        obsSetTimestamp(data.generated_at);
+
+        const errors = data.errors || [];
+        if (errors.length === 0) {
+            el.innerHTML = '<div class="obs-empty">No errors logged.</div>';
+            return;
+        }
+        const frag = document.createDocumentFragment();
+        for (const entry of errors) {
+            const row = document.createElement('div');
+            row.className = 'error-log-row';
+            const ts = document.createElement('time');
+            ts.dateTime = entry.timestamp;
+            ts.textContent = entry.timestamp;
+            const msg = document.createElement('span');
+            msg.textContent = entry.message;
+            row.appendChild(ts);
+            row.appendChild(msg);
+            frag.appendChild(row);
+        }
+        el.innerHTML = '';
+        el.appendChild(frag);
+    } catch (e) {
+        console.warn('[brain/app] failed to load error log:', e);
+        el.innerHTML = '<div class="obs-empty">Could not load error log.</div>';
     }
 }
 
@@ -2432,7 +2002,7 @@ function timeAgo(isoStr) {
         if (diff < 3600000) return Math.floor(diff / 60000) + ' min ago';
         if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
         return Math.floor(diff / 86400000) + 'd ago';
-    } catch { return 'unknown'; }
+    } catch (e) { console.warn('[brain/app] timeAgo failed:', e); return 'unknown'; }
 }
 
 // ==========================================
@@ -2441,11 +2011,11 @@ function timeAgo(isoStr) {
 function escapeHtml(str) {
     if (!str) return '';
     return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
 }
 
 const ACRONYMS = {
@@ -2484,6 +2054,7 @@ async function loadDocuments() {
         renderDocuments();
         loadWatchedFolders();
     } catch (e) {
+        console.warn('[brain/app] failed to load documents:', e);
         el.innerHTML = '<div class="empty-state"><p>Failed to load documents.</p></div>';
     }
 }
@@ -2509,10 +2080,11 @@ function renderDocumentRow(doc) {
     const chunks = `${doc.chunk_count || 0} chunks`;
     const date = doc.doc_date || (doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '');
 
-    const statusClass = doc.status === 'ready' ? 'status-ready'
-        : doc.status === 'failed' ? 'status-error'
-        : doc.status === 'processing' ? 'status-building'
-        : '';
+    let statusClass;
+    if (doc.status === 'ready') statusClass = 'status-ready';
+    else if (doc.status === 'failed') statusClass = 'status-error';
+    else if (doc.status === 'processing') statusClass = 'status-building';
+    else statusClass = '';
 
     const isDeleted = !!doc.deleted_at;
 
@@ -2904,7 +2476,7 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.error || 'Upload failed', 'error');
             }
-        } catch { showToast('Upload failed', 'error'); }
+        } catch (e) { console.warn('[brain/app] document upload failed:', e); showToast('Upload failed', 'error'); }
     });
     fileInput.click();
 });
@@ -3071,7 +2643,7 @@ async function openWatchFolderModal(editId) {
                 document.getElementById('watchFolderInterval').value = folder.scan_interval || 300;
                 _currentBrowsePath = folder.folder_path;
             }
-        } catch { /* fallthrough */ }
+        } catch (e) { console.warn('[brain/app] failed to load watched folder for edit:', e); }
     } else {
         title.textContent = 'Watch Folder';
         saveBtn.textContent = 'Watch';
@@ -3131,6 +2703,7 @@ async function browseDirectory(path) {
             ).join('');
         }
     } catch (e) {
+        console.warn('[brain/app] failed to browse directory:', e);
         listEl.innerHTML = '<div class="dir-browser-empty">Failed to browse directory</div>';
     }
 }
@@ -3163,7 +2736,7 @@ document.getElementById('watchFolderForm')?.addEventListener('submit', async (e)
         file_patterns: filePatterns,
         ignore_patterns: ignorePatterns,
         recursive: document.getElementById('watchFolderRecursive').checked,
-        scan_interval: parseInt(document.getElementById('watchFolderInterval').value) || 300,
+        scan_interval: Number.parseInt(document.getElementById('watchFolderInterval').value, 10) || 300,
     };
 
     try {
@@ -3184,7 +2757,7 @@ document.getElementById('watchFolderForm')?.addEventListener('submit', async (e)
             const err = await res.json().catch(() => ({}));
             showToast(err.error || 'Failed to save', 'error');
         }
-    } catch { showToast('Failed to save watched folder', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to save watched folder:', e); showToast('Failed to save watched folder', 'error'); }
 });
 
 // Close / cancel watch folder modal
@@ -3206,7 +2779,7 @@ async function toggleWatchFolder(id, enabled) {
             body: JSON.stringify({ enabled }),
         });
         loadWatchedFolders();
-    } catch { showToast('Failed to toggle folder', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to toggle folder:', e); showToast('Failed to toggle folder', 'error'); }
 }
 
 async function triggerFolderScan(id) {
@@ -3217,7 +2790,7 @@ async function triggerFolderScan(id) {
         } else {
             showToast('Failed to trigger scan', 'error');
         }
-    } catch { showToast('Failed to trigger scan', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to trigger scan:', e); showToast('Failed to trigger scan', 'error'); }
 }
 
 async function deleteWatchFolder(id) {
@@ -3230,7 +2803,7 @@ async function deleteWatchFolder(id) {
         } else {
             showToast('Failed to remove folder watch', 'error');
         }
-    } catch { showToast('Failed to remove folder watch', 'error'); }
+    } catch (e) { console.warn('[brain/app] failed to remove folder watch:', e); showToast('Failed to remove folder watch', 'error'); }
 }
 
 // ==========================================
@@ -3258,6 +2831,7 @@ async function loadCapabilities() {
         capabilitiesData = data.capabilities || [];
         renderCapabilities();
     } catch (e) {
+        console.warn('[brain/app] failed to load capabilities:', e);
         el.innerHTML = '<div class="empty-state"><p>Failed to load capabilities.</p></div>';
     }
 }
@@ -3395,6 +2969,7 @@ document.getElementById('capSetupForm').addEventListener('submit', async (e) => 
             showToast(data.error || 'Connection failed', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] capability setup failed:', err);
         showToast('Network error', 'error');
     } finally {
         btn.disabled = false;
@@ -3414,6 +2989,7 @@ async function disconnectCapability(capId) {
             showToast(data.error || 'Failed to disconnect', 'error');
         }
     } catch (err) {
+        console.warn('[brain/app] capability disconnect failed:', err);
         showToast('Network error', 'error');
     }
 }

@@ -75,7 +75,7 @@ class TestDeleteAll:
                 from api.privacy import delete_all
                 with app.test_request_context('/api/privacy/delete-all', method='DELETE'):
                     # Simulate missing header
-                    resp, code = delete_all.__wrapped__() if hasattr(delete_all, '__wrapped__') else (None, None)
+                    _, _ = delete_all.__wrapped__() if hasattr(delete_all, '__wrapped__') else (None, None)
 
     def test_database_tables_cover_required_data(self):
         """Verify delete-all truncates the three core data tables."""

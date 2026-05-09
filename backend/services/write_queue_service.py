@@ -6,15 +6,12 @@ race under concurrent callers are funnelled through a single background thread
 that drains a :class:`queue.Queue`.  This eliminates ``SQLITE_BUSY`` under
 high write concurrency while keeping call-sites simple.
 
-Three access patterns are supported:
+Two access patterns are supported:
 
 - **Fire-and-forget** (:meth:`WriteQueueService.submit`) — caller returns
   immediately; the write happens asynchronously.
 - **Synchronous** (:meth:`WriteQueueService.submit_sync`) — caller blocks
   until the callable completes and receives its return value.
-- **Transactional** (:meth:`WriteQueueService.submit_transaction`) — multiple
-  callables share a single SQLite connection/transaction; the whole batch is
-  rolled back on any failure.
 
 Typical usage::
 
@@ -31,9 +28,6 @@ Design notes
 - The background thread obtains its own thread-local SQLite connection from
   :class:`~services.database_service.DatabaseService`, keeping it separate
   from callers' connections.
-- For :meth:`submit_transaction`, each callable in *fns* receives an open
-  ``sqlite3.Connection`` as its sole positional argument.  The caller is
-  responsible for using that connection (e.g. ``conn.cursor().execute(…)``).
 """
 
 import logging
@@ -43,28 +37,26 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Item types placed on the internal queue ────────────────────────────────
+# ── Item type placed on the internal queue ─────────────────────────────────
 
 _TYPE_SINGLE = "single"
-_TYPE_TRANSACTION = "transaction"
 
 
 class _QueueItem:
     """Internal container for a single work item placed on the write queue.
 
     Attributes:
-        item_type: One of the ``_TYPE_*`` module-level constants.
-        fn: Callable to execute for ``_TYPE_SINGLE`` items.
+        item_type: Always ``_TYPE_SINGLE``.
+        fn: Callable to execute.
         args: Positional arguments forwarded to *fn*.
         kwargs: Keyword arguments forwarded to *fn*.
-        fns: List of callables for ``_TYPE_TRANSACTION`` items.
         done_event: :class:`threading.Event` set by the worker when execution
             completes.  ``None`` for fire-and-forget items.
         result: Mutable one-element list used to pass the callable's return
             value (or raised exception) back to a waiting caller.
     """
 
-    __slots__ = ("item_type", "fn", "args", "kwargs", "fns", "done_event", "result")
+    __slots__ = ("item_type", "fn", "args", "kwargs", "done_event", "result")
 
     def __init__(
         self,
@@ -72,22 +64,17 @@ class _QueueItem:
         fn: Optional[Callable] = None,
         args: tuple = (),
         kwargs: Optional[Dict[str, Any]] = None,
-        fns: Optional[List[Callable]] = None,
         done_event: Optional[threading.Event] = None,
         result: Optional[List] = None,
     ) -> None:
         """Initialise a queue work item.
 
         Args:
-            item_type: Execution strategy — ``_TYPE_SINGLE`` for a single
-                callable, ``_TYPE_TRANSACTION`` for a multi-callable batch.
-            fn: Callable invoked for single items.  Ignored for transactions.
-            args: Positional arguments forwarded to *fn* (single items only).
-            kwargs: Keyword arguments forwarded to *fn* (single items only).
+            item_type: Execution strategy — always ``_TYPE_SINGLE``.
+            fn: Callable invoked for the item.
+            args: Positional arguments forwarded to *fn*.
+            kwargs: Keyword arguments forwarded to *fn*.
                 Defaults to an empty dict when ``None``.
-            fns: Ordered list of callables for transaction items.  Each
-                callable receives an open ``sqlite3.Connection`` as its sole
-                argument.
             done_event: :class:`threading.Event` signalled by the worker on
                 completion.  ``None`` means fire-and-forget.
             result: One-element list whose first slot receives either the
@@ -98,7 +85,6 @@ class _QueueItem:
         self.fn = fn
         self.args = args
         self.kwargs = kwargs if kwargs is not None else {}
-        self.fns = fns or []
         self.done_event = done_event
         self.result = result  # [value] or [exception_instance] after execution
 
@@ -179,7 +165,7 @@ class WriteQueueService:
                 calling thread verbatim.
         """
         done_event = threading.Event()
-        result: List[Any] = [None]  # result[0] = value or exception
+        result: List[Any] = [None]  # index 0 holds the return value or a propagated exception
 
         item = _QueueItem(
             item_type=_TYPE_SINGLE,
@@ -195,45 +181,6 @@ class WriteQueueService:
         if isinstance(result[0], BaseException):
             raise result[0]
         return result[0]
-
-    def submit_transaction(self, fns: List[Callable]) -> None:
-        """Enqueue a batch of callables to execute inside a single transaction.
-
-        All callables in *fns* are invoked sequentially within a single SQLite
-        connection/transaction.  If any callable raises an exception the entire
-        transaction is rolled back and the exception is logged.
-
-        Each callable in *fns* must accept exactly one positional argument: an
-        open ``sqlite3.Connection``.  The caller is responsible for using that
-        connection to issue SQL (e.g. ``conn.cursor().execute(…)``).
-
-        The method blocks until the transaction completes (commit or rollback).
-
-        Args:
-            fns: Ordered list of callables, each receiving an open
-                ``sqlite3.Connection`` as its sole argument.
-
-        Raises:
-            Exception: The exception from the failing callable is re-raised in
-                the calling thread after the transaction has been rolled back.
-        """
-        if not fns:
-            return
-
-        done_event = threading.Event()
-        result: List[Any] = [None]
-
-        item = _QueueItem(
-            item_type=_TYPE_TRANSACTION,
-            fns=fns,
-            done_event=done_event,
-            result=result,
-        )
-        self._queue.put(item)
-        done_event.wait()
-
-        if isinstance(result[0], BaseException):
-            raise result[0]
 
     def get_stats(self) -> Dict[str, int]:
         """Return a snapshot of the queue's runtime statistics.
@@ -266,8 +213,7 @@ class WriteQueueService:
         """Drain the work queue in an infinite loop (runs in the daemon thread).
 
         Blocks on :meth:`queue.Queue.get` waiting for the next item, then
-        dispatches to :meth:`_execute_single` or :meth:`_execute_transaction`
-        depending on the item type.  After each dispatch the item's
+        dispatches to :meth:`_execute_single`.  After each dispatch the item's
         ``result[0]`` is inspected: a :class:`BaseException` instance means the
         write failed (``_errors`` incremented); any other value means success
         (``_processed`` incremented).  Counter updates are protected by
@@ -280,10 +226,7 @@ class WriteQueueService:
         while True:
             item: _QueueItem = self._queue.get()
             try:
-                if item.item_type == _TYPE_TRANSACTION:
-                    self._execute_transaction(item)
-                else:
-                    self._execute_single(item)
+                self._execute_single(item)
 
                 # Determine success/failure from stored result (avoids
                 # double-logging that would occur if sub-methods re-raised)
@@ -340,82 +283,6 @@ class WriteQueueService:
                 item.result[0] = exc_caught if exc_caught is not None else return_value
             if item.done_event is not None:
                 item.done_event.set()
-
-    def _execute_transaction(self, item: _QueueItem) -> None:
-        """Execute multiple callables atomically within a single SQLite transaction.
-
-        Opens a new ``sqlite3.Connection`` (independent of any thread-local
-        connection managed by :class:`~services.database_service.DatabaseService`)
-        and manually manages ``BEGIN``/``COMMIT``/``ROLLBACK`` so that all
-        callables in ``item.fns`` share the same transaction context.
-
-        Each callable in ``item.fns`` is called with the connection as its sole
-        positional argument.  On success the transaction is committed; on any
-        failure it is rolled back and the exception is stored for re-raising in
-        the caller's thread.
-
-        Args:
-            item: A :class:`_QueueItem` with ``item_type == _TYPE_TRANSACTION``.
-
-        Note:
-            Exceptions are *not* re-raised here.  The exception instance is
-            stored in ``item.result[0]`` and ``item.done_event`` is set; the
-            drain loop inspects ``item.result[0]`` for error accounting, and
-            :meth:`submit_transaction` re-raises in the calling thread.
-        """
-        import sqlite3
-
-        from services.database_service import get_db_path
-
-        exc_to_raise: Optional[Exception] = None
-
-        try:
-            conn = sqlite3.connect(get_db_path(), timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=15000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.isolation_level = None  # manual transaction control
-            conn.execute("BEGIN")
-
-            try:
-                for fn in item.fns:
-                    fn(conn)
-                conn.execute("COMMIT")
-                logger.debug(
-                    f"[WriteQueue] Transaction committed ({len(item.fns)} callables)"
-                )
-            except Exception as exc:
-                logger.error(
-                    f"[WriteQueue] Transaction failed, rolling back: {exc}",
-                    exc_info=True,
-                )
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    logger.warning("[WriteQueue] ROLLBACK failed", exc_info=True)
-                exc_to_raise = exc
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    logger.warning(
-                        "[WriteQueue] Failed to close transaction connection",
-                        exc_info=True,
-                    )
-
-        except Exception as exc:
-            logger.error(
-                f"[WriteQueue] Failed to open transaction connection: {exc}",
-                exc_info=True,
-            )
-            exc_to_raise = exc
-
-        if item.result is not None:
-            item.result[0] = exc_to_raise
-        if item.done_event is not None:
-            item.done_event.set()
 
 
 # ---------------------------------------------------------------------------

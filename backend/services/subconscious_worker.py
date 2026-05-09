@@ -2,24 +2,22 @@
 SubconsciousWorker — idle-gated 5-minute cognition tick.
 
 A single daemon thread that owns latent cognition: super-episode consolidation,
-decay, pattern extraction, and user synthesis.  Fires only when the user is
-not active.
-
-Spec: ``/Volumes/llm/chalie-plans/v0.5.0/2026-04-24-subconscious-worker-design.md``.
+decay, pattern extraction, user synthesis, and background DMN reflection.
+Fires only when the user is not active.
 
 Tick body (sequential, per §5.3):
-    1. Consolidate episodes → super-episodes  (per channel with unconsolidated rows).
+    1. Consolidate episodes → super-episodes  (channel='user' only — §B masterplan).
     2. Run decay engine.
     3. Run pattern match.
     4. Run user synthesis.
+    5. Run DMN reflection (skipped when no user_summary row exists).
 
 Gates (both must pass — §5.2):
     - User-active: ``last_user_message_at`` is older than 30 minutes.
     - Already-fired: ``subconscious_last_fired_at > last_user_message_at``.
 
 Each step is wrapped in ``try/except``; one bad step does not skip the rest.
-Steps 3 and 4 are LLM-heavy and skip when the background-LLM queue is saturated
-(spec §5.6).
+Step 5 (DMN) self-gates when ``user_summary`` is absent in data_graph.
 
 State persistence — ``subconscious_last_fired_at``:
     - MemoryStore key ``subconscious:last_fired_at`` (fast read).
@@ -36,13 +34,6 @@ from typing import Optional
 
 from services.time_utils import utc_now, parse_utc
 
-# Top-level canary import — guarantees the QUEUE_KEY symbol exists at module
-# load time. The lazy import inside ``_is_bg_llm_saturated`` still wins at
-# runtime (so test patching of ``services.background_llm_queue`` still works),
-# but a missing module fails loud here instead of silently bypassing
-# backpressure forever via the broad except in ``_is_bg_llm_saturated``.
-from services.background_llm_queue import QUEUE_KEY as _BG_QUEUE_KEY_CANARY  # noqa: F401
-
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SUBCONSCIOUS]"
@@ -51,10 +42,13 @@ LOG_PREFIX = "[SUBCONSCIOUS]"
 
 DEFAULT_TICK_SEC = 300              # 5 minutes — spec §5.1
 DEFAULT_IDLE_WINDOW_SEC = 1800      # 30 minutes — spec §5.2 user-active gate
-DEFAULT_BG_QUEUE_THRESHOLD = 20     # below MAX_QUEUE_DEPTH=25 — spec §5.6
 
 _MEMORY_KEY_LAST_FIRED = "subconscious:last_fired_at"
 _DG_KEY_LAST_FIRED = "subconscious_last_fired_at"
+
+# Keys checked to determine whether DMN has a synthesis to work from.
+# SubconsciousWorker._step_dmn() skips when neither row is present.
+_DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
 
 
 def _env_int(name: str, default: int) -> int:
@@ -81,11 +75,9 @@ class SubconsciousWorker:
         self,
         tick_sec: int = DEFAULT_TICK_SEC,
         idle_window_sec: int = DEFAULT_IDLE_WINDOW_SEC,
-        bg_queue_threshold: int = DEFAULT_BG_QUEUE_THRESHOLD,
     ):
         self.tick_sec = tick_sec
         self.idle_window = timedelta(seconds=idle_window_sec)
-        self.bg_queue_threshold = bg_queue_threshold
         self._lock = threading.Lock()
         self._cached_last_fired: Optional[datetime] = None
         # Single DecayEngineService instance — the engine reads
@@ -135,20 +127,19 @@ class SubconsciousWorker:
     # ── Tick orchestration ───────────────────────────────────────────────────
 
     def _tick(self) -> dict:
-        """Body of one tick after gates have been cleared."""
+        """Body of one tick after gates have been cleared.
+
+        Steps are strictly sequential — each step completes before the next
+        begins. Step 4 (synthesis) writes the user_summary row that step 5
+        (DMN) reads; the sequential contract ensures step 5 always sees the
+        latest synthesis output.
+        """
         steps: dict = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["decay"] = self._safe_step("decay", self._step_decay)
-
-        # Backpressure check — skip LLM-heavy steps 3 + 4 when queue is saturated.
-        bg_saturated = self._is_bg_llm_saturated()
-        if bg_saturated:
-            steps["pattern_match"] = {"status": "skipped", "detail": "bg_llm_saturated"}
-            steps["synthesis"] = {"status": "skipped", "detail": "bg_llm_saturated"}
-            logger.info(f"{LOG_PREFIX} bg LLM queue saturated — skipping pattern + synthesis")
-        else:
-            steps["pattern_match"] = self._safe_step("pattern_match", self._step_pattern_match)
-            steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
+        steps["pattern_match"] = self._safe_step("pattern_match", self._step_pattern_match)
+        steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
+        steps["dmn"] = self._safe_step("dmn", self._step_dmn)
 
         now = utc_now()
         try:
@@ -164,7 +155,8 @@ class SubconsciousWorker:
             f"consolidate={steps['consolidate']['status']} "
             f"decay={steps['decay']['status']} "
             f"pattern_match={steps['pattern_match']['status']} "
-            f"synthesis={steps['synthesis']['status']}"
+            f"synthesis={steps['synthesis']['status']} "
+            f"dmn={steps['dmn']['status']}"
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
@@ -220,39 +212,26 @@ class SubconsciousWorker:
     # ── Steps ────────────────────────────────────────────────────────────────
 
     def _step_consolidate(self) -> str:
-        """Step 1 — consolidate apex episodes into super-episodes per channel.
+        """Step 1 — consolidate apex episodes into super-episodes (channel='user' only).
 
-        The trigger that previously lived in transcript_service's daemon thread
-        moves here. SuperEpisodeEncoderProcessor is self-gating: ``send()``
+        Iterates only channel='user' episodes. This is both a performance
+        optimisation (the only channel that produces episodes post-masterplan,
+        since _maybe_trigger_extraction is gated to channel='user' upstream)
+        and a correctness guarantee: legacy pre-migration channels with residual
+        episodes are intentionally excluded.
+
+        SuperEpisodeEncoderProcessor is self-gating: ``send()``
         returns '' immediately when ``find_super_candidates(channel)`` finds
-        nothing, so iterating every channel with unconsolidated rows is cheap.
+        nothing, so the call is cheap when nothing has accumulated.
         """
-        from services.database_service import get_shared_db_service
         from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
 
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cur = conn.execute(
-                "SELECT DISTINCT channel FROM episodes "
-                "WHERE consolidated_into IS NULL AND deleted_at IS NULL"
-            )
-            channels = [row[0] for row in cur.fetchall() if row[0]]
-
-        if not channels:
-            return "no channels with unconsolidated episodes"
-
-        summaries: list[str] = []
-        for channel in channels:
-            try:
-                summary = SuperEpisodeEncoderProcessor(channel=channel).send()
-                if summary:
-                    summaries.append(f"{channel}: {summary}")
-            except Exception as exc:
-                logger.warning(
-                    f"{LOG_PREFIX} consolidate channel={channel} failed: {exc}"
-                )
-
-        return "; ".join(summaries) if summaries else f"checked {len(channels)} channel(s), no clusters formed"
+        try:
+            summary = SuperEpisodeEncoderProcessor(channel='user').send()
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} consolidate channel=user failed: {exc}")
+            raise
+        return summary if summary else "checked channel=user, no clusters formed"
 
     def _step_decay(self) -> str:
         """Step 2 — run the unified decay cycle.
@@ -354,42 +333,63 @@ class SubconsciousWorker:
         new traits or behavioural patterns have arrived since the last
         synthesis it silently returns ''.  Inputs are now the union of
         Episodes + Data Graph + Extracted Patterns.
+
+        The resulting ``user_summary`` / ``user_summary_long`` rows in
+        data_graph are the prerequisite for step 5 (DMN). Sequential execution
+        guarantees step 5 sees the freshest synthesis output.
         """
         from services.user_summary_processor import UserSummaryProcessor
 
         result = UserSummaryProcessor().send()
         return "ok" if result else "no new traits/patterns; skipped"
 
-    # ── Backpressure ─────────────────────────────────────────────────────────
+    def _step_dmn(self) -> str:
+        """Step 5 — background DMN reflection via DMNMessageProcessor.
 
-    def _is_bg_llm_saturated(self) -> bool:
-        """Return True when the background-LLM queue depth ≥ threshold.
+        Runs DMNMessageProcessor which reads user synthesis + recent episodes,
+        acts on open threads using news/search/browser/memory tools, and saves
+        all findings to data_graph via the memory tool. No UI broadcast.
 
-        Conservative — when the queue check itself fails we return False so
-        the tick proceeds. The dropped-job logging in BackgroundLLMProxy will
-        catch saturation at call time anyway.
+        Prerequisites (checked before constructing the processor):
+            - ``user_summary`` or ``user_summary_long`` must exist in data_graph.
+              Step 4 (synthesis) runs in the same tick and may have just produced
+              this row; this check runs after step 4 completes.
 
-        ImportError is surfaced at WARNING level (rather than DEBUG) so that
-        if ``services.background_llm_queue`` ever moves we notice — silent
-        swallow would permanently bypass backpressure. Other connection-style
-        errors stay at DEBUG to avoid log spam under transient failures.
+        Skips (returns early) when no synthesis row exists.
+        DMN has nothing meaningful to reflect on without a user model.
+        """
+        synthesis = self._load_user_synthesis()
+        if not synthesis:
+            logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
+            return "skipped: no user synthesis"
+
+        from services.dmn_message_processor import DMNMessageProcessor
+        DMNMessageProcessor(raw_input='').send()
+        return "ok"
+
+    def _load_user_synthesis(self) -> Optional[str]:
+        """Check whether a user_summary row exists in data_graph.
+
+        Returns the synthesis value when present, None otherwise.
+        Prefers user_summary_long for completeness but falls back to
+        user_summary — matching the same preference logic used by
+        DMNMessageProcessor._fetch_user_synthesis().
         """
         try:
-            from services.memory_client import MemoryClientService
-            from services.background_llm_queue import QUEUE_KEY
-
-            store = MemoryClientService.create_connection()
-            depth = store.llen(QUEUE_KEY) or 0
-            return depth >= self.bg_queue_threshold
-        except ImportError as exc:
-            logger.warning(
-                f"{LOG_PREFIX} bg queue depth check could not import "
-                f"backpressure deps — backpressure is now permanently OFF: {exc}"
-            )
-            return False
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT key, value FROM data_graph "
+                    "WHERE kind = 'system' "
+                    "  AND key IN ('user_summary', 'user_summary_long') "
+                    "  AND active = 1 AND deleted_at IS NULL",
+                ).fetchall()
+            by_key = {row[0]: row[1] for row in rows if row[1]}
+            return by_key.get('user_summary_long') or by_key.get('user_summary')
         except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} bg queue depth check failed: {exc}")
-            return False
+            logger.warning(f"{LOG_PREFIX} _load_user_synthesis failed: {exc}")
+            return None
 
     # ── State persistence ───────────────────────────────────────────────────
 
@@ -473,13 +473,9 @@ def get_subconscious_worker() -> SubconsciousWorker:
             if _DEFAULT_INSTANCE is None:
                 tick_sec = _env_int("SUBCONSCIOUS_TICK_SEC", DEFAULT_TICK_SEC)
                 idle_sec = _env_int("SUBCONSCIOUS_IDLE_WINDOW_SEC", DEFAULT_IDLE_WINDOW_SEC)
-                bg_threshold = _env_int(
-                    "SUBCONSCIOUS_BG_QUEUE_THRESHOLD", DEFAULT_BG_QUEUE_THRESHOLD
-                )
                 _DEFAULT_INSTANCE = SubconsciousWorker(
                     tick_sec=tick_sec,
                     idle_window_sec=idle_sec,
-                    bg_queue_threshold=bg_threshold,
                 )
     return _DEFAULT_INSTANCE
 

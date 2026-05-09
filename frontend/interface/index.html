@@ -10,7 +10,30 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/shared/theme.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="rich_media/base_card.css">
+  <link rel="stylesheet" href="rich_media/weather.css">
+  <link rel="stylesheet" href="rich_media/article.css">
+  <link rel="stylesheet" href="rich_media/scheduler.css">
+  <link rel="stylesheet" href="rich_media/list.css">
+  <link rel="stylesheet" href="rich_media/timer.css">
   <script>globalThis.__chaliePage = 'chat';</script>
+  <script>
+    // Theme bootstrap — runs before paint to avoid a dark→light flash on
+    // light-mode preference. Honours saved choice; falls back to system.
+    (function () {
+      function pickTheme(saved) {
+        if (saved === 'light' || saved === 'dark') return saved;
+        return globalThis.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+      try {
+        var saved = localStorage.getItem('chalie-theme');
+        document.documentElement.dataset.theme = pickTheme(saved);
+      } catch (err) {
+        console.warn('theme-persist failed', err);
+        document.documentElement.dataset.theme = 'dark';
+      }
+    })();
+  </script>
   <script src="/shared/auth-gate.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -26,6 +49,7 @@
 <body>
   <!-- Ambient background -->
   <canvas id="ambientCanvas"></canvas>
+  <div id="ambientBloom"></div>
   <div id="grainOverlay"></div>
 
   <!-- Connection lost banner -->
@@ -121,6 +145,19 @@
           <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
           <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
         </svg>
+      </button>
+      <!-- Theme toggle (light / dark) -->
+      <button id="themeToggle" class="theme-toggle" aria-label="Toggle light or dark theme" title="Toggle light / dark">
+        <span class="theme-toggle__track" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </span>
+        <span class="theme-toggle__thumb" aria-hidden="true"></span>
       </button>
     </div>
   </header>
@@ -225,7 +262,6 @@
   <!-- Voice player overlay — modal audio player for Chalie message playback -->
   <dialog id="voicePlayerOverlay" class="voice-player-overlay" aria-label="Audio player">
     <div class="voice-player">
-      <p class="voice-player__title" id="vpTitle"></p>
       <!-- Loading state -->
       <div class="voice-player__loading" id="vpLoading">
         <div class="voice-player__spinner"></div>
@@ -238,25 +274,13 @@
         <input id="vpProgress" class="voice-player__progress" type="range" min="0" max="100" step="0.1" value="0" aria-label="Playback position">
         <div class="voice-player__time" id="vpTime">0:00 / 0:00</div>
         <div class="voice-player__btns">
-          <button id="vpBkBtn" class="voice-player__btn" aria-label="Back 10 seconds">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="1 4 1 10 7 10"></polyline>
-              <path d="M3.51 15a9 9 0 1 0 .49-4.5"></path>
-              <text x="9" y="14" font-size="6" fill="currentColor" stroke="none">10</text>
-            </svg>
-          </button>
+          <button id="vpBkBtn" class="voice-player__btn voice-player__btn--seek" aria-label="Back 10 seconds">&laquo;</button>
           <button id="vpPlayBtn" class="voice-player__btn voice-player__btn--play" aria-label="Play">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" stroke="none">
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
           </button>
-          <button id="vpFfBtn" class="voice-player__btn" aria-label="Forward 10 seconds">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <path d="M20.49 15a9 9 0 1 1-.49-4.5"></path>
-              <text x="9" y="14" font-size="6" fill="currentColor" stroke="none">10</text>
-            </svg>
-          </button>
+          <button id="vpFfBtn" class="voice-player__btn voice-player__btn--seek" aria-label="Forward 10 seconds">&raquo;</button>
         </div>
       </div>
       <button id="vpCloseBtn" class="voice-player__close btn-icon" aria-label="Close player">
@@ -421,6 +445,21 @@
     </div>
   </dialog>
 
+  <script>
+    // Theme toggle wiring — flips data-theme on <html>, persists to localStorage.
+    // Pre-paint bootstrap above already set the initial theme.
+    (function () {
+      var btn = document.getElementById('themeToggle');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        var current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+        var next = current === 'light' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('chalie-theme', next); } catch (err) { console.warn('theme-persist failed', err); }
+        document.dispatchEvent(new CustomEvent('chalie:theme-changed', { detail: { theme: next } }));
+      });
+    })();
+  </script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

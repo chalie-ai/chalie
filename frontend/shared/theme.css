@@ -1,5 +1,9 @@
 /* ── Bootstrap v5 variable overrides ──────────────────────────────────────── */
-:root {
+/* Dark theme (default). `:root` so pages without `data-theme` still get it.   */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
   /* Primary = violet #8A5CFF */
   --bs-primary:             #8A5CFF;
   --bs-primary-rgb:         138, 92, 255;
@@ -40,34 +44,142 @@
   --bs-form-control-bg:     rgba(255, 255, 255, 0.05);
 
   /* ── Radiant tokens (backward compat + Chalie-specific) ───────────────────── */
-  --accent-primary:         var(--bs-primary);
-  --accent-secondary:       var(--bs-secondary);
-  --accent-tertiary:        var(--bs-info);
-  --bg:                     var(--bs-body-bg);
+  --violet:                 #8A5CFF;
+  --violet-hover:           #9B6FFF;
+  --magenta:                #FF2FD1;
+  --cyan:                   #00F0FF;
+
+  --accent-primary:         var(--violet);
+  --accent-secondary:       var(--magenta);
+  --accent-tertiary:        var(--cyan);
+  --bg:                     #06080e;
+  --bg-2:                   #0d0f18;
   --bg-surface:             rgba(255, 255, 255, 0.03);
+  --bg-surface-2:           rgba(255, 255, 255, 0.05);
   --bg-input:               rgba(255, 255, 255, 0.05);
-  --text:                   var(--bs-body-color);
-  --text-primary:           var(--bs-body-color);
+  --bg-user:                rgba(138, 92, 255, 0.07);
+  --bg-chalie:              rgba(255, 255, 255, 0.025);
+  --text:                   #eae6f2;
+  --text-primary:           #eae6f2;
   --text-secondary:         rgba(234, 230, 242, 0.58);
   --text-muted:             rgba(234, 230, 242, 0.50);
+  --text-tertiary:          rgba(234, 230, 242, 0.30);
   --text-subtle:            rgba(234, 230, 242, 0.30);
-  --border:                 var(--bs-border-color);
-  --success:                var(--bs-success);
-  --error:                  var(--bs-danger);
-  --warning:                var(--bs-warning);
+  --border:                 rgba(255, 255, 255, 0.07);
+  --border-subtle:          rgba(255, 255, 255, 0.07);
+  --border-strong:          rgba(255, 255, 255, 0.12);
+  --success:                #34d399;
+  --error:                  #fb7185;
+  --warning:                #fbbf24;
   --ease-out:               cubic-bezier(0.16, 1, 0.3, 1);
 
+  /* Effects */
+  --shadow-card:            0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 40px rgba(0,0,0,0.35);
+  --grain-opacity:          0.04;
+  --grain-blend:            overlay;
+
+  /* Ambient orbs (drive the canvas + decorative orbs) */
+  --orb-1:                  rgba(138, 92, 255, 0.55);
+  --orb-2:                  rgba(255, 47, 209, 0.30);
+  --orb-3:                  rgba(0, 240, 255, 0.22);
+
+  /* Surface scrim / dock backdrop — used by fixed bars */
+  --scrim-top:              rgba(6, 8, 14, 0.92);
+  --scrim-dock:             rgba(6, 8, 14, 0.92);
+  --scrim-fallback:         rgba(6, 8, 14, 0.98);
+
   /* Legacy aliases kept for backward compat */
-  --accent:                 var(--bs-primary);
-  --accent-hover:           #9B6FFF;
-  --bg-dark:                #06080e;
-  --bg-card:                rgba(255, 255, 255, 0.03);
+  --accent:                 var(--violet);
+  --accent-hover:           var(--violet-hover);
+  --bg-dark:                var(--bg);
+  --bg-card:                var(--bg-surface);
+}
+
+/* ── Light theme ──────────────────────────────────────────────────────────────
+   Mirrors the dark token system. Violet stays primary (nudged for AA on
+   light), warm paper background (never pure white), softer ambient orbs
+   blended via `multiply` so they tint the page rather than glow on it. */
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Bootstrap */
+  --bs-primary:             #6E3DEB;
+  --bs-primary-rgb:         110, 61, 235;
+  --bs-secondary:           #DB1FAF;
+  --bs-secondary-rgb:       219, 31, 175;
+  --bs-info:                #0098A8;
+  --bs-info-rgb:            0, 152, 168;
+  --bs-success:             #0F9D6E;
+  --bs-success-rgb:         15, 157, 110;
+  --bs-danger:              #DC3654;
+  --bs-danger-rgb:          220, 54, 84;
+  --bs-warning:             #B47B00;
+  --bs-warning-rgb:         180, 123, 0;
+  --bs-body-bg:             #F6F4F1;
+  --bs-body-color:          #1A1626;
+  --bs-border-color:        rgba(26, 22, 38, 0.08);
+  --bs-card-bg:             rgba(255, 255, 255, 0.72);
+  --bs-card-border-color:   rgba(26, 22, 38, 0.08);
+  --bs-card-cap-bg:         rgba(255, 255, 255, 0.55);
+  --bs-link-color:          #6E3DEB;
+  --bs-link-hover-color:    #5B2DD8;
+  --bs-link-color-rgb:      110, 61, 235;
+  --bs-form-control-bg:     rgba(255, 255, 255, 0.88);
+
+  /* Radiant tokens */
+  --violet:                 #6E3DEB;
+  --violet-hover:           #5B2DD8;
+  --magenta:                #DB1FAF;
+  --cyan:                   #0098A8;
+
+  --accent-primary:         var(--violet);
+  --accent-secondary:       var(--magenta);
+  --accent-tertiary:        var(--cyan);
+  --bg:                     #F6F4F1;
+  --bg-2:                   #FFFFFF;
+  --bg-surface:             rgba(255, 255, 255, 0.72);
+  --bg-surface-2:           rgba(255, 255, 255, 0.92);
+  --bg-input:               rgba(255, 255, 255, 0.88);
+  --bg-user:                rgba(110, 61, 235, 0.07);
+  --bg-chalie:              rgba(255, 255, 255, 0.65);
+  --text:                   #1A1626;
+  --text-primary:           #1A1626;
+  --text-secondary:         rgba(26, 22, 38, 0.62);
+  --text-muted:             rgba(26, 22, 38, 0.50);
+  --text-tertiary:          rgba(26, 22, 38, 0.34);
+  --text-subtle:            rgba(26, 22, 38, 0.34);
+  --border:                 rgba(26, 22, 38, 0.08);
+  --border-subtle:          rgba(26, 22, 38, 0.08);
+  --border-strong:          rgba(26, 22, 38, 0.14);
+  --success:                #0F9D6E;
+  --error:                  #DC3654;
+  --warning:                #B47B00;
+
+  /* Effects */
+  --shadow-card:            none;
+  --grain-opacity:          0.035;
+  --grain-blend:            multiply;
+
+  /* Ambient orbs — softer, more pastel on light */
+  --orb-1:                  rgba(138, 92, 255, 0.28);
+  --orb-2:                  rgba(255, 47, 209, 0.18);
+  --orb-3:                  rgba(0, 200, 220, 0.18);
+
+  /* Surface scrims react to the warm paper bg */
+  --scrim-top:              rgba(246, 244, 241, 0.88);
+  --scrim-dock:             rgba(246, 244, 241, 0.92);
+  --scrim-fallback:         rgba(246, 244, 241, 0.98);
+
+  --accent-hover:           var(--violet-hover);
+  --bg-dark:                var(--bg);
+  --bg-card:                var(--bg-surface);
 }
 
 /* ── Base resets ──────────────────────────────────────────────────────────── */
 body {
   background-color: var(--bs-body-bg);
   color: var(--bs-body-color);
+  transition: background-color 420ms ease, color 420ms ease;
 }
 
 /* ── JS-coupled class aliases (cannot be renamed in JS) ───────────────────── */
@@ -166,7 +278,7 @@ textarea::placeholder { color: var(--text-secondary); }
 
 /* Modals */
 .modal-content {
-  background-color: #0d0f18;
+  background-color: var(--bg-2);
   border-color: var(--bs-border-color);
   color: var(--bs-body-color);
 }
@@ -220,7 +332,7 @@ textarea::placeholder { color: var(--text-secondary); }
 
 /* Dropdowns */
 .dropdown-menu {
-  background-color: #0d0f18;
+  background-color: var(--bg-2);
   border-color: var(--bs-border-color);
 }
 .dropdown-item { color: var(--bs-body-color); }
@@ -250,7 +362,7 @@ textarea::placeholder { color: var(--text-secondary); }
 
 /* Toast */
 .toast {
-  background-color: #0d0f18;
+  background-color: var(--bg-2);
   border-color: var(--bs-border-color);
   color: var(--bs-body-color);
 }

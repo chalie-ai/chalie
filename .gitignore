@@ -4,13 +4,12 @@
 *.session_secret
 backend/.env
 backend/.key
-backend/data/*
-!backend/data/pre-trained/
-!backend/data/pre-trained/**
-backend/*.db
-backend/*.db-journal
-backend/*.db-wal
-backend/*.db-shm
+# Runtime state — entire /data tree is local-only, never committed.
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 backend/configs/generated/
 
 # Python
@@ -36,7 +35,6 @@ node_modules/
 frontend/_interfaces
 
 docker-compose.yml
-frontend/server/data/
 .aider*
 
 # LLM request logs (verbatim, one file per request, never committed)
@@ -53,3 +51,4 @@ frontend/server/data/
 backend/.build_baseline.json
 backend/.simplify_baseline.json*
 backend/.simplify_test_results.xml*
+.sonar_issues_p*.json

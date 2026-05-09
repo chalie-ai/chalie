@@ -81,7 +81,7 @@ class TestTraitExtraction:
 
         assert len(result) == 2
         assert result[0]["term"] == "artificial intelligence"
-        assert result[0]["score"] == 0.9 * 5
+        assert result[0]["score"] == pytest.approx(0.9 * 5, abs=1e-6)
         assert result[0]["source"] == "trait"
 
     def test_skips_short_trait_values(self, db):
@@ -122,8 +122,8 @@ class TestTopicExtraction:
 
         assert len(result) == 2
         assert result[0]["term"] == "machine learning"  # underscores replaced
-        assert result[0]["score"] == 1.0  # highest freq
-        assert result[1]["score"] == 0.5  # 5/10
+        assert result[0]["score"] == pytest.approx(1.0, abs=1e-9)  # highest freq
+        assert result[1]["score"] == pytest.approx(0.5, abs=1e-9)  # 5/10
 
     def test_normalizes_topic_names(self, db):
         _seed_topic_transcript(db, "natural_language_processing", 3)

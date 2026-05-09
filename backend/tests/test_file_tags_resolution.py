@@ -16,7 +16,7 @@ All tests use the real production stack:
   correctly in single-threaded tests — this is infrastructure wiring, not a
   mock of the feature being tested.
 
-The 10-second poll-timeout path is intentionally omitted: it burns real
+The 300-second poll-timeout path is intentionally omitted: it burns real
 wall-clock time that is unacceptable in CI, and the scenario is already
 exercised end-to-end by nightly scenario 063.
 """
@@ -198,8 +198,8 @@ def _insert_doc(
 def test_ready_image_emits_ocr_tag(_ft_db):
     """
     When an image_id refers to a document with status='ready' and OCR text,
-    _resolve_file_tags must return a single [image id=... ocr=...] tag
-    containing that OCR text.
+    _resolve_file_tags must return a single [image(id=...)]ocr text[end:image]
+    tag containing that OCR text.
 
     This is the happy path: the user drags an image into chat, the vision
     analysis completes before the user hits send, and the LLM receives the
@@ -217,7 +217,8 @@ def test_ready_image_emits_ocr_tag(_ft_db):
     tags = _resolve_file_tags(["img00001"], "req-001")
 
     assert len(tags) == 1
-    assert tags[0].startswith("[image id=img00001 ocr=")
+    assert tags[0].startswith("[image(id=img00001)]")
+    assert tags[0].endswith("[end:image]")
     assert "INVOICE #1234" in tags[0]
 
 
@@ -226,8 +227,8 @@ def test_failed_image_emits_status_failed_tag(_ft_db):
     """
     When an image_id refers to a document with status='failed' (vision
     analysis raised an error), _resolve_file_tags must return
-    [image id=... status=failed] so the LLM knows the image was attached
-    but could not be read — rather than silently dropping it.
+    [image(id=...)]analysis failed[end:image] so the LLM knows the image
+    was attached but could not be read — rather than silently dropping it.
     """
     _, seed_conn = _ft_db
     _insert_doc(
@@ -240,7 +241,7 @@ def test_failed_image_emits_status_failed_tag(_ft_db):
     tags = _resolve_file_tags(["img00002"], "req-002")
 
     assert len(tags) == 1
-    assert tags[0] == "[image id=img00002 status=failed]"
+    assert tags[0] == "[image(id=img00002)]analysis failed[end:image]"
 
 
 @pytest.mark.unit
@@ -248,14 +249,14 @@ def test_nonexistent_image_emits_not_found_tag(_ft_db):
     """
     When an image_id has no corresponding document record (deleted, never
     uploaded, or the client sent a stale ID), _resolve_file_tags must return
-    [image id=... status=not_found] rather than silently omitting the image
-    from the LLM context.
+    [image(id=...)]image not found[end:image] rather than silently omitting
+    the image from the LLM context.
     """
     # Deliberately do NOT seed any document for this ID.
     tags = _resolve_file_tags(["ghostid0"], "req-003")
 
     assert len(tags) == 1
-    assert tags[0] == "[image id=ghostid0 status=not_found]"
+    assert tags[0] == "[image(id=ghostid0)]image not found[end:image]"
 
 
 @pytest.mark.unit
@@ -263,8 +264,8 @@ def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
     """
     When image_ids is empty but a source_type='upload' document was created
     within the last 120 seconds and is ready with clean_text, _resolve_file_tags
-    must inject [document id=... name=... content=...] with the document's
-    clean_text.
+    must inject [document(id=..., name=...)]content[end:document] with the
+    document's clean_text.
 
     This is the drag-and-drop PDF / text-file path: the user uploads a PDF
     alongside their message, and even though no explicit image_ids are sent,
@@ -285,8 +286,8 @@ def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
 
     assert len(tags) == 1
     tag = tags[0]
-    assert tag.startswith("[document id=doc00001")
-    assert "report.pdf" in tag
+    assert tag.startswith("[document(id=doc00001, name=report.pdf)]")
+    assert tag.endswith("[end:document]")
     assert "Quarterly revenue grew 18%" in tag
 
 
@@ -295,8 +296,8 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
     """
     When image_ids is empty but a source_type='chat_image' document was
     created within the last 120 seconds and is ready, _resolve_file_tags
-    must inject [image id=... ocr=...] — the same OCR tag format used for
-    explicitly-referenced images.
+    must inject [image(id=...)]ocr text[end:image] — the same tag format
+    used for explicitly-referenced images.
 
     This is the paste / drop path where the frontend sends the chat turn
     before the upload XHR has had a chance to attach the image_id to the
@@ -314,5 +315,6 @@ def test_empty_image_ids_picks_up_recent_chat_image_document(_ft_db):
     tags = _resolve_file_tags([], "req-005")
 
     assert len(tags) == 1
-    assert tags[0].startswith("[image id=img00003 ocr=")
+    assert tags[0].startswith("[image(id=img00003)]")
+    assert tags[0].endswith("[end:image]")
     assert "Meeting notes: action items" in tags[0]

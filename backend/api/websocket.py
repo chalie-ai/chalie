@@ -23,7 +23,8 @@ from collections import deque
 
 from utils.logger import set_correlation_id
 
-from services.markup import wrap_text_xml, actions_to_xml, is_xml_content, sanitize
+from services.markup import actions_to_xml, sanitize
+from services.rich_media_parser import parse as _parse_rich_media
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +207,7 @@ def register_websocket(sock):
                 if msg_type == 'chat':
                     _handle_chat(ws, store, msg, active_request)
                 elif msg_type == 'action':
-                    _handle_action(ws, store, msg)
+                    _handle_action(ws, msg)
                 elif msg_type == 'act_steer':
                     _handle_act_steer(store, msg, active_request)
                 elif msg_type == 'resume':
@@ -243,10 +244,14 @@ def _poll_until_terminal(svc, doc_id: str, deadline: float) -> str:
     return status
 
 
+_UPLOAD_DEADLINE_S = 300.0
+
+
 def _image_ocr_tag(doc: dict, image_id: str) -> str:
-    """Format a ready-image tag with OCR text (or <none> sentinel)."""
+    """Format a ready-image tag with OCR text."""
     ocr = (_parse_meta(doc.get('extracted_metadata')).get('ocr_text') or '').strip()
-    return f"[image id={image_id} ocr={ocr[:500]}]" if ocr else f"[image id={image_id} ocr=<none>]"
+    body = ocr[:500] if ocr else 'no text detected'
+    return f"[image(id={image_id})]{body}[end:image]"
 
 
 def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> str:
@@ -254,7 +259,7 @@ def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> 
     doc = svc.get_document(image_id)
     if not doc:
         logger.warning(f"[WS] file_tags image not found image_id={image_id} request_id={request_id}")
-        return f"[image id={image_id} status=not_found]"
+        return f"[image(id={image_id})]image not found[end:image]"
 
     status = doc.get('status', '')
     if status not in ('ready', 'failed'):
@@ -264,9 +269,9 @@ def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> 
         return _image_ocr_tag(svc.get_document(image_id) or doc, image_id)
     if status == 'failed':
         logger.warning(f"[WS] file_tags image analysis failed image_id={image_id} request_id={request_id}")
-        return f"[image id={image_id} status=failed]"
+        return f"[image(id={image_id})]analysis failed[end:image]"
     logger.warning(f"[WS] file_tags image analysis timed out image_id={image_id} status={status} request_id={request_id}")
-    return f"[image id={image_id} status=timeout]"
+    return f"[image(id={image_id})]timeout of {int(_UPLOAD_DEADLINE_S)} seconds exceeded[end:image]"
 
 
 def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text: str, source_type: str) -> str:
@@ -275,9 +280,8 @@ def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text
     if source_type == 'chat_image':
         return _image_ocr_tag(final, doc_id)
     final_text = (final.get('clean_text') or fallback_text or '').strip()
-    if final_text:
-        return f"[document id={doc_id} name={original_name} content={final_text[:2000]}]"
-    return f"[document id={doc_id} name={original_name} content=<empty>]"
+    body = final_text[:2000] if final_text else 'no content extracted'
+    return f"[document(id={doc_id}, name={original_name})]{body}[end:document]"
 
 
 def _fetch_recent_upload_row(db):
@@ -309,16 +313,22 @@ def _resolve_recent_upload(db, svc, request_id: str):
 
     doc_id, original_name, doc_status, clean_text, source_type = row
     if doc_status not in ('ready', 'failed'):
-        doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + 10.0)
+        doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + _UPLOAD_DEADLINE_S)
 
-    tag_kind = 'image' if source_type == 'chat_image' else 'document'
     if doc_status == 'ready':
         return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
+
+    tag_kind = 'image' if source_type == 'chat_image' else 'document'
+    if tag_kind == 'image':
+        params = f"id={doc_id}"
+    else:
+        params = f"id={doc_id}, name={original_name}"
+
     if doc_status == 'failed':
         logger.warning(f"[WS] file_tags recent upload failed doc_id={doc_id} source_type={source_type} request_id={request_id}")
-        return f"[{tag_kind} id={doc_id} status=failed]", None
+        return f"[{tag_kind}({params})]processing failed[end:{tag_kind}]", None
     logger.warning(f"[WS] file_tags recent upload timed out doc_id={doc_id} source_type={source_type} status={doc_status} request_id={request_id}")
-    return f"[{tag_kind} id={doc_id} status=timeout]", None
+    return f"[{tag_kind}({params})]timeout of {int(_UPLOAD_DEADLINE_S)} seconds exceeded[end:{tag_kind}]", None
 
 
 def _resolve_file_tags(image_ids: list, request_id: str) -> list:
@@ -326,8 +336,8 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     Build file_tags for a chat turn. Returns structured strings to be appended
     to metadata['file_tags'] — consumed by UserMessageProcessor.getUserPrompt.
 
-    Images share a single 10 s deadline so N slow images cannot block a turn
-    for N × 10 s. When image_ids is empty, the most recent upload/chat_image
+    All images share a single deadline so N slow images cannot block a turn
+    for N × deadline. When image_ids is empty, the most recent upload/chat_image
     (within 120 s) falls back in — covers paste/drop where the chat turn is
     sent before the upload XHR completes. Every failure path emits a tag.
     """
@@ -341,7 +351,7 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     tags = []
     doc_ids_injected = []
 
-    images_deadline = _time.monotonic() + 10.0
+    images_deadline = _time.monotonic() + _UPLOAD_DEADLINE_S
     for image_id in image_ids:
         tags.append(_resolve_image_tag(svc, image_id, images_deadline, request_id))
 
@@ -359,6 +369,77 @@ def _resolve_file_tags(image_ids: list, request_id: str) -> list:
     return tags
 
 
+def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
+    """Fetch all tool_calls rows (including ephemeral=1) for a list of transcript IDs.
+
+    Replaces the old recency-based lookup that:
+      - filtered WHERE channel='user' AND role='user', silently missing subagent rows
+      - raced DMN which can write user-channel rows between ACT completion and WS emit
+
+    Args:
+        transcript_ids: List of transcript.id values from the turn that produced
+            the response. Typically a single-element list containing the UMP input
+            row ID (``MessageProcessor._uid``).
+
+    Returns:
+        Tool_calls rows ordered by created_at, id. Empty list on any error.
+    """
+    if not transcript_ids:
+        return []
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        placeholders = ','.join('?' * len(transcript_ids))
+        with db.connection() as conn:
+            tc_rows = conn.execute(
+                f"SELECT tool_name, params, result, ephemeral, created_at FROM tool_calls "
+                f"WHERE transcript_id IN ({placeholders}) "
+                f"ORDER BY created_at, id",
+                transcript_ids,
+            ).fetchall()
+        return [
+            {
+                "tool_name": r[0],
+                "params": r[1],
+                "result": r[2] or "",
+                "ephemeral": r[3],
+                "created_at": r[4],
+            }
+            for r in tc_rows
+        ]
+    except Exception as exc:
+        logger.debug("[WS] _fetch_tool_calls_for_transcript_ids failed: %s", exc)
+        return []
+
+
+def _attach_segments(message_evt: dict, content: str, transcript_ids: list) -> None:
+    """Attach the ``segments`` field to a message_evt dict in-place.
+
+    Fetches tool_calls by exact transcript IDs (avoiding the stale recency
+    heuristic) then calls RichMediaParser.parse(). Always produces at least
+    one segment — for responses with no rich-media spans this is a single
+    text segment; the frontend checks for ``segments`` presence, not length.
+
+    When ``transcript_ids`` is empty or None (e.g. legacy callers), a warning
+    is logged and a plain text segment is emitted — no silent degradation.
+
+    Args:
+        message_evt: The WS event dict being assembled (mutated in-place).
+        content: Sanitised assistant text (``transcript.content``).
+        transcript_ids: List of transcript row IDs for this turn. Populated
+            from ``MessageProcessor._uid`` by the background chat handler.
+    """
+    if not transcript_ids:
+        logger.warning("[WS] _attach_segments: no transcript_ids — emitting plain text segment")
+        message_evt["segments"] = [{"type": "text", "content": content}]
+        return
+    tool_calls = _fetch_tool_calls_for_transcript_ids(transcript_ids)
+    segments = _parse_rich_media(content, tool_calls)
+    if not segments:
+        segments = [{"type": "text", "content": content}]
+    message_evt["segments"] = segments
+
+
 def _handle_resume(ws, msg):
     """Replay missed events on reconnect."""
     last_seq = msg.get('last_seq', 0)
@@ -368,8 +449,15 @@ def _handle_resume(ws, msg):
     logger.debug(f"[WS] Resume: replayed {len(events)} events from seq {last_seq}")
 
 
-def _handle_action(ws, store, msg):
-    """Handle a deterministic action button click."""
+def _handle_action(ws, msg):
+    """Handle a deterministic action button click.
+
+    All ability invocations flow through ``ActDispatcherService`` so there is a
+    single tool-dispatch path.  The channel ``'action_button'`` is not
+    ``'user'``, so the dispatcher never injects ``_rich_media_ordinal`` — the
+    ordinal-None contract on ``Ability.execute()`` is automatically satisfied
+    without any special-casing here.
+    """
     payload = msg.get('payload', {})
     skill = payload.get('skill', '')
     if not skill:
@@ -382,37 +470,49 @@ def _handle_action(ws, store, msg):
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
     try:
-        from abilities._registry import AbilityRegistry
-        try:
-            ability = AbilityRegistry.get(skill)
-        except KeyError:
-            seq = _next_seq()
-            _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
-            seq = _next_seq()
-            _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
-            return
+        from services.act_dispatcher_service import ActDispatcherService
+
+        # Build an action dict for the dispatcher: type = skill name, remaining
+        # keys are the ability's input parameters.  'skill' itself is a
+        # framework key (like 'type') so it is excluded from params.
+        action = {
+            'type': skill,
+            **{k: v for k, v in payload.items() if k != 'skill'},
+        }
 
         start = time.time()
-        result = ability.execute('action_button', payload, None)
+        dispatcher = ActDispatcherService()
+        dispatch_result = dispatcher.dispatch_action('action_button', action)
 
-        # Handle structured results (text + reply_actions)
-        reply_actions = None
+        if dispatch_result.get('status') == 'error':
+            result_text = dispatch_result.get('result', '')
+            if 'Unknown action type' in result_text:
+                seq = _next_seq()
+                _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
+                seq = _next_seq()
+                _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
+                return
+
+        # Dispatcher already unwraps {'text': ..., 'reply_actions': ...} in
+        # _build_success_result — result is plain text or dict by this point.
+        result = dispatch_result.get('result')
+        reply_actions = dispatch_result.get('reply_actions')
+
+        # If the ability returned a dict with a 'text' key that the dispatcher
+        # did not unwrap (non-standard ability shape), normalise it here.
         if isinstance(result, dict) and 'text' in result:
-            reply_actions = result.get('reply_actions')
+            reply_actions = reply_actions or result.get('reply_actions')
             result = result['text']
 
         elapsed_ms = int((time.time() - start) * 1000)
 
-        # LLM / skill result → XML content string. Sanitize() is the single
+        # LLM / skill result → HTML content string. Sanitize() is the single
         # chokepoint: it strips every tag/attribute outside our allowlist
         # before the FE ever sees the content. The LLM is told to never emit
         # ``<a>``; the FE auto-linkifies any plain-text URLs it finds.
-        content = (result or "Done.")
-        if not is_xml_content(content):
-            content = wrap_text_xml(content)
+        content = sanitize(result or "Done.")
         if reply_actions:
             content += actions_to_xml(reply_actions)
-        content = sanitize(content)
 
         seq = _next_seq()
         message_evt = {
@@ -430,6 +530,10 @@ def _handle_action(ws, store, msg):
                 "response_time_s": round(time.time() - action_start, 3),
             },
         }
+        # Action-button responses come directly from abilities, not the ACT loop,
+        # so there are no transcript IDs or tool_calls rows. Empty list causes
+        # _attach_segments to emit a single plain text segment.
+        _attach_segments(message_evt, content, [])
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
 
@@ -529,10 +633,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 'channel': 'user',
             }
 
-            # Resolve file context tags — waits up to 10 s for image analysis
-            # and injects a recent-upload document heuristic when applicable.
-            # MUST run before UserMessageProcessor is constructed so that
-            # getUserPrompt() picks up file_tags on its first call.
+            # Resolve file context tags — blocks until upload processing
+            # completes (up to _UPLOAD_DEADLINE_S). Injects a recent-upload
+            # document heuristic when applicable. MUST run before
+            # UserMessageProcessor is constructed so that getUserPrompt()
+            # picks up file_tags on its first call.
             _file_tags_t0 = time.time()
             metadata['file_tags'] = _resolve_file_tags(image_ids, request_id)
             _file_tags_wait_ms = int((time.time() - _file_tags_t0) * 1000)
@@ -548,9 +653,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                     # Reuse the outer `store` from ws_chat (line 113) — no need
                     # to create a second MemoryClient connection per narration
                     # (Commit 8 critic P2-1).
+                    # Run narration through the same nh3 chokepoint chat
+                    # bubbles use — the frontend renders this via innerHTML
+                    # and trusts the backend has already stripped anything
+                    # outside the LLM tag allowlist.
                     store.set(f"output:{narration_id}", _json.dumps({
                         'type': 'act_narration',
-                        'text': text,
+                        'text': sanitize(text),
                         'step': step,
                     }), ex=300)
                     store.publish(f"sse:{request_id}", narration_id)
@@ -594,6 +703,12 @@ def _handle_chat(ws, store, msg, active_request=None):
             metrics = proc._metrics.snapshot()
             partial_metrics.update(metrics)
 
+            # Thread the input transcript row ID so the WS handler can fetch
+            # tool_calls by exact ID rather than by recency heuristic (Fix 2).
+            # proc._uid is the user-input transcript row written at the top of
+            # send(); all ACT tool_calls for this turn are stored against it.
+            _transcript_ids = [proc._uid] if getattr(proc, '_uid', None) is not None else None
+
             output_svc = OutputService()
             output_svc.enqueue_text(
                 topic='user',
@@ -603,12 +718,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                 generation_time=0.0,
                 original_metadata=metadata,
                 metrics=metrics,
+                transcript_ids=_transcript_ids,
             )
 
             # Store result at output:{request_id} so the fallback path can
             # find it if the pub/sub message was missed.
             try:
-                _fb_content = sanitize(response if is_xml_content(response) else wrap_text_xml(response))
+                _fb_content = sanitize(response or "")
                 fallback_output = {
                     "type": "TEXT",
                     "topic": 'user',
@@ -649,12 +765,14 @@ def _handle_chat(ws, store, msg, active_request=None):
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "thinking", "seq": seq})
 
-    # Listen for pub/sub events with timeout
+    # Listen for pub/sub events until done, disconnected, or cancelled.
+    # The loop is unbounded — no wall-clock timeout on the chat request.
+    # Exit conditions: (a) 'done' event arrives, (b) background thread sets
+    # bg_done and no pub/sub message received, (c) WS disconnects.
     start_time = time.time()
-    timeout_seconds = 360
     message_received = False
 
-    while time.time() - start_time < timeout_seconds:
+    while True:
         ps_msg = pubsub.get_message(timeout=1.0)
 
         if ps_msg and ps_msg['type'] == 'message':
@@ -716,10 +834,11 @@ def _handle_chat(ws, store, msg, active_request=None):
 
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
+                _msg_content = metadata.get("content", "")
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "content": metadata.get("content", ""),
+                    "content": _msg_content,
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -736,6 +855,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                     except Exception:
                         pass
                     message_evt["metrics"] = _msg_metrics
+                _attach_segments(
+                    message_evt,
+                    _msg_content,
+                    metadata.get("transcript_ids") or [],
+                )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -759,10 +883,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                 output = json.loads(fallback_data)
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
+                _fb_content = metadata.get("content", "")
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "content": metadata.get("content", ""),
+                    "content": _fb_content,
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
@@ -777,6 +902,11 @@ def _handle_chat(ws, store, msg, active_request=None):
                     except Exception:
                         pass
                     message_evt["metrics"] = _fallback_metrics
+                _attach_segments(
+                    message_evt,
+                    _fb_content,
+                    metadata.get("transcript_ids") or [],
+                )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:
@@ -799,18 +929,5 @@ def _handle_chat(ws, store, msg, active_request=None):
             _buffer_event(done_evt)
             _send_json(ws, done_evt)
             break
-    else:
-        # Timeout
-        seq = _next_seq()
-        err = {"type": "error", "message": "Request timed out", "recoverable": True, "seq": seq}
-        if partial_metrics:
-            err["metrics"] = partial_metrics
-        _buffer_event(err)
-        _send_json(ws, err)
-        seq = _next_seq()
-        done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-        _buffer_event(done_evt)
-        _send_json(ws, done_evt)
-
     pubsub.unsubscribe(sse_channel)
     pubsub.close()

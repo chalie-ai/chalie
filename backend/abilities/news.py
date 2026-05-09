@@ -1,7 +1,13 @@
 """
 NewsAbility — Search news articles across global sources.
+
+Rich-media rendering:
+  When ``_rich_media_ordinal`` is present (user channel only), returns a
+  structured JSON payload + instruction trailer so the frontend renders an
+  article card.  The first article's image (if any) populates the thumbnail.
 """
 
+import json
 import logging
 from typing import ClassVar, Optional
 
@@ -11,6 +17,25 @@ from services.news_service import NewsService
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
+
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a news article card; without it, the user sees "
+    "only plain text. Write a single paragraph that synthesises the key story "
+    "for the user. Example: \"Here's the latest — "
+    "<span id='{tag}'>The EU opened its first audits under the AI Act today, "
+    "targeting three major companies you've been tracking.</span>\""
+    "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
+    "array, each entry has a `url`, `source_title` (the article it came from), "
+    "and `caption` (a short description derived from the image filename or "
+    "article metadata). Pick the candidate whose `caption` and `source_title` "
+    "together best match the topic of your synthesis. If no candidate is a "
+    "clear match, omit `data-image`. To attach a thumbnail, add "
+    "`data-image='<that url>'` to the span, e.g. "
+    "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
+    "Use a URL verbatim from `image_candidates`."
+)
 
 
 class NewsAbility(Ability):
@@ -58,11 +83,12 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         query = (params.get("query") or "").strip()
         if not query:
             return {"text": "", "error": "A 'query' parameter is required."}
 
+        ordinal = params.get("_rich_media_ordinal")
         category = params.get("category")
         telemetry = telemetry or {}
 
@@ -82,8 +108,12 @@ class NewsAbility(Ability):
             if not articles:
                 return {"text": f"No news found for \"{query}\".", "title": f"News: \"{query}\""}
 
-            text = _format_articles(articles[:10])
-            return {"text": text, "title": f"News: \"{query}\""}
+            top = articles[:10]
+
+            if ordinal is None:
+                return {"text": _format_articles(top), "title": f"News: \"{query}\""}
+
+            return _serialise_rich(top, ordinal)
         except Exception as e:
             logger.error(f"[news-tool] failed: {e}", exc_info=True)
             return {"text": "", "error": str(e)}
@@ -101,11 +131,62 @@ class NewsAbility(Ability):
         return cls._COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
 
 
+def _serialise_rich(articles, ordinal: int) -> str:
+    tag = f"news_{ordinal}"
+    results = []
+    image_items: list[tuple[str, str]] = []
+    needs_og: list[tuple[str, str]] = []
+    for a in articles:
+        entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
+        if a.description:
+            entry["desc"] = a.description[:200]
+        results.append(entry)
+        img = getattr(a, "image_url", "") or ""
+        title = a.title or ""
+        if img:
+            image_items.append((img, title))
+        elif entry["url"]:
+            needs_og.append((entry["url"], title))
+
+    # og_meta maps image_url → {"image_url", "description"} for caption derivation
+    og_meta: dict = {}
+    if len(image_items) < 3 and needs_og:
+        from services.og_image_service import resolve_og_images
+        try:
+            og_map = resolve_og_images([u for u, _ in needs_og[: 3 - len(image_items)]])
+        except Exception as exc:
+            logger.warning("[news-tool] og:image lookup failed: %s", exc)
+            og_map = {}
+        for article_url, title in needs_og:
+            meta = og_map.get(article_url)
+            if meta:
+                img = meta["image_url"]
+                image_items.append((img, title))
+                # Key by image URL so image_candidate_service can look it up
+                og_meta[img] = meta
+            if len(image_items) >= 3:
+                break
+
+    payload: dict = {"results": results}
+    if image_items:
+        try:
+            from services.image_candidate_service import build_image_candidates
+            candidates = build_image_candidates(image_items, og_meta=og_meta or None)
+        except Exception as exc:
+            logger.warning("[news-tool] image candidate shortlist failed: %s", exc)
+            candidates = []
+        if candidates:
+            payload["image_candidates"] = candidates
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"
+
+
 def _format_articles(articles) -> str:
     lines = []
     for a in articles:
-        lines.append(f"\u2022 {a.title}")
-        lines.append(f"  {a.source} \u00b7 {TimeFormatterService.ago(a.published_at)}")
+        lines.append(f"• {a.title}")
+        lines.append(f"  {a.source} · {TimeFormatterService.ago(a.published_at)}")
         if a.description:
             lines.append(f"  {a.description[:150]}")
         lines.append("")

@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask_cors import CORS
 
+import paths
 from .auth import require_session as require_session
 
 
@@ -144,7 +145,7 @@ def _get_or_generate_session_secret() -> str:
     if env_key:
         return env_key
 
-    secret_file = _BACKEND_DIR / 'data' / '.session_secret'
+    secret_file = paths.SESSION_SECRET_PATH
     if secret_file.exists():
         try:
             value = secret_file.read_text().strip()
@@ -169,27 +170,18 @@ def _init_dashboard_gateway(app):
     DB, and creates a ChalieClient for proxying signals/context to the backend.
     All runs inside the same Flask process — no separate server or proxy needed.
     """
-    import sys
-
-    # Ensure the repo root is on sys.path so `frontend.server` is importable.
-    # In Docker: /app is the repo root, /app/backend is the working dir.
-    repo_root = str(_BACKEND_DIR.parent)
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
-
-    from frontend.server import db as dashboard_db
-    from frontend.server.gateway import gateway_bp, init_gateway
-    from frontend.server.interfaces import interfaces_bp as apps_bp, init_interfaces
-    from frontend.server.chalie_client import ChalieClient
+    from gateway import db as dashboard_db
+    from gateway.gateway import gateway_bp, init_gateway
+    from gateway.interfaces import interfaces_bp as apps_bp, init_interfaces
+    from gateway.chalie_client import ChalieClient
 
     from runtime_config import get as rc_get
 
     port = int(rc_get('port', 8081))
 
     # Dashboard DB lives alongside Chalie's data
-    data_dir = str(_BACKEND_DIR / 'data')
-    db_path = os.path.join(data_dir, 'dashboard.db')
-    dashboard_db.init_db(db_path)
+    data_dir = str(paths.DATA_DIR)
+    dashboard_db.init_db(str(paths.DASHBOARD_DB_PATH))
 
     # ChalieClient talks to ourselves (localhost) — no network hop.
     # Auto-generate a wrapper bearer token so the gateway can authenticate
@@ -285,7 +277,7 @@ def create_app():
 
     # ── Static file serving (replaces nginx) ─────────────────────────
 
-    @app.route('/shared/<path:filename>')
+    @app.route('/shared/<path:filename>', methods=["GET"])
     def shared_static(filename):
         """Serve shared frontend assets (theme.css, etc.)."""
         real = _strip_version_from_path(filename)
@@ -305,17 +297,17 @@ def create_app():
             return send_from_directory(str(directory), real)
         return _serve_versioned_html(directory)
 
-    @app.route('/brain/<path:filename>')
+    @app.route('/brain/<path:filename>', methods=["GET"])
     def brain_static(filename):
         """Serve brain dashboard SPA."""
         return _serve_spa(_BRAIN_DIR, filename)
 
-    @app.route('/brain')
+    @app.route('/brain', methods=["GET"])
     def brain_index_no_slash():
         """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
         return redirect('/brain/', code=301)
 
-    @app.route('/brain/')
+    @app.route('/brain/', methods=["GET"])
     def brain_index():
         """Serve brain dashboard index. Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
@@ -324,43 +316,43 @@ def create_app():
             return redirect('/login/?next=/brain/')
         return _serve_versioned_html(_BRAIN_DIR)
 
-    @app.route('/on-boarding/<path:filename>')
+    @app.route('/on-boarding/<path:filename>', methods=["GET"])
     def onboarding_static(filename):
         """Serve onboarding SPA."""
         return _serve_spa(_ONBOARDING_DIR, filename)
 
-    @app.route('/on-boarding')
+    @app.route('/on-boarding', methods=["GET"])
     def onboarding_index_no_slash():
         """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
         return redirect('/on-boarding/', code=301)
 
-    @app.route('/on-boarding/')
+    @app.route('/on-boarding/', methods=["GET"])
     def onboarding_index():
         """Serve onboarding index."""
         return _serve_versioned_html(_ONBOARDING_DIR)
 
-    @app.route('/login/<path:filename>')
+    @app.route('/login/<path:filename>', methods=["GET"])
     def login_static(filename):
         """Serve login page assets."""
         return _serve_spa(_LOGIN_DIR, filename)
 
-    @app.route('/login')
+    @app.route('/login', methods=["GET"])
     def login_index_no_slash():
         """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
         return redirect('/login/', code=301)
 
-    @app.route('/login/')
+    @app.route('/login/', methods=["GET"])
     def login_index():
         """Serve login page."""
         return _serve_versioned_html(_LOGIN_DIR)
 
     # Main interface SPA — catch-all (must be last)
-    @app.route('/<path:filename>')
+    @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):
         """Serve main interface SPA files."""
         return _serve_spa(_INTERFACE_DIR, filename)
 
-    @app.route('/')
+    @app.route('/', methods=["GET"])
     def interface_index():
         """Serve main interface index."""
         return _serve_versioned_html(_INTERFACE_DIR)

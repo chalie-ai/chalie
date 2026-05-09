@@ -16,13 +16,11 @@ SELECT topic, role, content, created_at FROM (
 WHERE NOT EXISTS (SELECT 1 FROM topic_transcript LIMIT 1)
 ORDER BY created_at ASC;
 
--- 2. Backfill missing job→provider assignments for existing installs.
--- Mirrors backend/configs/cognitive_jobs.json. Keep in lockstep when jobs
--- are added or removed — SchemaConvergenceService prunes orphan rows on
--- boot, so stale entries here are silently dropped, not warned.
-INSERT OR IGNORE INTO job_provider_assignments (job_name, provider_id)
-SELECT job_name, (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) AS provider_id
-FROM (
-    SELECT 'frontal-cortex-unified'
-)
+-- 2. Select the first active provider as the global provider for existing installs.
+INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
+SELECT 'selected_provider_id',
+       (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1),
+       'int',
+       'ID of the active LLM provider',
+       0
 WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;

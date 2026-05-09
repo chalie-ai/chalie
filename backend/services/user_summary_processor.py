@@ -10,7 +10,6 @@ writes both synopses back to data_graph as ``kind='system'`` rows.
 arrived since the last synthesis.  Triggered once per :class:`SubconsciousWorker`
 tick (v0.5.0 §5 step 4); the sentinel keeps repeated ticks idempotent.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
 """
 
 import json
@@ -59,7 +58,6 @@ class UserSummaryProcessor(MessageProcessor):
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
     MAX_ITERATIONS = 1
-    MAX_TIMEOUT = 120  # seconds
     SKIP_TRANSCRIPT_WRITE = True
 
     def __init__(self, metadata: dict | None = None):

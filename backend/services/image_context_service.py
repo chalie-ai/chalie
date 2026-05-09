@@ -23,7 +23,7 @@ _MAX_DIMENSION = 2048
 _MIN_TEXT_LENGTH = 10
 
 
-def analyze(image_bytes: bytes, mime_type: str = 'image/png') -> dict:
+def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
     """
     Analyze an image for chat context via local OCR.
 

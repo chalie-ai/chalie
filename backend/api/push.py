@@ -9,6 +9,7 @@ import os
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ def push_subscribe():
         store = MemoryClientService.create_connection()
         store.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         store.expire(SUBSCRIPTIONS_KEY, 86400 * 30)
-        logger.info(f"[Push] Stored subscription: {subscription['endpoint'][:60]}...")
+        logger.info("[Push] Stored subscription: %s...", safe(subscription['endpoint'][:60]))
         return jsonify({'ok': True}), 201
     except Exception as e:
         logger.error(f"[Push] Subscribe error: {e}", exc_info=True)

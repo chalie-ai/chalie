@@ -3,11 +3,8 @@ Telemetry Service — in-process event collection and summarisation.
 
 Provides a lightweight :class:`TelemetryCollector` that:
 
-- Subscribes to :class:`~services.event_bus_service.EventBusService` for each
-  of the seven well-known telemetry event types so that any service emitting
-  via the bus is automatically captured.
 - Exposes a direct :meth:`TelemetryCollector.record` entry-point for services
-  that want to emit telemetry without going through the bus.
+  that want to emit telemetry events.
 - Maintains an in-memory ring buffer (``collections.deque``, ``maxlen=1000``)
   so memory footprint is bounded even under high event rates.
 - Provides :meth:`TelemetryCollector.get_summary` for the observability
@@ -20,14 +17,6 @@ Typical usage by a service::
     from services.telemetry_service import get_telemetry_collector, MEMORY_RECALL
 
     get_telemetry_collector().record(MEMORY_RECALL, {"episode_count": 5})
-
-Typical usage at application startup (``run.py``)::
-
-    from services.telemetry_service import get_telemetry_collector
-    from services.event_bus_service import EventBusService
-
-    bus = EventBusService()
-    get_telemetry_collector().subscribe_to_bus(bus)
 """
 
 import datetime
@@ -202,45 +191,6 @@ class TelemetryCollector:
 
         return summary
 
-    def subscribe_to_bus(self, bus: Any) -> None:
-        """Register this collector as a handler on an :class:`EventBusService`.
-
-        For each event type in :data:`ALL_TELEMETRY_EVENT_TYPES`, a handler
-        is registered via ``bus.subscribe(event_type, handler)``.  The
-        handler signature matches what :class:`EventBusService` expects:
-        ``handler(event_type: str, payload: dict)``.
-
-        This method is idempotent only if called once per bus instance; calling
-        it twice on the same bus will register duplicate handlers.
-
-        Args:
-            bus: An :class:`~services.event_bus_service.EventBusService`
-                instance.  Typed as ``Any`` to avoid a hard import cycle —
-                the caller is responsible for passing a correctly-typed
-                object.
-        """
-        for event_type in ALL_TELEMETRY_EVENT_TYPES:
-            bus.subscribe(event_type, self._bus_handler)
-        logger.info(
-            "TelemetryCollector subscribed to %d event types on EventBusService",
-            len(ALL_TELEMETRY_EVENT_TYPES),
-        )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _bus_handler(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Handler called by :class:`EventBusService` when an event is processed.
-
-        Delegates directly to :meth:`record` so all bus-delivered events
-        pass through the same stamping and storage logic.
-
-        Args:
-            event_type: The event type string forwarded by the bus.
-            payload: The event payload dict forwarded by the bus.
-        """
-        self.record(event_type, payload)
 
 
 # ---------------------------------------------------------------------------

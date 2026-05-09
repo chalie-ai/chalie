@@ -32,7 +32,7 @@ class TestUnknownHandler:
         result = service.dispatch_action('topic', {'type': 'nonexistent_action'})
 
         assert result['status'] == 'error'
-        assert result['confidence'] == 0.0
+        assert result['confidence'] == pytest.approx(0.0, abs=1e-9)
         assert 'Unknown action type' in result['result']
         assert result['action_type'] == 'nonexistent_action'
 
@@ -86,7 +86,7 @@ class TestHandlerException:
         result = service.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'error'
-        assert result['confidence'] == 0.0
+        assert result['confidence'] == pytest.approx(0.0, abs=1e-9)
         assert 'something broke' in result['result']
 
 
@@ -108,7 +108,7 @@ class TestTimeout:
         result = svc.dispatch_action('topic', {'type': 'recall'})
 
         assert result['status'] == 'timeout'
-        assert result['confidence'] == 0.0
+        assert result['confidence'] == pytest.approx(0.0, abs=1e-9)
 
 
 # ── Confidence Estimation ──────────────────────────────────────

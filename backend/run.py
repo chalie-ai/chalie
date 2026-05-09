@@ -48,8 +48,6 @@ def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    parser.add_argument("--models-dir", default=None, help="ONNX models directory (default: backend/data/models or MODELS_DIR env)")
-    parser.add_argument("--pretrained-dir", default=None, help="Pre-shipped classifier directory (default: backend/data/pre-trained or PRETRAINED_DIR env)")
     args = parser.parse_args()
 
     port = args.port
@@ -57,12 +55,7 @@ def main():
 
     # Store in runtime_config so any module can access these values
     import runtime_config
-    config = {"port": port, "host": host}
-    if args.models_dir:
-        config["models_dir"] = args.models_dir
-    if args.pretrained_dir:
-        config["pretrained_dir"] = args.pretrained_dir
-    runtime_config.set(config)
+    runtime_config.set({"port": port, "host": host})
 
     # Preload models in a single background thread so Flask starts immediately.
     # Models are loaded sequentially to avoid concurrent memory spikes that
@@ -132,6 +125,21 @@ def main():
     database_service = get_shared_db_service()
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+
+    # Persist providers.max_tokens / compact_at for every provider (active
+    # and inactive). Per-row try/except inside backfill_one — a single
+    # unreachable provider never kills startup.
+    try:
+        from services.provider_token_limits import backfill_all
+        with database_service.connection() as _conn:
+            _stats = backfill_all(_conn)
+            _conn.commit()
+        logger.info(
+            "[Startup] providers token-limit backfill: total=%d succeeded=%d failed=%d",
+            _stats['total'], _stats['succeeded'], _stats['failed'],
+        )
+    except Exception as _bf_err:
+        logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
 
     # One-time transcript rebuild (runs exactly once; sentinel file prevents re-runs)
     try:
@@ -235,7 +243,6 @@ def main():
     from consumer import WorkerManager
 
     # Import worker functions
-    from services.dmn_service import dmn_worker
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
@@ -244,7 +251,6 @@ def main():
     manager = WorkerManager()
 
     # Register service workers
-    manager.register_service("dmn-service", dmn_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
@@ -265,10 +271,6 @@ def main():
     # Self-model service (interoception — epistemic, operational, capability awareness)
     from services.self_model_service import self_model_worker
     manager.register_service("self-model-service", self_model_worker)
-
-    # Background LLM worker
-    from workers.background_llm_worker import background_llm_worker
-    manager.register_service("background-llm-worker", background_llm_worker)
 
     # Subconscious worker (v0.5.0 §5 — idle-gated 5-minute cognition tick:
     # super-episode consolidation → decay → pattern extraction → user synthesis).

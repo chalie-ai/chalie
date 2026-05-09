@@ -77,7 +77,7 @@ class ToolSubprocessService:
 
         try:
             return json.loads(raw)
-        except (json.JSONDecodeError, ValueError) as e:
+        except ValueError as e:
             raise RuntimeError(f"Tool returned invalid JSON: {e}")
 
     def run_interactive(
@@ -170,7 +170,7 @@ class ToolSubprocessService:
 
                 try:
                     result = json.loads(line_str)
-                except (json.JSONDecodeError, ValueError):
+                except ValueError:
                     logger.warning(
                         f"[SUBPROCESS INTERACTIVE] non-JSON stdout (turn {turns + 1}): "
                         f"{line_str[:200]}"

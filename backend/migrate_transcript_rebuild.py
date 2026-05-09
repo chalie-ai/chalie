@@ -7,11 +7,11 @@ IMPORTANT: Stop Chalie before running this script.
 What this does:
   1. Reads the last N transcript entries for the specified channel(s)
   2. Groups into (user → assistant) exchange pairs; skips background turns
-     (proactive_thought, goal_pursuit, scheduled) and tool-result rows
+     (proactive_thought, subagent, scheduled) and tool-result rows
   3. Strips the UserPromptAssemblyService wrapper from user content — keeps
      only the raw user message below the "## User Message" marker
   4. Deduplicates pairs by content hash
-  5. Deletes orphaned tool_calls, clears compactions, truncates transcript
+  5. Deletes orphaned tool_calls, truncates transcript
      rows for the affected channels
   6. Re-inserts clean (user, assistant) pairs in chronological order
      WITHOUT tool_calls rows — north-star format: no role='tool' in transcript,
@@ -28,18 +28,20 @@ Collateral tables:
     integer IDs. SQLite does not enforce this FK, and episode retrieval uses
     vector similarity, not transcript ID lookup — harmless.
   - memory_recall_log: same orphaned-ID situation, same non-impact.
-  - compactions: watermark ID is invalidated; row is deleted and rebuilt
-    naturally during normal operation.
+  - compaction tool_calls rows: watermark IDs reference transcript rows that
+    no longer exist after the rebuild. These rows are harmless — the canonical
+    lookup (get_compaction) filters by transcript.channel JOIN, so orphaned
+    tool_calls rows for deleted transcript IDs are invisible to the lookup.
 
 Usage:
   # Dry run — show what would happen, change nothing
   python migrate_transcript_rebuild.py --dry-run
 
-  # Run against default DB (backend/data/chalie.db), channel='user'
+  # Run against default DB (data/chalie.db), channel='user'
   python migrate_transcript_rebuild.py
 
-  # Custom DB path
-  python migrate_transcript_rebuild.py --db /data/chalie.db
+  # Custom DB path (e.g. operating on a backup)
+  python migrate_transcript_rebuild.py --db /tmp/chalie.db.pre-0.5.0
 
   # Different channel or limit
   python migrate_transcript_rebuild.py --channel main --limit 200
@@ -53,17 +55,18 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# Add backend/ to sys.path so `import paths` resolves when invoked standalone.
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+import paths  # noqa: E402
+
 logger = logging.getLogger(__name__)
-
-# ── DB path resolution ──────────────────────────────────────────────────────
-
-_DEFAULT_DB = str(Path(__file__).resolve().parent / "data" / "chalie.db")
 
 
 def _resolve_db(cli_arg: str | None) -> str:
-    if cli_arg:
-        return cli_arg
-    return os.environ.get("CHALIE_DB_PATH", _DEFAULT_DB)
+    return cli_arg if cli_arg else str(paths.DB_PATH)
 
 
 # ── Content extraction ──────────────────────────────────────────────────────
@@ -92,7 +95,7 @@ _INJECTION_PREFIXES = (
 _PLAIN_TEXT_MAX = 10_000
 
 # Roles that are background/internal — skip entirely
-_SKIP_ROLES = {"proactive_thought", "goal_pursuit", "scheduled", "tool"}
+_SKIP_ROLES = {"proactive_thought", "subagent", "subagent_return", "scheduled", "tool"}
 
 
 def extract_user_message(content: str) -> str | None:
@@ -280,7 +283,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print(f"\n  Channel: {channel!r}")
     print(f"  Rows read            : {stats['rows_read']}")
     print(f"  Skipped (role)       : {stats['skipped_role']}  "
-          f"(tool, proactive_thought, goal_pursuit, scheduled)")
+          f"(tool, proactive_thought, subagent, scheduled)")
     print(f"  Skipped (unpaired)   : {stats['skipped_unpaired']}  "
           f"(user with no following assistant, or assistant with no preceding user)")
     print(f"  Skipped (bad user)   : {stats['skipped_unrecoverable_user']}  "
@@ -318,10 +321,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
             )
             stats["orphaned_tool_calls_deleted"] = cur.rowcount
 
-        # 5b. Delete compaction (watermark is stale post-truncate)
-        conn.execute("DELETE FROM compactions WHERE channel = ?", (channel,))
-
-        # 5c. Delete transcript rows for this channel
+        # 5b. Delete transcript rows for this channel
         #     (we only delete the rows we READ — the last N — not the whole channel,
         #      since rows earlier than our window are already compacted / irrelevant)
         if old_ids:
@@ -352,7 +352,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print(f"\n  Written {len(clean_pairs)} exchange pairs "
           f"({len(clean_pairs) * 2} transcript rows)")
     print(f"  Deleted {stats['orphaned_tool_calls_deleted']} orphaned tool_calls rows")
-    print("  Compaction cleared (will rebuild naturally)")
+    print("  Compaction audit rows preserved (orphaned IDs are invisible to canonical lookup)")
     print()
     print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 
@@ -379,7 +379,7 @@ _MIGRATION_ID = "transcript-rebuild-v1"
 # prompt:  — old scheduled-prompt delivery channels (contain [SCHEDULED TASK] text)
 # web:     — old web interface channels (also contained scheduled prompts)
 # scheduled: — new ScheduledMessageProcessor channels
-_BACKGROUND_PREFIXES = ("goal_pursuit:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
+_BACKGROUND_PREFIXES = ("subagent:", "scheduled:", "dmn:", "cron_tool:", "prompt:", "web:")
 
 
 def _flag_path(db_path: str) -> Path:
@@ -399,7 +399,7 @@ def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
     loop exits early with "Nothing to write."
 
     Args:
-        db_path: Override the DB path (default: $CHALIE_DB_PATH or built-in default).
+        db_path: Override the DB path (default: paths.DB_PATH).
         limit:   Number of most-recent rows to analyse per channel (default 100).
     """
     db_path = _resolve_db(db_path)
@@ -487,7 +487,7 @@ def main():
         "--db",
         metavar="PATH",
         default=None,
-        help=f"SQLite DB path (default: $CHALIE_DB_PATH or {_DEFAULT_DB})",
+        help=f"SQLite DB path (default: {paths.DB_PATH})",
     )
     parser.add_argument(
         "--channel",

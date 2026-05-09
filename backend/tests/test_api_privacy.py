@@ -154,3 +154,32 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+
+    def test_delete_all_tables_all_exist_in_schema(self):
+        """Every table in _DELETE_ALL_TABLES must exist in the live schema.
+
+        Parses CREATE TABLE declarations directly from backend/schema.sql and
+        compares against _DELETE_ALL_TABLES.  Fails immediately if a future
+        schema rip removes a table that is still listed in the tuple.
+        """
+        import re
+        from pathlib import Path
+
+        from api.privacy import _DELETE_ALL_TABLES
+
+        schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+        schema_sql = schema_path.read_text()
+
+        # Match both plain and virtual CREATE TABLE declarations
+        schema_tables = set(
+            re.findall(
+                r"CREATE\s+(?:VIRTUAL\s+)?TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)",
+                schema_sql,
+                re.IGNORECASE,
+            )
+        )
+
+        dead = [t for t in _DELETE_ALL_TABLES if t not in schema_tables]
+        assert dead == [], (
+            f"_DELETE_ALL_TABLES references tables not in schema.sql: {dead}"
+        )

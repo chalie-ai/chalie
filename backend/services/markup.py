@@ -6,31 +6,51 @@ library) before persisting / sending to the frontend. That single chokepoint
 replaces every hand-rolled tokenizer, regex tag-matcher, and markdown
 converter that lived here previously.
 
-Allowlist (10 tags total):
+Allowlist (11 tags total):
 - LLM-emittable formatting (8): b, i, u, h1, code, p, ul, li
+- Rich-media pairing (1): span (id attribute only — used by RichMediaParser)
 - Programmatic only (3): img, actions, action
 
 The LLM is NOT allowed to emit ``<a>``. Plain-text URLs in the LLM's
 response are linkified by the frontend so the model cannot inject
 arbitrary anchors into the rendered DOM.
+
+``<span id="tool_N">`` is allowed because the rich-media protocol requires
+these tags to survive the sanitisation pass so the parser can read them at
+the WS-send boundary. Only the ``id`` attribute is permitted; ``class``,
+``style``, ``onclick``, and all other span attributes are stripped.
+
+``sanitize()`` is the only entry point for LLM output. It accepts mixed
+plain text + allowlisted HTML and passes both through unchanged — text
+nodes are valid HTML, so no wrapping or escaping heuristics are needed.
 """
 from __future__ import annotations
 
 import html as _html
+import re
 
 import nh3
 
+# Block-level tags that must produce a word break in spoken output. Without
+# this, ``<li>A</li><li>B</li>`` collapses to ``AB`` once nh3 strips tags,
+# and phonemizer silently drops the resulting gibberish token. We insert a
+# space at each opening / closing boundary before tag stripping so adjacent
+# items stay separable.
+_BLOCK_BOUNDARY_RE = re.compile(r"</?(?:p|li|ul|h1|br)\b[^>]*>", re.IGNORECASE)
+
 # ── Tag allowlist ───────────────────────────────────────────────────────────
 
-LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li"})
+LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li", "span"})
 PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
 ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 
 # Programmatic-only attributes. ``<img>`` carries src/alt; ``<action>`` carries
 # the chat-button label/value plus the overlay daemon's data-* hooks.
+# ``<span>`` carries only ``id`` — the rich-media pairing key.
 _ATTRIBUTES = {
     "img": {"src", "alt"},
     "action": {"label", "value", "execute", "collect", "target", "open-url", "payload", "style"},
+    "span": {"id"},
 }
 
 # Image src URLs are restricted to http(s). ``data:`` and ``javascript:`` are
@@ -63,28 +83,6 @@ def sanitize(html: str | None) -> str:
     )
 
 
-def is_xml_content(text: str | None) -> bool:
-    """True if *text* is non-empty and its first non-whitespace char is ``<``.
-
-    Single chokepoint for the "did the LLM emit XML or plaintext?" decision.
-    Used by output_service + websocket fallbacks to decide whether to wrap
-    the response in ``<p>...</p>``.
-    """
-    return bool((text or "").lstrip().startswith("<"))
-
-
-def wrap_text_xml(text: str) -> str:
-    """Wrap a plain string as ``<p>{escaped}</p>``. Empty input returns empty.
-
-    Used when the model emits plain text instead of structured markup, so the
-    frontend always receives well-formed HTML.
-    """
-    stripped = (text or "").strip()
-    if not stripped:
-        return ""
-    return f"<p>{escape_text(stripped)}</p>"
-
-
 def actions_to_xml(actions: list[dict]) -> str:
     """Render programmatic action buttons as XML.
 
@@ -105,15 +103,6 @@ def actions_to_xml(actions: list[dict]) -> str:
         parts.append(f'<action label="{label}" value="{value}"/>')
     parts.append("</actions>")
     return "".join(parts)
-
-
-def escape_text(text: str) -> str:
-    """Escape & < > for HTML text content. Used by callers that build their own
-    structured tags around model-supplied text (e.g. ``wrap_text_xml``).
-    """
-    if not text:
-        return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def escape_attr(value: str) -> str:
@@ -141,5 +130,6 @@ def extract_plaintext(html: str) -> str:
     """
     if not html:
         return ""
-    stripped = nh3.clean(html, tags=set(), clean_content_tags={"actions"})
+    spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
+    stripped = nh3.clean(spaced, tags=set(), clean_content_tags={"actions"})
     return " ".join(_html.unescape(stripped).split()).strip()

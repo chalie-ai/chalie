@@ -30,13 +30,17 @@ import re
 import mimetypes
 import threading
 from datetime import datetime
-from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 
+import paths
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
+
+_ERR_INTERNAL = "Internal server error"
+_ERR_NOT_FOUND = "Not found"
+_ERR_FILE_NOT_FOUND = "File not found on disk"
 
 documents_bp = Blueprint("documents", __name__)
 
@@ -70,9 +74,8 @@ ALLOWED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.webp', '.gif',
 }
 
-# Document storage root — env var overrides for Docker; local default mirrors backend/data/
-_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
+# Document storage root — single hard-coded layout (paths.py).
+DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +320,7 @@ def list_documents():
         return jsonify({"items": [_serialize_doc(d) for d in docs]})
     except Exception as e:
         logger.error(f"[DOCS API] list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>", methods=["GET"])
@@ -328,7 +331,7 @@ def get_document(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         from services.data_graph_service import get_data_graph_service
         dgs = get_data_graph_service()
@@ -342,7 +345,7 @@ def get_document(doc_id):
         return jsonify({"item": result})
     except Exception as e:
         logger.error(f"[DOCS API] get_document error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/content", methods=["GET"])
@@ -353,7 +356,7 @@ def get_document_content(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         from services.data_graph_service import get_data_graph_service
         dgs = get_data_graph_service()
@@ -371,7 +374,7 @@ def get_document_content(doc_id):
         })
     except Exception as e:
         logger.error(f"[DOCS API] get_content error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/download", methods=["GET"])
@@ -382,17 +385,17 @@ def download_document(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         # Watched folder docs store absolute paths; uploaded docs are relative to DOCUMENTS_ROOT
         if doc.get('watched_folder_id'):
             full_path = doc['file_path']
             if not os.path.isfile(os.path.realpath(full_path)):
-                return jsonify({"error": "File not found on disk"}), 404
+                return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
             full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
-                return jsonify({"error": "File not found on disk"}), 404
+                return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 
         return send_file(
             full_path,
@@ -402,7 +405,7 @@ def download_document(doc_id):
         )
     except Exception as e:
         logger.error(f"[DOCS API] download error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/preview", methods=["GET"])
@@ -413,16 +416,16 @@ def preview_document(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc.get('watched_folder_id'):
             full_path = doc['file_path']
             if not os.path.isfile(os.path.realpath(full_path)):
-                return jsonify({"error": "File not found on disk"}), 404
+                return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
             full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
-                return jsonify({"error": "File not found on disk"}), 404
+                return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 
         return send_file(
             full_path,
@@ -432,7 +435,7 @@ def preview_document(doc_id):
         )
     except Exception as e:
         logger.error(f"[DOCS API] preview error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/classify", methods=["PUT"])
@@ -443,7 +446,7 @@ def update_document_classification(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         data = request.get_json() or {}
         svc.update_classification(
@@ -456,7 +459,7 @@ def update_document_classification(doc_id):
         return jsonify({"status": "ok"})
     except Exception as e:
         logger.error(f"[DOCS API] classify update error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/groups/<field>", methods=["GET"])
@@ -469,7 +472,7 @@ def get_document_groups(field):
         return jsonify({"groups": groups})
     except Exception as e:
         logger.error(f"[DOCS API] groups error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>", methods=["DELETE"])
@@ -480,11 +483,11 @@ def delete_document(doc_id):
         svc = _get_document_service()
         ok = svc.soft_delete(doc_id)
         if not ok:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[DOCS API] delete error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/restore", methods=["POST"])
@@ -499,7 +502,7 @@ def restore_document(doc_id):
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[DOCS API] restore error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/purge", methods=["DELETE"])
@@ -510,11 +513,11 @@ def purge_document(doc_id):
         svc = _get_document_service()
         ok = svc.hard_delete(doc_id)
         if not ok:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[DOCS API] purge error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/search", methods=["GET"])
@@ -561,7 +564,7 @@ def confirm_document(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc['status'] != 'awaiting_confirmation':
             return jsonify({"error": "Document is not awaiting confirmation"}), 400
@@ -570,7 +573,7 @@ def confirm_document(doc_id):
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] confirm error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/augment", methods=["POST"])
@@ -581,7 +584,7 @@ def augment_document(doc_id):
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
         if not doc:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc['status'] not in ('awaiting_confirmation', 'ready'):
             return jsonify({"error": "Document cannot be augmented in its current state"}), 400
@@ -607,7 +610,7 @@ def augment_document(doc_id):
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/<doc_id>/supersede", methods=["POST"])
@@ -636,7 +639,7 @@ def supersede_document(doc_id):
         return jsonify({"ok": True, "supersedes_id": old_id})
     except Exception as e:
         logger.error(f"[DOCS API] supersede error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +662,7 @@ def list_watched_folders():
         return jsonify({"items": folders})
     except Exception as e:
         logger.error(f"[DOCS API] list watched folders error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/watched-folders", methods=["POST"])
@@ -691,7 +694,7 @@ def create_watched_folder():
         if 'UNIQUE constraint' in str(e):
             return jsonify({"error": "This folder is already being watched"}), 409
         logger.error(f"[DOCS API] create watched folder error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["PUT"])
@@ -703,7 +706,7 @@ def update_watched_folder(folder_id):
         svc = _get_watcher_service()
         folder = svc.get_folder(folder_id)
         if not folder:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         updated = svc.update_folder(folder_id, **data)
         return jsonify({"item": updated})
@@ -711,7 +714,7 @@ def update_watched_folder(folder_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"[DOCS API] update watched folder error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["DELETE"])
@@ -723,11 +726,11 @@ def delete_watched_folder(folder_id):
         svc = _get_watcher_service()
         ok = svc.delete_folder(folder_id, delete_documents=delete_documents)
         if not ok:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"[DOCS API] delete watched folder error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/watched-folders/<folder_id>/scan", methods=["POST"])
@@ -738,13 +741,13 @@ def trigger_scan(folder_id):
         svc = _get_watcher_service()
         folder = svc.get_folder(folder_id)
         if not folder:
-            return jsonify({"error": "Not found"}), 404
+            return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         svc.trigger_scan(folder_id)
         return jsonify({"ok": True, "message": "Scan requested"})
     except Exception as e:
         logger.error(f"[DOCS API] trigger scan error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @documents_bp.route("/documents/watched-folders/browse", methods=["POST"])
@@ -764,6 +767,6 @@ def browse_directories():
         return jsonify({"error": str(e)}), 403
     except Exception as e:
         logger.error(f"[DOCS API] browse error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 

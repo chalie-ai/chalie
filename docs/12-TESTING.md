@@ -40,12 +40,13 @@ pytest                  # both
 # backend/tests/test_classifier_features.py
 
 import pytest
-from pathlib import Path
+
+import paths
 
 pytestmark = pytest.mark.integration
 
-_MODELS_DIR = str(Path(__file__).parent.parent / "data" / "models")
-_PRETRAINED_DIR = str(Path(__file__).parent.parent / "data" / "pre-trained")
+_MODELS_DIR = str(paths.MODELS_DIR)
+_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
 
 
 @pytest.fixture(scope="module")
@@ -87,6 +88,8 @@ Names describe the real-world scenario: `test_architecture_question_routes_to_hi
 | Benchmarks | `chalie-nightly-test/benchmark_tasks/` | Scored quality measurement, not pass/fail |
 
 Python-level tests are a fast-feedback supplement. They do not replace the nightly scenarios. See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
+
+**Boundary-contract sentinels.** Some test files exist specifically to canary a cross-layer invariant that the nightly scenarios would catch too late and too silently. `backend/tests/test_rich_media_subagent_isolation.py` (12 tests across three classes) is the reference example. It locks the rich-media round-3 architectural contract: `ActDispatcherService` must not inject `_rich_media_ordinal` on non-user-channel dispatches, and `SubagentAbility` must strip every `<span id='name_N'>…</span>` wrapper from returned text before handing it to the parent. Without these guards, nightly scenarios 058 and 059 regress silently — the LLM stops receiving the rich-media instruction trailer, cards stop rendering, and the only observable symptom is a plain-text response where a card was expected (the round-432 failure mode). If a refactor of `act_dispatcher_service.py` or `abilities/subagent.py` causes these sentinels to fail, treat it as a must-fix before merging.
 
 ## What If a Service Cannot Be Tested Without Mocks?
 

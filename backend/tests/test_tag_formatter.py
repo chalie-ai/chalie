@@ -65,9 +65,9 @@ class TestTagFormatter:
 
     def test_name_appears_in_both_opener_and_terminator(self):
         """The tag name must match exactly in both the opener and terminator."""
-        result = tag("goal_pursuit", "body here", pursuit_id="abc")
-        assert result.startswith("[goal_pursuit(")
-        assert result.endswith("[end:goal_pursuit]")
+        result = tag("subagent", "body here", sub_id="abc")
+        assert result.startswith("[subagent(")
+        assert result.endswith("[end:subagent]")
 
     def test_no_args_produces_empty_parens(self):
         """When no kwargs are supplied, the opener is [name()]."""

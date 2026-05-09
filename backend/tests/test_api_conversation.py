@@ -34,3 +34,38 @@ class TestChatHistory:
         assert has_more is True
         assert messages[0]["content"] == "Message 6"
         assert messages[-1]["content"] == "Message 17"
+
+    def test_subagent_return_role_hidden_from_recent_history(self, db):
+        """subagent_return rows must be hidden from user-visible chat history.
+
+        Plan §Q-spec-1 hard requirement: the role 'subagent_return' is an
+        internal async-delivery mechanism — only Chalie's synthesised response
+        reaches the chat, not the raw subagent envelope that triggered it.
+        """
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('user', 'user', 'hello', '2026-01-01T00:01:00+00:00')",
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('user', 'assistant', 'hi', '2026-01-01T00:02:00+00:00')",
+        )
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES ('user', 'subagent_return', "
+            "'[subagent.complete(type=web_surfer)]\\nresult\\n[end:subagent.complete]', "
+            "'2026-01-01T00:03:00+00:00')",
+        )
+        db.commit()
+
+        messages, _ = get_recent_history(limit=50, offset=0)
+
+        roles = [m["role"] for m in messages]
+        assert "subagent_return" not in roles, (
+            f"subagent_return row leaked into chat history: {roles}"
+        )
+        assert "user" in roles, "user row missing from history"
+        assert "assistant" in roles, "assistant row missing from history"
+        assert len(messages) == 2, (
+            f"Expected 2 rows (user + assistant), got {len(messages)}: {roles}"
+        )

@@ -10,9 +10,8 @@
 App Update Service — in-place update system for installed Chalie instances.
 
 Detects deployment mode, checks GitHub for new releases, downloads and validates
-tarballs, and performs atomic rename-swap upgrades with automatic database backup
-and rollback on failure. Dev environments receive mode-appropriate guidance
-instead of in-place mutation.
+tarballs, and performs atomic rename-swap upgrades with rollback on failure.
+Dev environments receive mode-appropriate guidance instead of in-place mutation.
 """
 
 import json
@@ -23,9 +22,9 @@ import tarfile
 import tempfile
 import threading
 from pathlib import Path
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from services.log_utils import safe
 from services.memory_client import MemoryClientService
 from services.time_utils import utc_now
 
@@ -154,7 +153,7 @@ class AppUpdateService:
             store.setex(CACHE_KEY, CACHE_TTL, json.dumps(result))
             return result
 
-        except (URLError, OSError, json.JSONDecodeError, KeyError) as exc:
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
             logger.warning("Failed to check for updates: %s", exc)
 
             cached = store.get(CACHE_KEY)
@@ -174,41 +173,6 @@ class AppUpdateService:
                 "deployment_mode": mode,
                 "checked_at": utc_now().isoformat(),
             }
-
-    # ── Database Backup ──────────────────────────────────────────────────
-
-    @staticmethod
-    def backup_database() -> Path:
-        """Back up the SQLite database before an update.
-
-        Creates a copy at ``backend/data/chalie.db.pre-{version}`` and
-        removes any older ``.pre-*`` backups so only the latest remains.
-
-        Returns:
-            Path to the new backup file.
-
-        Raises:
-            FileNotFoundError: If the database file does not exist.
-        """
-        db_path = APP_ROOT / "backend" / "data" / "chalie.db"
-        if not db_path.exists():
-            raise FileNotFoundError(f"Database not found at {db_path}")
-
-        version = AppUpdateService.get_current_version()
-        backup_path = db_path.parent / f"chalie.db.pre-{version}"
-
-        # Remove older .pre-* backups (keep only the one we are about to create)
-        for old_backup in db_path.parent.glob("chalie.db.pre-*"):
-            if old_backup != backup_path:
-                try:
-                    old_backup.unlink()
-                    logger.info("Removed old database backup: %s", old_backup.name)
-                except OSError as exc:
-                    logger.warning("Could not remove old backup %s: %s", old_backup, exc)
-
-        shutil.copy2(str(db_path), str(backup_path))
-        logger.info("Database backed up to %s", backup_path)
-        return backup_path
 
     # ── Download & Validate ──────────────────────────────────────────────
 
@@ -234,7 +198,7 @@ class AppUpdateService:
         from run import _safe_tar_extract
 
         tarball_url = GITHUB_TARBALL_URL.format(tag=tag)
-        logger.info("Downloading release %s from %s", tag, tarball_url)
+        logger.info("Downloading release %s from %s", safe(tag), tarball_url)
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="chalie_update_"))
         tarball_path = tmp_dir / "release.tar.gz"
@@ -242,7 +206,7 @@ class AppUpdateService:
         try:
             with urlopen(tarball_url, timeout=30) as resp:
                 tarball_path.write_bytes(resp.read())
-        except (URLError, OSError) as exc:
+        except OSError as exc:
             shutil.rmtree(str(tmp_dir), ignore_errors=True)
             raise RuntimeError(f"Failed to download release {tag}: {exc}") from exc
 
@@ -271,7 +235,7 @@ class AppUpdateService:
                 shutil.rmtree(str(tmp_dir), ignore_errors=True)
                 raise RuntimeError(f"Release {tag} is missing required file: {rel_path}")
 
-        logger.info("Release %s downloaded and validated at %s", tag, source_dir)
+        logger.info("Release %s downloaded and validated at %s", safe(tag), source_dir)
         return source_dir
 
     # ── Apply Update (Rename-Swap) ───────────────────────────────────────
@@ -333,16 +297,12 @@ class AppUpdateService:
         renamed_frontend = False
 
         try:
-            # Step 1: Backup database
-            logger.info("Starting update to %s — backing up database", tag)
-            self.backup_database()
-
-            # Step 2: Download and validate
-            logger.info("Downloading release %s", tag)
+            # Step 1: Download and validate
+            logger.info("Starting update to %s — downloading release", safe(tag))
             source_dir = self.download_and_validate(tag)
 
-            # Step 3: Rename-swap
-            logger.info("Performing rename-swap for %s", tag)
+            # Step 2: Rename-swap
+            logger.info("Performing rename-swap for %s", safe(tag))
 
             if backend_dir.exists():
                 backend_dir.rename(backend_old)
@@ -366,16 +326,10 @@ class AppUpdateService:
             else:
                 raise RuntimeError(f"Release {tag} has no frontend/ directory")
 
-            # Step 4: Preserve data and tools from old backend
+            # Step 3: Preserve user-installed tools from old backend.
+            # data/ and resources/ live at APP_ROOT and are untouched by the
+            # backend/ rename-swap, so they don't need preservation here.
             if renamed_backend:
-                old_data = backend_old / "data"
-                if old_data.exists():
-                    new_data = backend_dir / "data"
-                    if new_data.exists():
-                        shutil.rmtree(str(new_data))
-                    shutil.copytree(str(old_data), str(new_data))
-                    logger.info("Preserved data/ directory")
-
                 old_tools = backend_old / "tools"
                 if old_tools.exists():
                     new_tools = backend_dir / "tools"
@@ -384,7 +338,7 @@ class AppUpdateService:
                     shutil.copytree(str(old_tools), str(new_tools))
                     logger.info("Preserved tools/ directory")
 
-            # Step 5: Copy root-level files from the release
+            # Step 4: Copy root-level files from the release
             for filename in ("run.sh", "VERSION"):
                 src = source_dir / filename
                 if src.exists():
@@ -393,14 +347,14 @@ class AppUpdateService:
             for req_file in source_dir.glob("requirements*.txt"):
                 shutil.copy2(str(req_file), str(APP_ROOT / req_file.name))
 
-            # Step 6: Delete .deps-installed stamp so dependencies are re-synced
+            # Step 5: Delete .deps-installed stamp so dependencies are re-synced
             deps_stamp = APP_ROOT / ".deps-installed"
             if deps_stamp.exists():
                 deps_stamp.unlink()
                 logger.info("Removed .deps-installed stamp")
 
         except Exception as exc:
-            logger.error("Update to %s failed: %s — rolling back", tag, exc)
+            logger.error("Update to %s failed: %s — rolling back", safe(tag), exc)
 
             # Rollback: reverse renames
             try:
@@ -443,7 +397,7 @@ class AppUpdateService:
             shutil.rmtree(str(tmp_root), ignore_errors=True)
 
         store.delete(IN_PROGRESS_KEY)
-        logger.info("Update to %s completed successfully", tag)
+        logger.info("Update to %s completed successfully", safe(tag))
 
         return {
             "ok": True,

@@ -251,7 +251,6 @@ def _get_db_id(db_service, rowid: int) -> int:
         return row[0] if row else None
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestStore
 # ══════════════════════════════════════════════════════════════════
 
@@ -588,7 +587,6 @@ class TestStore:
         assert _rid(r2) != _rid(r1)
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestRecall
 # ══════════════════════════════════════════════════════════════════
 
@@ -693,7 +691,6 @@ class TestRecall:
             assert 'composite_score' in r
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestFetch
 # ══════════════════════════════════════════════════════════════════
 
@@ -752,169 +749,6 @@ class TestFetch:
         assert len(rows) == 3
 
 
-# ══════════════════════════════════════════════════════════════════
-# TestEdges
-# ══════════════════════════════════════════════════════════════════
-
-@pytest.mark.unit
-class TestEdges:
-
-    def test_add_edge_basic(self, svc, db_service):
-        """add_edge returns a positive edge id and the edge is persisted."""
-        ra = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='a', value='av')
-        rb = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='b', value='bv')
-        id_a = _get_db_id(db_service, ra)
-        id_b = _get_db_id(db_service, rb)
-
-        edge_id = svc.add_edge(id_a, id_b, edge_type='related')
-        assert edge_id > 0
-
-        with db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM data_graph_edges "
-                "WHERE from_id=? AND to_id=? AND edge_type='related'",
-                (id_a, id_b)
-            ).fetchone()
-        assert row is not None
-
-    def test_add_edge_duplicate_ignored_returns_same_id(self, svc, db_service):
-        """Inserting the same edge twice uses INSERT OR IGNORE and returns the same edge id."""
-        ra = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='x', value='xv')
-        rb = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='y', value='yv')
-        id_a = _get_db_id(db_service, ra)
-        id_b = _get_db_id(db_service, rb)
-
-        edge_id_1 = svc.add_edge(id_a, id_b, edge_type='related')
-        edge_id_2 = svc.add_edge(id_a, id_b, edge_type='related')
-        assert edge_id_1 == edge_id_2
-
-        with db_service.connection() as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM data_graph_edges "
-                "WHERE from_id=? AND to_id=? AND edge_type='related'",
-                (id_a, id_b)
-            ).fetchone()[0]
-        assert count == 1
-
-    def test_expand_edges_returns_outgoing(self, svc, db_service):
-        """expand_edges returns all edges from the given seed node ids."""
-        ra = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='hub', value='v')
-        rb = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='leaf1', value='v')
-        rc = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='leaf2', value='v')
-        id_a = _get_db_id(db_service, ra)
-        id_b = _get_db_id(db_service, rb)
-        id_c = _get_db_id(db_service, rc)
-
-        svc.add_edge(id_a, id_b, edge_type='related')
-        svc.add_edge(id_a, id_c, edge_type='causes')
-
-        edges = svc.expand_edges([id_a])
-        to_ids = {e['to_id'] for e in edges}
-        assert id_b in to_ids
-        assert id_c in to_ids
-
-    def test_expand_edges_type_filter(self, svc, db_service):
-        """edge_types= filters edges to only the specified types."""
-        ra = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='src', value='v')
-        rb = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='dst1', value='v')
-        rc = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='dst2', value='v')
-        id_a = _get_db_id(db_service, ra)
-        id_b = _get_db_id(db_service, rb)
-        id_c = _get_db_id(db_service, rc)
-
-        svc.add_edge(id_a, id_b, edge_type='causes')
-        svc.add_edge(id_a, id_c, edge_type='related')
-
-        edges = svc.expand_edges([id_a], edge_types=['causes'])
-        assert all(e['edge_type'] == 'causes' for e in edges)
-        to_ids = {e['to_id'] for e in edges}
-        assert id_b in to_ids
-        assert id_c not in to_ids
-
-    def test_touch_edge_updates_last_accessed_at(self, svc, db_service):
-        """touch_edge sets last_accessed_at on the matching edge row."""
-        ra = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='p', value='v')
-        rb = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='q', value='v')
-        id_a = _get_db_id(db_service, ra)
-        id_b = _get_db_id(db_service, rb)
-
-        svc.add_edge(id_a, id_b, edge_type='related')
-
-        # Verify last_accessed_at starts NULL
-        with db_service.connection() as conn:
-            before = conn.execute(
-                "SELECT last_accessed_at FROM data_graph_edges "
-                "WHERE from_id=? AND to_id=? AND edge_type='related'",
-                (id_a, id_b)
-            ).fetchone()[0]
-        assert before is None
-
-        svc.touch_edge(id_a, id_b, 'related')
-
-        with db_service.connection() as conn:
-            after = conn.execute(
-                "SELECT last_accessed_at FROM data_graph_edges "
-                "WHERE from_id=? AND to_id=? AND edge_type='related'",
-                (id_a, id_b)
-            ).fetchone()[0]
-        assert after is not None
-
-
-# ══════════════════════════════════════════════════════════════════
-# TestReinforceAndDemote
-# ══════════════════════════════════════════════════════════════════
-
-@pytest.mark.unit
-class TestReinforceAndDemote:
-
-    def test_reinforce_increments_evidence_and_resets_retrieval_weight(self, svc, db_service):
-        """reinforce() increments evidence_count, boosts storage_strength, resets retrieval_weight=1.0."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='r_key', value='r_val',
-                            evidence_count=2, storage_strength=0.6, retrieval_weight=0.5)
-
-        svc.reinforce(rowid)
-
-        raw = _raw_row(db_service, rowid)
-        assert raw['evidence_count'] == 3
-        assert raw['storage_strength'] > 0.6
-        assert raw['retrieval_weight'] == pytest.approx(1.0)
-
-    def test_reinforce_storage_strength_capped_at_one(self, svc, db_service):
-        """storage_strength never exceeds 1.0 after reinforcement."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='strong', value='v',
-                            storage_strength=0.999, evidence_count=100)
-
-        svc.reinforce(rowid)
-
-        raw = _raw_row(db_service, rowid)
-        assert raw['storage_strength'] <= 1.0
-
-    def test_demote_reduces_retrieval_weight_by_factor(self, svc, db_service):
-        """demote() multiplies retrieval_weight by the given factor."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='d_key', value='d_val',
-                            retrieval_weight=0.8)
-
-        svc.demote(rowid, factor=0.5)
-
-        raw = _raw_row(db_service, rowid)
-        assert raw['retrieval_weight'] == pytest.approx(0.4, abs=0.001)
-
-    def test_demote_does_not_touch_storage_strength(self, svc, db_service):
-        """demote() only modifies retrieval_weight, not storage_strength."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='ss_key', value='v',
-                            storage_strength=0.75, retrieval_weight=1.0)
-
-        svc.demote(rowid, factor=0.5)
-
-        raw = _raw_row(db_service, rowid)
-        assert raw['storage_strength'] == pytest.approx(0.75, abs=0.001)
-
-    def test_demote_unknown_rowid_is_no_op(self, svc):
-        """demote() on a non-existent rowid silently does nothing (no exception raised)."""
-        svc.demote(999999, factor=0.1)  # must not raise
-
-
-# ══════════════════════════════════════════════════════════════════
 # TestDeletion
 # ══════════════════════════════════════════════════════════════════
 
@@ -952,39 +786,7 @@ class TestDeletion:
         raw = _raw_row(db_service, rowid)
         assert raw is not None
 
-    def test_hard_delete_removes_row_completely(self, svc, db_service):
-        """hard_delete_by_id physically removes the row from data_graph."""
-        rowid = _insert_row(db_service, kind=KIND_MISC, key='hard', value='gone')
 
-        result = svc.hard_delete_by_id(rowid)
-        assert result is True
-
-        raw = _raw_row(db_service, rowid)
-        assert raw is None
-
-    def test_hard_delete_removes_from_fts(self, svc, db_service):
-        """hard_delete_by_id removes the FTS entry so it can't be searched."""
-        rowid = _insert_row(db_service, kind=KIND_MISC, key='hd_fts', value='erasedtoken')
-
-        svc.hard_delete_by_id(rowid)
-
-        fts_hits = _raw_fts(db_service, '"erasedtoken"*')
-        assert rowid not in fts_hits
-
-    def test_set_active_toggles_flag(self, svc, db_service):
-        """set_active() writes the active flag as given."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='toggle', value='v')
-
-        svc.set_active(rowid, 0)
-        raw = _raw_row(db_service, rowid)
-        assert raw['active'] == 0
-
-        svc.set_active(rowid, 1)
-        raw = _raw_row(db_service, rowid)
-        assert raw['active'] == 1
-
-
-# ══════════════════════════════════════════════════════════════════
 # TestDecayCycle
 # ══════════════════════════════════════════════════════════════════
 
@@ -1067,7 +869,6 @@ class TestDecayCycle:
         assert count >= 1
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestKindPolicy
 # ══════════════════════════════════════════════════════════════════
 
@@ -1116,7 +917,6 @@ class TestKindPolicy:
         assert raw['retrieval_weight'] == pytest.approx(0.8, abs=0.001)
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestDocumentKind
 # ══════════════════════════════════════════════════════════════════
 
@@ -1153,23 +953,9 @@ class TestDocumentKind:
         assert _rid(r2) == _rid(r1)
         assert r2['evidence_count'] == 1
 
-    def test_document_hard_delete(self, svc, db_service):
-        """document kind uses hard deletion — hard_delete_by_id removes the row completely."""
-        assert _KIND_POLICY[KIND_DOCUMENT]['deletion'] == 'hard'
-
-        result = svc.store(KIND_DOCUMENT, 'doc:xyz:000', 'deletable chunk', source='doc:xyz')
-        assert result is not None
-        row_id = _rid(result)
-
-        deleted = svc.hard_delete_by_id(row_id)
-        assert deleted is True
-
-        raw = _raw_row(db_service, row_id)
-        assert raw is None
-
     def test_document_no_decay(self, svc, db_service):
         """document kind has d_base=0.0 — decay_cycle does not modify retrieval_weight."""
-        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == 0.0
+        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == pytest.approx(0.0, abs=1e-9)
 
         result = svc.store(KIND_DOCUMENT, 'doc:nodecay:000', 'persistent chunk', source='doc:nodecay')
         assert result is not None
@@ -1222,7 +1008,6 @@ class TestDocumentKind:
         assert p['salience_floor'] == pytest.approx(0.0)
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestHardDeleteBySourcePrefix
 # ══════════════════════════════════════════════════════════════════
 
@@ -1370,7 +1155,12 @@ class TestForget:
         new_id = _get_db_id(db_service, new_rowid)
 
         # Wire a supersedes edge between the two so we can assert it is also removed.
-        svc.add_edge(new_id, old_id, edge_type='supersedes')
+        with db_service.connection() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO data_graph_edges (from_id, to_id, edge_type, strength, created_at) "
+                "VALUES (?, ?, 'supersedes', 1.0, datetime('now'))",
+                (new_id, old_id)
+            )
 
         svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
@@ -1475,7 +1265,6 @@ class TestForget:
         assert result['status'] == 'not_found'
 
 
-# ══════════════════════════════════════════════════════════════════
 # TestBackfillMissingEmbeddings
 # ══════════════════════════════════════════════════════════════════
 

@@ -66,7 +66,7 @@ export class AppsPanel {
       if (!resp.ok) return;
       this._apps = await resp.json();
       this._renderAppsList();
-    } catch (_) { /* dashboard may not be running */ }
+    } catch (e) { console.warn('[apps_panel] failed to load apps:', e); }
   }
 
   _renderAppsList() {
@@ -307,7 +307,8 @@ export class AppsPanel {
         });
         if (window.lucide) lucide.createIcons({ node: content });
       }
-    } catch (_) {
+    } catch (e) {
+      console.warn('[apps_panel] app overlay load failed:', e);
       content.textContent = '';
       const errP = document.createElement('p');
       errP.style.color = 'var(--text-secondary)';
@@ -351,7 +352,7 @@ export class AppsPanel {
 
         // Merge static payload if present
         if (btn.dataset.payload) {
-          try { Object.assign(params, JSON.parse(btn.dataset.payload)); } catch (_) {}
+          try { Object.assign(params, JSON.parse(btn.dataset.payload)); } catch (e) { console.warn('[apps_panel] invalid payload JSON:', e); }
         }
 
         try {
@@ -397,10 +398,10 @@ export class AppsPanel {
   _startOverlayPolling(root) {
     root.querySelectorAll('[data-poll-capability]').forEach(container => {
       const capability = container.dataset.pollCapability;
-      const interval = parseInt(container.dataset.pollInterval, 10) || 5000;
+      const interval = Number.parseInt(container.dataset.pollInterval, 10) || 5000;
       let params = {};
       if (container.dataset.pollParams) {
-        try { params = JSON.parse(container.dataset.pollParams); } catch (_) {}
+        try { params = JSON.parse(container.dataset.pollParams); } catch (e) { console.warn('[apps_panel] invalid pollParams JSON:', e); }
       }
 
       const timerId = setInterval(async () => {
@@ -421,7 +422,7 @@ export class AppsPanel {
             clearInterval(timerId);
             this._overlayPollTimers = this._overlayPollTimers.filter(id => id !== timerId);
           }
-        } catch (_) {}
+        } catch (e) { console.warn('[apps_panel] poll failed:', e); }
       }, interval);
 
       this._overlayPollTimers.push(timerId);

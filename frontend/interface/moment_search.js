@@ -124,6 +124,7 @@ export class MomentSearch {
         this._results.appendChild(el);
       }
     } catch (err) {
+      console.warn('[moment_search] search failed:', err);
       this._results.textContent = '';
       const errEl = document.createElement('div');
       errEl.className = 'moment-search-dialog__empty';

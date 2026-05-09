@@ -106,7 +106,6 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "code_eval",
     "document",
     "find_tools",
-    "goal_pursuit",
     "list",
     "memory",
     "news",
@@ -117,12 +116,14 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "save_pattern",
     "schedule",
     "search",
+    "subagent",
+    "timer",
     "weather",
 })
 
 
-def test_abilities_directory_has_exactly_16_non_underscore_modules():
-    """abilities/ contains exactly the 16 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_17_non_underscore_modules():
+    """abilities/ contains exactly the 17 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -150,14 +151,12 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 16
+    assert len(walked) == 17
 
 
 # ---------------------------------------------------------------------------
 # Test 4 — per-processor ALWAYS_AVAILABLE / DISCOVERABLE matches the spec
 # ---------------------------------------------------------------------------
-#
-# Spec source: /Volumes/llm/chalie-plans/v0.4.0/processor-tool-scope.md
 #
 # Every processor declares two ClassVars:
 #   * ALWAYS_AVAILABLE — list of tool names pre-injected into the native
@@ -172,26 +171,41 @@ def test_abilities_directory_has_exactly_16_non_underscore_modules():
 # model hallucinations in nightly run 346.
 
 _DEFAULT_ALWAYS = frozenset({
-    "document", "find_tools", "goal_pursuit", "list", "memory",
-    "read", "review_tool_calls", "schedule",
+    "document", "find_tools", "list", "memory",
+    "read", "review_tool_calls", "schedule", "timer",
 })
 
+# `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
+# must not spawn further subagents, so they subtract it explicitly. Listing it
+# here keeps the leak-check honest: any processor that pre-injects `subagent`
+# into ALWAYS_AVAILABLE will trip the assertion in
+# test_per_processor_tool_scope_matches_spec.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "code_eval", "news", "programming_docs_search", "search", "weather",
+    "browser", "code_eval", "news", "programming_docs_search", "search", "subagent", "weather",
 })
 
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
-    "DMNMessageProcessor":       (_DEFAULT_ALWAYS - {"goal_pursuit"}, _DEFAULT_DISCOVERABLE),
-    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "goal_pursuit"}, _DEFAULT_DISCOVERABLE),
-    "GoalPursuitProcessor":      (_DEFAULT_ALWAYS - {"goal_pursuit"}, _DEFAULT_DISCOVERABLE),
+    # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
+    # `timer` is dropped: DMN runs in the background without a user-channel
+    # surface, so the rich-media card would never render. `subagent` is
+    # excluded everywhere except UMP so background processes cannot spawn
+    # nested subagents.
+    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
+                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
+    # Scheduled has no UI surface either — drop `timer` for the same reason.
+    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "timer"}, _DEFAULT_DISCOVERABLE - {"subagent"}),
+    # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
+    # the class-level attribute is [] (empty). The per-instance value is
+    # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
+    "SubagentProcessor":         (frozenset(), frozenset((set(_DEFAULT_DISCOVERABLE) - {"subagent"}) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
-    "FullCompactionProcessor":     (frozenset(), frozenset()),
-    "TrailCompactionProcessor":    (frozenset(), frozenset()),
-    "EpisodeEncoderProcessor":     (frozenset(), frozenset()),
+    "ContinuityCompactionProcessor":      (frozenset(), frozenset()),
+    "SubagentTrailCompactionProcessor":   (frozenset(), frozenset()),
+    "EpisodeEncoderProcessor":            (frozenset(), frozenset()),
     "SuperEpisodeEncoderProcessor": (frozenset(), frozenset()),
     "UserSummaryProcessor":        (frozenset(), frozenset()),
 }
@@ -208,14 +222,14 @@ def test_per_processor_tool_scope_matches_spec():
     one (PMP today).
     """
     from services.compaction_message_processor import (
-        FullCompactionProcessor,
-        TrailCompactionProcessor,
+        ContinuityCompactionProcessor,
+        SubagentTrailCompactionProcessor,
     )
     from services.dmn_message_processor import DMNMessageProcessor
     from services.episode_encoder_processor import EpisodeEncoderProcessor
-    from services.goal_pursuit_processor import GoalPursuitProcessor
     from services.pattern_match_processor import PatternMatchProcessor
     from services.scheduled_message_processor import ScheduledMessageProcessor
+    from services.subagent_processor import SubagentProcessor
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
     from services.user_message_processor import UserMessageProcessor
     from services.user_summary_processor import UserSummaryProcessor
@@ -224,10 +238,10 @@ def test_per_processor_tool_scope_matches_spec():
         "UserMessageProcessor": UserMessageProcessor,
         "DMNMessageProcessor": DMNMessageProcessor,
         "ScheduledMessageProcessor": ScheduledMessageProcessor,
-        "GoalPursuitProcessor": GoalPursuitProcessor,
+        "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
-        "FullCompactionProcessor": FullCompactionProcessor,
-        "TrailCompactionProcessor": TrailCompactionProcessor,
+        "ContinuityCompactionProcessor": ContinuityCompactionProcessor,
+        "SubagentTrailCompactionProcessor": SubagentTrailCompactionProcessor,
         "EpisodeEncoderProcessor": EpisodeEncoderProcessor,
         "SuperEpisodeEncoderProcessor": SuperEpisodeEncoderProcessor,
         "UserSummaryProcessor": UserSummaryProcessor,
@@ -240,11 +254,14 @@ def test_per_processor_tool_scope_matches_spec():
         discoverable = frozenset(cls.DISCOVERABLE)
         expected_always, expected_discoverable = _EXPECTED_SCOPE[name]
 
-        leaked_externals = always & _DEFAULT_DISCOVERABLE
+        # DMNMessageProcessor has news/search/browser promoted to
+        # ALWAYS_AVAILABLE per masterplan §4 — not a leak, by design.
+        approved_always_externals = {"news", "search", "browser"} if name == "DMNMessageProcessor" else set()
+        leaked_externals = always & (_DEFAULT_DISCOVERABLE - approved_always_externals)
         assert not leaked_externals, (
             f"{name}.ALWAYS_AVAILABLE leaks discoverable externals "
             f"{sorted(leaked_externals)}. These MUST be surfaced via find_tools "
-            "only — see /Volumes/llm/chalie-plans/v0.4.0/processor-tool-scope.md."
+            "only."
         )
 
         if name != "PatternMatchProcessor":

@@ -7,41 +7,7 @@ Covers:
   - CognitiveIntent emission in OutputService.enqueue_text
 """
 
-import sqlite3
-import contextlib
 import pytest
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_fake_db():
-    """Minimal DatabaseService shim backed by an in-memory SQLite instance."""
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute("""
-        CREATE TABLE wrapper_tokens (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            wrapper_id TEXT NOT NULL UNIQUE,
-            capabilities TEXT NOT NULL DEFAULT '{}',
-            permissions TEXT NOT NULL DEFAULT '{}',
-            metadata TEXT NOT NULL DEFAULT '{}',
-            last_seen_at TEXT,
-            created_at TEXT NOT NULL,
-            revoked_at TEXT
-        )
-    """)
-    conn.commit()
-
-    class _FakeDB:
-        @contextlib.contextmanager
-        def connection(self):
-            yield conn
-
-    return _FakeDB()
 
 
 # ---------------------------------------------------------------------------
@@ -103,31 +69,25 @@ class TestIntentDelivery:
         assert second == []
 
     def test_intent_event_structure(self):
-        """The intent event dict sent to the WebSocket has required fields."""
-        # Mirror the structure built in _drift_sender
-        intent_dict = {
-            'intent_id': 'id-999',
-            'intent_type': 'present_response',
-            'target_wrapper': '__chat_ui__',
-            'payload': {'content': 'Hi', 'output_id': 'o', 'mode': 'UNIFIED'},
-            'urgency': 'normal',
-            'confidence': 1.0,
-        }
+        """An emitted present_response intent carries the expected payload fields."""
+        from services.memory_store import MemoryStore
+        from services.intent_service import IntentService, CognitiveIntent
+        import uuid
 
-        seq = 42
-        intent_evt = {
-            "type": "intent",
-            "intent_id": intent_dict.get("intent_id"),
-            "intent_type": intent_dict.get("intent_type"),
-            "payload": intent_dict.get("payload", {}),
-            "urgency": intent_dict.get("urgency", "normal"),
-            "seq": seq,
-        }
+        store = MemoryStore()
+        svc = IntentService(store)
 
-        assert intent_evt["type"] == "intent"
-        assert intent_evt["intent_type"] == "present_response"
-        assert intent_evt["payload"]["content"] == "Hi"
-        assert intent_evt["seq"] == 42
+        svc.emit(CognitiveIntent(
+            intent_id=str(uuid.uuid4()),
+            intent_type='present_response',
+            target_wrapper='__chat_ui__',
+            payload={'content': 'Hi', 'output_id': 'o', 'mode': 'UNIFIED'},
+        ))
+
+        pending = svc.get_pending('__chat_ui__', limit=5)
+        assert len(pending) == 1
+        assert pending[0]['payload']['content'] == 'Hi'
+        assert pending[0]['intent_type'] == 'present_response'
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +99,11 @@ class TestIntentDelivery:
 class TestChatUIRegistration:
     """__chat_ui__ must be registerable with a stable, well-known wrapper_id."""
 
-    def test_create_token_with_wrapper_id_override(self):
+    def test_create_token_with_wrapper_id_override(self, db):
         """create_token() accepts wrapper_id_override and uses it as the wrapper_id."""
         from services.wrapper_auth_service import WrapperAuthService
 
-        db = _make_fake_db()
-        svc = WrapperAuthService(db=db)
+        svc = WrapperAuthService()
 
         raw_token, wrapper_id = svc.create_token(
             name='Chat UI (Built-in)',
@@ -164,12 +123,11 @@ class TestChatUIRegistration:
         assert wrapper_id == '__chat_ui__'
         assert raw_token  # non-empty token generated
 
-    def test_chat_ui_wrapper_retrievable_after_registration(self):
+    def test_chat_ui_wrapper_retrievable_after_registration(self, db):
         """get_wrapper('__chat_ui__') returns the wrapper after auto-registration."""
         from services.wrapper_auth_service import WrapperAuthService
 
-        db = _make_fake_db()
-        svc = WrapperAuthService(db=db)
+        svc = WrapperAuthService()
 
         svc.create_token(
             name='Chat UI (Built-in)',
@@ -181,12 +139,11 @@ class TestChatUIRegistration:
         assert result['wrapper_id'] == '__chat_ui__'
         assert result['name'] == 'Chat UI (Built-in)'
 
-    def test_idempotent_registration_check(self):
+    def test_idempotent_registration_check(self, db):
         """Registering __chat_ui__ twice is prevented by checking get_wrapper first."""
         from services.wrapper_auth_service import WrapperAuthService
 
-        db = _make_fake_db()
-        svc = WrapperAuthService(db=db)
+        svc = WrapperAuthService()
 
         # First registration
         svc.create_token(name='Chat UI (Built-in)', wrapper_id_override='__chat_ui__')
@@ -200,12 +157,11 @@ class TestChatUIRegistration:
         chat_ui_wrappers = [w for w in wrappers if w['wrapper_id'] == '__chat_ui__']
         assert len(chat_ui_wrappers) == 1
 
-    def test_wrapper_id_override_none_generates_random_id(self):
+    def test_wrapper_id_override_none_generates_random_id(self, db):
         """Passing wrapper_id_override=None falls back to the auto-generated wrp_ prefix."""
         from services.wrapper_auth_service import WrapperAuthService
 
-        db = _make_fake_db()
-        svc = WrapperAuthService(db=db)
+        svc = WrapperAuthService()
 
         _, wrapper_id = svc.create_token(name='External Wrapper')
         assert wrapper_id.startswith('wrp_')

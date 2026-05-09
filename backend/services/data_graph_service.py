@@ -9,6 +9,7 @@ from typing import Optional
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
+from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 # SearchExpanderService: generates doc2query variants + embeds them for KNN recall.
 # Replaces _schedule_embeddings and _schedule_doc2query fire-and-forget threads.
@@ -30,6 +31,10 @@ VALID_KINDS = frozenset({
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
     "SELECT * FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1"
 )
+_ORDER_FIRST_SEEN_DESC = 'first_seen_at DESC'
+_SQL_DELETE_DG_ROW = "DELETE FROM data_graph WHERE rowid=?"
+_SQL_DELETE_DG_KEY_VEC = "DELETE FROM data_graph_key_vec WHERE rowid=?"
+_SQL_DELETE_DG_VALUE_VEC = "DELETE FROM data_graph_value_vec WHERE rowid=?"
 
 
 @dataclass
@@ -1100,18 +1105,18 @@ class DataGraphService:
     # ── fetch() ───────────────────────────────────────────────────────
 
     _VALID_ORDER_BY = frozenset({
-        'first_seen_at DESC', 'last_confirmed_at DESC',
+        _ORDER_FIRST_SEEN_DESC, 'last_confirmed_at DESC',
         'retrieval_weight DESC', 'evidence_count DESC',
         'first_seen_at ASC', 'last_confirmed_at ASC',
         'key ASC',
     })
 
-    def fetch(self, *, kinds=None, limit=None, order_by='first_seen_at DESC',
+    def fetch(self, *, kinds=None, limit=None, order_by=_ORDER_FIRST_SEEN_DESC,
               include_inactive=False, include_deleted=False) -> list:
         try:
             if order_by not in self._VALID_ORDER_BY:
                 logger.warning("[DATA GRAPH] Invalid order_by '%s', using default", order_by)
-                order_by = 'first_seen_at DESC'
+                order_by = _ORDER_FIRST_SEEN_DESC
 
             filters = []
             params = []
@@ -1141,50 +1146,6 @@ class DataGraphService:
             logger.error("[DATA GRAPH] fetch failed: %s", e)
             return []
 
-    # ── find_similar_by_kind() ────────────────────────────────────────
-
-    def find_similar_by_kind(self, embedding, kind: str, exclude_id: int, limit: int = 3) -> list:
-        try:
-            blob = pack_embedding(embedding) if embedding else None
-            if blob is None:
-                return []
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT v.rowid, v.distance
-                    FROM data_graph_value_vec v
-                    WHERE v.embedding MATCH ? AND k = ?
-                    ORDER BY v.distance
-                """, (blob, limit * 5))
-                vec_results = cursor.fetchall()
-
-                results = []
-                for rowid, dist in vec_results:
-                    if dist >= 0.25:
-                        continue
-                    cursor.execute(
-                        "SELECT id, key, value, retrieval_weight, kind "
-                        "FROM data_graph WHERE id=? AND kind=? AND id!=? AND deleted_at IS NULL AND active=1",
-                        (rowid, kind, exclude_id)
-                    )
-                    row = cursor.fetchone()
-                    if row:
-                        results.append({
-                            'id': row[0],
-                            'key': row[1],
-                            'value': row[2],
-                            'retrieval_weight': row[3],
-                            'kind': row[4],
-                        })
-                    if len(results) >= limit:
-                        break
-
-                cursor.close()
-                return results
-        except Exception as e:
-            logger.error("[DATA GRAPH] find_similar_by_kind failed: %s", e)
-            return []
-
     # ── Edge operations ───────────────────────────────────────────────
 
     def _add_edge_with_conn(self, conn, from_id: int, to_id: int, edge_type: str = 'related', strength: float = 1.0) -> int:
@@ -1200,88 +1161,6 @@ class DataGraphService:
         ).fetchone()
         return row[0] if row else 0
 
-    def add_edge(self, from_id: int, to_id: int, *, edge_type: str = 'related', strength: float = 1.0) -> int:
-        try:
-            with self.db.connection() as conn:
-                return self._add_edge_with_conn(conn, from_id, to_id, edge_type, strength)
-        except Exception as e:
-            logger.warning("[DATA GRAPH] add_edge failed from=%s to=%s type=%s: %s", from_id, to_id, edge_type, e)
-            return 0
-
-    def expand_edges(self, seed_ids: list, *, edge_types=None) -> list:
-        if not seed_ids:
-            return []
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                placeholders = ','.join('?' for _ in seed_ids)
-                params = list(seed_ids)
-                type_clause = ""
-                if edge_types:
-                    type_placeholders = ','.join('?' for _ in edge_types)
-                    type_clause = f" AND edge_type IN ({type_placeholders})"
-                    params.extend(edge_types)
-                cursor.execute(
-                    f"SELECT * FROM data_graph_edges WHERE from_id IN ({placeholders}){type_clause}",
-                    params
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-                return [self._row_to_dict(r) for r in rows]
-        except Exception as e:
-            logger.error("[DATA GRAPH] expand_edges failed: %s", e)
-            return []
-
-    def touch_edge(self, from_id: int, to_id: int, edge_type: str) -> None:
-        try:
-            with self.db.connection() as conn:
-                conn.execute("""
-                    UPDATE data_graph_edges
-                    SET last_accessed_at=?
-                    WHERE from_id=? AND to_id=? AND edge_type=?
-                """, (utc_now().isoformat(), from_id, to_id, edge_type))
-        except Exception as e:
-            logger.warning("[DATA GRAPH] touch_edge failed: %s", e)
-
-    # ── Reinforcement / demotion ──────────────────────────────────────
-
-    def reinforce(self, row_id: int) -> None:
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT evidence_count, storage_strength FROM data_graph WHERE rowid=?",
-                    (row_id,)
-                )
-                row = cursor.fetchone()
-                cursor.close()
-                if not row:
-                    return
-                old_evidence, old_strength = row
-                new_evidence = old_evidence + 1
-                boost = 0.05 / math.log2(new_evidence + 1)
-                new_strength = min(1.0, old_strength + boost)
-                now_iso = utc_now().isoformat()
-                conn.execute("""
-                    UPDATE data_graph
-                    SET evidence_count=?, storage_strength=?, retrieval_weight=1.0,
-                        last_confirmed_at=?, last_accessed_at=?
-                    WHERE rowid=?
-                """, (new_evidence, new_strength, now_iso, now_iso, row_id))
-        except Exception as e:
-            logger.warning("[DATA GRAPH] reinforce failed for rowid=%s: %s", row_id, e)
-
-    def demote(self, row_id: int, factor: float = 0.5) -> None:
-        try:
-            with self.db.connection() as conn:
-                conn.execute("""
-                    UPDATE data_graph
-                    SET retrieval_weight = retrieval_weight * ?
-                    WHERE rowid=?
-                """, (factor, row_id))
-        except Exception as e:
-            logger.warning("[DATA GRAPH] demote failed for rowid=%s: %s", row_id, e)
-
     # ── Deletion operations ───────────────────────────────────────────
 
     def soft_delete_by_id(self, row_id: int) -> bool:
@@ -1295,18 +1174,6 @@ class DataGraphService:
             return True
         except Exception as e:
             logger.warning("[DATA GRAPH] soft_delete_by_id failed for rowid=%s: %s", row_id, e)
-            return False
-
-    def hard_delete_by_id(self, row_id: int) -> bool:
-        try:
-            with self.db.connection() as conn:
-                self._remove_fts(conn, row_id)
-                conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
-                conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
-                conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
-            return True
-        except Exception as e:
-            logger.warning("[DATA GRAPH] hard_delete_by_id failed for rowid=%s: %s", row_id, e)
             return False
 
     def hard_delete_by_source_prefix(self, source_prefix: str) -> int:
@@ -1327,24 +1194,14 @@ class DataGraphService:
 
                 for rid in rowids:
                     self._remove_fts(conn, rid)
-                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (rid,))
-                    conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rid,))
-                    conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rid,))
+                    conn.execute(_SQL_DELETE_DG_ROW, (rid,))
+                    conn.execute(_SQL_DELETE_DG_KEY_VEC, (rid,))
+                    conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rid,))
 
                 return len(rowids)
         except Exception as e:
-            logger.warning("[DATA GRAPH] hard_delete_by_source_prefix failed for '%s': %s", source_prefix, e)
+            logger.warning("[DATA GRAPH] hard_delete_by_source_prefix failed for '%s': %s", safe(source_prefix), e)
             return 0
-
-    def set_active(self, row_id: int, active: int) -> None:
-        try:
-            with self.db.connection() as conn:
-                conn.execute(
-                    "UPDATE data_graph SET active=? WHERE rowid=?",
-                    (int(active), row_id)
-                )
-        except Exception as e:
-            logger.warning("[DATA GRAPH] set_active failed for rowid=%s: %s", row_id, e)
 
     def _make_forget_result(
         self,
@@ -1381,14 +1238,14 @@ class DataGraphService:
         are non-fatal and logged at debug level.
         """
         self._remove_fts(conn, row_id)
-        conn.execute("DELETE FROM data_graph WHERE rowid=?", (row_id,))
+        conn.execute(_SQL_DELETE_DG_ROW, (row_id,))
         conn.execute("DELETE FROM data_graph_edges WHERE from_id=? OR to_id=?", (row_id, row_id))
         try:
-            conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (row_id,))
+            conn.execute(_SQL_DELETE_DG_KEY_VEC, (row_id,))
         except Exception as e:
             logger.debug("vec table delete failed for id=%s: %s", row_id, e)
         try:
-            conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (row_id,))
+            conn.execute(_SQL_DELETE_DG_VALUE_VEC, (row_id,))
         except Exception as e:
             logger.debug("vec table delete failed for id=%s: %s", row_id, e)
 
@@ -1571,9 +1428,9 @@ class DataGraphService:
 
                 for rowid in expired_misc:
                     self._remove_fts(conn, rowid)
-                    conn.execute("DELETE FROM data_graph WHERE rowid=?", (rowid,))
-                    conn.execute("DELETE FROM data_graph_key_vec WHERE rowid=?", (rowid,))
-                    conn.execute("DELETE FROM data_graph_value_vec WHERE rowid=?", (rowid,))
+                    conn.execute(_SQL_DELETE_DG_ROW, (rowid,))
+                    conn.execute(_SQL_DELETE_DG_KEY_VEC, (rowid,))
+                    conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rowid,))
                     total_updated += 1
 
             if total_updated > 0:

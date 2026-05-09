@@ -4,7 +4,7 @@ Unit tests for SubconsciousWorker — gates, step exception isolation, persisten
 Per Dylan's directive: lean test surface for the worker shell. Sub-services
 (SuperEpisodeEncoderProcessor, DecayEngineService, PatternMatchProcessor,
 UserSummaryProcessor) own their own behavioural tests; this file only verifies
-the worker's gate logic, exception isolation, persistence, and backpressure.
+the worker's gate logic, exception isolation, and persistence.
 
 Per feedback_test_philosophy.md: hot-path only, no mock theater.  Step methods
 are monkeypatched to exercise the worker's orchestration without dragging the
@@ -69,18 +69,21 @@ def stub_worker(monkeypatch):
         fired.append("synthesis")
         return "ok"
 
+    def _dmn(_self):
+        fired.append("dmn")
+        return "ok"
+
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", _consolidate)
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", _decay)
     monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", _pattern_match)
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", _synthesis)
+    monkeypatch.setattr(SubconsciousWorker, "_step_dmn", _dmn)
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired",
                         lambda _self, when: _persist(when))
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage",
                         lambda _self: None)
-    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated",
-                        lambda _self: False)
 
-    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
     worker._fired = fired           # type: ignore[attr-defined]
     worker._persisted = persisted   # type: ignore[attr-defined]
     return worker
@@ -90,10 +93,10 @@ def stub_worker(monkeypatch):
 
 
 def test_cold_boot_passes_both_gates(isolated_world_state, stub_worker):
-    """No user message, no prior fire → run all four steps."""
+    """No user message, no prior fire → run all five steps."""
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
     assert all(step["status"] == "ok" for step in result["steps"].values())
     assert result["last_fired_at"] is not None
 
@@ -121,7 +124,7 @@ def test_idle_window_passed_runs(isolated_world_state, stub_worker):
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
 
 
 def test_already_fired_gate_skips(isolated_world_state, stub_worker):
@@ -153,14 +156,14 @@ def test_fresh_message_resets_already_fired_gate(isolated_world_state, stub_work
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
 
 
 # ── Step exception isolation ────────────────────────────────────────────────
 
 
 def test_step_exception_does_not_block_others(isolated_world_state, monkeypatch):
-    """A raise in step 2 must not prevent steps 3 + 4."""
+    """A raise in step 2 must not prevent steps 3, 4, and 5."""
     def _ok(name):
         return lambda _self: name
 
@@ -171,11 +174,11 @@ def test_step_exception_does_not_block_others(isolated_world_state, monkeypatch)
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", _boom)
     monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", _ok("pattern_match"))
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", _ok("synthesis"))
+    monkeypatch.setattr(SubconsciousWorker, "_step_dmn", _ok("dmn"))
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
-    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: False)
 
-    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
     result = worker.run_once()
 
     assert result["steps"]["consolidate"]["status"] == "ok"
@@ -183,34 +186,7 @@ def test_step_exception_does_not_block_others(isolated_world_state, monkeypatch)
     assert "decay blew up" in result["steps"]["decay"]["error"]
     assert result["steps"]["pattern_match"]["status"] == "ok"
     assert result["steps"]["synthesis"]["status"] == "ok"
-
-
-# ── Backpressure ─────────────────────────────────────────────────────────────
-
-
-def test_backpressure_skips_steps_3_and_4(isolated_world_state, monkeypatch):
-    """When the bg LLM queue is saturated, only steps 1 + 2 run."""
-    fired: list[str] = []
-    monkeypatch.setattr(SubconsciousWorker, "_step_consolidate",
-                        lambda _self: fired.append("consolidate") or "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_decay",
-                        lambda _self: fired.append("decay") or "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match",
-                        lambda _self: fired.append("pattern_match") or "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_step_synthesis",
-                        lambda _self: fired.append("synthesis") or "ok")
-    monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
-    monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
-    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: True)
-
-    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
-    result = worker.run_once()
-
-    assert fired == ["consolidate", "decay"]
-    assert result["steps"]["pattern_match"]["status"] == "skipped"
-    assert result["steps"]["pattern_match"]["detail"] == "bg_llm_saturated"
-    assert result["steps"]["synthesis"]["status"] == "skipped"
-    assert result["steps"]["synthesis"]["detail"] == "bg_llm_saturated"
+    assert result["steps"]["dmn"]["status"] == "ok"
 
 
 # ── Re-entrancy ──────────────────────────────────────────────────────────────
@@ -230,11 +206,11 @@ def test_concurrent_tick_returns_skipped_re_entrant(isolated_world_state, monkey
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", lambda _self: "ok")
+    monkeypatch.setattr(SubconsciousWorker, "_step_dmn", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
-    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: False)
 
-    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
     holder = {}
 
     t = threading.Thread(target=lambda: holder.setdefault("first", worker.run_once()))
@@ -266,7 +242,7 @@ def test_hydrate_loads_cached_last_fired(monkeypatch):
 
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", _load)
 
-    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+    worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
     assert worker.last_fired_at == target
 
 
@@ -279,45 +255,6 @@ def test_persist_called_with_recent_timestamp(isolated_world_state, stub_worker)
     assert persisted is not None
     assert before <= persisted <= after
     assert result["last_fired_at"] is not None
-
-
-# ── Backpressure default (P0 gap) ────────────────────────────────────────────
-
-
-def test_bg_saturated_check_returns_false_on_exception(isolated_world_state, monkeypatch):
-    """_is_bg_llm_saturated must return False when the queue check itself raises.
-
-    The production defensive contract: a broken MemoryStore connection or missing
-    import must never flip the default to True and start suppressing steps 3+4.
-    Calling the real method with a poisoned import confirms the fallback.
-    """
-    import sys
-
-    # Poison the MemoryClientService import so the queue-depth path raises.
-    original = sys.modules.get("services.memory_client")
-    broken = type(sys)("services.memory_client")
-
-    class _BrokenService:
-        @staticmethod
-        def create_connection():
-            raise RuntimeError("connection refused")
-
-    broken.MemoryClientService = _BrokenService
-    sys.modules["services.memory_client"] = broken
-
-    try:
-        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
-        result = worker._is_bg_llm_saturated()
-    finally:
-        if original is None:
-            sys.modules.pop("services.memory_client", None)
-        else:
-            sys.modules["services.memory_client"] = original
-
-    assert result is False, (
-        "_is_bg_llm_saturated must default to False on exception "
-        "so that steps 3+4 are not silently suppressed when the queue check breaks"
-    )
 
 
 # ── Synthesis result propagation (P0 gap) ────────────────────────────────────
@@ -334,9 +271,10 @@ def test_synthesis_skipped_result_propagates_to_step_detail(isolated_world_state
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match",
                         lambda _self: "skip cursor=0 latest=0 delta=0")
+    monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", lambda _self: "no new traits/patterns; skipped")
+    monkeypatch.setattr(SubconsciousWorker, "_step_dmn", lambda _self: "ok")
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired", lambda _self, _when: None)
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage", lambda _self: None)
-    monkeypatch.setattr(SubconsciousWorker, "_is_bg_llm_saturated", lambda _self: False)
 
     # Patch UserSummaryProcessor inside the method's import scope so .send() returns "".
     import types as _types
@@ -352,7 +290,7 @@ def test_synthesis_skipped_result_propagates_to_step_detail(isolated_world_state
     sys.modules["services.user_summary_processor"] = fake_usp_mod
 
     try:
-        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60, bg_queue_threshold=5)
+        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
         result = worker.run_once()
     finally:
         if original_usp is None:

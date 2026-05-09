@@ -165,7 +165,7 @@ def _poll_and_fire():
                     )
 
                     if item["recurrence"]:
-                        next_item = _build_recurrence(item, now)
+                        next_item = _build_recurrence(item)
                         if next_item:
                             cursor.execute("""
                                 INSERT INTO scheduled_items
@@ -283,7 +283,7 @@ def _fire_item(item: dict):
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
 
-def _build_recurrence(item: dict, fired_at: datetime) -> dict:
+def _build_recurrence(item: dict, _fired_at: object = None) -> dict:
     """
     Build the next occurrence for a recurring schedule.
     Returns new row dict with fresh 8-char hex id, or None if one-time.
@@ -306,7 +306,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
     except Exception:
         return None
 
-    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"), fired_at)
+    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"))
     if next_due is None:
         return None
 
@@ -330,7 +330,6 @@ def _calculate_next_due(
     recurrence: str,
     window_start: str = None,
     window_end: str = None,
-    fired_at: datetime = None
 ) -> datetime:
     """
     Calculate next due datetime for a recurrence rule.

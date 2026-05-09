@@ -60,11 +60,6 @@ class ToolConfigService:
             logger.debug(f"[TOOL CONFIG] get_tool_config('{tool_name}'): {e}")
             return {}
 
-    def is_tool_enabled(self, tool_name: str) -> bool:
-        """Return True if the tool is enabled (default), False if _enabled=false in DB."""
-        cfg = self.get_tool_config(tool_name)
-        return cfg.get("_enabled", "true").lower() != "false"
-
     def _set_enabled_flag(self, tool_name: str, enabled: bool) -> bool:
         """Write _enabled flag directly, bypassing the reserved-key guard."""
         try:
@@ -112,11 +107,6 @@ class ToolConfigService:
         except Exception as e:
             logger.error(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}", exc_info=True)
             return False
-
-    def get_source_metadata(self, tool_name: str) -> dict:
-        """Return source tracking fields for a tool: _source_type, _source_url, _installed_tag."""
-        cfg = self.get_tool_config(tool_name)
-        return {k: cfg[k] for k in ("_source_type", "_source_url", "_installed_tag") if k in cfg}
 
     def set_tool_config(self, tool_name: str, config: dict) -> bool:
         """

@@ -9,9 +9,6 @@
 """
 UserMessageProcessor — user-channel subclass of MessageProcessor v2.
 
-North star: /Volumes/llm/chalie-plans/message-processing.md
-Refactor plan: /Users/dylangrech/.claude/plans/joyful-cooking-riddle.md (Commit 8)
-
 Lifecycle: one instance per user turn. Constructed by websocket.py,
 called as:
     proc = UserMessageProcessor(raw_input=text, metadata=metadata,
@@ -23,7 +20,6 @@ callback, and getSystemPrompt() override.
 """
 
 import logging
-import threading
 from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
@@ -31,46 +27,6 @@ from services.system_message_prompt import UnifiedSystemMessagePrompt
 from services.world_state import world_state
 
 logger = logging.getLogger(__name__)
-
-# ── Lazy-synthesis concurrency guard ─────────────────────────────────────────
-# Prevents multiple concurrent getUserDefinition() calls from each spawning a
-# synthesis daemon when the user_summary row is missing.  The flag is cleared
-# in a ``finally`` block so the next call — whether prior synthesis succeeded,
-# failed, or raised — re-arms the guard cleanly.
-_lazy_fire_lock = threading.Lock()
-_lazy_fire_in_flight = False
-
-def _fire_lazy_synthesis() -> None:
-    """Spawn a one-shot daemon thread to synthesise the user_summary row.
-
-    Guards against concurrent calls with a module-level flag + lock.
-    If synthesis is already in flight the call is a no-op.
-    The flag is cleared in a ``finally`` block on every daemon exit path
-    (success, exception, or early return) so the guard re-arms for the
-    next call regardless of outcome.
-    """
-    global _lazy_fire_in_flight
-
-    with _lazy_fire_lock:
-        if _lazy_fire_in_flight:
-            return
-        _lazy_fire_in_flight = True
-
-    def _run():
-        global _lazy_fire_in_flight
-        try:
-            from services.user_summary_processor import UserSummaryProcessor
-
-            UserSummaryProcessor().send()
-            logger.info("[USER MSG] Lazy synthesis complete")
-        except Exception as exc:
-            logger.warning("[USER MSG] Lazy synthesis failed: %s", exc)
-        finally:
-            with _lazy_fire_lock:
-                _lazy_fire_in_flight = False
-
-    threading.Thread(target=_run, daemon=True, name="user-summary-lazy").start()
-    logger.info("[USER MSG] Lazy synthesis daemon spawned")
 
 
 class UserMessageProcessor(MessageProcessor):
@@ -86,18 +42,20 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # 9 innate abilities — pre-injected on every ACT iteration. The 6 in
+    # 8 innate abilities — pre-injected on every ACT iteration. The 7 in
     # DISCOVERABLE are surfaced at runtime via find_tools and never
-    # pre-injected.
+    # pre-injected. `subagent` lives in DISCOVERABLE so it competes with
+    # weather/search/news/browser via find_tools rather than appearing as
+    # an always-on fallback that biases routing for single-tool lookups.
     ALWAYS_AVAILABLE: list[str] = [
-        "document",
         "find_tools",
-        "goal_pursuit",
+        "document",
         "list",
         "memory",
         "read",
         "review_tool_calls",
         "schedule",
+        "timer",
     ]
     DISCOVERABLE: list[str] = [
         "browser",
@@ -105,6 +63,7 @@ class UserMessageProcessor(MessageProcessor):
         "news",
         "programming_docs_search",
         "search",
+        "subagent",
         "weather",
     ]
 
@@ -144,21 +103,14 @@ class UserMessageProcessor(MessageProcessor):
     def getUserDefinition(self) -> str:
         """One-sentence synthesis of the real human user for the system prompt.
 
-        Reads the user_summary record (kind='system', key='user_summary') from data_graph.
-        from DataGraphService and returns its value. This is a human-readable sentence
-        that describes the user (e.g. "Dylan is a software engineer based in Malta").
+        Reads the user_summary record (kind='system', key='user_summary') from data_graph
+        and returns its value. This is a human-readable sentence that describes the user
+        (e.g. "Dylan is a software engineer based in Malta").
 
         Falls back to a static peer-to-peer framing on empty or missing record, or on
-        any exception.  When the row is missing but ``user_specific`` traits exist a
-        one-shot background synthesis is fired via the lazy-fallback path below so
-        that future turns find the row populated.
-
-        Writer path: ``UserSummaryProcessor`` (driven by SubconsciousWorker
-        idle tick, plus ``getUserDefinition()`` lazy fallback).  Traits are
-        written continuously by
-        the LLM-native memory skill (``memory_skill._handle_store`` →
-        ``DataGraphService.store(kind='user_specific', …)``) whenever the user
-        discloses a personal fact.
+        any exception. When the row is missing, the static fallback is returned immediately.
+        UserSummaryProcessor is driven exclusively by SubconsciousWorker._step_synthesis()
+        on each idle tick — no lazy fallback here.
 
         Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
@@ -193,12 +145,6 @@ class UserMessageProcessor(MessageProcessor):
             if entry and entry.get('value'):
                 self._user_definition_cached = entry['value']
                 return self._user_definition_cached
-
-            # user_summary row is missing — check whether any traits exist so we
-            # know if synthesis is worthwhile.
-            trait_rows = dgs.fetch(kinds=['user_specific'], limit=1)
-            if trait_rows:
-                _fire_lazy_synthesis()
 
         except Exception as e:
             logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
@@ -263,7 +209,7 @@ class UserMessageProcessor(MessageProcessor):
         file_tags = self._metadata.get('file_tags', [])
         nudge_tag = self._metadata.get('nudge_tag')
         if file_tags:
-            kinds = [t.split(' ', 1)[0].lstrip('[') for t in file_tags]
+            kinds = [t.split('(', 1)[0].lstrip('[') for t in file_tags]
             logger.info(
                 f"[UMP] file_tags present uuid={self._uid} "
                 f"count={len(file_tags)} kinds={kinds}"
@@ -273,7 +219,19 @@ class UserMessageProcessor(MessageProcessor):
             turn_line += ' ' + nudge_tag
         parts.append(turn_line)
 
-        # 6. ACT loop trail (empty on iteration 1)
+        # 6. Drain pending steers from async subagent completions into the trail.
+        # These are envelopes queued by _deliver_envelope() while compaction
+        # or an earlier iteration was in progress. Draining here (before
+        # getActLoopTrail()) is compaction-safe: compaction mutates _act_trail
+        # directly; this drain fires before the next iteration's prompt
+        # assembly, so steers are never mid-compaction when appended.
+        if self._pending_steers:
+            steers = self._pending_steers[:]
+            self._pending_steers.clear()
+            for steer in steers:
+                self._act_trail.append(steer)
+
+        # 7. ACT loop trail (empty on iteration 1)
         trail = self.getActLoopTrail()
         if trail:
             parts.append(trail)
@@ -342,6 +300,7 @@ class UserMessageProcessor(MessageProcessor):
         block = AbilityRegistry.get('memory').execute(self.CHANNEL, {
             'action': 'recall',
             'query': query,
+            '_auto': True,
         }, None).get('text', '')
 
         # Row is recorded every turn — the seed dispatch is part of the ACT
@@ -433,12 +392,15 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def postTurn(self) -> None:
-        """Three-step fan-out, each individually error-isolated.
+        """Two-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
           1. ConversationPhaseService — two calls
-          2. DMNService.on_turn() — R10 critical
-          3. MetricsService — last ("turn closed" signal)
+          2. MetricsService — last ("turn closed" signal)
+
+        DMN is no longer a service with an idle timer — it runs as step 5 of
+        SubconsciousWorker, gated by the worker's own user-idle check.
+        The on_turn() hook is therefore not needed here.
 
         Compaction is intentionally NOT here: per the north star
         (message-processing.md § "What does NOT go in postTurn()"),
@@ -463,17 +425,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
 
-        # 2. DMN idle reset — CRITICAL (R10): must fire on every user turn
-        # so the DMN idle timer is deferred while the user is active.
-        # WARNING level — failure here means DMN can fire mid-conversation
-        # (Commit 8 critic P1-2).
-        try:
-            from services.dmn_service import get_dmn_service
-            get_dmn_service().on_turn()
-        except Exception as e:
-            logger.warning(f"[POSTTURN] DMN on_turn failed: {e}", exc_info=True)
-
-        # 3. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 2. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -536,3 +488,28 @@ class UserMessageProcessor(MessageProcessor):
             self._mode_state_cached = {}
         return self._mode_state_cached
 
+
+class SubagentReturnProcessor(UserMessageProcessor):
+    """Synthesize a subagent's result via a fresh user-channel ACT loop.
+
+    Flow (isolation contract):
+    1. SubagentProcessor (CHANNEL='subagent') does the work in its own
+       isolated transcript.
+    2. On completion, a daemon thread constructs this processor with the
+       subagent's result as ``raw_input`` and calls ``.send()``.
+    3. SKIP_INPUT_ROW=True — the raw subagent result is NEVER written to
+       the user transcript.  The user channel stays clean.
+    4. The ACT loop synthesizes the result.  The synthesized response is
+       written to transcript (``store()``) and delivered via WS — this is
+       what the user sees.
+    5. On subagent failure, the same flow runs — the ACT loop sees the
+       error envelope and synthesizes a user-friendly response.
+
+    Why CHANNEL='user': the output of this ACT loop is a normal
+    user-channel assistant message — fully visible, rich-media-capable.
+    Do NOT add a CHANNEL='subagent_return' constant — it would break
+    rich-media card injection for tool calls in this loop.
+    """
+
+    ROLE = 'subagent_return'
+    SKIP_INPUT_ROW = True

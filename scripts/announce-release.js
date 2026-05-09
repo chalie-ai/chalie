@@ -17,6 +17,7 @@ function getPreviousTag() {
       .trim().split('\n').filter(Boolean);
     return tags[1] || null;
   } catch (e) {
+    console.warn('[announce-release] git tag failed:', e.message);
     return null;
   }
 }
@@ -30,6 +31,7 @@ function getCommitsSince(ref) {
     );
     return output.trim().split('\n').filter(Boolean);
   } catch (e) {
+    console.warn('[announce-release] git log failed:', e.message);
     return [];
   }
 }

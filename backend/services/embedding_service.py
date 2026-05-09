@@ -12,7 +12,7 @@ Model: Alibaba-NLP/gte-modernbert-base
   - ONNX Runtime inference, CPU-friendly, no PyTorch dependency
 
 Model downloads automatically from HuggingFace on first run (~300MB, cached
-at backend/data/models/gte-modernbert-base/onnx/model.onnx).
+at ``data/models/gte-modernbert-base/onnx/model.onnx``).
 """
 
 import concurrent.futures
@@ -69,7 +69,8 @@ _COMPILING_EPS = frozenset({
 
 def _model_dir() -> Path:
     """Return path to local model cache directory, creating it if needed."""
-    base = Path(__file__).parent.parent / "data" / "models" / _MODEL_SUBDIR
+    import paths
+    base = paths.MODELS_DIR / _MODEL_SUBDIR
     base.mkdir(parents=True, exist_ok=True)
     return base
 

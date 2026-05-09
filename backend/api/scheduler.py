@@ -20,6 +20,9 @@ from .auth import require_session
 
 logger = logging.getLogger(__name__)
 
+_ERR_INTERNAL = "Internal server error"
+_ERR_NOT_PENDING = "Not found or item is not pending"
+
 scheduler_bp = Blueprint("scheduler", __name__)
 
 _VALID_STATUSES = {"pending", "fired", "failed", "cancelled"}
@@ -203,7 +206,7 @@ def list_scheduler():
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] list error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler", methods=["POST"])
@@ -276,7 +279,7 @@ def create_scheduler():
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] create error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler/history", methods=["DELETE"])
@@ -309,7 +312,7 @@ def prune_history():
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] prune history error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler/group/<group_id>", methods=["GET"])
@@ -348,7 +351,7 @@ def get_scheduler_group(group_id):
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] group fires error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["GET"])
@@ -378,7 +381,7 @@ def get_scheduler_item(item_id):
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] get item error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["PUT"])
@@ -400,7 +403,7 @@ def update_scheduler_item(item_id):
                 (item_id,)
             )
             if not cursor.fetchone():
-                return jsonify({"error": "Not found or item is not pending"}), 404
+                return jsonify({"error": _ERR_NOT_PENDING}), 404
 
         data = request.get_json(silent=True) or {}
         clean, err = _validate_item(data, require_future=True)
@@ -435,7 +438,7 @@ def update_scheduler_item(item_id):
 
             if cursor.rowcount == 0:
                 conn.commit()
-                return jsonify({"error": "Not found or item is not pending"}), 404
+                return jsonify({"error": _ERR_NOT_PENDING}), 404
 
             # SELECT back the updated row (SQLite has no RETURNING)
             cursor.execute(
@@ -446,13 +449,13 @@ def update_scheduler_item(item_id):
             conn.commit()
 
         if not row:
-            return jsonify({"error": "Not found or item is not pending"}), 404
+            return jsonify({"error": _ERR_NOT_PENDING}), 404
 
         return jsonify({"item": _serialize_item(_row_to_dict(row, cols))})
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] update error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500
 
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["DELETE"])
@@ -477,10 +480,10 @@ def cancel_scheduler_item(item_id):
             conn.commit()
 
         if affected == 0:
-            return jsonify({"error": "Not found or item is not pending"}), 404
+            return jsonify({"error": _ERR_NOT_PENDING}), 404
 
         return jsonify({"status": "cancelled", "id": item_id})
 
     except Exception as e:
         logger.error(f"[SCHEDULER API] cancel error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": _ERR_INTERNAL}), 500

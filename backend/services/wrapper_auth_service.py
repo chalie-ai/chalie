@@ -23,6 +23,7 @@ import uuid
 from typing import Optional
 
 from services.database_service import get_shared_db_service
+from services.log_utils import safe
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -243,7 +244,7 @@ class WrapperAuthService:
             cursor.close()
 
         if affected:
-            logger.info("[WrapperAuth] Revoked wrapper: %s", wrapper_id)
+            logger.info("[WrapperAuth] Revoked wrapper: %s", safe(wrapper_id))
         return affected > 0
 
     # ------------------------------------------------------------------

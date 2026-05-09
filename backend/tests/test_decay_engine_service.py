@@ -22,7 +22,7 @@ class TestDecayEngineService:
         ):
             svc = DecayEngineService()
 
-        assert svc.retrieval_decay_exponent == 0.5
+        assert svc.retrieval_decay_exponent == pytest.approx(0.5, abs=1e-9)
 
     # ── run_decay_cycle — richness gating ────────────────────────────
 

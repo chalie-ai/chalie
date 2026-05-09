@@ -9,8 +9,21 @@ Routing:
   - City name in params: wttr.in directly (Open-Meteo needs coordinates)
 
 Class-level cache per location key, 10-min TTL.
+
+Rich-media rendering:
+  When an ordinal is supplied (``params['_rich_media_ordinal']``), the return
+  value is a string: ``<JSON payload>\\n\\n<rich-media instruction trailer>``.
+  The instruction trailer tells the LLM to wrap its synthesis in a span tag
+  so the RichMediaParser can pair the card with this payload at WS-send time.
+
+  Error payloads do NOT include an instruction trailer — the LLM should not
+  attempt to render a card for an error response.
+
+  The first JSON segment (before the first blank line) is parsed by
+  RichMediaParser._extract_data() and becomes the card payload.
 """
 
+import json
 import logging
 import time
 from typing import ClassVar
@@ -70,35 +83,72 @@ class WeatherAbility(Ability):
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         """
         Get current weather for a location.
 
         Args:
             channel: Conversation channel (passed by framework)
-            params: {"location": str (optional city name; omit to use client coordinates)}
+            params: {"location": str (optional city name; omit to use client coordinates),
+                     "_rich_media_ordinal": int (injected by ActDispatcherService)}
             telemetry: Client telemetry with location coords and resolved name
 
         Returns:
-            location, condition, temperature_c/f, feels_like_c, humidity_pct,
-            wind_kmh, wind_direction, visibility_km, uv_index, precip_mm,
-            observation_time, is_raining, is_daylight, is_hot, is_cold, is_windy, is_clear
+            A string of the form ``<JSON payload>\\n\\n<rich-media instruction>``
+            so the LLM can pair its synthesis with this structured data via a
+            span tag.  Error payloads omit the instruction trailer.
         """
+        ordinal = params.get("_rich_media_ordinal")
         location_param = params.get("location", "").strip()
         lat, lon, location_name = _extract_location(telemetry)
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)
         if cached is not None:
-            return cached
+            return _serialise(cached, ordinal)
 
         result, open_meteo_err, wttr_err = _fetch_with_fallback(location_param, lat, lon, location_name, cache_key)
 
         if result is not None:
             WeatherAbility._cache[cache_key] = (result, time.time())
-            return result
+            return _serialise(result, ordinal)
 
-        return _stale_or_error(cache_key, open_meteo_err, wttr_err)
+        return _serialise(_stale_or_error(cache_key, open_meteo_err, wttr_err), ordinal)
+
+
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a weather card; without it, the user sees only "
+    "plain text. Example output: \"Current conditions in "
+    "<span id='{tag}'>Paris is 14°C with light rain — bring an umbrella.</span>\" "
+    "You may include multiple weather spans (one per location) and prose between them."
+)
+
+
+def _serialise(payload: dict, ordinal: int | None) -> dict | str:
+    """Serialise a weather payload dict to the tool result string or dict.
+
+    When an ordinal is provided (normal ACT dispatch path), the instruction
+    trailer is appended so the LLM knows to emit a span tag.  Error payloads
+    (``'error'`` key present) never get the instruction trailer because a card
+    should not be rendered for error data.  When ordinal is None (direct call,
+    tests, action-button path) the original dict is returned unchanged for
+    backward compatibility.
+
+    Args:
+        payload: Weather data dict (or error dict with ``error``/``details``).
+        ordinal: Per-turn call counter for this tool; None returns the raw dict.
+
+    Returns:
+        ``dict`` when ordinal is None or payload is an error; ``str`` otherwise.
+    """
+    if ordinal is None or "error" in payload:
+        return payload
+    tag = f"weather_{ordinal}"
+    data_json = json.dumps(payload)
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{data_json}\n\n{instruction}"
 
 
 def _extract_location(telemetry: dict | None) -> tuple:
@@ -133,25 +183,57 @@ def _get_fresh_cache(cache_key: str):
 
 
 def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
-    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err)."""
+    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err).
+
+    Routing:
+      - No location_param: prefer Open-Meteo with telemetry coords.
+      - location_param matches telemetry city/country: prefer Open-Meteo with
+        telemetry coords (LLM is just naming the user's home turf).
+      - location_param is a different place: use wttr.in directly (Open-Meteo
+        needs coords we don't have for foreign queries).
+
+    wttr.in is also used as a fallback when Open-Meteo fails. In all wttr.in
+    paths, when we have a clean Nominatim location_name AND the query refers
+    to that same place, we override wttr's mojibake-prone location field.
+    """
     result = None
     open_meteo_err = ""
     wttr_err = ""
+    have_coords = lat is not None and lon is not None
+    use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
 
-    if lat is not None and lon is not None and not location_param:
+    if use_telemetry_coords:
         result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
 
     if result is None and location_param:
         result, wttr_err = _fetch_wttr(location_param)
+        if result is not None and use_telemetry_coords and location_name:
+            result["location"] = location_name
 
     if result is None:
         logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
-        if lat is not None and lon is not None and not location_param:
+        if use_telemetry_coords:
             result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
         if result is None and location_param:
             result, _ = _fetch_wttr(location_param, timeout=5)
+            if result is not None and use_telemetry_coords and location_name:
+                result["location"] = location_name
 
     return result, open_meteo_err, wttr_err
+
+
+def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
+    """True when the LLM-supplied location names the same place as telemetry.
+
+    Case-insensitive substring match in either direction so 'Żabbar' matches
+    'Iż-Żabbar, Malta' and 'malta' matches the country half. Diacritics are
+    not normalised — a partial English/Maltese collision is acceptable.
+    """
+    if not location_param or not location_name:
+        return False
+    p = location_param.strip().lower()
+    n = location_name.strip().lower()
+    return p in n or n in p
 
 
 def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
@@ -180,8 +262,9 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             f"?latitude={lat}&longitude={lon}"
             "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
             "precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day"
+            "&hourly=temperature_2m,weather_code"
             "&daily=weathercode,precipitation_probability_max,precipitation_sum,"
-            "temperature_2m_max,temperature_2m_min"
+            "temperature_2m_max,temperature_2m_min,sunrise,sunset"
             "&wind_speed_unit=kmh"
             "&timezone=auto"
             "&forecast_days=2"
@@ -208,6 +291,8 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
         tomorrow_precip_mm = None
         tomorrow_max_c = None
         tomorrow_min_c = None
+        sunrise = None
+        sunset = None
         if daily and len(daily.get("time", [])) > 1:
             raw_code = daily.get("weathercode", [None, None])[1]
             if raw_code is not None:
@@ -216,6 +301,12 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             tomorrow_precip_mm = daily.get("precipitation_sum", [None, None])[1]
             tomorrow_max_c = daily.get("temperature_2m_max", [None, None])[1]
             tomorrow_min_c = daily.get("temperature_2m_min", [None, None])[1]
+            sunrise_arr = daily.get("sunrise", [])
+            sunset_arr = daily.get("sunset", [])
+            sunrise = sunrise_arr[0] if sunrise_arr else None
+            sunset = sunset_arr[0] if sunset_arr else None
+
+        hourly_strip = _extract_hourly_strip(data.get("hourly", {}), cc.get("time", ""))
 
         return {
             "location": location_name,
@@ -241,6 +332,9 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             "forecast_tomorrow_min_c": tomorrow_min_c,
             "forecast_tomorrow_precip_chance_pct": tomorrow_precip_chance,
             "forecast_tomorrow_precip_mm": tomorrow_precip_mm,
+            "sunrise": sunrise,
+            "sunset": sunset,
+            "hourly": hourly_strip,
         }, ""
     except Exception as e:
         logger.warning(f"[WEATHER] Open-Meteo failed for ({lat},{lon}): {e}")
@@ -253,6 +347,9 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
         url = f"https://wttr.in/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
         resp.raise_for_status()
+        # wttr.in serves JSON without a charset header; requests guesses Latin-1
+        # and mojibakes UTF-8 place names ('Żabbar' → 'Il-AÅ¦Ofra'). Force UTF-8.
+        resp.encoding = "utf-8"
         data = resp.json()
 
         current_conditions = data.get("current_condition")
@@ -321,10 +418,59 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
             "forecast_tomorrow_min_c": tomorrow_min_c,
             "forecast_tomorrow_precip_chance_pct": tomorrow_precip_chance,
             "forecast_tomorrow_precip_mm": tomorrow_precip_mm,
+            "sunrise": None,
+            "sunset": None,
+            "hourly": [],
         }, ""
     except Exception as e:
         logger.warning(f"[WEATHER] wttr.in failed for '{location}': {e}")
         return None, str(e)
+
+
+def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
+    """Pick the next 8 hourly readings starting from the slot containing current_iso.
+
+    Open-Meteo returns ``hourly.time`` as ``["2026-05-03T09:00", ...]`` aligned
+    with the location's local timezone (``timezone=auto``).  The current time
+    is also a local ISO string with no offset, so simple prefix-match against
+    the ``YYYY-MM-DDTHH`` portion locates the first slot — no parsing needed.
+    """
+    if not hourly:
+        return []
+    times = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+    codes = hourly.get("weather_code", [])
+    if not times or not temps:
+        return []
+
+    start_idx = 0
+    if current_iso:
+        prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
+        for i, t in enumerate(times):
+            if t.startswith(prefix):
+                start_idx = i
+                break
+
+    out = []
+    end_idx = min(start_idx + 8, len(times))
+    for i in range(start_idx, end_idx):
+        try:
+            hour = int(times[i][11:13])
+        except (ValueError, IndexError):
+            hour = None
+        try:
+            temp = round(float(temps[i]))
+        except (TypeError, ValueError, IndexError):
+            temp = None
+        code = None
+        if i < len(codes):
+            try:
+                code = int(codes[i])
+            except (TypeError, ValueError):
+                code = None
+        if hour is not None and temp is not None:
+            out.append({"hour": hour, "temp_c": temp, "code": code})
+    return out
 
 
 def _degrees_to_compass(degrees: float) -> str:

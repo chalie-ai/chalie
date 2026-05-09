@@ -30,7 +30,6 @@ def _has_ttl(store: MemoryStore, key: str) -> bool:
     for keyspace in (
         store._strings,
         store._lists,
-        store._hashes,
         store._sorted_sets,
         store._sets,
     ):
@@ -96,61 +95,6 @@ class TestOutputServiceQueueTTL:
 
 
 # ---------------------------------------------------------------------------
-# 2. background_llm_queue — rpush to bg_llm:queue
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestBackgroundLLMQueueTTL:
-    """After rpush to bg_llm:queue, expire(bg_llm:queue, 600) must fire."""
-
-    def test_enqueue_sets_ttl_on_queue_key(self):
-        store = MemoryStore()
-        with patch("services.background_llm_queue.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.background_llm_queue import BackgroundLLMProxy, QUEUE_KEY
-            proxy = BackgroundLLMProxy("test-agent")
-
-        # Intercept brpop so the proxy doesn't block indefinitely
-        with patch.object(store, "brpop", return_value=None):
-            proxy.send_message("sys", "user")
-
-        assert _has_ttl(store, QUEUE_KEY), "bg_llm:queue must have a TTL after rpush"
-
-
-# ---------------------------------------------------------------------------
-# 3. event_bus_service — rpush to event_bus:{event_type}
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestEventBusServiceQueueTTL:
-    """After rpush to event_bus:<type>, expire(event_bus:<type>, 3600) must fire."""
-
-    def test_emit_sets_ttl_on_event_queue(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.event_bus_service import EventBusService, ENCODE_EVENT
-            bus = EventBusService()
-
-        bus.emit(ENCODE_EVENT, {"data": "test"})
-
-        queue_key = f"event_bus:{ENCODE_EVENT}"
-        assert _has_ttl(store, queue_key), f"{queue_key} must have a TTL after rpush"
-
-    def test_emit_custom_event_type_sets_ttl(self):
-        """TTL is applied regardless of the event type string."""
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            from services.event_bus_service import EventBusService
-            bus = EventBusService()
-
-        bus.emit("custom_event", {"key": "value"})
-
-        assert _has_ttl(store, "event_bus:custom_event")
-
-
-# ---------------------------------------------------------------------------
 # 5. app_update_service — set(IN_PROGRESS_KEY, "1", ex=3600)
 # ---------------------------------------------------------------------------
 
@@ -180,7 +124,6 @@ class TestAppUpdateServiceTTL:
                    return_value="installed"), \
              patch("services.app_update_service.AppUpdateService.get_current_version",
                    return_value="0.2.0"), \
-             patch("services.app_update_service.AppUpdateService.backup_database"), \
              patch("services.app_update_service.AppUpdateService.download_and_validate",
                    side_effect=RuntimeError("abort early for test")):
             from services.app_update_service import AppUpdateService, IN_PROGRESS_KEY
@@ -233,29 +176,6 @@ class TestIntentServiceQueueTTL:
 
         list_key = f"intents:{_BROADCAST_KEY}"
         assert _has_ttl(store, list_key), f"{list_key} must have a TTL for broadcast intents"
-
-
-# ---------------------------------------------------------------------------
-# 10. dmn_service — zadd to dmn:deliveries
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestDMNServiceDeliveryZSetTTL:
-    """After zadd to dmn:deliveries, expire(dmn:deliveries, 86400) must fire."""
-
-    def test_record_delivery_sets_ttl_on_deliveries_zset(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch("services.database_service.get_shared_db_service"):
-            from services.dmn_service import DMNService, _DELIVERY_ZSET
-            svc = DMNService.__new__(DMNService)
-            svc._store = store
-
-        svc._record_delivery()
-
-        assert _has_ttl(store, _DELIVERY_ZSET), \
-            "dmn:deliveries must have TTL=86400 after zadd"
 
 
 # ---------------------------------------------------------------------------

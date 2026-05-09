@@ -1,84 +1,8 @@
 """
-Tool Output Utilities — Shared formatting, sanitization, and telemetry.
+Tool Output Utilities — Telemetry construction.
 
-Shared helpers used by ToolRegistryService for result formatting and
-telemetry construction.
+Shared helpers used by ToolRegistryService for telemetry construction.
 """
-
-import json
-from typing import Any
-
-
-MAX_OUTPUT_CHARS = 3000
-
-
-def format_tool_result(result: Any) -> str:
-    """Convert a tool result dict/str into plain text for LLM consumption.
-
-    Handles three structured output patterns:
-    - {"results": [...]} — search-style results with title/snippet/url
-    - {"content": "..."} — page extraction with optional truncation
-    - Generic dict — key/value pairs
-
-    Args:
-        result: Raw tool output (str, dict, or other)
-
-    Returns:
-        Formatted plain text string
-    """
-    if isinstance(result, str):
-        return result
-
-    if not isinstance(result, dict):
-        return str(result)
-
-    lines = []
-
-    # Search-style results
-    if "results" in result and isinstance(result["results"], list):
-        results = result["results"]
-        if not results:
-            lines.append(result.get("message", "No results found."))
-        else:
-            for i, r in enumerate(results, 1):
-                if isinstance(r, dict):
-                    title = r.get("title", "")
-                    snippet = r.get("snippet", "")
-                    url = r.get("url", "")
-                    lines.append(f"{i}. {title}")
-                    if snippet:
-                        lines.append(f"   {snippet}")
-                    if url:
-                        lines.append(f"   {url}")
-                else:
-                    lines.append(f"{i}. {r}")
-        if result.get("count") is not None and result["count"] > 0:
-            lines.append(f"\n{result['count']} results returned.")
-        return "\n".join(lines)
-
-    # Page extraction
-    if "content" in result and isinstance(result["content"], str):
-        content = result["content"]
-        if result.get("error"):
-            return f"Error: {result['error']}"
-        if not content:
-            return "No content extracted from page."
-        parts = [content]
-        if result.get("truncated"):
-            parts.append(f"(truncated to {result.get('char_count', '?')} chars)")
-        return "\n".join(parts)
-
-    # Generic key/value
-    for key, value in result.items():
-        if key in ("budget_remaining",):
-            continue
-        if isinstance(value, (list, dict)):
-            lines.append(f"{key}: {json.dumps(value, default=str)[:500]}")
-        else:
-            lines.append(f"{key}: {value}")
-
-    return "\n".join(lines)
-
 
 def build_tool_telemetry(raw_telemetry: dict) -> dict:
     """Flatten client context telemetry into the tool contract format.

@@ -11,7 +11,8 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from pathlib import Path
+
+import paths
 
 logger = logging.getLogger(__name__)
 
@@ -49,26 +50,12 @@ def text(sql: str) -> _TextClause:
     """
     return _TextClause(sql)
 
-# Default database path
-_DEFAULT_DB_PATH = str(Path(__file__).resolve().parent.parent / "data" / "chalie.db")
-
 # ── Thread-local storage for connections ────────────────────────
 _local = threading.local()
 
 # ── Singleton DatabaseService ───────────────────────────────────
 _shared_db_service = None
 _shared_lock = threading.Lock()
-
-
-def get_db_path() -> str:
-    """Return the database file path from the environment or the built-in default.
-
-    Returns:
-        Absolute path to the SQLite file, sourced from the ``CHALIE_DB_PATH``
-        environment variable when set, otherwise the default path inside the
-        Docker data volume.
-    """
-    return os.environ.get("CHALIE_DB_PATH", _DEFAULT_DB_PATH)
 
 
 def get_shared_db_service() -> 'DatabaseService':
@@ -82,7 +69,7 @@ def get_shared_db_service() -> 'DatabaseService':
     if _shared_db_service is None:
         with _shared_lock:
             if _shared_db_service is None:
-                _shared_db_service = DatabaseService(get_db_path())
+                _shared_db_service = DatabaseService(str(paths.DB_PATH))
                 logger.info("[DB] Created shared DatabaseService singleton")
     return _shared_db_service
 
@@ -304,10 +291,11 @@ class DatabaseService:
         """Initialize the service and ensure the database directory exists.
 
         Args:
-            db_path: Absolute path to the SQLite file. Defaults to the value
-                returned by :func:`get_db_path` (env var or built-in default).
+            db_path: Absolute path to the SQLite file. Defaults to the
+                hard-coded :data:`paths.DB_PATH`. Tests pass a temp path
+                explicitly.
         """
-        self.db_path = db_path or get_db_path()
+        self.db_path = db_path or str(paths.DB_PATH)
         # Ensure the directory exists
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
@@ -359,15 +347,6 @@ class DatabaseService:
     def get_connection(self):
         """Get a connection (thread-local). Compatible with old API."""
         return self._get_connection()
-
-    def release_connection(self, conn):
-        """No-op compatibility shim — SQLite connections are thread-local and reused.
-
-        Args:
-            conn: Ignored.  Present for API compatibility with the old PostgreSQL
-                connection-pool pattern.
-        """
-        pass
 
     @contextmanager
     def connection(self):

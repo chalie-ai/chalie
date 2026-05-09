@@ -16,10 +16,11 @@ import os
 import secrets
 import shutil
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import paths
 from services.embedding_utils import pack_embedding as _pack_embedding
+from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,8 @@ DEDUP_MIN_TEXT_LENGTH = 200        # skip semantic dedup for very short docs
 # Purge window (days after soft delete)
 PURGE_WINDOW_DAYS = 30
 
-# Document storage root — env var overrides for Docker; local default mirrors backend/data/
-_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
+# Document storage root — single hard-coded layout (paths.py).
+DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
 
 
 class DocumentService:
@@ -325,9 +325,9 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_update)
-            logger.info(f"[DOCS] Updated status for {doc_id}: {status}")
+            logger.info("[DOCS] Updated status for %s: %s", safe(doc_id), safe(status))
         except Exception as e:
-            logger.error(f"[DOCS] update_status failed for {doc_id}: {e}")
+            logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
             raise
 
     def update_summary(self, doc_id: str, summary: str) -> None:
@@ -430,7 +430,7 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_supersede)
-            logger.info(f"[DOCS] Document {doc_id} supersedes {supersedes_id}")
+            logger.info("[DOCS] Document %s supersedes %s", safe(doc_id), safe(supersedes_id))
         except Exception as e:
             logger.error(f"[DOCS] set_supersedes failed: {e}")
 
@@ -558,7 +558,7 @@ class DocumentService:
             updated = self._write_queue.submit_sync(_soft_delete) > 0
 
             if updated:
-                logger.info(f"[DOCS] Soft-deleted document {doc_id}")
+                logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
                 # Deactivate data_graph artifacts so they stop surfacing in recall.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -569,7 +569,7 @@ class DocumentService:
                             (f'document:{doc_id}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
 
         except Exception as e:
@@ -607,7 +607,7 @@ class DocumentService:
             updated = self._write_queue.submit_sync(_restore) > 0
 
             if updated:
-                logger.info(f"[DOCS] Restored document {doc_id}")
+                logger.info("[DOCS] Restored document %s", safe(doc_id))
                 # Reactivate data_graph artifacts so they surface in recall again.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -618,7 +618,7 @@ class DocumentService:
                             (f'document:{doc_id}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
 
         except Exception as e:
@@ -667,7 +667,7 @@ class DocumentService:
                     from services.data_graph_service import get_data_graph_service
                     get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", doc_id, exc)
+                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe(doc_id), exc)
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
@@ -678,7 +678,7 @@ class DocumentService:
                 if resolved.startswith(os.path.realpath(DOCUMENTS_ROOT)) and os.path.exists(resolved):
                     shutil.rmtree(resolved, ignore_errors=True)
             if deleted:
-                logger.info(f"[DOCS] Hard-deleted document {doc_id}")
+                logger.info("[DOCS] Hard-deleted document %s", safe(doc_id))
 
             return deleted
 
@@ -716,54 +716,6 @@ class DocumentService:
             logger.error(f"[DOCS] purge_expired failed: {e}")
             return 0
 
-    def search_by_metadata(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Query documents by extracted_metadata JSON fields.
-        Supported filters: document_type, company, has_expiration.
-        """
-        try:
-            conditions = ["deleted_at IS NULL", "status = 'ready'"]
-            params = []
-
-            if 'document_type' in filters:
-                conditions.append("json_extract(extracted_metadata, '$.document_type.value') = ?")
-                params.append(filters['document_type'])
-
-            if 'company' in filters:
-                conditions.append(
-                    "EXISTS (SELECT 1 FROM json_each(json_extract(extracted_metadata, '$.companies')) c "
-                    "WHERE json_extract(c.value, '$.name') LIKE ?)"
-                )
-                params.append(f"%{filters['company']}%")
-
-            if filters.get('has_expiration'):
-                conditions.append("json_array_length(COALESCE(json_extract(extracted_metadata, '$.expiration_dates'), '[]')) > 0")
-
-            where = " AND ".join(conditions)
-
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(f"""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE {where}
-                    ORDER BY created_at DESC
-                """, params)
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [self._row_to_dict(row) for row in rows]
-
-        except Exception as e:
-            logger.error(f"[DOCS] search_by_metadata failed: {e}")
-            return []
-
     # ─────────────────────────────────────────────
     # Watched folder helpers
     # ─────────────────────────────────────────────
@@ -791,31 +743,6 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
-
-    def get_document_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Get a non-deleted document by its file_path."""
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE file_path = ? AND deleted_at IS NULL
-                """, (file_path,))
-                row = cursor.fetchone()
-                cursor.close()
-            if not row:
-                return None
-            return self._row_to_dict(row)
-        except Exception as e:
-            logger.error(f"[DOCS] get_document_by_path failed: {e}")
-            return None
 
     def update_tags(self, doc_id: str, tags: list) -> None:
         """Update the tags JSON array for a document.

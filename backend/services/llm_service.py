@@ -8,6 +8,7 @@ Usage:
     text = response.text
 """
 
+import json
 import re
 import time
 import logging
@@ -17,7 +18,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
-
 
 def _strip_think_blocks(text: str) -> str:
     """Remove <think>...</think> chain-of-thought blocks emitted by reasoning
@@ -209,7 +209,7 @@ class FallbackLLMService:
         self._primary = primary
         self._fallback = fallback
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message, falling back to the secondary service on primary failure.
 
         Rate limits from the primary now trigger a fallback attempt —
@@ -219,8 +219,6 @@ class FallbackLLMService:
         Args:
             system_prompt: Instruction context placed in the system role.
             user_message: The user-turn content to send to the model.
-            stream: If ``True``, request streamed output (passed through to
-                the underlying service; not yet supported by most providers).
 
         Returns:
             LLMResponse from whichever service successfully handled the request.
@@ -229,7 +227,7 @@ class FallbackLLMService:
             Exception: If both the primary and fallback services raise errors.
         """
         try:
-            return self._primary.send_message(system_prompt, user_message, stream=stream)
+            return self._primary.send_message(system_prompt, user_message)
         except NonRetryableError:
             # PayloadTooLargeError + other 5xx-derived non-retryables. Re-raise
             # so callers (e.g. MessageProcessor.send) can act — sending the
@@ -237,7 +235,7 @@ class FallbackLLMService:
             raise
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
-            return self._fallback.send_message(system_prompt, user_message, stream=stream)
+            return self._fallback.send_message(system_prompt, user_message)
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         try:
@@ -249,6 +247,9 @@ class FallbackLLMService:
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
+        return self._primary.build_request_body(system_prompt, messages, tools, **kwargs)
 
     def get_context_limit(self) -> int:
         return self._primary.get_context_limit()
@@ -323,8 +324,8 @@ class LoggingLLMService:
         self._service = service
         self._job_name = job_name
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
-        result = self._service.send_message(system_prompt, user_message, stream=stream)
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
+        result = self._service.send_message(system_prompt, user_message)
         _log_llm_call(self._job_name, result)
         return result
 
@@ -332,6 +333,9 @@ class LoggingLLMService:
         result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         _log_llm_call(self._job_name, result)
         return result
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
+        return self._service.build_request_body(system_prompt, messages, tools, **kwargs)
 
     def get_context_limit(self) -> int:
         return self._service.get_context_limit()
@@ -389,122 +393,6 @@ def _log_llm_call(job_name: str, response: LLMResponse):
         )
     except Exception as e:
         logger.debug(f"[LLM] _log_llm_call: persistent log write failed (non-fatal): {e}")
-
-
-class RefreshableLLMService:
-    """
-    LLM service wrapper that auto-refreshes when provider configuration changes.
-
-    Detects provider cache version changes (via MemoryStore invalidation) and re-creates
-    the underlying LLM client, so workers don't need to restart when providers change
-    via the Brain UI.
-    """
-
-    def __init__(self, agent_name: str):
-        """Initialise the wrapper without immediately creating the underlying client.
-
-        The underlying LLM client is lazily created on the first call to
-        :meth:`send_message` and is transparently re-created whenever the
-        provider cache version changes (i.e., when a provider is added,
-        updated, or reassigned via the Brain UI).
-
-        Args:
-            agent_name: Agent configuration name used to resolve provider
-                settings via ``ConfigService.resolve_agent_config``
-                (e.g., ``'cognitive-drift'``, ``'episodic-memory'``).
-        """
-        self._agent_name = agent_name
-        self._version = None  # Last seen provider cache version
-        self._service = None  # Underlying LLM service
-
-    def _ensure_fresh(self):
-        """Re-create the underlying service if the provider cache version has changed."""
-        from services.provider_cache_service import ProviderCacheService
-        from services.config_service import ConfigService
-
-        # Warm cache and get current version
-        ProviderCacheService.get_providers()
-        current_version = ProviderCacheService._version
-
-        if current_version != self._version:
-            logger.debug(
-                f"[RefreshableLLM] Provider version changed ({self._version} → {current_version}), "
-                f"re-creating LLM service for agent '{self._agent_name}'"
-            )
-            config = ConfigService.resolve_agent_config(self._agent_name)
-            primary = _build_service(config)
-
-            # Handle fallback provider
-            fallback_name = config.get('fallback_provider')
-            if fallback_name:
-                try:
-                    providers = ConfigService.get_providers()
-                    if fallback_name in providers:
-                        fallback_config = dict(providers[fallback_name])
-                        fallback = _build_service(fallback_config)
-                        primary = FallbackLLMService(primary, fallback)
-                except Exception as e:
-                    logger.warning(f"[RefreshableLLM] Failed to load fallback '{fallback_name}': {e}")
-
-            self._service = primary
-            self._version = current_version
-
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
-        """Send a message, refreshing the underlying client if the provider config has changed.
-
-        Calls :meth:`_ensure_fresh` before each request so that provider
-        configuration updates (e.g., new API key or model) are picked up
-        automatically without restarting the worker process.
-
-        Args:
-            system_prompt: Instruction context placed in the system role.
-            user_message: The user-turn content to send to the model.
-            stream: If ``True``, request streamed output (passed through to
-                the underlying service; not yet supported by most providers).
-
-        Returns:
-            LLMResponse from the (potentially freshly re-created) underlying
-            service instance.
-
-        Raises:
-            Any exception raised by the underlying LLM service.
-        """
-        self._ensure_fresh()
-        result = self._service.send_message(system_prompt, user_message, stream=stream)
-        _log_llm_call(self._agent_name, result)
-        return result
-
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
-        self._ensure_fresh()
-        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        _log_llm_call(self._agent_name, result)
-        return result
-
-    def get_context_limit(self) -> int:
-        self._ensure_fresh()
-        return self._service.get_context_limit()
-
-    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
-        self._ensure_fresh()
-        return self._service.count_tokens(messages, system_prompt, tools)
-
-
-def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
-    """
-    Create an LLM service that auto-refreshes when provider configuration changes.
-
-    Use this instead of create_llm_service() for long-lived services that store
-    the LLM client as an instance variable. The underlying client is re-created
-    automatically when the provider cache version changes (e.g., after a provider
-    is added, updated, or reassigned via the Brain UI).
-
-    Args:
-        agent_name: Agent config name (e.g., 'cognitive-drift', 'episodic-memory')
-
-    Returns:
-        RefreshableLLMService that transparently re-creates its client on changes.
-    """
-    return RefreshableLLMService(agent_name)
 
 
 _ANTHROPIC_THINKING_BUDGETS = {'medium': 4096, 'high': 16384}
@@ -577,27 +465,22 @@ class AnthropicService:
         api_key = _resolve_api_key(self._config)
         return anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the Anthropic Messages API.
 
         Args:
             system_prompt: Text placed in the ``system`` role of the request.
             user_message: Text placed in the ``user`` role of the request.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts, and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RateLimitError: If the API returns HTTP 429.
             anthropic.APIError: For other Anthropic API errors after retries
                 are exhausted.
         """
-        if stream:
-            raise NotImplementedError("Streaming not yet supported")
-
         import anthropic
 
         client = self._get_client()
@@ -633,6 +516,24 @@ class AnthropicService:
             tokens_output=response.usage.output_tokens,
             latency_ms=latency_ms,
         )
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Uses the same dict construction as send_messages (cache_prefix=False,
+        thinking_mode=None — measurement path never needs those variants because
+        token counts are independent of caching and thinking budget headers).
+        The result is json.dumps of the identical create_kwargs dict, which is
+        what the Anthropic SDK serialises over the wire.
+        """
+        create_kwargs = {
+            'model': self.model,
+            'max_tokens': self._MAX_TOKENS,
+            'system': system_prompt,
+            'messages': _anthropic_convert_messages(messages),
+            **({'tools': tools} if tools else {}),
+        }
+        return json.dumps(create_kwargs, default=str)
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         import anthropic
@@ -807,7 +708,7 @@ class OpenAIService:
             kwargs['base_url'] = base_url
         return OpenAI(**kwargs)
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the OpenAI Chat Completions API.
 
         When ``format='json'`` is set in the provider config, the request
@@ -817,21 +718,16 @@ class OpenAIService:
         Args:
             system_prompt: Text placed in the ``system`` role of the request.
             user_message: Text placed in the ``user`` role of the request.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts, and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RateLimitError: If the API returns HTTP 429.
             openai.APIError: For other OpenAI API errors after retries are
                 exhausted.
         """
-        if stream:
-            raise NotImplementedError("Streaming not yet supported")
-
         import openai as openai_mod
 
         client = self._get_client()
@@ -960,6 +856,24 @@ class OpenAIService:
                 'input': parsed_args,
             })
         return tool_calls
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Uses the same dict construction as send_messages (thinking_mode=None —
+        reasoning_effort is omitted from measurement because the token count
+        it adds to the payload is negligible and provider-dependent).
+        The result is json.dumps of the identical create_kwargs dict, which is
+        what the OpenAI SDK serialises over the wire.
+        """
+        api_messages = _openai_convert_messages(messages)
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
+        }
+        if tools:
+            create_kwargs['tools'] = self._build_openai_tools(tools)
+        return json.dumps(create_kwargs, default=str)
 
     def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         # ``_cache_prefix``: interface parity with Anthropic, but OpenAI has
@@ -1102,28 +1016,23 @@ class GeminiService:
         self.model = config.get('model', 'gemini-2.5-flash')
         self.format = config.get('format', 'text')
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the Google Gemini generative AI API.
 
         Args:
             system_prompt: Instruction passed as the system instruction in
                 ``GenerateContentConfig``.
             user_message: The user-turn content to generate a response for.
-            stream: Must be ``False``; streaming is not yet implemented.
 
         Returns:
             LLMResponse populated with the generated text, model identifier,
             token counts (from ``usage_metadata``), and round-trip latency.
 
         Raises:
-            NotImplementedError: If ``stream=True`` is requested.
             RuntimeError: If the ``google-genai`` package is not installed.
             RateLimitError: If the API raises ``ResourceExhausted`` (HTTP 429).
             ValueError: If the model returns an empty response.
         """
-        if stream:
-            raise NotImplementedError("Streaming not yet supported")
-
         try:
             from google import genai
         except ImportError:
@@ -1185,6 +1094,38 @@ class GeminiService:
             tokens_output=tokens_output,
             latency_ms=latency_ms,
         )
+
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Gemini uses the google-genai SDK which serialises over gRPC/REST
+        internally. We serialise the same Python dict structures that
+        send_messages builds (converted contents + config kwargs) so the
+        token estimator sees exactly what the SDK would encode.
+        """
+        gemini_contents = _gemini_convert_messages(messages)
+        # Build a plain-dict config representation without importing genai
+        # (measurement must work without a live API key or SDK initialised).
+        config_dict: dict = {'system_instruction': system_prompt}
+        if tools:
+            config_dict['tools'] = [
+                {
+                    'function_declarations': [
+                        {
+                            'name': t['name'],
+                            'description': t.get('description', ''),
+                            'parameters': t.get('input_schema'),
+                        }
+                        for t in tools
+                    ]
+                }
+            ]
+        body = {
+            'model': self.model,
+            'contents': gemini_contents,
+            'config': config_dict,
+        }
+        return json.dumps(body, default=str)
 
     def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         # ``_cache_prefix``: interface parity with Anthropic, but Gemini has

@@ -85,7 +85,7 @@ class OllamaService:
         # Cached result of _model_supports_thinking(). None = not yet checked.
         self._thinking_supported: bool | None = None
 
-    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+    def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to Ollama and return the response."""
         url = f"{self.host}/api/generate"
 
@@ -121,6 +121,19 @@ class OllamaService:
             except requests.exceptions.HTTPError as e:
                 self._handle_http_error(e, attempt)
 
+    def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **_kwargs) -> str:
+        """Return the serialised request body that send_messages would POST.
+
+        Uses the same _build_chat_payload path as send_messages; thinking_mode
+        is omitted (None) because the think flag adds negligible token weight
+        and requires a live /api/show preflight — unsuitable for measurement.
+        requests.post(json=payload) serialises with json.dumps; we use the
+        same call here so measurement and wire body are identical.
+        """
+        api_messages = _ollama_convert_messages(messages)
+        payload = self._build_chat_payload(system_prompt, api_messages, tools, thinking_mode=None)
+        return json.dumps(payload)
+
     def send_messages(self, system_prompt: str, messages: list, _cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         # ``_cache_prefix`` is named with a leading underscore on purpose:
         # interface parity with Anthropic, but Ollama has no prefix-cache so
@@ -143,7 +156,7 @@ class OllamaService:
             except requests.exceptions.HTTPError as e:
                 self._handle_http_error(e, attempt)
 
-    def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: str) -> dict:
+    def _build_chat_payload(self, system_prompt: str, api_messages: list, tools: list, thinking_mode: 'str | None') -> dict:
         payload: dict = {
             "model": self.model,
             "messages": [{"role": "system", "content": system_prompt}] + api_messages,

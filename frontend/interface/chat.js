@@ -147,8 +147,7 @@ export class Chat {
         this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
       },
       onSteerSent: (steerText) => {
-        // User sent a redirect while ACT is running — show inline
-        this._renderer.appendSteerBubble(steerText);
+        this._renderer.appendSteerBubble(steerText, actEl);
       },
       onMessage: (data) => {
         responseContent = data.content || '';
@@ -157,6 +156,7 @@ export class Chat {
           exchange_id: data.exchange_id,
           mode: data.mode || '',
           confidence: data.confidence || 0,
+          segments: data.segments || null,
         };
         this._presence.setState('responding');
       },
@@ -193,13 +193,6 @@ export class Chat {
       },
     }, pendingImageIds);
 
-    // Safety: if onDone never fires (connection drop), reset after 5 minutes
-    setTimeout(() => {
-      if (this._isSending) {
-        this._isSending = false;
-        this._pendingForm = null;
-      }
-    }, 300000);
   }
 
   // ---------------------------------------------------------------------------
@@ -270,16 +263,20 @@ export class Chat {
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.content) {
-      this._renderer.appendChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content || msg.segments) {
+      const meta = { ts: msg.timestamp };
+      if (msg.segments) meta.segments = msg.segments;
+      this._renderer.appendChalieForm(msg.content || '', meta, { inWorkingMemory });
     }
   }
 
   _prependMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
       this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
-    } else if (msg.content) {
-      this._renderer.prependChalieForm(msg.content, { ts: msg.timestamp }, { inWorkingMemory });
+    } else if (msg.content || msg.segments) {
+      const meta = { ts: msg.timestamp };
+      if (msg.segments) meta.segments = msg.segments;
+      this._renderer.prependChalieForm(msg.content || '', meta, { inWorkingMemory });
     }
   }
 

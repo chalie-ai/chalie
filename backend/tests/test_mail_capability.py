@@ -305,7 +305,7 @@ class TestMailCapabilityDisconnect:
     """disconnect() behaviour."""
 
     def test_disconnect_clears_all_flags(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._caldav_ok = True
         cap._carddav_ok = True
@@ -351,20 +351,20 @@ class TestMailCapabilityGetTools:
     """get_tools() conditional registration."""
 
     def test_no_protocols_returns_empty(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         # All flags default to False
         tools = cap.get_tools()
         assert tools == []
 
     def test_imap_only_returns_three_tools(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
         assert names == {"search_email", "read_email", "send_email"}
 
     def test_caldav_only_returns_seven_tools(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._caldav_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
@@ -374,14 +374,14 @@ class TestMailCapabilityGetTools:
         }
 
     def test_carddav_only_returns_two_tools(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._carddav_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
         assert names == {"list_contacts", "get_contact"}
 
     def test_all_protocols_returns_twelve_tools(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._caldav_ok = True
         cap._carddav_ok = True
@@ -389,7 +389,7 @@ class TestMailCapabilityGetTools:
         assert len(tools) == 12
 
     def test_all_tools_have_required_keys(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._caldav_ok = True
         cap._carddav_ok = True
@@ -402,7 +402,7 @@ class TestMailCapabilityGetTools:
             assert "timeout" in tool
 
     def test_imap_tool_returns_error_when_disconnected(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         tools = {t["name"]: t for t in cap.get_tools()}
 
@@ -412,7 +412,7 @@ class TestMailCapabilityGetTools:
         assert "error" in result
 
     def test_caldav_tool_returns_error_when_disconnected(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._caldav_ok = True
         tools = {t["name"]: t for t in cap.get_tools()}
 
@@ -421,7 +421,7 @@ class TestMailCapabilityGetTools:
         assert "error" in result
 
     def test_carddav_tool_returns_error_when_disconnected(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._carddav_ok = True
         tools = {t["name"]: t for t in cap.get_tools()}
 
@@ -450,7 +450,7 @@ class TestMailCapabilityMonitorCadence:
         return cap, vault, tcs
 
     def test_imap_called_every_cycle(self):
-        cap, vault, tcs = self._connected_cap()
+        cap, _, _ = self._connected_cap()
         mock_client = MagicMock()
         cap._imap_handler.open_client.return_value = mock_client
         cap._imap_handler.ingest.return_value = ([], None)
@@ -468,7 +468,7 @@ class TestMailCapabilityMonitorCadence:
         assert cap._imap_handler.open_client.call_count == 3
 
     def test_caldav_called_every_third_cycle(self):
-        cap, vault, tcs = self._connected_cap()
+        cap, _, _ = self._connected_cap()
         mock_imap = MagicMock()
         cap._imap_handler.open_client.return_value = mock_imap
         cap._imap_handler.ingest.return_value = ([], None)
@@ -487,7 +487,7 @@ class TestMailCapabilityMonitorCadence:
         assert cap._caldav_handler.open_client.call_count == 2
 
     def test_carddav_called_every_twelfth_cycle(self):
-        cap, vault, tcs = self._connected_cap()
+        cap, _, _ = self._connected_cap()
         mock_imap = MagicMock()
         cap._imap_handler.open_client.return_value = mock_imap
         cap._imap_handler.ingest.return_value = ([], None)
@@ -507,7 +507,7 @@ class TestMailCapabilityMonitorCadence:
         assert cap._carddav_handler.open_client.call_count == 2
 
     def test_monitor_reconnects_if_disconnected(self):
-        cap, vault, tcs = self._connected_cap()
+        cap, _, _ = self._connected_cap()
         cap._connected = False
         cap._imap_ok = False
         cap._caldav_ok = False
@@ -524,7 +524,7 @@ class TestMailCapabilityHealthDetails:
     """health_details() structure."""
 
     def test_health_details_when_disconnected(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         details = cap.health_details()
         assert details == {
             "connected": False,
@@ -532,7 +532,7 @@ class TestMailCapabilityHealthDetails:
         }
 
     def test_health_details_when_partially_connected(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._connected = True
         details = cap.health_details()
@@ -547,12 +547,12 @@ class TestMailCapabilityAct:
     """act() dispatches to the correct tool handler."""
 
     def test_act_unknown_action_returns_error(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         result = cap.act("launch_rocket", {})
         assert "error" in result
 
     def test_act_dispatches_to_known_tool(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
         cap._caldav_ok = True
         cap._caldav_handler.list_events.return_value = {"events": [], "count": 0}
 
@@ -565,7 +565,7 @@ class TestEnsureSyncRegistration:
     """_ensure_sync_registration() registers once and creates the scheduled_item."""
 
     def test_registration_only_runs_once(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
 
         mock_db = MagicMock()
         mock_conn = MagicMock()
@@ -587,7 +587,7 @@ class TestEnsureSyncRegistration:
         assert mock_cursor.execute.call_count == 3
 
     def test_registration_sets_flag(self):
-        cap, vault, tcs = _make_capability()
+        cap, _, _ = _make_capability()
 
         mock_db = MagicMock()
         mock_conn = MagicMock()

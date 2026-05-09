@@ -9,7 +9,7 @@ export function lsSet(key, val) { try { localStorage.setItem(key, val); } catch 
 /** Escape HTML entities. */
 export function escHtml(str) {
   if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 /** Convert an ISO date string to a short relative label ("in 5m", "in 2h", "tomorrow"). */

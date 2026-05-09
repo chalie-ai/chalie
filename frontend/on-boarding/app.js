@@ -24,10 +24,12 @@ async function readErrorMessage(res, fallback) {
         try {
             const parsed = JSON.parse(text);
             return parsed.error || fallback + ' (HTTP ' + res.status + ')';
-        } catch {
+        } catch (e) {
+            console.warn('[on-boarding] failed to parse error JSON:', e);
             return fallback + ' (HTTP ' + res.status + ')';
         }
-    } catch {
+    } catch (e) {
+        console.warn('[on-boarding] failed to read response body:', e);
         return fallback + ' (HTTP ' + res.status + ')';
     }
 }

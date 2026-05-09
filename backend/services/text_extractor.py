@@ -76,7 +76,7 @@ def extract_html(html: str, url: str = None) -> str:
     # 1. trafilatura (primary) — trusts its result regardless of length
     try:
         import trafilatura
-        content = trafilatura.extract(html, url=url, include_comments=False)
+        content = trafilatura.extract(html, url=url, include_comments=False, include_links=True)
         if content and content.strip():
             return content.strip()
     except ImportError:

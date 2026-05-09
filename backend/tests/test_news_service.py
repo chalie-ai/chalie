@@ -9,7 +9,7 @@ import pytest
 from services.news_service import (
     NewsService, NewsArticle,
     _strip_html, _parse_date, _normalize_title, _levenshtein,
-    _tokenize_title, _jaccard, _derive_domain,
+    _derive_domain,
 )
 
 SAMPLE_RSS = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -116,35 +116,6 @@ class TestHelpers:
     def test_levenshtein_different(self):
         assert _levenshtein("cat", "dog") == 3
 
-    def test_tokenize_title_removes_stopwords(self):
-        tokens = _tokenize_title("The cat is on the mat")
-        assert "the" not in tokens
-        assert "is" not in tokens
-        assert "on" not in tokens
-        assert "cat" in tokens
-        assert "mat" in tokens
-
-    def test_tokenize_title_lowercase(self):
-        tokens = _tokenize_title("HELLO WORLD")
-        assert "hello" in tokens
-        assert "world" in tokens
-
-    def test_jaccard_identical(self):
-        assert _jaccard({"a", "b", "c"}, {"a", "b", "c"}) == 1.0
-
-    def test_jaccard_disjoint(self):
-        assert _jaccard({"a", "b"}, {"c", "d"}) == 0.0
-
-    def test_jaccard_partial(self):
-        result = _jaccard({"a", "b", "c"}, {"b", "c", "d"})
-        assert abs(result - 0.5) < 0.01  # 2/4
-
-    def test_jaccard_both_empty(self):
-        assert _jaccard(set(), set()) == 1.0
-
-    def test_jaccard_one_empty(self):
-        assert _jaccard({"a"}, set()) == 0.0
-
     def test_derive_domain_strips_rss_prefix(self):
         assert _derive_domain("https://feeds.bbci.co.uk/news/rss.xml") == "bbci.co.uk"
 
@@ -242,7 +213,7 @@ class TestDeduplication:
     def test_near_duplicates_removed(self):
         articles = [
             _make_article(title="Breaking News in Markets Today"),
-            _make_article(title="Breaking News in Market Today"),  # distance = 1
+            _make_article(title="Breaking News in Market Today"),  # edit distance 1 from the title above
         ]
         result = self.svc.deduplicate(articles)
         assert len(result) == 1
@@ -313,67 +284,6 @@ class TestRanking:
         ]
         result = self.svc.rank_by_relevance(articles, "query")
         assert len(result) == 2  # All returned, date-sorted
-
-
-# ── Clustering tests ──────────────────────────────────────────
-
-@pytest.mark.unit
-class TestClustering:
-
-    def setup_method(self):
-        self.svc = NewsService()
-
-    def test_similar_titles_clustered(self):
-        articles = [
-            _make_article(title="AI breakthrough in healthcare announced", source="BBC",
-                         url="https://bbc.com/article-1"),
-            _make_article(title="AI breakthrough in healthcare reported", source="CNN",
-                         url="https://cnn.com/article-2"),
-            _make_article(title="Completely unrelated sports story", source="ESPN",
-                         url="https://espn.com/article-3"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        assert len(clusters) >= 1
-        assert clusters[0]["coverage"] == 2
-
-    def test_clusters_below_min_sources_filtered(self):
-        articles = [
-            _make_article(title="Unique story one", source="BBC"),
-            _make_article(title="Unique story two", source="CNN"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=3, limit=5)
-        assert len(clusters) == 0
-
-    def test_representative_title_is_longest(self):
-        articles = [
-            _make_article(title="Short title about AI", source="BBC",
-                         url="https://bbc.com/1"),
-            _make_article(title="A much longer and more detailed title about AI breakthroughs in medicine",
-                         source="CNN", url="https://cnn.com/2"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        if clusters:
-            assert "longer" in clusters[0]["title"] or "detailed" in clusters[0]["title"]
-
-    def test_empty_articles(self):
-        assert self.svc.cluster_trending([], min_sources=2, limit=5) == []
-
-    def test_clusters_sorted_by_coverage(self):
-        articles = [
-            _make_article(title="Big story about climate change", source="BBC",
-                         url="https://bbc.com/1"),
-            _make_article(title="Big story about climate change today", source="CNN",
-                         url="https://cnn.com/2"),
-            _make_article(title="Big story about climate change reported", source="AP",
-                         url="https://ap.com/3"),
-            _make_article(title="Small tech news item", source="TechCrunch",
-                         url="https://tc.com/4"),
-            _make_article(title="Small tech news item today", source="Wired",
-                         url="https://wired.com/5"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        if len(clusters) >= 2:
-            assert clusters[0]["coverage"] >= clusters[1]["coverage"]
 
 
 # ── Google News country code tests ───────────────────────────
@@ -655,3 +565,89 @@ class TestDeriveDomainComprehensive:
     def test_url_without_hostname_returns_none(self):
         from services.news_service import _derive_domain
         assert _derive_domain("not-a-url") is None
+
+
+@pytest.mark.unit
+class TestRssItemImage:
+    """`_rss_item_image` walks media:thumbnail → media:content (image/*) →
+    enclosure (image/*) → <image><url>."""
+
+    def test_media_thumbnail(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:thumbnail url='https://t.example.com/a.jpg'/>
+        </item>"""
+        assert _rss_item_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
+
+    def test_media_content_image_type(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:content url='https://cdn.example.com/p.jpg' type='image/jpeg'/>
+        </item>"""
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/p.jpg"
+
+    def test_enclosure_image(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = "<item><enclosure url='https://cdn.example.com/e.png' type='image/png'/></item>"
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/e.png"
+
+    def test_image_url_child(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        xml = "<item><image><url>https://cdn.example.com/i.jpg</url></image></item>"
+        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/i.jpg"
+
+    def test_no_image_returns_empty(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _rss_item_image
+        assert _rss_item_image(ET.fromstring("<item></item>")) == ""
+
+
+@pytest.mark.unit
+class TestAtomEntryImage:
+    def test_media_thumbnail(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = """<entry xmlns='http://www.w3.org/2005/Atom' xmlns:media='http://search.yahoo.com/mrss/'>
+            <media:thumbnail url='https://t.example.com/a.jpg'/>
+        </entry>"""
+        assert _atom_entry_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
+
+    def test_atom_link_enclosure_image(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = """<entry xmlns='http://www.w3.org/2005/Atom'>
+            <link rel='enclosure' type='image/jpeg' href='https://cdn.example.com/e.jpg'/>
+        </entry>"""
+        assert _atom_entry_image(ET.fromstring(xml)) == "https://cdn.example.com/e.jpg"
+
+    def test_no_image_returns_empty(self):
+        import xml.etree.ElementTree as ET
+        from services.news_service import _atom_entry_image
+        xml = "<entry xmlns='http://www.w3.org/2005/Atom'></entry>"
+        assert _atom_entry_image(ET.fromstring(xml)) == ""
+
+
+@pytest.mark.unit
+class TestNewsArticleImageUrl:
+    def test_dataclass_default_empty_string(self):
+        from services.news_service import NewsArticle
+        a = NewsArticle(
+            title="t", description="d", url="u",
+            published_at="2026-05-03T00:00:00+00:00",
+            source="s", source_id="sid", category="c",
+        )
+        assert a.image_url == ""
+
+    def test_to_dict_includes_image_url(self):
+        from services.news_service import NewsArticle
+        a = NewsArticle(
+            title="t", description="d", url="u",
+            published_at="2026-05-03T00:00:00+00:00",
+            source="s", source_id="sid", category="c",
+            image_url="https://x.example.com/p.jpg",
+        )
+        assert a.to_dict()["image_url"] == "https://x.example.com/p.jpg"

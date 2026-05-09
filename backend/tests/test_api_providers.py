@@ -8,8 +8,8 @@ Covers all endpoints in the providers blueprint:
   - PUT    /providers/<id>
   - DELETE /providers/<id>
   - POST   /providers/test
-  - GET    /providers/jobs
-  - PUT    /providers/jobs/<job_name>
+  - GET    /providers/selected
+  - PUT    /providers/selected
 """
 
 import pytest
@@ -72,8 +72,6 @@ class TestProvidersAPI:
         data = response.get_json()
         assert "providers" in data
         assert len(data["providers"]) == 2
-        # The list endpoint returns whatever list_providers_summary gives;
-        # masking happens per-row in the service or in single-object endpoints.
         mock_service.list_providers_summary.assert_called_once()
 
     # ------------------------------------------------------------------
@@ -114,67 +112,6 @@ class TestProvidersAPI:
         assert data["provider"]["api_key"] == "***"
         assert data["provider"]["id"] == 5
         mock_service.create_provider.assert_called_once()
-
-    def test_create_first_provider_auto_assigns_all_jobs(
-        self, client, mock_service
-    ):
-        """POST /providers for the first provider auto-assigns all jobs."""
-        mock_service.list_providers_summary.return_value = []  # no existing
-        mock_service.create_provider.return_value = {
-            "id": 1,
-            "name": "ollama-local",
-            "platform": "ollama",
-            "model": "gemma4:31b",
-            "api_key": None,
-        }
-
-        response = client.post('/providers', json={
-            "name": "ollama-local",
-            "platform": "ollama",
-            "model": "gemma4:31b",
-        })
-
-        assert response.status_code == 201
-
-        # Job list now comes from configs/cognitive_jobs.json
-        import json
-        import os
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
-        with open(config_path, 'r') as f:
-            expected_jobs = sorted(j['id'] for j in json.load(f)['jobs'])
-
-        assert mock_service.set_job_assignment.call_count == len(expected_jobs)
-        assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
-        assert assigned_jobs == expected_jobs
-
-        # Each assignment should reference the newly created provider's id
-        for c in mock_service.set_job_assignment.call_args_list:
-            assert c.args[1] == 1
-
-    def test_create_second_provider_does_not_auto_assign(
-        self, client, mock_service
-    ):
-        """POST /providers when providers already exist does not auto-assign jobs."""
-        mock_service.list_providers_summary.return_value = [
-            {"id": 1, "name": "existing-provider"}
-        ]
-        mock_service.create_provider.return_value = {
-            "id": 2,
-            "name": "second",
-            "platform": "openai",
-            "model": "gpt-4o",
-            "api_key": "sk-xyz",
-        }
-
-        response = client.post('/providers', json={
-            "name": "second",
-            "platform": "openai",
-            "model": "gpt-4o",
-            "api_key": "sk-xyz",
-        })
-
-        assert response.status_code == 201
-        mock_service.set_job_assignment.assert_not_called()
 
     # ------------------------------------------------------------------
     # GET /providers/<id>
@@ -255,7 +192,7 @@ class TestProvidersAPI:
     def test_delete_provider_conflict(self, client, mock_service):
         """DELETE /providers/<id> returns 409 when service raises ValueError."""
         mock_service.delete_provider.side_effect = ValueError(
-            "Cannot delete: provider is assigned to active jobs"
+            "Cannot delete: provider is selected"
         )
 
         response = client.delete('/providers/4')
@@ -263,7 +200,7 @@ class TestProvidersAPI:
         assert response.status_code == 409
         data = response.get_json()
         assert "error" in data
-        assert "active jobs" in data["error"]
+        assert "selected" in data["error"]
 
     # ------------------------------------------------------------------
     # POST /providers/test  (ollama path)
@@ -313,49 +250,75 @@ class TestProvidersAPI:
         assert "API key is required" in data["error"]
 
     # ------------------------------------------------------------------
-    # GET /providers/jobs
+    # GET /providers/selected
     # ------------------------------------------------------------------
 
-    def test_list_job_assignments(self, client, mock_service):
-        """GET /providers/jobs returns all job assignments."""
-        mock_service.get_all_job_assignments.return_value = [
-            {"job_name": "frontal-cortex", "provider_id": 1},
-            {"job_name": "cognitive-triage", "provider_id": 2},
-        ]
+    def test_get_selected_provider(self, client, mock_service):
+        """GET /providers/selected returns the currently selected provider."""
+        mock_service.get_selected_provider.return_value = {
+            "id": 1,
+            "name": "ollama-local",
+            "platform": "ollama",
+            "model": "gemma4:31b",
+            "api_key": None,
+        }
 
-        response = client.get('/providers/jobs')
+        response = client.get('/providers/selected')
 
         assert response.status_code == 200
         data = response.get_json()
-        assert "assignments" in data
-        assert len(data["assignments"]) == 2
-        mock_service.get_all_job_assignments.assert_called_once()
+        assert data["provider"]["id"] == 1
+        assert data["provider"]["name"] == "ollama-local"
+        mock_service.get_selected_provider.assert_called_once()
+
+    def test_get_selected_provider_none(self, client, mock_service):
+        """GET /providers/selected returns null when none is selected."""
+        mock_service.get_selected_provider.return_value = None
+
+        response = client.get('/providers/selected')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["provider"] is None
 
     # ------------------------------------------------------------------
-    # PUT /providers/jobs/<job_name>
+    # PUT /providers/selected
     # ------------------------------------------------------------------
 
-    def test_assign_job_missing_provider_id(self, client, mock_service):
-        """PUT /providers/jobs/<name> without provider_id returns 400."""
-        response = client.put('/providers/jobs/frontal-cortex', json={})
+    def test_set_selected_provider_success(self, client, mock_service):
+        """PUT /providers/selected sets the active provider."""
+        mock_service.get_provider_by_id.return_value = {
+            "id": 2,
+            "name": "openai-main",
+            "platform": "openai",
+            "model": "gpt-4o",
+        }
+
+        response = client.put('/providers/selected', json={
+            "provider_id": 2,
+        })
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["provider"]["id"] == 2
+        mock_service.set_selected_provider.assert_called_once_with(2)
+
+    def test_set_selected_provider_missing_id(self, client, mock_service):
+        """PUT /providers/selected without provider_id returns 400."""
+        response = client.put('/providers/selected', json={})
 
         assert response.status_code == 400
         data = response.get_json()
         assert "provider_id" in data["error"]
 
-    def test_assign_job_success(self, client, mock_service):
-        """PUT /providers/jobs/<name> assigns provider successfully."""
-        mock_service.set_job_assignment.return_value = {
-            "job_name": "frontal-cortex-unified",
-            "provider_id": 3,
-        }
+    def test_set_selected_provider_not_found(self, client, mock_service):
+        """PUT /providers/selected with invalid provider_id returns 404."""
+        mock_service.get_provider_by_id.return_value = None
 
-        response = client.put('/providers/jobs/frontal-cortex-unified', json={
-            "provider_id": 3,
+        response = client.put('/providers/selected', json={
+            "provider_id": 999,
         })
 
-        assert response.status_code == 200
+        assert response.status_code == 404
         data = response.get_json()
-        assert data["assignment"]["job_name"] == "frontal-cortex-unified"
-        assert data["assignment"]["provider_id"] == 3
-        mock_service.set_job_assignment.assert_called_once_with("frontal-cortex-unified", 3, None)
+        assert "not found" in data["error"].lower()

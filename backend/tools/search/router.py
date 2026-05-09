@@ -17,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 _DB = os.path.join(os.path.dirname(__file__), 'assets', 'search_tool_providers.sqlite')
 
-_GAP = 0.10       # max distance from top score to still be selected
-_MAX = 3           # max providers returned
-_K = 30            # k-NN depth
-_TOP_N = 3         # top-N examples per provider for mean score
-_MIN_SCORE = 0.50  # below this = routing miss
+_GAP = 0.10        # max distance from top score to still be selected
+_MAX = 3            # max providers returned
+_K = 30             # k-NN depth
+_TOP_N = 3          # top-N examples per provider for mean score
+_MIN_SCORE = 0.50   # below this = routing miss
+_WEAK_SCORE = 0.60  # below this (but >= _MIN_SCORE) = DDG supplement fires
 
 
 def route_query(query: str) -> list[dict]:
