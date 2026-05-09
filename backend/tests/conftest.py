@@ -160,7 +160,6 @@ def mock_config():
             'cost_growth_factor': 1.5,
         },
     }
-    agent_prompts = {}
     connections = {
         'memory': {},
         'rest_api': {'host': '0.0.0.0', 'port': 8081},
@@ -168,7 +167,6 @@ def mock_config():
     }
 
     with patch('services.config_service.ConfigService.get_agent_config', side_effect=lambda name: agent_configs.get(name, {})), \
-         patch('services.config_service.ConfigService.get_agent_prompt', side_effect=lambda name: agent_prompts.get(name, '')), \
          patch('services.config_service.ConfigService.connections', return_value=connections):
         yield agent_configs
 

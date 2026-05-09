@@ -127,17 +127,6 @@ class SettingsService:
             session.commit()
         return True
 
-    def get_all(self) -> dict:
-        """Get all settings (mask sensitive values, never decrypt)."""
-        with self.db.get_session() as session:
-            result = session.execute(
-                text("SELECT key, "
-                     "  CASE WHEN is_sensitive = 1 THEN '***' ELSE value END AS value "
-                     "FROM settings ORDER BY key")
-            )
-            rows = result.fetchall()
-            return {row[0]: row[1] for row in rows}
-
     def get_api_key_or_generate(self) -> str:
         """
         Get API key from settings, or generate and store a new one if not present.

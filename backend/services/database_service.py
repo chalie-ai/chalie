@@ -348,15 +348,6 @@ class DatabaseService:
         """Get a connection (thread-local). Compatible with old API."""
         return self._get_connection()
 
-    def release_connection(self, conn):
-        """No-op compatibility shim — SQLite connections are thread-local and reused.
-
-        Args:
-            conn: Ignored.  Present for API compatibility with the old PostgreSQL
-                connection-pool pattern.
-        """
-        pass
-
     @contextmanager
     def connection(self):
         """Yield a thread-local connection, committing or rolling back on exit.

@@ -150,29 +150,3 @@ class ConfigService:
         result = {**provider_config, **agent_config, '_job_name': agent_name}
         return result
 
-    @staticmethod
-    def get_agent_prompt(agent_name: str) -> str:
-        """Load the markdown prompt for a named agent.
-
-        Args:
-            agent_name: Agent prompt name (filename stem under prompts/)
-
-        Returns:
-            Prompt text as a string, or empty string if file not found.
-        """
-        return ConfigService.load_text(str(ConfigService.PROMPTS_DIR / (agent_name + ".md")))
-
-    @staticmethod
-    def get_all_agents() -> list[str]:
-        """List the names of all registered agent configs.
-
-        Returns:
-            List of agent name strings (filename stems from configs/agents/).
-        """
-        agents = []
-
-        for entry in ConfigService.AGENTS_CONFIGS.iterdir():
-            if entry.is_file():
-                agents.append(entry.stem)
-
-        return agents
