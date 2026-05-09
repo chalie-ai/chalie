@@ -2203,22 +2203,30 @@ body.voice-unavailable .speech-form__speak-btn { display: none; }
   color: var(--accent-primary);
 }
 
+/* Dialog surface is hardcoded dark in both themes (rgba(12,14,24,0.96)),
+   so text must stay on the dark-theme light tokens — otherwise light theme
+   resolves --text-primary to #1A1626 and the copy goes dark-on-dark. */
+.pwa-dialog__content,
+.pwa-dialog__close {
+  color: #eae6f2;
+}
+
 .pwa-dialog__title {
   font-size: var(--font-size-xl);
   font-weight: 300;
   margin-bottom: var(--space-sm);
-  color: var(--text-primary);
+  color: #eae6f2;
 }
 
 .pwa-dialog__desc {
   font-size: var(--font-size-sm);
-  color: var(--text-secondary);
+  color: rgba(234, 230, 242, 0.78);
   margin-bottom: var(--space-lg);
   line-height: 1.6;
 }
 
 .pwa-dialog__desc strong {
-  color: var(--text-primary);
+  color: #eae6f2;
   font-weight: 500;
 }
 
