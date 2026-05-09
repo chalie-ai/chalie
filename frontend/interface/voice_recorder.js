@@ -134,7 +134,10 @@ export class VoiceRecorder {
       if (text) this._onTranscript(text);
     } catch (err) {
       console.error('[VoiceRecorder] STT error:', err);
-      this._showError('Transcription failed');
+      // Prefer the server-supplied hint when voice deps are missing — same
+      // rationale as VoicePlayer: the /voice/health poller usually hides the
+      // mic button first, but a stale page load can still race the install.
+      this._showError(err.userMessage || 'Transcription failed');
     } finally {
       this._setButtonState('idle');
     }
@@ -254,7 +257,16 @@ export class VoiceRecorder {
       credentials: 'same-origin',
     });
 
-    if (!response.ok) throw new Error(`STT error: ${response.status}`);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const err = new Error(body.error || `STT error: ${response.status}`);
+      // deps_missing → attach the install hint as `userMessage` so the caller
+      // can render it verbatim. Other 4xx/5xx fall back to the generic message.
+      if (body.reason === 'deps_missing') {
+        err.userMessage = body.hint || body.error || 'Voice dependencies not installed';
+      }
+      throw err;
+    }
     const data = await response.json();
     return data.text || null;
   }
