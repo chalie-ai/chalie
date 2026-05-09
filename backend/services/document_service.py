@@ -744,31 +744,6 @@ class DocumentService:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
-    def get_document_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Get a non-deleted document by its file_path."""
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE file_path = ? AND deleted_at IS NULL
-                """, (file_path,))
-                row = cursor.fetchone()
-                cursor.close()
-            if not row:
-                return None
-            return self._row_to_dict(row)
-        except Exception as e:
-            logger.error(f"[DOCS] get_document_by_path failed: {e}")
-            return None
-
     def update_tags(self, doc_id: str, tags: list) -> None:
         """Update the tags JSON array for a document.
 
