@@ -614,15 +614,23 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     }
 
     if (res.ok) {
-        const data = await res.json();
-        if (id) {
-            providers = providers.map(p => p.id === id ? data.provider : p);
-        } else {
-            providers.push(data.provider);
-        }
+        const wasFirstAdd = !id && providers.length === 0;
         document.getElementById('providerModal').classList.add('hidden');
-        renderProviders();
+        document.getElementById('providerForm').reset();
+        editModel = '';
         showToast(id ? 'Provider updated' : 'Provider added', 'success');
+
+        // First-ever provider unlocks the rest of the Brain UI (auth-gate
+        // sets providersOnly=!has_providers at page load). A full reload is
+        // the only way to re-run the gate and reveal the hidden tabs.
+        if (wasFirstAdd) {
+            window.location.reload();
+            return;
+        }
+
+        // Re-fetch from the server so the list reflects canonical state
+        // (handles api_key masking, server-side defaults, etc.) and re-render.
+        await loadData();
     } else {
         const err = await res.json();
         showToast(err.error || 'Failed to save provider', 'error');
