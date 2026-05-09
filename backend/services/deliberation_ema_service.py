@@ -118,10 +118,6 @@ class DeliberationEmaService:
         except Exception as exc:
             logger.warning("%s reset failed: %s", LOG_PREFIX, exc)
 
-    def resolve_bucket(self, ema: float) -> str:
-        """Resolve a float EMA to 'high' | 'medium' | 'low'. Exposed for tests."""
-        return self._resolve_bucket(ema)
-
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _resolve_bucket(self, ema: float) -> str:
