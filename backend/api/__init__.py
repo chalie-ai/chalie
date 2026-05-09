@@ -6,6 +6,7 @@ and static file serving (replaces nginx).
 import os
 import re
 import importlib
+import mimetypes
 import pkgutil
 import logging
 from pathlib import Path
@@ -17,6 +18,29 @@ from .auth import require_session as require_session
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# MIME type registration (cross-platform safety net)
+#
+# Python's `mimetypes` module reads the Windows registry on Windows, which is
+# frequently stale or missing the standard JS/CSS/JSON entries. When that
+# happens, Flask's `send_from_directory` ships `.js` files as `text/plain`,
+# and strict browsers (Chrome, Edge) refuse to execute them — breaking the
+# entire frontend.
+#
+# Registering these at import time, before any Flask app is constructed,
+# guarantees that `mimetypes.guess_type()` returns the correct value on every
+# OS. `mimetypes.add_type` overrides any pre-existing mapping for the given
+# extension, so it neutralises the bad registry entries on Windows without
+# affecting macOS/Linux (which already return the correct types).
+# ---------------------------------------------------------------------------
+
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('application/javascript', '.mjs')
+mimetypes.add_type('application/json', '.json')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('text/html', '.html')
 
 # Resolve frontend directories relative to backend/
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
