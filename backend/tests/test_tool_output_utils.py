@@ -1,70 +1,15 @@
 """
-Behavioural tests for tool_output_utils — pure formatting functions.
+Behavioural tests for tool_output_utils — telemetry construction.
 
-Both format_tool_result and build_tool_telemetry are deterministic with zero
-collaborators, so they qualify for unit tests per tester.md.
+build_tool_telemetry is deterministic with zero collaborators, qualifying
+for unit tests per tester.md.
 """
 
 import pytest
 
-from services.tool_output_utils import format_tool_result, build_tool_telemetry
+from services.tool_output_utils import build_tool_telemetry
 
 pytestmark = pytest.mark.unit
-
-
-# ── format_tool_result ──────────────────────────────────────────────────────
-
-class TestFormatToolResult:
-    def test_str_passthrough(self):
-        assert format_tool_result("hello") == "hello"
-
-    def test_non_dict_falls_back_to_str(self):
-        assert format_tool_result(42) == "42"
-
-    def test_empty_results_shows_message(self):
-        assert format_tool_result({"results": [], "message": "nope"}) == "nope"
-
-    def test_search_results_formats_numbered_list(self):
-        result = format_tool_result({
-            "results": [
-                {"title": "First", "snippet": "desc", "url": "https://a"},
-                {"title": "Second", "snippet": "", "url": ""},
-            ],
-        })
-        lines = result.split("\n")
-        assert lines[0] == "1. First"
-        assert lines[1] == "   desc"
-        assert lines[2] == "   https://a"
-        assert "2. Second" in result
-
-    def test_search_results_shows_count_when_present(self):
-        result = format_tool_result({
-            "results": [{"title": "X"}],
-            "count": 1,
-        })
-        assert "1 results returned." in result
-
-    def test_page_content_with_truncation(self):
-        result = format_tool_result({
-            "content": "some text",
-            "truncated": True,
-            "char_count": 500,
-        })
-        assert "some text" in result
-        assert "truncated to 500 chars" in result
-
-    def test_page_content_error(self):
-        result = format_tool_result({"content": "", "error": "timeout"})
-        assert result == "Error: timeout"
-
-    def test_generic_dict_skips_budget_remaining(self):
-        result = format_tool_result({"a": 1, "budget_remaining": 500})
-        assert "a: 1" in result
-        assert "budget_remaining" not in result
-
-    def test_generic_dict_lists_serialized(self):
-        result = format_tool_result({"items": [1, 2]})
-        assert "items: [1, 2]" in result
 
 
 # ── build_tool_telemetry ────────────────────────────────────────────────────
