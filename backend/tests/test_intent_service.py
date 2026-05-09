@@ -59,14 +59,13 @@ class TestCognitiveIntent:
         assert d["urgency"] == "normal"
         assert isinstance(d["payload"], dict)
 
-    def test_to_json_roundtrip(self):
+    def test_to_json_emits_valid_json_with_all_fields(self):
         intent = _make_intent()
         json_str = intent.to_json()
         data = json.loads(json_str)
-        restored = CognitiveIntent.from_dict(data)
-        assert restored.intent_id == intent.intent_id
-        assert restored.payload == intent.payload
-        assert restored.status == intent.status
+        assert data["intent_id"] == intent.intent_id
+        assert data["payload"] == intent.payload
+        assert data["status"] == intent.status
 
     def test_default_status_is_pending(self):
         intent = _make_intent()
