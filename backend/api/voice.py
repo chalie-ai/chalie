@@ -46,16 +46,45 @@ _KOKORO_MODEL_URL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/
 _KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Dependency detection ────────────────────────────────────────────────────
+#
+# We track _which_ voice package is missing so the UI can surface a precise
+# install hint instead of a generic "unavailable" — the fresh-install case.
+# The shipped requirements-voice.txt covers all four; if any are missing the
+# user (or installer) skipped the voice pip step.
 
-_VOICE_AVAILABLE = False
-try:
-    import moonshine_voice  # noqa: F401
-    import kokoro_onnx  # noqa: F401
-    import soundfile  # noqa: F401
-    import numpy  # noqa: F401
-    _VOICE_AVAILABLE = True
-except ImportError:
-    pass
+_VOICE_REQUIRED_MODULES = ("moonshine_voice", "kokoro_onnx", "soundfile", "numpy")
+_VOICE_MISSING_MODULES: tuple[str, ...] = ()
+
+
+def _detect_voice_modules() -> tuple[str, ...]:
+    import importlib.util
+    missing = []
+    for name in _VOICE_REQUIRED_MODULES:
+        if importlib.util.find_spec(name) is None:
+            missing.append(name)
+    return tuple(missing)
+
+
+_VOICE_MISSING_MODULES = _detect_voice_modules()
+_VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
+
+# Hint surfaced in /voice/health and route 503s. Same string in both places so
+# the frontend has a single canonical install instruction to render.
+_VOICE_INSTALL_HINT = (
+    "Voice dependencies are not installed. Run "
+    "`pip install -r backend/requirements-voice.txt` (or relaunch with "
+    "`./run.sh` — failed installs auto-retry on next launch)."
+)
+
+
+def _voice_unavailable_payload() -> dict:
+    """Canonical 503 envelope when voice deps are missing."""
+    return {
+        "error": "Voice dependencies not installed",
+        "reason": "deps_missing",
+        "missing": list(_VOICE_MISSING_MODULES),
+        "hint": _VOICE_INSTALL_HINT,
+    }
 
 # ── Lazy model state ────────────────────────────────────────────────────────
 
@@ -337,9 +366,20 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
 
 @voice_bp.route("/voice/health", methods=["GET"])
 def voice_health():
-    """Voice service health check."""
+    """Voice service health check.
+
+    Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``} for backwards
+    compatibility with the existing frontend poller and integration tests.
+    When deps are missing we also include ``reason`` + ``missing`` + ``hint``
+    so the UI can show actionable install guidance instead of a silent hide.
+    """
     if not _VOICE_AVAILABLE:
-        return jsonify({"status": "unavailable"}), 503
+        return jsonify({
+            "status": "unavailable",
+            "reason": "deps_missing",
+            "missing": list(_VOICE_MISSING_MODULES),
+            "hint": _VOICE_INSTALL_HINT,
+        }), 503
     if _models_loaded:
         return jsonify({"status": "ok"}), 200
     if _models_loading:
@@ -366,7 +406,7 @@ def voice_synthesize():
     instance is not thread-safe), and ship the WAV.
     """
     if not _VOICE_AVAILABLE:
-        return jsonify({"error": "Voice dependencies not installed"}), 503
+        return jsonify(_voice_unavailable_payload()), 503
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
@@ -422,7 +462,7 @@ def voice_synthesize():
 def voice_transcribe():
     """Transcribe uploaded audio (WAV). Returns {"text": "..."}."""
     if not _VOICE_AVAILABLE:
-        return jsonify({"error": "Voice dependencies not installed"}), 503
+        return jsonify(_voice_unavailable_payload()), 503
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503

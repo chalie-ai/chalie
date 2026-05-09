@@ -145,6 +145,13 @@ export class VoicePlayer {
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         if (gen !== this._openGeneration) return;
+        // deps_missing → surface the install hint verbatim. The button SHOULD
+        // already be hidden by the /voice/health poller in app.js, but a stale
+        // page load (interface fetched before voice install completed) can still
+        // hit this path. Show the hint instead of a useless "HTTP 503".
+        if (err.reason === 'deps_missing') {
+          throw new Error(err.hint || err.error || 'Voice dependencies not installed');
+        }
         throw new Error(err.error || `HTTP ${resp.status}`);
       }
 
