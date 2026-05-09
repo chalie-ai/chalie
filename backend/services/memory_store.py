@@ -555,7 +555,7 @@ class MemoryStore:
     def delete(self, *keys) -> int:
         """Delete one or more keys across all keyspaces.
 
-        Removes the key from every keyspace (string, list, hash, sorted-set, set)
+        Removes the key from every keyspace (string, list, sorted-set, set)
         where it may exist, mirroring Redis behaviour where a key belongs to exactly
         one data structure.
 
@@ -766,7 +766,7 @@ class MemoryStore:
             key: Key to inspect.
 
         Returns:
-            One of ``"string"``, ``"list"``, ``"hash"``, ``"zset"``, ``"set"``,
+            One of ``"string"``, ``"list"``, ``"zset"``, ``"set"``,
             or ``"none"`` if the key does not exist in any keyspace.
         """
         with self._str_lock:
