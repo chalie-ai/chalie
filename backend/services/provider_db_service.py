@@ -176,21 +176,6 @@ class ProviderDbService:
                 for row in rows
             ]
 
-    def get_provider_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get provider by name."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT {self._PROVIDER_COLS} "
-                "FROM providers WHERE name = ? AND is_active = 1",
-                (name,)
-            )
-            row = cursor.fetchone()
-            cursor.close()
-            if not row:
-                return None
-            return self._row_to_provider(row)
-
     def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """Get provider by ID."""
         with self.db.connection() as conn:

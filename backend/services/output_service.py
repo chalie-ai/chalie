@@ -302,15 +302,3 @@ class OutputService:
         else:
             logger.warning(f"Output {output_id} not found for deletion")
 
-    def register_consumer_heartbeat(self, consumer_type: str) -> None:
-        """
-        Update consumer heartbeat with 60-second TTL.
-
-        Args:
-            consumer_type: Type of consumer (e.g., "text", "act")
-        """
-        heartbeat_key = f"consumer:{consumer_type}:heartbeat"
-        timestamp = utc_now().isoformat()
-
-        self.store.setex(heartbeat_key, 60, timestamp)
-        logger.debug(f"Updated heartbeat for consumer:{consumer_type}")
