@@ -235,19 +235,15 @@ function selectPlatform(platform, context) {
     // Show/hide host field
     document.getElementById('editHostGroup').style.display = config.hasHost ? '' : 'none';
 
-    // Host field label + connection-test button are Ollama-specific helpers;
-    // for other OpenAI-compatible endpoints we expose a plain "Base URL" field
+    // Host field label differs by platform type
     const hostLabel = document.querySelector('#editHostGroup label');
     const hostInput = document.getElementById('editHost');
-    const ollamaTestBtn = document.getElementById('editTestConnectionBtn');
     if (platform === 'ollama') {
         if (hostLabel) hostLabel.textContent = 'Host';
         hostInput.placeholder = 'http://localhost:11434';
-        ollamaTestBtn.style.display = '';
     } else {
         if (hostLabel) hostLabel.textContent = 'Base URL';
         hostInput.placeholder = 'https://api.minimax.io/v1';
-        ollamaTestBtn.style.display = 'none';
     }
 
     // Show/hide api key field
@@ -255,32 +251,42 @@ function selectPlatform(platform, context) {
 
     // Update model select
     populateModelSelect();
+
+    // Auto-fetch models on tab switch if the relevant credential is already filled.
+    // Skip Gemini (hardcoded list) and OpenAI-compatible (no discovery endpoint).
+    // Skip if a fetch is already in-flight to avoid duplicate requests.
+    if (!_editModelsFetchInFlight) {
+        if (platform === 'ollama') {
+            const host = document.getElementById('editHost').value.trim();
+            if (host) refreshEditModels();
+        } else if (platform === 'openai' || platform === 'anthropic') {
+            const key = document.getElementById('editApiKey').value.trim();
+            if (key) refreshEditModels();
+        }
+    }
 }
 
-async function fetchOllamaModels(host, statusId) {
-    const statusEl = document.getElementById(statusId);
-    statusEl.textContent = 'Fetching models…';
-    statusEl.className = '';
+// Set the inline status under the model dropdown.
+//   tone ∈ {null, 'loading', 'ok', 'err'}
+function setModelStatus(text, tone) {
+    const el = document.getElementById('editModelStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'model-status' + (tone ? ' status-' + tone : '');
+}
 
-    try {
-        const res = await apiFetch(`/providers/ollama/models?host=${encodeURIComponent(host || 'http://localhost:11434')}`);
-        if (res.ok) {
-            const data = await res.json();
-            const names = data.models || [];
-            statusEl.textContent = names.length > 0 ? `✓ ${names.length} model(s) found` : '✓ Connected (no models installed)';
-            statusEl.className = 'status-ok';
-            return names;
-        }
-        const err = await res.json().catch(() => ({}));
-        statusEl.textContent = `✗ ${err.error || 'Connection failed'}`;
-        statusEl.className = 'status-err';
-        return [];
-    } catch (e) {
-        console.warn('[brain/app] failed to reach backend for Ollama models:', e);
-        statusEl.textContent = '✗ Cannot reach backend';
-        statusEl.className = 'status-err';
-        return [];
+async function fetchProviderModels(platform, credentials) {
+    const body = { platform, ...credentials };
+    const res = await apiFetch('/providers/list-models', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || `Request failed (${res.status})`);
     }
+    if (data.error) {
+        throw new Error(data.error);
+    }
+    // Backend returns [{id, display_name}, ...]; collapse to plain ID strings.
+    return (data.models || []).map(m => (typeof m === 'string' ? m : (m && m.id) || '')).filter(Boolean);
 }
 
 
@@ -434,11 +440,11 @@ function openEditModal(id) {
     selectPlatform(editPlatform, 'edit');
     modal.classList.remove('hidden');
 
-    // Auto-load model list when editing an Ollama provider so the panel isn't
-    // empty until the user clicks Refresh. New-provider flow stays manual —
-    // the host field still has the default value and no key is needed.
-    if (id && editPlatform === 'ollama') {
-        refreshOllamaModels();
+    // Auto-load model list when editing an existing provider so the dropdown
+    // isn't empty on open. For new providers credential fields are blank so
+    // the tab-switch fetch inside selectPlatform won't fire (by design).
+    if (id) {
+        refreshEditModels();
     }
 }
 
@@ -486,40 +492,93 @@ document.getElementById('editPlatformTabs').addEventListener('click', (e) => {
     }
 });
 
-// Ollama refresh models — single code path used by button click and host blur.
-// Guarded so clicking the Refresh button (which blurs the host input) doesn't
-// fire two simultaneous requests.
-let _ollamaRefreshInFlight = false;
-async function refreshOllamaModels() {
-    if (_ollamaRefreshInFlight) return;
-    _ollamaRefreshInFlight = true;
-    try {
+// Live model fetch — single guarded code path for all platforms.
+// Guards against duplicate in-flight requests (tab-switch + keyup can both fire).
+let _editModelsFetchInFlight = false;
+async function refreshEditModels() {
+    if (_editModelsFetchInFlight) return;
+
+    const platform = editPlatform;
+
+    let credentials;
+    if (platform === 'ollama') {
         const host = document.getElementById('editHost').value.trim();
-        const names = await fetchOllamaModels(host, 'editConnectionStatus');
-        const select = document.getElementById('editModel');
-        if (!select) return;
-        const prev = select.value;
-        select.innerHTML = '<option value="">Select model...</option>';
-        names.forEach(n => {
-            const opt = document.createElement('option');
-            opt.value = n;
-            opt.textContent = n;
-            if (n === prev || n === editModel) opt.selected = true;
-            select.appendChild(opt);
-        });
+        credentials = { host: host || 'http://localhost:11434' };
+    } else if (platform === 'openai' || platform === 'anthropic') {
+        const key = document.getElementById('editApiKey').value.trim();
+        if (!key) return;
+        credentials = { api_key: key };
+    } else {
+        return;
+    }
+
+    const select = document.getElementById('editModel');
+    _editModelsFetchInFlight = true;
+    if (select) select.disabled = true;
+    setModelStatus('Loading models…', 'loading');
+
+    try {
+        const names = await fetchProviderModels(platform, credentials);
+        populateModelSelectFromFetch(names);
+        if (names.length === 0) {
+            setModelStatus(
+                platform === 'ollama'
+                    ? 'No models installed on this Ollama host'
+                    : 'No models returned',
+                'err',
+            );
+        } else {
+            setModelStatus(
+                `${names.length} model${names.length === 1 ? '' : 's'} available`,
+                'ok',
+            );
+        }
+    } catch (e) {
+        setModelStatus(e.message || 'Could not fetch models', 'err');
     } finally {
-        _ollamaRefreshInFlight = false;
+        if (select) select.disabled = false;
+        _editModelsFetchInFlight = false;
     }
 }
 
-// Refresh button click
-document.getElementById('editTestConnectionBtn').addEventListener('click', refreshOllamaModels);
-
-// Host blur → programmatically trigger the same refresh
-document.getElementById('editHost').addEventListener('blur', () => {
-    if (editPlatform === 'ollama') {
-        document.getElementById('editTestConnectionBtn').click();
+// Populate the dropdown from a freshly-fetched list. Preserves the user's
+// current selection if the model still exists in the new list; otherwise
+// appends it as a trailing option so the existing provider config isn't lost.
+function populateModelSelectFromFetch(names) {
+    const select = document.getElementById('editModel');
+    if (!select) return;
+    const prev = editModel || select.value;
+    select.innerHTML = '<option value="">Select model...</option>';
+    names.forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = n;
+        if (n === prev) opt.selected = true;
+        select.appendChild(opt);
+    });
+    if (prev && !names.includes(prev)) {
+        const opt = document.createElement('option');
+        opt.value = prev;
+        opt.textContent = prev;
+        opt.selected = true;
+        select.appendChild(opt);
     }
+}
+
+// Debounced keyup on host (ollama) and api_key (openai/anthropic). 600 ms is
+// comfortably above typical inter-keystroke latency so a long paste collapses
+// to a single fetch while still feeling live.
+const _MODEL_FETCH_DEBOUNCE_MS = 600;
+let _modelFetchTimer = null;
+function debouncedRefreshModels() {
+    clearTimeout(_modelFetchTimer);
+    _modelFetchTimer = setTimeout(refreshEditModels, _MODEL_FETCH_DEBOUNCE_MS);
+}
+document.getElementById('editHost').addEventListener('keyup', () => {
+    if (editPlatform === 'ollama') debouncedRefreshModels();
+});
+document.getElementById('editApiKey').addEventListener('keyup', () => {
+    if (editPlatform === 'openai' || editPlatform === 'anthropic') debouncedRefreshModels();
 });
 
 // Full provider test (all platforms)
