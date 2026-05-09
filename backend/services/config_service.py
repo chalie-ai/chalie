@@ -2,8 +2,7 @@
 Config Service — Centralized configuration loading and provider resolution.
 
 Loads agent configs from JSON files, merges the globally selected provider
-into the resolved config, and exposes helpers for prompt text, connection
-settings, and registered agent names.
+into the resolved config, and exposes helpers for connection settings.
 """
 
 import json
@@ -15,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigService:
-    """Static configuration service for agents, providers, prompts, and connections."""
+    """Static configuration service for agents, providers, and connections."""
 
     CONFIGS_DIR         = Path(__file__).resolve().parent.parent / "configs"
-    PROMPTS_DIR         = Path(__file__).resolve().parent.parent / "prompts"
     CONNECTIONS_CONFIG  = str(CONFIGS_DIR / "connections.json")
     AGENTS_CONFIGS      = CONFIGS_DIR / "agents"
 
@@ -38,21 +36,6 @@ class ConfigService:
         """
         with open(file_path, 'r') as f:
             return json.load(f)
-
-    @staticmethod
-    def load_text(file_path: str) -> str:
-        """Load the text content of a file, returning empty string if missing.
-
-        Args:
-            file_path: Absolute or relative path to the text file.
-
-        Returns:
-            Stripped text content of the file, or empty string if it does not exist.
-        """
-        path = Path(file_path)
-        if not path.exists():
-            return ""
-        return path.read_text().strip()
 
     @staticmethod
     def connections() -> Dict[str, Any]:
