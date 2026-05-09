@@ -9,7 +9,7 @@ import pytest
 from services.news_service import (
     NewsService, NewsArticle,
     _strip_html, _parse_date, _normalize_title, _levenshtein,
-    _tokenize_title, _jaccard, _derive_domain,
+    _derive_domain,
 )
 
 SAMPLE_RSS = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -115,35 +115,6 @@ class TestHelpers:
 
     def test_levenshtein_different(self):
         assert _levenshtein("cat", "dog") == 3
-
-    def test_tokenize_title_removes_stopwords(self):
-        tokens = _tokenize_title("The cat is on the mat")
-        assert "the" not in tokens
-        assert "is" not in tokens
-        assert "on" not in tokens
-        assert "cat" in tokens
-        assert "mat" in tokens
-
-    def test_tokenize_title_lowercase(self):
-        tokens = _tokenize_title("HELLO WORLD")
-        assert "hello" in tokens
-        assert "world" in tokens
-
-    def test_jaccard_identical(self):
-        assert _jaccard({"a", "b", "c"}, {"a", "b", "c"}) == pytest.approx(1.0, abs=1e-9)
-
-    def test_jaccard_disjoint(self):
-        assert _jaccard({"a", "b"}, {"c", "d"}) == pytest.approx(0.0, abs=1e-9)
-
-    def test_jaccard_partial(self):
-        result = _jaccard({"a", "b", "c"}, {"b", "c", "d"})
-        assert abs(result - 0.5) < 0.01  # 2/4
-
-    def test_jaccard_both_empty(self):
-        assert _jaccard(set(), set()) == pytest.approx(1.0, abs=1e-9)
-
-    def test_jaccard_one_empty(self):
-        assert _jaccard({"a"}, set()) == pytest.approx(0.0, abs=1e-9)
 
     def test_derive_domain_strips_rss_prefix(self):
         assert _derive_domain("https://feeds.bbci.co.uk/news/rss.xml") == "bbci.co.uk"
@@ -313,67 +284,6 @@ class TestRanking:
         ]
         result = self.svc.rank_by_relevance(articles, "query")
         assert len(result) == 2  # All returned, date-sorted
-
-
-# ── Clustering tests ──────────────────────────────────────────
-
-@pytest.mark.unit
-class TestClustering:
-
-    def setup_method(self):
-        self.svc = NewsService()
-
-    def test_similar_titles_clustered(self):
-        articles = [
-            _make_article(title="AI breakthrough in healthcare announced", source="BBC",
-                         url="https://bbc.com/article-1"),
-            _make_article(title="AI breakthrough in healthcare reported", source="CNN",
-                         url="https://cnn.com/article-2"),
-            _make_article(title="Completely unrelated sports story", source="ESPN",
-                         url="https://espn.com/article-3"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        assert len(clusters) >= 1
-        assert clusters[0]["coverage"] == 2
-
-    def test_clusters_below_min_sources_filtered(self):
-        articles = [
-            _make_article(title="Unique story one", source="BBC"),
-            _make_article(title="Unique story two", source="CNN"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=3, limit=5)
-        assert len(clusters) == 0
-
-    def test_representative_title_is_longest(self):
-        articles = [
-            _make_article(title="Short title about AI", source="BBC",
-                         url="https://bbc.com/1"),
-            _make_article(title="A much longer and more detailed title about AI breakthroughs in medicine",
-                         source="CNN", url="https://cnn.com/2"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        if clusters:
-            assert "longer" in clusters[0]["title"] or "detailed" in clusters[0]["title"]
-
-    def test_empty_articles(self):
-        assert self.svc.cluster_trending([], min_sources=2, limit=5) == []
-
-    def test_clusters_sorted_by_coverage(self):
-        articles = [
-            _make_article(title="Big story about climate change", source="BBC",
-                         url="https://bbc.com/1"),
-            _make_article(title="Big story about climate change today", source="CNN",
-                         url="https://cnn.com/2"),
-            _make_article(title="Big story about climate change reported", source="AP",
-                         url="https://ap.com/3"),
-            _make_article(title="Small tech news item", source="TechCrunch",
-                         url="https://tc.com/4"),
-            _make_article(title="Small tech news item today", source="Wired",
-                         url="https://wired.com/5"),
-        ]
-        clusters = self.svc.cluster_trending(articles, min_sources=2, limit=5)
-        if len(clusters) >= 2:
-            assert clusters[0]["coverage"] >= clusters[1]["coverage"]
 
 
 # ── Google News country code tests ───────────────────────────
