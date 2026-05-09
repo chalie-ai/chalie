@@ -76,11 +76,6 @@ class SelfModelService:
                 logger.debug(f"{LOG_PREFIX} Cache parse failed, refreshing: {e}", exc_info=True)
         return self._refresh()
 
-    def has_noteworthy_state(self) -> bool:
-        """Fast gate — True only when something is degraded."""
-        snapshot = self.get_snapshot()
-        return len(snapshot.get("noteworthy", [])) > 0
-
     def get_memory_richness(self) -> float:
         """0.0 (no activity) to 1.0 (rich memory), from cached snapshot.
 

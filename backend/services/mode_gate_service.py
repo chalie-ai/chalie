@@ -302,15 +302,6 @@ class ModeGateService:
             )
             return set()
 
-    def get_active_modes(self) -> Set[str]:
-        """Return the set of modes whose current state >= activation_threshold."""
-        try:
-            state = self._load_state()
-            return {m for m in self.MODES if state.get(m, 0.0) >= self._activation_threshold}
-        except Exception as exc:
-            logger.warning("%s get_active_modes failed: %s", LOG_PREFIX, exc)
-            return set()
-
     def get_state(self) -> Dict[str, float]:
         """Return the current per-mode activation state as a fresh dict.
 
