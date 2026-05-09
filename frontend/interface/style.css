@@ -1236,6 +1236,14 @@ body.speaker-user   #ambientBloom {
 /* Hide all voice controls when the voice service is unavailable */
 body.voice-unavailable .speech-form__speak-btn { display: none; }
 
+/* Hide voice controls until the backend reports voice is fully loaded.
+   Default state on page load is .voice-loading; app.js removes the class
+   only after /voice/health returns {status: "ok"}. If voice is unavailable
+   or fails to initialise, the class stays and the controls remain hidden
+   instead of appearing and erroring on click. */
+body.voice-loading #voiceRecBtn,
+body.voice-loading .speech-form__speak-btn { display: none; }
+
 /* ACT cycle — chrome-less live tool loop UI.
    Layout:
      .act-cycle
