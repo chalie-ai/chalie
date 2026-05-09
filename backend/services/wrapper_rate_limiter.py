@@ -113,23 +113,3 @@ class WrapperRateLimiter:
         store.expire(key, self._window + 10)
 
         return True
-
-    def remaining(self, wrapper_id: str) -> int:
-        """Return the number of signal slots remaining in the current window.
-
-        This is a read-only check — it does **not** consume a slot.
-
-        Args:
-            wrapper_id: The stable identifier of the calling wrapper.
-
-        Returns:
-            Non-negative integer: ``max(0, limit - count_in_window)``.
-        """
-        store = self._get_store()
-        key = f"{_KEY_PREFIX}{wrapper_id}"
-        now = time.time()
-        window_start = now - self._window
-
-        store.zremrangebyscore(key, '-inf', window_start)
-        count = store.zcard(key)
-        return max(0, self._limit - count)

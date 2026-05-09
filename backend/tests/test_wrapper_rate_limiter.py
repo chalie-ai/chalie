@@ -125,51 +125,6 @@ class TestWrapperRateLimiterSlidingWindow:
 
 
 # ---------------------------------------------------------------------------
-# Remaining slots
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestWrapperRateLimiterRemaining:
-    def test_remaining_is_full_limit_when_no_signals(self):
-        limiter, _ = _make_limiter(limit=5)
-        assert limiter.remaining("wrp_new") == 5
-
-    def test_remaining_decrements_with_each_signal(self):
-        limiter, _ = _make_limiter(limit=5)
-        limiter.is_allowed("wrp_dec")
-        assert limiter.remaining("wrp_dec") == 4
-        limiter.is_allowed("wrp_dec")
-        assert limiter.remaining("wrp_dec") == 3
-
-    def test_remaining_is_zero_when_limit_reached(self):
-        limiter, _ = _make_limiter(limit=2)
-        limiter.is_allowed("wrp_zero")
-        limiter.is_allowed("wrp_zero")
-        assert limiter.remaining("wrp_zero") == 0
-
-    def test_remaining_does_not_consume_a_slot(self):
-        """remaining() is read-only — repeated calls should not change count."""
-        limiter, _ = _make_limiter(limit=3)
-        limiter.is_allowed("wrp_ro")
-        r1 = limiter.remaining("wrp_ro")
-        r2 = limiter.remaining("wrp_ro")
-        assert r1 == r2 == 2
-
-    def test_remaining_prunes_old_entries(self):
-        """remaining() should prune expired entries before counting."""
-        store = MemoryStore()
-        limiter = WrapperRateLimiter(limit=3, window_seconds=5, store=store)
-        key = f"{_KEY_PREFIX}wrp_prune"
-
-        # Insert an entry 10 seconds in the past (outside 5s window)
-        old_ts = time.time() - 10
-        store.zadd(key, {f"{old_ts}:old": old_ts})
-
-        # remaining() should not count the stale entry
-        assert limiter.remaining("wrp_prune") == 3
-
-
-# ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 

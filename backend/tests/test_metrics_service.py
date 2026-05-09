@@ -33,21 +33,12 @@ class TestTraceLifecycle:
         assert data["trace_id"] == trace_id
         assert "started_at" in data
 
-    def test_get_trace_returns_none_for_unknown(self, metrics):
-        assert metrics.get_trace("deadbeef") is None
-
-    def test_get_trace_returns_started_trace(self, metrics):
-        trace_id = metrics.start_trace()
-        data = metrics.get_trace(trace_id)
-        assert data is not None
-        assert data["trace_id"] == trace_id
-
 
 class TestRecordTiming:
-    def test_timing_stored_on_trace(self, metrics):
+    def test_timing_stored_on_trace(self, metrics, store):
         trace_id = metrics.start_trace()
         metrics.record_timing(trace_id, "classification", 42.0)
-        data = metrics.get_trace(trace_id)
+        data = json.loads(store.get(f"trace:{trace_id}"))
         assert data["timings"]["classification"] == pytest.approx(42.0, abs=1e-9)
 
     def test_timing_idempotent_on_unknown_trace(self, metrics):
