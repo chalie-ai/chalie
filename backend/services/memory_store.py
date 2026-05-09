@@ -7,7 +7,6 @@ All data is ephemeral — loss on restart is acceptable by design.
 Data structures:
 - STRING: dict[key] → (value, expiry_timestamp|None)
 - LIST: dict[key] → (list, expiry_timestamp|None)
-- HASH: dict[key] → (dict, expiry_timestamp|None)
 - SORTED SET: dict[key] → (SortedList, expiry_timestamp|None)
 
 Thread safety: one RLock per keyspace.
@@ -33,7 +32,6 @@ class MemoryStore:
         # Keyspaces
         self._strings: Dict[str, Tuple[Any, Optional[float]]] = {}
         self._lists: Dict[str, Tuple[list, Optional[float]]] = {}
-        self._hashes: Dict[str, Tuple[dict, Optional[float]]] = {}
         self._sorted_sets: Dict[str, Tuple[Any, Optional[float]]] = {}
 
         self._sets: Dict[str, Tuple[set, Optional[float]]] = {}
@@ -41,7 +39,6 @@ class MemoryStore:
         # Locks per keyspace
         self._str_lock = threading.RLock()
         self._list_lock = threading.RLock()
-        self._hash_lock = threading.RLock()
         self._zset_lock = threading.RLock()
         self._set_lock = threading.RLock()
 
@@ -79,7 +76,6 @@ class MemoryStore:
             try:
                 self._reap_keyspace(self._strings, self._str_lock)
                 self._reap_keyspace(self._lists, self._list_lock)
-                self._reap_keyspace(self._hashes, self._hash_lock)
                 self._reap_keyspace(self._sorted_sets, self._zset_lock)
                 self._reap_keyspace(self._sets, self._set_lock)
             except Exception as e:
@@ -160,18 +156,6 @@ class MemoryStore:
             self._strings[key] = (str(value), self._expiry_from_seconds(seconds))
             return True
 
-    def setnx(self, key: str, value: str) -> bool:
-        """Set ``key`` to ``value`` only if the key does not already exist.
-
-        Args:
-            key: Destination key.
-            value: Value to store (coerced to ``str``).
-
-        Returns:
-            ``True`` if the key was set, ``False`` if it already existed.
-        """
-        return self.set(key, value, nx=True)
-
     def incr(self, key: str) -> int:
         """Atomically increment the integer value at ``key`` by 1.
 
@@ -202,28 +186,6 @@ class MemoryStore:
                 return amount
             val, expiry = entry
             new_val = int(val) + amount
-            self._strings[key] = (str(new_val), expiry)
-            return new_val
-
-    def decr(self, key: str) -> int:
-        """Atomically decrement the integer value at ``key`` by 1.
-
-        If the key does not exist or has expired it is initialised to ``0`` before
-        decrementing, mirroring Redis semantics.
-
-        Args:
-            key: The key whose value should be decremented.
-
-        Returns:
-            The new integer value after decrementing.
-        """
-        with self._str_lock:
-            entry = self._strings.get(key)
-            if entry is None or self._is_expired(entry[1]):
-                self._strings[key] = ("-1", None)
-                return -1
-            val, expiry = entry
-            new_val = int(val) - 1
             self._strings[key] = (str(new_val), expiry)
             return new_val
 
@@ -439,107 +401,6 @@ class MemoryStore:
                 return None
             time.sleep(0.1)
 
-    # ── HASH operations ────────────────────────────────────────
-
-    def _get_hash(self, key: str) -> Optional[dict]:
-        """Return the live hash dict for ``key``, evicting it on expiry.
-
-        Must be called while ``_hash_lock`` is held.
-
-        Args:
-            key: Hash key to look up.
-
-        Returns:
-            The mutable dict, or ``None`` if the key is absent or expired.
-        """
-        entry = self._hashes.get(key)
-        if entry is None:
-            return None
-        d, expiry = entry
-        if self._is_expired(expiry):
-            del self._hashes[key]
-            return None
-        return d
-
-    def hset(self, key: str, field: str = None, value: str = None, mapping: dict = None):
-        """Set one field (or multiple via ``mapping``) in the hash at ``key``.
-
-        Creates the hash if it does not exist. Mirrors the Redis 4+ ``HSET`` signature
-        that accepts either a single ``field``/``value`` pair or a ``mapping`` dict.
-
-        Args:
-            key: Hash key.
-            field: Field name (used when ``mapping`` is ``None``).
-            value: Field value (coerced to ``str``; used when ``mapping`` is ``None``).
-            mapping: Optional dict of ``{field: value}`` pairs to set in bulk.
-
-        Returns:
-            ``1`` always (simplified; Redis returns the number of *new* fields added).
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            if d is None:
-                d = {}
-                self._hashes[key] = (d, None)
-            if mapping:
-                for k, v in mapping.items():
-                    d[str(k)] = str(v)
-            elif field is not None:
-                d[str(field)] = str(value)
-            return 1
-
-    def hget(self, key: str, field: str) -> Optional[str]:
-        """Return the value of ``field`` in the hash at ``key``.
-
-        Args:
-            key: Hash key.
-            field: Field name.
-
-        Returns:
-            The field value as a string, or ``None`` if the key or field does not exist.
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            if d is None:
-                return None
-            return d.get(str(field))
-
-    def hgetall(self, key: str) -> dict:
-        """Return all field-value pairs in the hash at ``key``.
-
-        Args:
-            key: Hash key.
-
-        Returns:
-            A shallow copy of the hash dict, or ``{}`` if the key does not exist.
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            return dict(d) if d else {}
-
-    def hincrby(self, key: str, field: str, amount: int = 1) -> int:
-        """Increment the integer value of ``field`` in the hash at ``key`` by ``amount``.
-
-        Initialises the field to ``0`` before incrementing when it does not exist.
-
-        Args:
-            key: Hash key.
-            field: Field whose integer value should be incremented.
-            amount: Amount to add (default ``1``; may be negative).
-
-        Returns:
-            The new integer value of the field.
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            if d is None:
-                d = {}
-                self._hashes[key] = (d, None)
-            current = int(d.get(str(field), 0))
-            new_val = current + amount
-            d[str(field)] = str(new_val)
-            return new_val
-
     # ── SORTED SET operations ──────────────────────────────────
 
     def _get_zset(self, key: str) -> Optional[Any]:
@@ -579,114 +440,6 @@ class MemoryStore:
             zset.sort(key=lambda x: x[0])
             return len(mapping)
 
-    def zrange(self, key: str, start: int, stop: int, withscores: bool = False) -> list:
-        """Return members of the sorted set at ``key`` ordered by ascending score.
-
-        Args:
-            key: Sorted-set key.
-            start: Inclusive start rank (0-based; negative indices supported).
-            stop: Inclusive stop rank (negative indices supported).
-            withscores: If ``True``, returns ``[(member, score), ...]`` instead of
-                just ``[member, ...]``.
-
-        Returns:
-            A list of members (strings), or ``(member, score)`` tuples when
-            ``withscores=True``. Returns ``[]`` if the key does not exist.
-        """
-        with self._zset_lock:
-            zset = self._get_zset(key)
-            if zset is None:
-                return []
-            length = len(zset)
-            if stop < 0:
-                stop = length + stop
-            items = zset[start:stop + 1]
-            if withscores:
-                return [(m, s) for s, m in items]
-            return [m for s, m in items]
-
-    def zrangebyscore(self, key: str, min_score: float, max_score: float,
-                      start: int = None, num: int = None, withscores: bool = False) -> list:
-        """Return members of the sorted set at ``key`` with scores in [``min_score``, ``max_score``].
-
-        Accepts the special string values ``'-inf'`` and ``'+inf'`` for unbounded ranges,
-        mirroring Redis behaviour.
-
-        Args:
-            key: Sorted-set key.
-            min_score: Minimum score (inclusive), or the string ``'-inf'``.
-            max_score: Maximum score (inclusive), or the string ``'+inf'``.
-            start: Optional offset into the filtered result list (LIMIT offset).
-            num: Optional maximum number of results to return (LIMIT count).
-            withscores: If ``True``, returns ``[(member, score), ...]``.
-
-        Returns:
-            A list of members, or ``(member, score)`` tuples when ``withscores=True``.
-            Returns ``[]`` if the key does not exist.
-        """
-        with self._zset_lock:
-            zset = self._get_zset(key)
-            if zset is None:
-                return []
-
-            # Handle special min/max values
-            if isinstance(min_score, str) and min_score == '-inf':
-                min_score = float('-inf')
-            if isinstance(max_score, str) and max_score == '+inf':
-                max_score = float('inf')
-
-            items = [(s, m) for s, m in zset if float(min_score) <= s <= float(max_score)]
-            if start is not None and num is not None:
-                items = items[start:start + num]
-            if withscores:
-                return [(m, s) for s, m in items]
-            return [m for s, m in items]
-
-    def zrevrange(self, key: str, start: int, stop: int, withscores: bool = False) -> list:
-        """Return members of the sorted set at ``key`` ordered by descending score.
-
-        Args:
-            key: Sorted-set key.
-            start: Inclusive start rank in the reversed ordering (0-based).
-            stop: Inclusive stop rank in the reversed ordering (negative indices supported).
-            withscores: If ``True``, returns ``[(member, score), ...]``.
-
-        Returns:
-            A list of members, or ``(member, score)`` tuples when ``withscores=True``.
-            Returns ``[]`` if the key does not exist.
-        """
-        with self._zset_lock:
-            zset = self._get_zset(key)
-            if zset is None:
-                return []
-            length = len(zset)
-            if stop < 0:
-                stop = length + stop
-            items = list(reversed(zset))[start:stop + 1]
-            if withscores:
-                return [(m, s) for s, m in items]
-            return [m for s, m in items]
-
-    def zrem(self, key: str, *members) -> int:
-        """Remove one or more ``members`` from the sorted set at ``key``.
-
-        Args:
-            key: Sorted-set key.
-            *members: Member values to remove (coerced to ``str``).
-
-        Returns:
-            The number of members actually removed (non-existent members are not counted).
-            Returns ``0`` if the key does not exist.
-        """
-        with self._zset_lock:
-            zset = self._get_zset(key)
-            if zset is None:
-                return 0
-            before = len(zset)
-            member_set = {str(m) for m in members}
-            zset[:] = [(s, m) for s, m in zset if m not in member_set]
-            return before - len(zset)
-
     def zcard(self, key: str) -> int:
         """Return the number of members in the sorted set at ``key``.
 
@@ -699,18 +452,6 @@ class MemoryStore:
         with self._zset_lock:
             zset = self._get_zset(key)
             return len(zset) if zset is not None else 0
-
-    def zscore(self, key: str, member: str) -> Optional[float]:
-        """Return score of member in sorted set, or None if not present."""
-        with self._zset_lock:
-            zset = self._get_zset(key)
-            if zset is None:
-                return None
-            member = str(member)
-            for s, m in zset:
-                if m == member:
-                    return s
-            return None
 
     def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
         """Remove all members with scores between min_score and max_score (inclusive)."""
@@ -814,7 +555,7 @@ class MemoryStore:
     def delete(self, *keys) -> int:
         """Delete one or more keys across all keyspaces.
 
-        Removes the key from every keyspace (string, list, hash, sorted-set, set)
+        Removes the key from every keyspace (string, list, sorted-set, set)
         where it may exist, mirroring Redis behaviour where a key belongs to exactly
         one data structure.
 
@@ -833,10 +574,6 @@ class MemoryStore:
             with self._list_lock:
                 if key in self._lists:
                     del self._lists[key]
-                    count += 1
-            with self._hash_lock:
-                if key in self._hashes:
-                    del self._hashes[key]
                     count += 1
             with self._zset_lock:
                 if key in self._sorted_sets:
@@ -865,10 +602,6 @@ class MemoryStore:
             entry = self._lists.get(key)
             if entry and not self._is_expired(entry[1]):
                 return True
-        with self._hash_lock:
-            entry = self._hashes.get(key)
-            if entry and not self._is_expired(entry[1]):
-                return True
         with self._zset_lock:
             entry = self._sorted_sets.get(key)
             if entry and not self._is_expired(entry[1]):
@@ -893,7 +626,6 @@ class MemoryStore:
         for store, lock in [
             (self._strings, self._str_lock),
             (self._lists, self._list_lock),
-            (self._hashes, self._hash_lock),
             (self._sorted_sets, self._zset_lock),
             (self._sets, self._set_lock),
         ]:
@@ -909,7 +641,6 @@ class MemoryStore:
         for store, lock in [
             (self._strings, self._str_lock),
             (self._lists, self._list_lock),
-            (self._hashes, self._hash_lock),
             (self._sorted_sets, self._zset_lock),
             (self._sets, self._set_lock),
         ]:
@@ -935,7 +666,6 @@ class MemoryStore:
         for store, lock in [
             (self._strings, self._str_lock),
             (self._lists, self._list_lock),
-            (self._hashes, self._hash_lock),
             (self._sorted_sets, self._zset_lock),
             (self._sets, self._set_lock),
         ]:
@@ -1015,11 +745,6 @@ class MemoryStore:
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "list", "value": list(v)}
 
-        with self._hash_lock:
-            for k, (v, expiry) in self._hashes.items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "hash", "value": dict(v)}
-
         with self._zset_lock:
             for k, (v, expiry) in self._sorted_sets.items():
                 if (expiry is None or now <= expiry) and _matches(k):
@@ -1041,7 +766,7 @@ class MemoryStore:
             key: Key to inspect.
 
         Returns:
-            One of ``"string"``, ``"list"``, ``"hash"``, ``"zset"``, ``"set"``,
+            One of ``"string"``, ``"list"``, ``"zset"``, ``"set"``,
             or ``"none"`` if the key does not exist in any keyspace.
         """
         with self._str_lock:
@@ -1050,9 +775,6 @@ class MemoryStore:
         with self._list_lock:
             if key in self._lists:
                 return "list"
-        with self._hash_lock:
-            if key in self._hashes:
-                return "hash"
         with self._zset_lock:
             if key in self._sorted_sets:
                 return "zset"

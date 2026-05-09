@@ -30,7 +30,6 @@ def _has_ttl(store: MemoryStore, key: str) -> bool:
     for keyspace in (
         store._strings,
         store._lists,
-        store._hashes,
         store._sorted_sets,
         store._sets,
     ):
