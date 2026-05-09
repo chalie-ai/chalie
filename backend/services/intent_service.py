@@ -80,18 +80,6 @@ class CognitiveIntent:
         """
         return json.dumps(self.to_dict())
 
-    @classmethod
-    def from_dict(cls, data: dict) -> "CognitiveIntent":
-        """Deserialize a CognitiveIntent from a plain dict.
-
-        Args:
-            data: Dict produced by :meth:`to_dict`.
-
-        Returns:
-            Reconstructed CognitiveIntent instance.
-        """
-        return cls(**data)
-
 
 def _make_intent_id() -> str:
     """Generate a new UUID string for an intent.
