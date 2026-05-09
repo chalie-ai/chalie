@@ -242,14 +242,16 @@ class TestSynthesiseChunkSafe:
     whole synthesis down via ``pool.map``'s exception propagation."""
 
     def test_success_first_try(self):
-        good = np.ones(48_000, dtype=np.float32)
+        # 0.1 amplitude is well under _TTS_SATURATION_THRESHOLD (0.95) so
+        # the new detector treats it as legitimate speech.
+        good = np.full(48_000, 0.1, dtype=np.float32)
         with patch.object(voice_module, "_synthesise_chunk", return_value=good) as syn:
             audio = _synthesise_chunk_safe((0, "hello world"))
         assert syn.call_count == 1
         np.testing.assert_array_equal(audio, good)
 
     def test_retries_on_exception_then_succeeds(self):
-        good = np.ones(48_000, dtype=np.float32)
+        good = np.full(48_000, 0.1, dtype=np.float32)
         with patch.object(
             voice_module,
             "_synthesise_chunk",
@@ -261,7 +263,7 @@ class TestSynthesiseChunkSafe:
 
     def test_retries_on_silent_then_succeeds(self):
         silent = np.zeros(50, dtype=np.float32)  # below _TTS_MIN_SAMPLES
-        good = np.ones(48_000, dtype=np.float32)
+        good = np.full(48_000, 0.1, dtype=np.float32)
         with patch.object(
             voice_module,
             "_synthesise_chunk",
@@ -271,16 +273,20 @@ class TestSynthesiseChunkSafe:
         assert syn.call_count == 2
         np.testing.assert_array_equal(audio, good)
 
-    def test_persistent_failure_returns_silence_pad(self):
-        """All attempts exhausted — must NOT raise; must return short silence
-        so the surrounding chunks still concatenate and play."""
+    def test_persistent_failure_falls_back_to_sentence_rescue(self):
+        """All attempts exhausted on the whole chunk — rescue splits by
+        sentence; each failing sentence becomes a short silence pad. Must
+        NOT raise; surrounding chunks still concatenate and play."""
+        # Single-sentence chunk → rescue splits into 1 sentence → 1 pad.
         with patch.object(
             voice_module,
             "_synthesise_chunk",
             side_effect=RuntimeError("perma-fail"),
         ) as syn:
             audio = _synthesise_chunk_safe((3, "..."))
-        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS
+        # 2 retry attempts on the whole chunk + 1 rescue attempt on the
+        # one sentence = 3 calls total.
+        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS + 1
         assert audio.size == voice_module._TTS_FALLBACK_SAMPLES
         assert audio.dtype == np.float32
         assert float(np.abs(audio).max()) == 0.0  # silent pad
@@ -293,8 +299,108 @@ class TestSynthesiseChunkSafe:
             return_value=silent,
         ) as syn:
             audio = _synthesise_chunk_safe((4, "***"))
-        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS
+        # 2 retries + 1 rescue sentence (the whole "***" un-splittable string).
+        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS + 1
         assert audio.size == voice_module._TTS_FALLBACK_SAMPLES
+
+    def test_retries_on_saturated_then_succeeds(self):
+        """Kokoro DC-saturation (every sample at ±1.0) sounds like silence
+        through any DC-blocked playback chain. Detector flags it; retry
+        recovers with clean speech."""
+        saturated = np.ones(48_000, dtype=np.float32)  # 100% at peak
+        good = np.full(48_000, 0.1, dtype=np.float32)  # well under 0.95
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            side_effect=[saturated, good],
+        ) as syn:
+            audio = _synthesise_chunk_safe((5, "2,097 tests at 0.973."))
+        assert syn.call_count == 2
+        np.testing.assert_array_equal(audio, good)
+
+    def test_persistent_saturation_triggers_sentence_rescue(self):
+        """Whole chunk saturates on every retry → rescue splits into
+        sentences → if every sentence still saturates, output is
+        N × silence pad (one per sentence)."""
+        saturated = np.ones(48_000, dtype=np.float32)
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            return_value=saturated,
+        ) as syn:
+            audio = _synthesise_chunk_safe((6, "First. Second. Third."))
+        # 2 chunk-level retries + 3 sentence-level rescue calls = 5 calls.
+        assert syn.call_count == voice_module._TTS_MAX_ATTEMPTS + 3
+        # 3 silence pads concatenated.
+        assert audio.size == voice_module._TTS_FALLBACK_SAMPLES * 3
+        assert float(np.abs(audio).max()) == 0.0
+
+    def test_sentence_rescue_preserves_good_sentences(self):
+        """The whole point of sentence rescue: when ONE sentence of a chunk
+        breaks Kokoro, the OTHERS still get spoken. Listener loses one
+        sentence, not the whole 25-second chunk."""
+        saturated = np.ones(48_000, dtype=np.float32)
+        good_a = np.full(36_000, 0.1, dtype=np.float32)
+        good_c = np.full(24_000, 0.2, dtype=np.float32)
+        # Whole-chunk attempts saturate; rescue gets good/sat/good per sentence.
+        with patch.object(
+            voice_module,
+            "_synthesise_chunk",
+            side_effect=[saturated, saturated, good_a, saturated, good_c],
+        ) as syn:
+            audio = _synthesise_chunk_safe(
+                (7, "Sentence A here. Bad sentence with 2,097 tokens. Sentence C."),
+            )
+        assert syn.call_count == 5
+        # good_a + pad (saturated rescue) + good_c
+        expected_size = 36_000 + voice_module._TTS_FALLBACK_SAMPLES + 24_000
+        assert audio.size == expected_size
+        # Both good clips' amplitudes must appear in the output.
+        assert float(audio[:36_000].max()) == pytest.approx(0.1)
+        assert float(audio[-24_000:].max()) == pytest.approx(0.2)
+
+
+@pytest.mark.unit
+class TestIsChunkBroken:
+    """Direct coverage for the failure-mode classifier so future Kokoro
+    quirks have an obvious place to land."""
+
+    def test_normal_speech_is_good(self):
+        rng = np.random.default_rng(0)
+        speech = rng.normal(0, 0.1, 48_000).astype(np.float32)
+        broken, reason = voice_module._is_chunk_broken(speech)
+        assert not broken
+        assert reason == ""
+
+    def test_empty_array_is_broken(self):
+        broken, reason = voice_module._is_chunk_broken(np.zeros(50, dtype=np.float32))
+        assert broken
+        assert reason == "empty"
+
+    def test_dc_saturated_is_broken(self):
+        broken, reason = voice_module._is_chunk_broken(
+            np.ones(48_000, dtype=np.float32),
+        )
+        assert broken
+        assert reason.startswith("saturated(")
+
+    def test_negative_dc_saturated_is_broken(self):
+        broken, reason = voice_module._is_chunk_broken(
+            -np.ones(48_000, dtype=np.float32),
+        )
+        assert broken
+        assert reason.startswith("saturated(")
+
+    def test_loud_speech_with_brief_clipping_is_good(self):
+        """Real speech can clip a few samples on a loud syllable; that's
+        fine — only sustained saturation is rejected."""
+        rng = np.random.default_rng(1)
+        audio = rng.normal(0, 0.2, 48_000).astype(np.float32)
+        # 5% of samples briefly at peak — well under 25% threshold.
+        idx = rng.choice(48_000, 2_400, replace=False)
+        audio[idx] = 1.0
+        broken, _ = voice_module._is_chunk_broken(audio)
+        assert not broken
 
 
 @pytest.mark.unit

@@ -100,6 +100,16 @@ _TTS_SILENCE_THRESHOLD = 0.005
 _TTS_LEAD_KEEP_SAMPLES = 1200   # ≤50ms of leading silence preserved
 _TTS_TRAIL_KEEP_SAMPLES = 2400  # ≤100ms of trailing silence preserved
 
+# Kokoro occasionally produces DC-saturated output for certain inputs (numerals
+# with commas / decimals like "2,097" or "0.973", emoji-rich text, certain
+# hyphenated tokens). Every sample sits at ±1.0; speech this would never look
+# like. Playback chains DC-block this to silence — the listener hears nothing
+# for the entire chunk duration. Detected via the fraction of samples at peak:
+# real speech rarely clips more than a couple of percent; >25% saturated is
+# always a Kokoro malfunction. Caught and rescued at the chunk-safe layer.
+_TTS_SATURATION_THRESHOLD = 0.95
+_TTS_SATURATION_FRACTION = 0.25
+
 
 def _download_kokoro_models():
     """Download Kokoro model files if not present."""
@@ -311,22 +321,87 @@ def _trim_chunk_silence(audio):
     return audio[start:end]
 
 
-def _synthesise_chunk_safe(idx_chunk):
-    """Synthesise one chunk with retry-on-failure and retry-on-silent.
+def _is_chunk_broken(audio) -> tuple[bool, str]:
+    """Return ``(is_broken, reason)`` for a synthesised chunk.
 
-    A bare ``_synthesise_chunk`` call can raise (phonemizer mismatch) or
-    return effectively-empty audio (chunk dominated by punctuation that
-    phonemizes to nothing). Both used to either kill the whole synthesis
-    via ``pool.map``'s exception propagation, or land in the concat as a
-    silent gap with no log. We now retry once and, if still bad, fall
-    back to a short pad of silence so neighbouring chunks still play.
+    Two failure modes are recognised:
+    - ``empty``: audio shorter than ``_TTS_MIN_SAMPLES`` (~50ms). Chunk
+      collapsed to nothing — typically a phonemizer drop on punctuation.
+    - ``saturated``: more than ``_TTS_SATURATION_FRACTION`` of samples sit
+      at ``±_TTS_SATURATION_THRESHOLD`` or above. Kokoro DC-saturation
+      mode; sounds like silence after the playback chain DC-blocks it.
+
+    Anything else is treated as good audio. The check is intentionally
+    cheap (one ``mean(abs(...) > T)``) so it adds <1ms per chunk.
+    """
+    import numpy as np
+
+    if audio.size < _TTS_MIN_SAMPLES:
+        return True, "empty"
+    saturated_frac = float(np.mean(np.abs(audio) >= _TTS_SATURATION_THRESHOLD))
+    if saturated_frac > _TTS_SATURATION_FRACTION:
+        return True, f"saturated({saturated_frac:.0%})"
+    return False, ""
+
+
+def _rescue_chunk_by_sentence(chunk: str, idx: int):
+    """Last-resort rescue for a chunk Kokoro can't synthesise as a whole.
+
+    Splits the chunk on sentence boundaries and synthesises each sentence
+    independently. Bad-token failures (DC-saturation, phoneme overflow,
+    mismatched phonemizer output) are usually triggered by ONE token in
+    ONE sentence — splitting reduces blast radius from "whole 25s chunk
+    silent" to "one sentence replaced with 0.1s pad."
+
+    Sentences that still fail get a short silence pad so the surrounding
+    speech still plays. Returns the concatenated rescue audio, or a
+    single fallback pad if every sentence fails (extremely unlikely).
+    """
+    import numpy as np
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(chunk) if s.strip()]
+    if not sentences:
+        return np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
+
+    pieces: list = []
+    for sent in sentences:
+        try:
+            audio = _synthesise_chunk(sent)
+        except Exception as exc:
+            logger.warning(
+                "[Voice] chunk %d rescue: sentence raised (%s) head=%r — pad",
+                idx, exc, sent[:60],
+            )
+            pieces.append(np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32))
+            continue
+        broken, reason = _is_chunk_broken(audio)
+        if broken:
+            logger.warning(
+                "[Voice] chunk %d rescue: sentence %s head=%r — pad",
+                idx, reason, sent[:60],
+            )
+            pieces.append(np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32))
+        else:
+            pieces.append(audio)
+    return np.concatenate(pieces) if pieces else np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
+
+
+def _synthesise_chunk_safe(idx_chunk):
+    """Synthesise one chunk with retry-on-failure and retry-on-broken.
+
+    A bare ``_synthesise_chunk`` call can raise (phonemizer mismatch),
+    return empty audio (punctuation-only input), or return DC-saturated
+    audio (Kokoro malfunction on numerals/emoji/specific hyphens). All
+    three used to either kill the whole synthesis via ``pool.map``'s
+    exception propagation, or land in the concat as silent / unplayable
+    gaps with no log. We now retry once and — if still bad — fall back
+    to sentence-level rescue so a single bad token only nukes one
+    sentence rather than the entire chunk.
 
     Takes ``(idx, chunk)`` so log lines can identify the offending chunk
     by position; returns the audio array. Order is preserved by the
     caller using ``pool.map`` over the enumerated list.
     """
-    import numpy as np
-
     idx, chunk = idx_chunk
     for attempt in range(1, _TTS_MAX_ATTEMPTS + 1):
         try:
@@ -337,17 +412,18 @@ def _synthesise_chunk_safe(idx_chunk):
                 idx, attempt, _TTS_MAX_ATTEMPTS, exc, chunk[:60],
             )
             continue
-        if audio.size >= _TTS_MIN_SAMPLES:
+        broken, reason = _is_chunk_broken(audio)
+        if not broken:
             return audio
         logger.warning(
-            "[Voice] chunk %d empty on attempt %d/%d (samples=%d) head=%r — retrying",
-            idx, attempt, _TTS_MAX_ATTEMPTS, int(audio.size), chunk[:60],
+            "[Voice] chunk %d %s on attempt %d/%d (samples=%d) head=%r — retrying",
+            idx, reason, attempt, _TTS_MAX_ATTEMPTS, int(audio.size), chunk[:60],
         )
     logger.error(
-        "[Voice] chunk %d permanently silent after %d attempts — emitting fallback silence (head=%r)",
+        "[Voice] chunk %d unrecoverable after %d attempts — sentence rescue (head=%r)",
         idx, _TTS_MAX_ATTEMPTS, chunk[:60],
     )
-    return np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
+    return _rescue_chunk_by_sentence(chunk, idx)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
