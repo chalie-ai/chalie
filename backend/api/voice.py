@@ -248,8 +248,11 @@ def _wav_duration_seconds(data: bytes) -> float:
 
 _MD_FENCE_RE = re.compile(r"```[\w-]*\n?((?:[^`]|`(?!``))*+)```", re.MULTILINE)
 _MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
-_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+# Possessive quantifiers (`++`/`*+`) prevent the regex engine from
+# back-tracking inside the bracket and paren bodies, which avoids the
+# polynomial-ReDoS path on adversarial inputs like ``[[[[[…``.
+_MD_LINK_RE = re.compile(r"\[([^\]]++)\]\([^)]*+\)")
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*+)\]\([^)]*+\)")
 _MD_BARE_URL_RE = re.compile(r"https?://\S+")
 _MD_BOLD_STAR_RE = re.compile(r"\*\*([^\s*][^*]*?[^\s*]|\S)\*\*")
 _MD_ITALIC_STAR_RE = re.compile(r"(?<![\w*])\*([^\s*][^*]*?[^\s*]|\S)\*(?!\w)")
@@ -392,9 +395,12 @@ def voice_synthesize():
             len(samples), time.time() - t0,
         )
     except Exception as e:
+        # Log the exception detail server-side; the response body must NOT
+        # echo ``str(e)`` because it can carry stack-frame artefacts that
+        # leak filesystem paths or library internals to the caller.
         logger.error("[Voice] TTS synthesis failed: %s", e)
         body = (
-            json.dumps({"done": True, "total": 0, "error": str(e)}) + "\n"
+            json.dumps({"done": True, "total": 0, "error": "TTS synthesis failed"}) + "\n"
         )
         return Response(body, mimetype="application/x-ndjson", status=500)
 
