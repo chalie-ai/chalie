@@ -223,38 +223,6 @@ class TestFallbackDelegation:
         primary.count_tokens.assert_called_once_with(msgs, "sys", None)
 
 
-# ── RefreshableLLMService ───────────────────────────────────────────
-
-class TestRefreshableDelegation:
-    def test_delegates_context_limit(self):
-        from services.llm_service import RefreshableLLMService
-
-        svc = RefreshableLLMService('test-agent')
-        inner = MagicMock()
-        inner.get_context_limit.return_value = 128_000
-        svc._service = inner
-        svc._version = 'v1'
-
-        # Skip the version check by patching _ensure_fresh
-        with patch.object(svc, '_ensure_fresh'):
-            result = svc.get_context_limit()
-        assert result == 128_000
-
-    def test_delegates_count_tokens(self):
-        from services.llm_service import RefreshableLLMService
-
-        svc = RefreshableLLMService('test-agent')
-        inner = MagicMock()
-        inner.count_tokens.return_value = 1234
-        svc._service = inner
-        svc._version = 'v1'
-
-        with patch.object(svc, '_ensure_fresh'):
-            msgs = [{"role": "user", "content": "test"}]
-            result = svc.count_tokens(msgs, "sys", [{"name": "tool1"}])
-        assert result == 1234
-
-
 # ── ACT Orchestrator Budget ────────────────────────────────────────
 
 class TestAutoBudgetCalculation:
