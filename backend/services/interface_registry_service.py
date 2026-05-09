@@ -23,7 +23,6 @@ from services.write_queue_service import get_write_queue
 logger = logging.getLogger(__name__)
 
 _HEALTH_CHECK_TIMEOUT = 5  # seconds
-_EXECUTE_TIMEOUT = 15  # seconds
 _PAIRING_KEY_TTL = 600  # 10 minutes
 
 # Module-level failure counter — must survive across InterfaceRegistryService
@@ -441,42 +440,6 @@ class InterfaceRegistryService:
         return capabilities
 
     # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
-
-    def execute_capability(self, interface_id: str, capability: str, params: dict) -> dict:
-        """Execute a tool on the interface via HTTP POST.
-
-        Args:
-            interface_id: The interface UUID.
-            capability: Name of the capability to execute.
-            params: Parameters to pass to the capability.
-
-        Returns:
-            Dict with ``text``, ``html``, ``data``, or ``error`` — same
-            format as any tool result.
-        """
-        iface = self.get_interface(interface_id)
-        if not iface:
-            return {"error": f"Interface {interface_id} not found"}
-        if iface["status"] != "online":
-            return {"error": f"Interface '{iface['name']}' is offline"}
-
-        base_url = f"http://{iface['host']}:{iface['port']}"
-        try:
-            resp = requests.post(
-                f"{base_url}/execute",
-                json={"capability": capability, "params": params},
-                timeout=_EXECUTE_TIMEOUT,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.Timeout:
-            return {"error": f"Interface '{iface['name']}' did not respond in time"}
-        except Exception as e:
-            return {"error": f"Interface execution failed: {e}"}
-
-    # ------------------------------------------------------------------
     # Health checks
     # ------------------------------------------------------------------
 
@@ -546,13 +509,6 @@ class InterfaceRegistryService:
             logger.info("[INTERFACE] '%s' recovered — back online", iface["name"])
 
         return True
-
-    def health_check_all(self):
-        """Run health check on all non-revoked interfaces."""
-        interfaces = self.list_interfaces()
-        for iface in interfaces:
-            if iface["status"] != "revoked":
-                self.health_check(iface["id"])
 
     # ------------------------------------------------------------------
     # Removal
