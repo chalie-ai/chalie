@@ -46,7 +46,7 @@ class TestOutputService:
     @pytest.fixture
     def service(self, mock_store):
         """
-        Create OutputService with a real MemoryStore and stubbed config.
+        Create OutputService with a real MemoryStore.
 
         Args:
             mock_store: Real MemoryStore (with publish spy) injected by fixture.
@@ -54,15 +54,8 @@ class TestOutputService:
         Returns:
             OutputService: Fully initialised service instance.
         """
-        connections = {
-            "memory": {
-                "topics": {"output_queue": "output-queue"},
-            }
-        }
         with patch('services.memory_client.MemoryClientService.create_connection',
-                    return_value=mock_store), \
-             patch('services.config_service.ConfigService.connections',
-                   return_value=connections):
+                    return_value=mock_store):
             svc = OutputService()
         return svc
 
@@ -160,62 +153,6 @@ class TestOutputService:
 
         recent = mock_store.lrange("notifications:recent", 0, -1)
         assert len(recent) > 0
-
-    # ------------------------------------------------------------------ #
-    # dequeue
-    # ------------------------------------------------------------------ #
-
-    def test_dequeue_returns_output_from_queue(self, service, mock_store):
-        """Successful dequeue returns the parsed output dict."""
-        output_data = {
-            "id": "out-1",
-            "type": "ACT",
-            "topic": "t",
-            "metadata": {"actions": ["search"]},
-        }
-        mock_store.set("output:out-1", json.dumps(output_data))
-        mock_store.rpush("output-queue", "out-1")
-
-        result = service.dequeue(output_type="ACT", timeout=1)
-
-        assert result is not None
-        assert result["id"] == "out-1"
-        assert result["type"] == "ACT"
-
-    def test_dequeue_requeues_mismatched_type(self, service, mock_store):
-        """When dequeued output type does not match, it is re-queued via lpush."""
-        text_output = {"id": "out-2", "type": "TEXT", "topic": "t", "metadata": {}}
-        act_output = {"id": "out-3", "type": "ACT", "topic": "t", "metadata": {}}
-
-        # rpush appends to the right; brpop pops from the right.
-        # Push out-3 first so out-2 sits at the right end and is popped first.
-        mock_store.set("output:out-2", json.dumps(text_output))
-        mock_store.set("output:out-3", json.dumps(act_output))
-        mock_store.rpush("output-queue", "out-3")
-        mock_store.rpush("output-queue", "out-2")
-
-        result = service.dequeue(output_type="ACT", timeout=1)
-
-        assert result["type"] == "ACT"
-        # out-2 (TEXT) must have been re-queued back onto the list
-        queued = mock_store.lrange("output-queue", 0, -1)
-        assert "out-2" in queued
-
-    def test_dequeue_returns_none_on_timeout(self, service, mock_store):
-        """When brpop times out (returns None), dequeue returns None."""
-        # Empty queue — brpop will exhaust the timeout and return None
-        result = service.dequeue(output_type="ACT", timeout=1)
-        assert result is None
-
-    # ------------------------------------------------------------------ #
-    # delete_output
-    # ------------------------------------------------------------------ #
-
-    def test_delete_output_calls_store_delete(self, service, mock_store):
-        """delete_output removes the output key from the store."""
-        mock_store.set("output:dead-uuid-42", json.dumps({"id": "dead-uuid-42"}))
-        service.delete_output("dead-uuid-42")
-        assert mock_store.get("output:dead-uuid-42") is None
 
     # ------------------------------------------------------------------ #
     # notifications:recent trimming
