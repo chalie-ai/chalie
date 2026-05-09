@@ -7,19 +7,25 @@ No Docker required — voice runs in-process.
 
 Models are loaded lazily on first request (not at startup) to avoid blocking
 the Flask server while large models download.
+
+TTS architecture: one Kokoro instance, one lock. ``Kokoro.create()`` already
+phonemizes, batches by ``MAX_PHONEME_LENGTH``, runs ORT inference, trims
+inter-batch silence, and concatenates — so this module is just the Flask
+glue (text cleanup → kokoro.create → WAV encode → NDJSON envelope). The
+single dtype patch in ``_patch_kokoro_speed_dtype`` works around an upstream
+``kokoro-onnx==0.5.0`` int32/float32 mismatch on the HF fp16 export. Drop
+the patch when upstream releases a fix.
 """
 
 import io
 import logging
 import os
-import queue
 import re
 import struct
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
 
-from flask import Blueprint, Response, request, jsonify, stream_with_context
+from flask import Blueprint, Response, request, jsonify
 
 import paths
 from services.markup import extract_plaintext
@@ -33,15 +39,6 @@ voice_bp = Blueprint("voice", __name__)
 MOONSHINE_LANG = "en"
 KOKORO_VOICE = "af_heart"
 MAX_AUDIO_SECONDS = 660
-
-# Number of Kokoro instances loaded at boot, dispatched via a queue checkout.
-# Long messages chunk into N pieces; with a pool of 3, the first 3 chunks
-# synthesise concurrently. Memory cost is ~3× the model RAM (~600MB total
-# for fp16 Kokoro). Each instance owns its own ONNX session — sharing one
-# session across threads is documented-safe at the ORT layer but the
-# Kokoro wrapper above it is not, and the original lock comment claims
-# state corruption was observed under concurrent ``create()`` calls.
-TTS_POOL_SIZE = 3
 
 # Kokoro model files — downloaded lazily into data/models/kokoro/
 _KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
@@ -63,52 +60,16 @@ except ImportError:
 # ── Lazy model state ────────────────────────────────────────────────────────
 
 _stt_model = None
-_tts_pool: "queue.Queue" = queue.Queue()
+_tts_model = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
 # Moonshine STT is single-instance; one user clicks the mic at a time.
-# Kokoro is concurrent via the pool — no global lock, instances are
-# checked out from ``_tts_pool`` and returned after each synthesis.
+# Kokoro is single-instance too — ``create()`` mutates the phonemizer's
+# stateful espeak backend and the ORT session is not safe for concurrent
+# ``run()`` calls on a shared Kokoro wrapper. Serialise both.
 _stt_lock = threading.Lock()
-# phonemizer's EspeakBackend is cached in a process-global dict and carries
-# mutable instance state (_count_txt / _count_phn).  Concurrent threads
-# clobber that state, producing "number of lines in input and output must be
-# equal" errors on multi-chunk requests.  Serialise the phonemize step only;
-# the ONNX inference step is genuinely parallel-safe per-instance.
-_phonemize_lock = threading.Lock()
-
-# Per-chunk retry budget. Phonemizer occasionally returns truncated/empty
-# phonemes on chunks dominated by punctuation, em-dashes, or stage-direction
-# brackets — Kokoro then produces near-silent audio. One retry is cheap and
-# clears most transient cases (e.g., the espeak backend's stateful counters
-# self-correcting after a previous mismatch). Persistent failures fall back
-# to a short pad of silence so the rest of the message still plays.
-_TTS_MAX_ATTEMPTS = 2
-# Below ~50ms of audio (24kHz × 0.05) the chunk is effectively silent — the
-# user hears a gap. Treat as failure and retry.
-_TTS_MIN_SAMPLES = 1200
-_TTS_FALLBACK_SAMPLES = 2400  # 0.1s of silence preserves chunk ordering
-
-# Kokoro emits 0.4-0.7s of trailing silence at the end of every synthesis
-# call. With a 5-chunk reply, that's ~2-3s of accumulated dead air the user
-# hears as gaps every few seconds. Trim leading/trailing silence per chunk
-# so concatenation seams collapse to a natural ~100ms inter-chunk pause.
-# Threshold chosen empirically from a synthesised "Bro!"-style reply: voiced
-# RMS sits at 0.05-0.30; silent regions sit below 0.005.
-_TTS_SILENCE_THRESHOLD = 0.005
-_TTS_LEAD_KEEP_SAMPLES = 1200   # ≤50ms of leading silence preserved
-_TTS_TRAIL_KEEP_SAMPLES = 2400  # ≤100ms of trailing silence preserved
-
-# Kokoro occasionally produces DC-saturated output for certain inputs (numerals
-# with commas / decimals like "2,097" or "0.973", emoji-rich text, certain
-# hyphenated tokens). Every sample sits at ±1.0; speech this would never look
-# like. Playback chains DC-block this to silence — the listener hears nothing
-# for the entire chunk duration. Detected via the fraction of samples at peak:
-# real speech rarely clips more than a couple of percent; >25% saturated is
-# always a Kokoro malfunction. Caught and rescued at the chunk-safe layer.
-_TTS_SATURATION_THRESHOLD = 0.95
-_TTS_SATURATION_FRACTION = 0.25
+_tts_lock = threading.Lock()
 
 
 def _download_kokoro_models():
@@ -159,14 +120,14 @@ def _patch_kokoro_speed_dtype(tts):
     from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE
 
     def _create_audio_fixed(self, phonemes, voice, speed):
-        # Defense in depth: callers must pre-chunk text so each segment
-        # phonemizes within MAX_PHONEME_LENGTH. The previous version
-        # silently truncated overlong phoneme strings, dropping audio for
-        # any chunk Kokoro's internal segmenter handed us over budget.
+        # The library's ``create()`` pre-batches phonemes via
+        # ``_split_phonemes()`` so each call here is already under budget.
+        # If something upstream ever skips that, fail loudly rather than
+        # silently truncating audio.
         if len(phonemes) > MAX_PHONEME_LENGTH:
             raise RuntimeError(
                 f"Kokoro phoneme overflow: {len(phonemes)} > {MAX_PHONEME_LENGTH}. "
-                "Caller must pre-chunk text before synthesis."
+                "Library should have batched via _split_phonemes()."
             )
         start_t = time.time()
         tokens = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
@@ -189,9 +150,9 @@ def _patch_kokoro_speed_dtype(tts):
         # The HF fp16 export returns shape (1, N) float16; kokoro-onnx's
         # downstream concatenation + soundfile encoding both expect a 1-D
         # float32 waveform (the legacy thewh1teagle fp32 model returned that
-        # natively). Squeeze and cast so existing chunk-stitching keeps working.
+        # natively).
         audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-        logger.debug("[Voice] kokoro chunk %.2fs in %.2fs",
+        logger.debug("[Voice] kokoro batch %.2fs in %.2fs",
                      len(audio) / SAMPLE_RATE, time.time() - start_t)
         return audio, SAMPLE_RATE
 
@@ -199,7 +160,7 @@ def _patch_kokoro_speed_dtype(tts):
 
 
 def _build_kokoro_instance(model_file: str, voices_file: str):
-    """Construct one Kokoro instance with its own ONNX session and patch."""
+    """Construct one Kokoro instance with its own ONNX session and dtype patch."""
     from kokoro_onnx import Kokoro
     from services.onnx_session import build_session
 
@@ -211,7 +172,7 @@ def _build_kokoro_instance(model_file: str, voices_file: str):
 
 def _ensure_models():
     """Load STT and TTS models on first use. Thread-safe, blocks concurrent loaders."""
-    global _stt_model, _models_loaded, _models_loading
+    global _stt_model, _tts_model, _models_loaded, _models_loading
 
     if _models_loaded:
         return True
@@ -232,31 +193,17 @@ def _ensure_models():
         model_path, model_arch = mv.get_model_for_language(MOONSHINE_LANG)
         stt = mv.Transcriber(model_path=model_path, model_arch=model_arch)
 
-        logger.info(
-            "[Voice] Loading TTS pool (Kokoro x%d, voice=%s)",
-            TTS_POOL_SIZE, KOKORO_VOICE,
-        )
+        logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
         model_file, voices_file = _download_kokoro_models()
-        # Build N independent Kokoro instances in parallel. Each has its
-        # own ONNX session (~200MB) — the cost is RAM, the gain is true
-        # concurrent synthesis without serialising on a shared wrapper.
-        with ThreadPoolExecutor(max_workers=TTS_POOL_SIZE) as pool:
-            instances = list(pool.map(
-                lambda _: _build_kokoro_instance(model_file, voices_file),
-                range(TTS_POOL_SIZE),
-            ))
+        tts = _build_kokoro_instance(model_file, voices_file)
 
         with _load_lock:
             _stt_model = stt
-            for inst in instances:
-                _tts_pool.put(inst)
+            _tts_model = tts
             _models_loaded = True
             _models_loading = False
 
-        logger.info(
-            "[Voice] Models loaded — TTS pool size=%d, accepting requests",
-            _tts_pool.qsize(),
-        )
+        logger.info("[Voice] Models loaded — accepting requests")
         return True
 
     except Exception as e:
@@ -264,166 +211,6 @@ def _ensure_models():
         with _load_lock:
             _models_loading = False
         return False
-
-
-def _synthesise_chunk(chunk: str):
-    """Synthesise one text chunk on a pooled Kokoro instance.
-
-    Two-phase execution:
-    1. Phonemize under ``_phonemize_lock`` — espeak's process-global
-       EspeakBackend cache has mutable instance state that is not
-       thread-safe; serialising this step eliminates the race.
-    2. ONNX inference outside the lock — each pooled Kokoro instance
-       owns its own ORT session; inference is genuinely parallel.
-
-    Checks an instance out of ``_tts_pool`` for the inference step and
-    always returns it to the pool, even on exception.
-    """
-    import numpy as np
-
-    inst = _tts_pool.get()
-    try:
-        with _phonemize_lock:
-            phonemes = inst.tokenizer.phonemize(chunk, lang="en-us")
-        voice_style = inst.get_voice_style(KOKORO_VOICE)
-        samples, _sr = inst._create_audio(phonemes, voice_style, speed=1.0)
-        audio = np.asarray(samples, dtype=np.float32).reshape(-1)
-        return _trim_chunk_silence(audio)
-    finally:
-        _tts_pool.put(inst)
-
-
-def _trim_chunk_silence(audio):
-    """Trim leading/trailing silence on a Kokoro chunk so concatenation seams
-    don't accumulate into audible gaps.
-
-    Kokoro emits ~0.4-0.7s of trailing silence at the end of every call (a
-    sentence-end pause baked into the model). With multi-chunk replies these
-    pile up as dead air every 3-4 seconds. We slice the array down to the
-    first/last samples above ``_TTS_SILENCE_THRESHOLD`` plus a small pad on
-    each side — leaving a natural ~100ms inter-chunk pause without clipping
-    voiceless fricatives or quiet word endings.
-
-    All-silent arrays pass through untouched; the retry wrapper catches them
-    via ``_TTS_MIN_SAMPLES``.
-    """
-    import numpy as np
-
-    if audio.size == 0:
-        return audio
-    above = np.abs(audio) > _TTS_SILENCE_THRESHOLD
-    if not above.any():
-        return audio
-    first = int(np.argmax(above))
-    last = audio.size - int(np.argmax(above[::-1]))
-    start = max(0, first - _TTS_LEAD_KEEP_SAMPLES)
-    end = min(audio.size, last + _TTS_TRAIL_KEEP_SAMPLES)
-    return audio[start:end]
-
-
-def _is_chunk_broken(audio) -> tuple[bool, str]:
-    """Return ``(is_broken, reason)`` for a synthesised chunk.
-
-    Two failure modes are recognised:
-    - ``empty``: audio shorter than ``_TTS_MIN_SAMPLES`` (~50ms). Chunk
-      collapsed to nothing — typically a phonemizer drop on punctuation.
-    - ``saturated``: more than ``_TTS_SATURATION_FRACTION`` of samples sit
-      at ``±_TTS_SATURATION_THRESHOLD`` or above. Kokoro DC-saturation
-      mode; sounds like silence after the playback chain DC-blocks it.
-
-    Anything else is treated as good audio. The check is intentionally
-    cheap (one ``mean(abs(...) > T)``) so it adds <1ms per chunk.
-    """
-    import numpy as np
-
-    if audio.size < _TTS_MIN_SAMPLES:
-        return True, "empty"
-    saturated_frac = float(np.mean(np.abs(audio) >= _TTS_SATURATION_THRESHOLD))
-    if saturated_frac > _TTS_SATURATION_FRACTION:
-        return True, f"saturated({saturated_frac:.0%})"
-    return False, ""
-
-
-def _rescue_chunk_by_sentence(chunk: str, idx: int):
-    """Last-resort rescue for a chunk Kokoro can't synthesise as a whole.
-
-    Splits the chunk on sentence boundaries and synthesises each sentence
-    independently. Bad-token failures (DC-saturation, phoneme overflow,
-    mismatched phonemizer output) are usually triggered by ONE token in
-    ONE sentence — splitting reduces blast radius from "whole 25s chunk
-    silent" to "one sentence replaced with 0.1s pad."
-
-    Sentences that still fail get a short silence pad so the surrounding
-    speech still plays. Returns the concatenated rescue audio, or a
-    single fallback pad if every sentence fails (extremely unlikely).
-    """
-    import numpy as np
-
-    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(chunk) if s.strip()]
-    if not sentences:
-        return np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
-
-    pieces: list = []
-    for sent in sentences:
-        try:
-            audio = _synthesise_chunk(sent)
-        except Exception as exc:
-            logger.warning(
-                "[Voice] chunk %d rescue: sentence raised (%s) head=%r — pad",
-                idx, exc, sent[:60],
-            )
-            pieces.append(np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32))
-            continue
-        broken, reason = _is_chunk_broken(audio)
-        if broken:
-            logger.warning(
-                "[Voice] chunk %d rescue: sentence %s head=%r — pad",
-                idx, reason, sent[:60],
-            )
-            pieces.append(np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32))
-        else:
-            pieces.append(audio)
-    return np.concatenate(pieces) if pieces else np.zeros(_TTS_FALLBACK_SAMPLES, dtype=np.float32)
-
-
-def _synthesise_chunk_safe(idx_chunk):
-    """Synthesise one chunk with retry-on-failure and retry-on-broken.
-
-    A bare ``_synthesise_chunk`` call can raise (phonemizer mismatch),
-    return empty audio (punctuation-only input), or return DC-saturated
-    audio (Kokoro malfunction on numerals/emoji/specific hyphens). All
-    three used to either kill the whole synthesis via ``pool.map``'s
-    exception propagation, or land in the concat as silent / unplayable
-    gaps with no log. We now retry once and — if still bad — fall back
-    to sentence-level rescue so a single bad token only nukes one
-    sentence rather than the entire chunk.
-
-    Takes ``(idx, chunk)`` so log lines can identify the offending chunk
-    by position; returns the audio array. Order is preserved by the
-    caller using ``pool.map`` over the enumerated list.
-    """
-    idx, chunk = idx_chunk
-    for attempt in range(1, _TTS_MAX_ATTEMPTS + 1):
-        try:
-            audio = _synthesise_chunk(chunk)
-        except Exception as exc:
-            logger.warning(
-                "[Voice] chunk %d raised on attempt %d/%d (%s) head=%r — retrying",
-                idx, attempt, _TTS_MAX_ATTEMPTS, exc, chunk[:60],
-            )
-            continue
-        broken, reason = _is_chunk_broken(audio)
-        if not broken:
-            return audio
-        logger.warning(
-            "[Voice] chunk %d %s on attempt %d/%d (samples=%d) head=%r — retrying",
-            idx, reason, attempt, _TTS_MAX_ATTEMPTS, int(audio.size), chunk[:60],
-        )
-    logger.error(
-        "[Voice] chunk %d unrecoverable after %d attempts — sentence rescue (head=%r)",
-        idx, _TTS_MAX_ATTEMPTS, chunk[:60],
-    )
-    return _rescue_chunk_by_sentence(chunk, idx)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -522,107 +309,6 @@ def _clean_for_tts(text: str) -> str:
     return " ".join(text.split())
 
 
-# ── TTS chunking ────────────────────────────────────────────────────────────
-#
-# Kokoro's ONNX graph caps phoneme input at 510 tokens per call. Its public
-# ``create()`` segments on punctuation, but a long un-punctuated stretch
-# still produces an over-budget chunk that the model rejects (or, before
-# the patch hardened, silently clipped). We pre-segment here so every chunk
-# Kokoro sees is comfortably under budget, then concatenate the resulting
-# float32 audio arrays into a single WAV — preserving the no-gap
-# single-blob delivery contract.
-#
-# Budget is in characters, not phonemes, because phonemizing twice (once
-# to size, once to synthesise) is wasted work. 400 chars maps to roughly
-# 320–450 phonemes for typical English prose, leaving headroom under 510.
-
-_TTS_CHUNK_TARGET = 400
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-_CLAUSE_SPLIT_RE = re.compile(r"(?<=[,;:])\s+")
-
-
-def _word_pack(text: str, target: int = _TTS_CHUNK_TARGET) -> list[str]:
-    """Pack words into chunks <= target chars. Hard-cuts any single token
-    larger than target — the only case where we slice mid-content, and
-    only for pathological input (no whitespace in 400 chars)."""
-    out: list[str] = []
-    buf: list[str] = []
-    buf_len = 0
-    for word in text.split():
-        while len(word) > target:
-            if buf:
-                out.append(" ".join(buf))
-                buf = []
-                buf_len = 0
-            out.append(word[:target])
-            word = word[target:]
-        sep = 1 if buf else 0
-        if buf_len + sep + len(word) > target and buf:
-            out.append(" ".join(buf))
-            buf = [word]
-            buf_len = len(word)
-        else:
-            buf.append(word)
-            buf_len += sep + len(word)
-    if buf:
-        out.append(" ".join(buf))
-    return out
-
-
-def _chunk_text_for_tts(text: str, target: int = _TTS_CHUNK_TARGET) -> list[str]:
-    """Split text into Kokoro-safe chunks: newline → sentence → clause → word.
-
-    Newline is the primary boundary — paragraph breaks are the natural
-    split for chat output. Lines that exceed ``target`` cascade through
-    sentence → clause → word-pack so no chunk ever blows the 510-phoneme
-    cap. Short atoms coalesce up to ``target`` chars so we don't fan out
-    a 50-call worker storm on a bullet list.
-    """
-    text = text.strip()
-    if not text:
-        return []
-
-    atoms: list[str] = []
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if len(line) <= target:
-            atoms.append(line)
-            continue
-        for sent in _SENTENCE_SPLIT_RE.split(line):
-            sent = sent.strip()
-            if not sent:
-                continue
-            if len(sent) <= target:
-                atoms.append(sent)
-                continue
-            for clause in _CLAUSE_SPLIT_RE.split(sent):
-                clause = clause.strip()
-                if not clause:
-                    continue
-                if len(clause) <= target:
-                    atoms.append(clause)
-                else:
-                    atoms.extend(_word_pack(clause, target))
-
-    chunks: list[str] = []
-    buf: list[str] = []
-    buf_len = 0
-    for atom in atoms:
-        sep = 1 if buf else 0
-        if buf_len + sep + len(atom) > target and buf:
-            chunks.append(" ".join(buf))
-            buf = [atom]
-            buf_len = len(atom)
-        else:
-            buf.append(atom)
-            buf_len += sep + len(atom)
-    if buf:
-        chunks.append(" ".join(buf))
-    return chunks
-
-
 def _transcribe_sync(data: bytes) -> str:
     """Run Moonshine transcription on raw WAV bytes (blocking)."""
     import moonshine_voice as mv
@@ -633,6 +319,15 @@ def _transcribe_sync(data: bytes) -> str:
         audio_data, sample_rate = mv.load_wav_file(tmp.name)
         transcript = _stt_model.transcribe_without_streaming(audio_data, sample_rate=sample_rate)
         return " ".join(line.text.strip() for line in transcript.lines).strip()
+
+
+def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
+    """Encode a numpy audio array as PCM WAV bytes."""
+    import soundfile as sf
+    buf = io.BytesIO()
+    sf.write(buf, audio_array, sample_rate, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+    return buf.read()
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -653,15 +348,6 @@ def voice_health():
     return jsonify({"status": "loading"}), 200
 
 
-def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
-    """Encode a numpy audio array as PCM WAV bytes."""
-    import soundfile as sf
-    buf = io.BytesIO()
-    sf.write(buf, audio_array, sample_rate, format="WAV", subtype="PCM_16")
-    buf.seek(0)
-    return buf.read()
-
-
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
     """Synthesise speech and return the full WAV as a single NDJSON line.
@@ -671,13 +357,10 @@ def voice_synthesize():
     ``{done:true, total:1}`` sentinel so the client can distinguish a
     complete response from a truncated one.
 
-    Long text is pre-chunked on sentence/clause boundaries so each
-    Kokoro call stays under the 510-phoneme budget; the resulting audio
-    arrays are concatenated server-side and shipped as one WAV. This
-    preserves the no-gap single-blob contract — the previous
-    sentence-chunked *streaming* design caused mid-message gaps when
-    synthesis lagged playback, but server-side concat-then-blob has no
-    such race.
+    ``Kokoro.create()`` handles phonemization, batching by
+    ``MAX_PHONEME_LENGTH``, ORT inference, per-batch silence trimming, and
+    concatenation. We just clean the input text, lock around the call (the
+    instance is not thread-safe), and ship the WAV.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
@@ -691,58 +374,39 @@ def voice_synthesize():
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
-    chunks = _chunk_text_for_tts(text)
-    if not chunks:
-        return jsonify({"error": "Text is required"}), 400
+    logger.info("[Voice] synthesize: len=%d head=%r", len(text), text[:80])
 
-    logger.info(
-        "[Voice] synthesize: len=%d chunks=%d head=%r",
-        len(text),
-        len(chunks),
-        text[:80],
-    )
+    import base64
+    import json
+    import time
 
-    @stream_with_context
-    def stream():
-        import base64
-        import json
-        import time
-        import numpy as np
-
-        try:
-            t0 = time.time()
-            # Cap concurrency at the pool size — submitting more would just
-            # have workers block on _tts_pool.get(). Equal sizes mean every
-            # worker has an instance the moment its turn comes up.
-            with ThreadPoolExecutor(max_workers=TTS_POOL_SIZE) as pool:
-                # ``map`` preserves submission order — critical for concat.
-                # ``_synthesise_chunk_safe`` retries on error/empty per chunk
-                # and degrades to a short pad of silence on persistent failure
-                # so a single bad chunk no longer kills the whole synthesis.
-                pieces = list(pool.map(
-                    _synthesise_chunk_safe,
-                    list(enumerate(chunks)),
-                ))
-            full_audio = pieces[0] if len(pieces) == 1 else np.concatenate(pieces)
-            logger.info(
-                "[Voice] synthesized %d chunks in %.2fs (%d samples total)",
-                len(chunks), time.time() - t0, len(full_audio),
+    try:
+        t0 = time.time()
+        with _tts_lock:
+            samples, sample_rate = _tts_model.create(
+                text, voice=KOKORO_VOICE, speed=1.0, lang="en-us",
             )
-        except Exception as e:
-            logger.error("[Voice] TTS synthesis failed: %s", e)
-            yield json.dumps({"done": True, "total": 0, "error": str(e)}) + "\n"
-            return
+        wav_bytes = _audio_to_wav_bytes(samples, sample_rate)
+        logger.info(
+            "[Voice] synthesized %d samples in %.2fs",
+            len(samples), time.time() - t0,
+        )
+    except Exception as e:
+        logger.error("[Voice] TTS synthesis failed: %s", e)
+        body = (
+            json.dumps({"done": True, "total": 0, "error": str(e)}) + "\n"
+        )
+        return Response(body, mimetype="application/x-ndjson", status=500)
 
-        wav_bytes = _audio_to_wav_bytes(full_audio)
-        yield json.dumps({
-            "index": 0,
-            "total": 1,
-            "audio": base64.b64encode(wav_bytes).decode("ascii"),
-        }) + "\n"
-        yield json.dumps({"done": True, "total": 1}) + "\n"
+    payload = json.dumps({
+        "index": 0,
+        "total": 1,
+        "audio": base64.b64encode(wav_bytes).decode("ascii"),
+    }) + "\n"
+    sentinel = json.dumps({"done": True, "total": 1}) + "\n"
 
     return Response(
-        stream(),
+        payload + sentinel,
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
