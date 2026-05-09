@@ -160,7 +160,6 @@ def mock_config():
             'cost_growth_factor': 1.5,
         },
     }
-    agent_prompts = {}
     connections = {
         'memory': {},
         'rest_api': {'host': '0.0.0.0', 'port': 8081},
