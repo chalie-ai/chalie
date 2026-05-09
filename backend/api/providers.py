@@ -60,24 +60,37 @@ def _validate_ollama_host(host: str) -> tuple[str | None, str | None]:
     return safe, None
 
 
-def _fetch_ollama_models(host: str):
-    """Fetch the model list from an Ollama instance via GET /api/tags.
+# --- Live model-list fetch helpers -----------------------------------------
+#
+# Each helper returns ``(models, error)`` where ``models`` is a list of dicts
+# ``{"id": str, "display_name": str | None}`` and exactly one of the two is
+# non-None. All helpers cap upstream calls at 8s and never raise.
 
-    Returns ``(model_names, error_str)`` where exactly one is non-None.
-    """
+_LIST_MODELS_TIMEOUT = 8
+
+# OpenAI model IDs we accept: chat-capable text models only. Drop audio/realtime/
+# image/tts/whisper/embedding/moderation variants — none are useful for ACT.
+_OPENAI_PREFIX_OK = ('gpt-', 'o1', 'o3', 'o4', 'o5')
+_OPENAI_DENY_SUBSTR = (
+    'audio', 'realtime', 'image', 'tts', 'whisper', 'embedding', 'moderation',
+)
+
+
+def _fetch_ollama_models(host: str):
+    """Fetch the model list from an Ollama instance via GET /api/tags."""
     safe_host, err = _validate_ollama_host(host)
     if err is not None:
         return None, err
     try:
-        r = req.get(f"{safe_host}/api/tags", timeout=5)
+        r = req.get(f"{safe_host}/api/tags", timeout=_LIST_MODELS_TIMEOUT)
         r.raise_for_status()
         models_data = r.json()
-        names = [
-            m.get('name') or m.get('model', '')
-            for m in (models_data.get('models') or [])
-            if m.get('name') or m.get('model', '')
-        ]
-        return names, None
+        models = []
+        for m in (models_data.get('models') or []):
+            name = m.get('name') or m.get('model', '')
+            if name:
+                models.append({"id": name, "display_name": None})
+        return models, None
     except req.exceptions.ConnectionError:
         return None, f"Cannot connect to {safe_host} — is the service running?"
     except req.exceptions.Timeout:
@@ -85,6 +98,84 @@ def _fetch_ollama_models(host: str):
     except Exception as e:
         logger.warning(f"[REST API] Ollama model list failed: {type(e).__name__}: {e}")
         return None, "Failed to fetch Ollama models"
+
+
+def _fetch_openai_models(api_key: str):
+    """Fetch chat-capable model IDs from GET https://api.openai.com/v1/models."""
+    if not api_key:
+        return None, "API key is required"
+    try:
+        r = req.get(
+            'https://api.openai.com/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=_LIST_MODELS_TIMEOUT,
+        )
+        if r.status_code in (401, 403):
+            return None, "Invalid API key"
+        if not r.ok:
+            return None, f"OpenAI API returned {r.status_code}"
+        data = r.json()
+        items = data.get('data') or []
+        # Filter to chat-capable text models, then sort newest first by 'created'.
+        kept = []
+        for m in items:
+            mid = m.get('id') or ''
+            if not mid or not mid.startswith(_OPENAI_PREFIX_OK):
+                continue
+            lid = mid.lower()
+            if any(bad in lid for bad in _OPENAI_DENY_SUBSTR):
+                continue
+            kept.append(m)
+        kept.sort(key=lambda m: m.get('created') or 0, reverse=True)
+        return [{"id": m['id'], "display_name": None} for m in kept], None
+    except req.exceptions.ConnectionError:
+        return None, "Cannot connect to OpenAI API"
+    except req.exceptions.Timeout:
+        return None, "OpenAI API request timed out"
+    except Exception as e:
+        logger.warning(f"[REST API] OpenAI model list failed: {type(e).__name__}: {e}")
+        return None, "OpenAI API request failed"
+
+
+def _fetch_anthropic_models(api_key: str):
+    """Fetch chat models from GET https://api.anthropic.com/v1/models."""
+    if not api_key:
+        return None, "API key is required"
+    try:
+        r = req.get(
+            'https://api.anthropic.com/v1/models',
+            params={'limit': 1000},
+            headers={
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+            },
+            timeout=_LIST_MODELS_TIMEOUT,
+        )
+        if r.status_code in (401, 403):
+            return None, "Invalid API key"
+        if not r.ok:
+            return None, f"Anthropic API returned {r.status_code}"
+        data = r.json()
+        items = list(data.get('data') or [])
+        # Sort by created_at desc when available; falsy values sink to the end.
+        items.sort(key=lambda m: m.get('created_at') or '', reverse=True)
+        models = []
+        for m in items:
+            mid = m.get('id')
+            if not mid:
+                continue
+            models.append({
+                "id": mid,
+                "display_name": m.get('display_name'),
+            })
+        return models, None
+    except req.exceptions.ConnectionError:
+        return None, "Cannot connect to Anthropic API"
+    except req.exceptions.Timeout:
+        return None, "Anthropic API request timed out"
+    except Exception as e:
+        logger.warning(f"[REST API] Anthropic model list failed: {type(e).__name__}: {e}")
+        return None, "Anthropic API request failed"
 
 
 def get_provider_service():
@@ -225,65 +316,39 @@ def delete_provider(provider_id):
         return jsonify({"error": "Failed to delete provider"}), 500
 
 
-@providers_bp.route('/ollama/models', methods=['GET'])
+@providers_bp.route('/list-models', methods=['POST'])
 @require_session
-def list_ollama_models():
-    """Proxy GET /api/tags on an Ollama host and return model names.
-
-    Query param:
-      host  — Ollama base URL (default: http://localhost:11434)
-
-    Response 200: {"models": ["name:tag", ...]}
-    Response 502: {"error": "..."}
-    """
-    host = request.args.get('host', 'http://localhost:11434')
-    names, err = _fetch_ollama_models(host)
-    if err is not None:
-        return jsonify({"error": err}), 502
-    return jsonify({"models": names}), 200
-
-
-@providers_bp.route('/anthropic/models', methods=['POST'])
-@require_session
-def list_anthropic_models():
-    """Proxy the Anthropic models list endpoint server-side.
+def list_models():
+    """Live model-list fetch for the brain provider form.
 
     Body JSON:
-      {"api_key": "sk-ant-..."}
+      {"platform": "ollama" | "openai" | "anthropic",
+       "api_key": "...",   # openai / anthropic
+       "host": "..."}      # ollama
 
-    The key is POSTed (not a query param) so it does not land in Flask access
-    logs, browser history, or reverse-proxy logs.
+    Always returns HTTP 200 — auth/network/parse failures land in the body's
+    ``error`` field so the UI can render them inline. Credentials are POSTed
+    (never a query param) to keep them out of Flask access logs and reverse-
+    proxy logs.
 
-    Response 200: {"models": ["claude-...", ...]}
-    Response 400: {"error": "api_key is required"}
-    Response 502: {"error": "..."}
+    Response 200: {"models": [{"id": "...", "display_name": "..."|null}, ...],
+                   "error": "..."|null}
+    Response 400: {"error": "..."}  (only for malformed/unsupported requests)
     """
     body = request.get_json(silent=True) or {}
-    api_key = (body.get('api_key') or '').strip()
-    if not api_key:
-        return jsonify({"error": "api_key is required"}), 400
+    platform = (body.get('platform') or '').strip().lower()
+    if platform == 'ollama':
+        models, err = _fetch_ollama_models(body.get('host') or '')
+    elif platform == 'openai':
+        models, err = _fetch_openai_models((body.get('api_key') or '').strip())
+    elif platform == 'anthropic':
+        models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
+    else:
+        return jsonify({"models": [], "error": f"Unsupported platform '{platform}'"}), 400
 
-    try:
-        r = req.get(
-            'https://api.anthropic.com/v1/models',
-            headers={
-                'x-api-key': api_key,
-                'anthropic-version': '2023-06-01',
-            },
-            timeout=10,
-        )
-        if not r.ok:
-            return jsonify({"error": f"Anthropic API returned {r.status_code}"}), 502
-        data = r.json()
-        model_ids = [m['id'] for m in (data.get('data') or []) if m.get('id')]
-        return jsonify({"models": model_ids}), 200
-    except req.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot connect to Anthropic API"}), 502
-    except req.exceptions.Timeout:
-        return jsonify({"error": "Anthropic API request timed out"}), 502
-    except Exception as e:
-        logger.error(f"[REST API] Anthropic model list failed: {type(e).__name__}: {e}")
-        return jsonify({"error": "Anthropic API request failed"}), 502
+    if err is not None:
+        return jsonify({"models": [], "error": err}), 200
+    return jsonify({"models": models, "error": None}), 200
 
 
 @providers_bp.route('/test', methods=['POST'])
@@ -328,13 +393,14 @@ def test_provider():
             if err is not None:
                 return jsonify({"success": False, "error": err}), 200
 
+            available_names = [m['id'] for m in (available or [])]
             model_base = model.split(':')[0]
             model_found = any(
                 m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
-                for m in available
+                for m in available_names
             )
 
-            if not model_found and not available:
+            if not model_found and not available_names:
                 return jsonify({
                     "success": True,
                     "model": model,
@@ -346,14 +412,14 @@ def test_provider():
                 return jsonify({
                     "success": False,
                     "error": f"Model '{model}' not found on this Ollama instance.",
-                    "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available[:5])}"
+                    "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}"
                 }), 200
 
             return jsonify({
                 "success": True,
                 "model": model,
                 "latency_ms": latency_ms,
-                "message": f"Connected · {len(available)} model(s) available"
+                "message": f"Connected · {len(available_names)} model(s) available"
             }), 200
 
         else:
