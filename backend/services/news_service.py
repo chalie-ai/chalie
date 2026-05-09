@@ -32,13 +32,6 @@ PER_FEED_TIMEOUT = 5.0
 TOTAL_BUDGET = 8.0
 RELEVANCE_FLOOR = 0.3
 LEVENSHTEIN_THRESHOLD = 5
-JACCARD_THRESHOLD = 0.5
-
-_STOPWORDS = frozenset({
-    "the", "a", "an", "is", "in", "of", "to", "and", "for", "with",
-    "on", "at", "by", "it", "its", "as", "are", "was", "be", "has",
-    "have", "had", "that", "this", "from", "or", "but", "not", "s", "us",
-})
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#039;": "'", "&nbsp;": " "}
@@ -346,63 +339,6 @@ class NewsService:
         relevant.sort(key=lambda x: x[1], reverse=True)
         return [a for a, _ in relevant]
 
-    # ── Trending clustering ───────────────────────────────────
-
-    def cluster_trending(self, articles: list, min_sources: int = 2, limit: int = 5) -> list:
-        """Jaccard similarity clustering on tokenized titles."""
-        if not articles:
-            return []
-
-        clusters = []  # list of {"articles": [], "word_sets": []}
-
-        for article in articles:
-            words = _tokenize_title(article.title)
-            if not words:
-                continue
-            merged = False
-            for cluster in clusters:
-                for ws in cluster["word_sets"]:
-                    if _jaccard(words, ws) >= JACCARD_THRESHOLD:
-                        cluster["articles"].append(article)
-                        cluster["word_sets"].append(words)
-                        merged = True
-                        break
-                if merged:
-                    break
-            if not merged:
-                clusters.append({"articles": [article], "word_sets": [words]})
-
-        # Finalize
-        result = []
-        for cluster in clusters:
-            # Deduplicate within cluster
-            seen_urls = set()
-            seen_titles = set()
-            deduped = []
-            for a in cluster["articles"]:
-                if a.url in seen_urls:
-                    continue
-                t_lower = a.title.lower()
-                if t_lower in seen_titles:
-                    continue
-                seen_urls.add(a.url)
-                seen_titles.add(t_lower)
-                deduped.append(a)
-
-            if len(deduped) < min_sources:
-                continue
-
-            # Representative title = longest
-            rep_title = max(deduped, key=lambda a: len(a.title)).title
-            result.append({
-                "title": rep_title,
-                "articles": deduped,
-                "coverage": len(deduped),
-            })
-
-        result.sort(key=lambda c: c["coverage"], reverse=True)
-        return result[:limit]
-
     # ── Convenience methods ───────────────────────────────────
 
     def search(self, query: str, source_ids: list = None, limit: int = 10, country_code: str = "US") -> list:
@@ -467,19 +403,6 @@ def _levenshtein(s1: str, s2: str) -> int:
             curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
         prev, curr = curr, prev
     return prev[n]
-
-
-def _tokenize_title(title: str) -> set:
-    words = _PUNCT_RE.sub(" ", title.lower()).split()
-    return {w for w in words if w and w not in _STOPWORDS}
-
-
-def _jaccard(set_a: set, set_b: set) -> float:
-    if not set_a and not set_b:
-        return 1.0
-    if not set_a or not set_b:
-        return 0.0
-    return len(set_a & set_b) / len(set_a | set_b)
 
 
 _MEDIA_NS = "{http://search.yahoo.com/mrss/}"
