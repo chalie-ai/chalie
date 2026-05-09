@@ -58,7 +58,7 @@ const PLATFORM_CONFIG = {
         hasHost: false,
         hasApiKey: true,
         modelPlaceholder: 'e.g. gemini-2.5-flash',
-        models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'],
+        models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     },
     openai_compatible: {
         desc: 'Any OpenAI-compatible API — MiniMax, Groq, DeepSeek, Together, OpenRouter, LM Studio, vLLM. Supply the provider\'s base URL and API key.',
