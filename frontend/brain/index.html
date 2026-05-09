@@ -439,11 +439,7 @@
                 </div>
                 <div class="form-group" id="editHostGroup">
                     <label for="editHost">Host</label>
-                    <div class="host-input-row">
-                        <input type="text" id="editHost" value="http://localhost:11434">
-                        <button type="button" class="btn btn-secondary btn-sm" id="editTestConnectionBtn">Refresh models</button>
-                    </div>
-                    <span id="editConnectionStatus"></span>
+                    <input type="text" id="editHost" value="http://localhost:11434">
                 </div>
                 <div class="form-group" id="editApiKeyGroup">
                     <label for="editApiKey">API Key</label>
@@ -454,6 +450,7 @@
                     <select id="editModel">
                         <option value="">Select model...</option>
                     </select>
+                    <span id="editModelStatus" class="model-status"></span>
                 </div>
                 <div id="testResult" class="test-result hidden"></div>
                 <div class="form-actions">
