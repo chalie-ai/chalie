@@ -35,6 +35,7 @@ ROCM_PIP_INDEX="${CHALIE_ROCM_INDEX:-https://repo.radeon.com/rocm/manylinux/late
 # Installer flags (parsed from args)
 _DISABLE_VOICE=false
 _BRANCH=""
+_TAG=""
 
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
@@ -66,6 +67,8 @@ _parse_args() {
       --disable-voice)         _DISABLE_VOICE=true; shift ;;
       --branch=*)              _BRANCH="${1#--branch=}"; shift ;;
       --branch)                _BRANCH="$2"; shift 2 ;;
+      --tag=*)                 _TAG="${1#--tag=}"; shift ;;
+      --tag)                   _TAG="$2"; shift 2 ;;
       --disable-default-tools) shift ;; # deprecated, ignored — tools are bundled in the repo
       *) shift ;;
     esac
@@ -376,8 +379,18 @@ _download_release() {
   fi
 
   _section "Downloading Chalie"
+  # Priority order:
+  #   1. --tag=NAME  → fetch refs/tags/NAME.tar.gz directly (no API lookup).
+  #      Used by the Docker workflow on tag pushes — avoids racing with the
+  #      release-publication step that gates _fetch_latest_tag.
+  #   2. --branch=NAME → fetch refs/heads/NAME.tar.gz (development builds).
+  #   3. neither → call the GitHub API for the latest published release tag.
   local ref tarball_url
-  if [[ -n "$_BRANCH" ]]; then
+  if [[ -n "$_TAG" ]]; then
+    ref="$_TAG"
+    _info "Tag: $ref"
+    tarball_url="https://github.com/$CHALIE_REPO/archive/refs/tags/$ref.tar.gz"
+  elif [[ -n "$_BRANCH" ]]; then
     ref="$_BRANCH"
     _info "Branch: $ref"
     tarball_url="https://github.com/$CHALIE_REPO/archive/refs/heads/$ref.tar.gz"
