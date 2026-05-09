@@ -253,12 +253,6 @@ function selectPlatform(platform, context) {
     // Show/hide api key field
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
-    // Show/hide Ollama model list panel
-    const ollamaListGroup = document.getElementById('ollamaModelListGroup');
-    if (ollamaListGroup) {
-        ollamaListGroup.style.display = platform === 'ollama' ? '' : 'none';
-    }
-
     // Update model select
     populateModelSelect();
 }
@@ -502,30 +496,8 @@ async function refreshOllamaModels() {
     try {
         const host = document.getElementById('editHost').value.trim();
         const names = await fetchOllamaModels(host, 'editConnectionStatus');
-        renderOllamaModelList(names);
-    } finally {
-        _ollamaRefreshInFlight = false;
-    }
-}
-
-function renderOllamaModelList(names) {
-    const container = document.getElementById('ollamaModelList');
-    if (!container) return;
-
-    const select = document.getElementById('editModel');
-
-    if (names.length === 0) {
-        container.innerHTML = '<span class="ollama-model-empty">No models found — is Ollama running?</span>';
-        return;
-    }
-
-    container.innerHTML = names.map(n => {
-        const selected = n === editModel;
-        return `<button type="button" class="ollama-model-chip${selected ? ' selected' : ''}" data-model="${escapeHtml(n)}">${escapeHtml(n)}</button>`;
-    }).join('');
-
-    // Populate the single model select with fetched names
-    if (select) {
+        const select = document.getElementById('editModel');
+        if (!select) return;
         const prev = select.value;
         select.innerHTML = '<option value="">Select model...</option>';
         names.forEach(n => {
@@ -535,18 +507,9 @@ function renderOllamaModelList(names) {
             if (n === prev || n === editModel) opt.selected = true;
             select.appendChild(opt);
         });
+    } finally {
+        _ollamaRefreshInFlight = false;
     }
-
-    container.querySelectorAll('.ollama-model-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-            const m = chip.dataset.model;
-            editModel = m;
-            if (select) select.value = m;
-            container.querySelectorAll('.ollama-model-chip').forEach(c => {
-                c.classList.toggle('selected', c.dataset.model === m);
-            });
-        });
-    });
 }
 
 // Refresh button click
