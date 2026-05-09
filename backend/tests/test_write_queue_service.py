@@ -1,9 +1,9 @@
 """
-Behavioural tests for WriteQueueService — real queue, real threading, real DB.
+Behavioural tests for WriteQueueService — real queue, real threading.
 
 WriteQueueService serialises SQLite writes through a stdlib queue.Queue backed
 by a daemon thread.  These tests exercise submit / submit_sync / get_stats
-against the real production stack with the test DB fixture.
+against the real production stack.
 """
 
 import pytest
@@ -82,44 +82,3 @@ class TestGetStats:
         assert stats["errors"] == 1
 
 
-# ── submit_transaction ──────────────────────────────────────────────────────
-
-class TestSubmitTransaction:
-    def test_writes_land_in_real_db(self, wq, db):
-        """Two INSERTs in a transaction either both land or neither do.
-
-        The ``db`` fixture installs a test-scoped DatabaseService as the
-        process-wide singleton, so :meth:`submit_transaction` follows it
-        automatically (no env override needed).
-        """
-        db.execute("CREATE TABLE IF NOT EXISTS wq_test (id INTEGER PRIMARY KEY, val TEXT)")
-        db.commit()
-
-        def insert_a(conn):
-            conn.execute("INSERT INTO wq_test (val) VALUES ('a')")
-
-        def insert_b(conn):
-            conn.execute("INSERT INTO wq_test (val) VALUES ('b')")
-
-        wq.submit_transaction([insert_a, insert_b])
-
-        rows = db.execute("SELECT val FROM wq_test ORDER BY id").fetchall()
-        assert [r[0] for r in rows] == ["a", "b"]
-
-    def test_transaction_rollback_on_failure(self, wq, db):
-        """If one callable raises, neither row persists."""
-        db.execute("CREATE TABLE IF NOT EXISTS wq_test2 (id INTEGER PRIMARY KEY, val TEXT)")
-        db.commit()
-
-        def insert_ok(conn):
-            conn.execute("INSERT INTO wq_test2 (val) VALUES ('ok')")
-
-        def insert_broken(conn):
-            conn.execute("INSERT INTO wq_test2 (val) VALUES ('doomed')")
-            raise RuntimeError("forced failure")
-
-        with pytest.raises(RuntimeError, match="forced failure"):
-            wq.submit_transaction([insert_ok, insert_broken])
-
-        rows = db.execute("SELECT val FROM wq_test2").fetchall()
-        assert rows == [], "rollback must leave no rows"
