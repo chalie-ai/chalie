@@ -149,19 +149,6 @@ class Providers:
             for m in msgs
         )
 
-    def send_async(self, user_prompt, system_prompt, job='unified', tools=None, callback=None):
-        """Fire-and-forget in daemon thread. Calls callback(LLMResponse) when done."""
-        def _run():
-            try:
-                result = self.send(user_prompt, system_prompt, job=job, tools=tools)
-                if callback:
-                    callback(result)
-            except Exception as e:
-                logger.error(f"[Providers] send_async failed: {e}", exc_info=True)
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        return t
-
     def _resolve(self, job):
         """Resolve LLM provider for a job. Uses ConfigService → create_llm_service."""
         from services.config_service import ConfigService
