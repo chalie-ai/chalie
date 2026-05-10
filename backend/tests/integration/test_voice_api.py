@@ -48,7 +48,7 @@ def test_health_endpoint_shape(authed_client):
     client, _db, _store = authed_client
 
     resp = client.get('/voice/health')
-    assert resp.status_code in (200, 503)
+    assert resp.status_code == 200
 
     data = resp.get_json()
     assert data is not None
