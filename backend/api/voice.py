@@ -5,7 +5,7 @@ One pip dependency owns G2P, ONNX runtime wiring, voice asset download, and
 inference for both directions:
 
 * STT  → ``moonshine_voice.Transcriber`` (Moonshine encoder/decoder)
-* TTS  → ``moonshine_voice.TextToSpeech`` (Kokoro voice "am_adam")
+* TTS  → ``moonshine_voice.TextToSpeech`` (Kokoro voice "af_heart")
 
 If the package is not installed, all routes return ``{"status":"unavailable"}``
 or 503. Models are loaded lazily on first request to avoid blocking Flask
@@ -32,7 +32,7 @@ voice_bp = Blueprint("voice", __name__)
 
 MOONSHINE_LANG = "en"
 TTS_LANG = "en-us"
-TTS_VOICE = "kokoro_am_adam"
+TTS_VOICE = "kokoro_af_heart"
 MAX_AUDIO_SECONDS = 660
 
 # ── Dependency detection ────────────────────────────────────────────────────
