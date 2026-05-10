@@ -1429,7 +1429,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .history-end-pill__label {
   font-size: 11px;
-  color: rgba(234, 230, 242, 0.3);
+  color: var(--text-muted);
   background: color-mix(in oklab, var(--text) 3%, transparent);
   border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
   border-radius: 20px;
