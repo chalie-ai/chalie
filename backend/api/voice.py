@@ -60,7 +60,7 @@ MAX_AUDIO_SECONDS = 660
 # The shipped requirements-voice.txt covers all; if any are missing the user
 # (or installer) skipped the voice pip step.
 
-_VOICE_REQUIRED_MODULES = ("moonshine_voice", "soundfile", "numpy", "markdown_it", "pysbd", "num2words")
+_VOICE_REQUIRED_MODULES = ("moonshine_voice", "soundfile", "numpy")
 _VOICE_MISSING_MODULES: tuple[str, ...] = ()
 
 

@@ -1,6 +1,3 @@
 moonshine-voice>=0.0.59
 soundfile>=0.13.0
 numpy>=1.24.0
-markdown-it-py>=3.0.0
-pysbd>=0.3.4
-num2words>=0.5.13
