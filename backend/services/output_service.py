@@ -1,10 +1,7 @@
 import json
 import logging
 import uuid
-from typing import Dict, Any, Optional, List
-
 from .memory_client import MemoryClientService
-from .config_service import ConfigService
 from .time_utils import utc_now
 from .markup import actions_to_xml, sanitize
 
@@ -17,13 +14,8 @@ class OutputService:
     """Service for managing output queue and storage with type-based routing."""
 
     def __init__(self):
-        """Initialize the OutputService with MemoryStore connection and config."""
+        """Initialize the OutputService with MemoryStore connection."""
         self.store = MemoryClientService.create_connection()
-        config = ConfigService.connections()
-        topics = config.get("memory", {}).get("topics", {})
-        self.queue_name = topics.get("output_queue", "output-queue")
-
-        logger.info(f"OutputService initialized with queue: {self.queue_name}")
 
     def enqueue_text(
         self,
@@ -191,114 +183,4 @@ class OutputService:
             metrics=metrics,
         )
 
-    def enqueue_act(
-        self,
-        topic: str = None,
-        actions: List[str] = None,
-        downstream_mode: str = 'ACT',
-        act_history: List[Dict[str, Any]] = None,
-        loop_id: str = '',
-        generation_time: float = 0.0,
-        channel: str = None,
-    ) -> str:
-        """
-        Enqueue an ACT output for action processing.
-
-        Args:
-            topic: Conversation topic identifier
-            actions: List of actions to execute
-            downstream_mode: Mode to use after action processing
-            act_history: History of previous actions in this cycle
-            loop_id: Identifier for the action loop
-            generation_time: Time taken to generate the actions
-
-        Returns:
-            str: UUID of the enqueued output
-        """
-        _channel = channel or topic
-        actions = actions or []
-        act_history = act_history or []
-        output_id = str(uuid.uuid4())
-        output = {
-            "id": output_id,
-            "type": "ACT",
-            "topic": _channel,
-            "created_at": utc_now().isoformat(),
-            "metadata": {
-                "actions": actions,
-                "downstream_mode": downstream_mode,
-                "act_history": act_history,
-                "loop_id": loop_id,
-                "generation_time": generation_time
-            }
-        }
-
-        # Store with 1-hour TTL
-        self.store.setex(f"output:{output_id}", 3600, json.dumps(output))
-
-        # Add to queue
-        self.store.lpush(self.queue_name, output_id)
-        self.store.expire(self.queue_name, 3600)
-
-        logger.info(
-            f"Enqueued ACT output {output_id} for topic '{_channel}' "
-            f"(loop_id={loop_id}, actions={len(actions)})"
-        )
-
-        return output_id
-
-    def dequeue(self, output_type: Optional[str] = None, timeout: int = 0) -> Optional[Dict[str, Any]]:
-        """
-        Dequeue an output from the queue with optional type filtering.
-
-        Args:
-            output_type: Optional filter for output type (TEXT, ACT)
-            timeout: BRPOP timeout in seconds (0 = block indefinitely)
-
-        Returns:
-            Dict containing the output data, or None if timeout
-        """
-        while True:
-            result = self.store.brpop(self.queue_name, timeout)
-
-            if not result:
-                return None
-
-            _, output_id = result
-
-            # Handle both bytes and str
-            if isinstance(output_id, bytes):
-                output_id = output_id.decode()
-
-            output_data = self.store.get(f"output:{output_id}")
-
-            if not output_data:
-                logger.warning(f"Output {output_id} expired or deleted, skipping")
-                continue
-
-            output = json.loads(output_data)
-
-            # Filter by type if specified
-            if output_type and output.get('type') != output_type:
-                logger.debug(f"Re-queuing output {output_id} (type={output.get('type')}, want={output_type})")
-                self.store.lpush(self.queue_name, output_id)
-                self.store.expire(self.queue_name, 3600)
-                continue
-
-            logger.info(f"Dequeued {output.get('type')} output {output_id}")
-            return output
-
-    def delete_output(self, output_id: str) -> None:
-        """
-        Delete an output from storage.
-
-        Args:
-            output_id: UUID of the output to delete
-        """
-        deleted = self.store.delete(f"output:{output_id}")
-
-        if deleted:
-            logger.info(f"Deleted output {output_id}")
-        else:
-            logger.warning(f"Output {output_id} not found for deletion")
 

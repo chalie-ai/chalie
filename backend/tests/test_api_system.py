@@ -93,15 +93,12 @@ class TestSystemAPI:
     # GET /system/status
 
     def test_system_status_returns_expected_keys(self, client, db):
-        """GET /system/status returns status, memory, storage, queues top-level keys."""
+        """GET /system/status returns status, memory, storage top-level keys."""
         store = MemoryStore()
         # Seed 2 keys for each memory namespace so counts == 2.
         for ns in ('working_memory', 'gist_index', 'fact_index'):
             store.set(f'{ns}:a', 'x')
             store.set(f'{ns}:b', 'x')
-        # Seed output-queue with 5 items so llen == 5.
-        for _ in range(5):
-            store.rpush('output-queue', 'x')
         # Seed DMN delivery ZSET with a recent entry.
         store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
 
@@ -113,14 +110,10 @@ class TestSystemAPI:
         assert data['status'] == 'ok'
         assert 'memory' in data
         assert 'storage' in data
-        assert 'queues' in data
         # Memory keys should reflect store.keys() calls (3 calls: working_memory, gist, fact)
         assert data['memory']['working_memory_keys'] == 2
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
-        # Queue depth
-        assert data['queues']['output-queue'] == 5
-        assert 'prompt-queue' not in data['queues']
 
     def test_system_status_degraded_when_store_fails(self, client, db):
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
