@@ -137,16 +137,17 @@ def _serialise_rich(articles, ordinal: int) -> str:
     image_items: list[tuple[str, str]] = []
     needs_og: list[tuple[str, str]] = []
     for a in articles:
-        entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
+        entry = {"title": a.title, "source": a.source}
         if a.description:
             entry["desc"] = a.description[:200]
         results.append(entry)
         img = getattr(a, "image_url", "") or ""
         title = a.title or ""
+        a_url = getattr(a, "url", "") or ""
         if img:
             image_items.append((img, title))
-        elif entry["url"]:
-            needs_og.append((entry["url"], title))
+        elif a_url:
+            needs_og.append((a_url, title))
 
     # og_meta maps image_url → {"image_url", "description"} for caption derivation
     og_meta: dict = {}
