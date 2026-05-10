@@ -439,27 +439,18 @@
                 </div>
                 <div class="form-group" id="editHostGroup">
                     <label for="editHost">Host</label>
-                    <div class="host-input-row">
-                        <input type="text" id="editHost" value="http://localhost:11434">
-                        <button type="button" class="btn btn-secondary btn-sm" id="editTestConnectionBtn">Refresh models</button>
-                    </div>
-                    <span id="editConnectionStatus"></span>
+                    <input type="text" id="editHost" value="http://localhost:11434">
                 </div>
                 <div class="form-group" id="editApiKeyGroup">
                     <label for="editApiKey">API Key</label>
                     <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
-                </div>
-                <div class="form-group" id="ollamaModelListGroup" style="display:none;">
-                    <label for="ollamaModelList">Available models <span class="label-hint">(click to select)</span></label>
-                    <div class="ollama-model-list" id="ollamaModelList">
-                        <span class="ollama-model-empty">Click &ldquo;Refresh models&rdquo; to load the list from your Ollama host.</span>
-                    </div>
                 </div>
                 <div class="form-group">
                     <label for="editModel">Model</label>
                     <select id="editModel">
                         <option value="">Select model...</option>
                     </select>
+                    <span id="editModelStatus" class="model-status"></span>
                 </div>
                 <div id="testResult" class="test-result hidden"></div>
                 <div class="form-actions">

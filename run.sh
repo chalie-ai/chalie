@@ -92,9 +92,17 @@ if [[ "$_VOICE" == "true" ]]; then
   VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
   if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
     echo "→ Syncing voice dependencies …"
-    "$PIP" install -r "$VOICE_REQ" 2>/dev/null \
-      || echo "  ⚠ Voice dep install failed — voice will be unavailable"
-    touch "$VOICE_STAMP"
+    # Stamp ONLY on success. A failed install (no libsndfile,
+    # network blip) used to be papered over by an unconditional `touch`, which
+    # left voice permanently broken until requirements-voice.txt changed. Now
+    # the stamp is created only when pip exits 0, so the next launch retries
+    # automatically and the user sees the failure surface in the UI via
+    # /voice/health → status:"unavailable" + reason:"deps_missing".
+    if "$PIP" install -r "$VOICE_REQ"; then
+      touch "$VOICE_STAMP"
+    else
+      echo "  ⚠ Voice dep install failed — voice will be unavailable until next launch retries"
+    fi
   fi
 fi
 

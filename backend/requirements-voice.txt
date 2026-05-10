@@ -1,4 +1,3 @@
-moonshine-voice>=0.0.51
-kokoro-onnx>=0.5.0
+moonshine-voice>=0.0.59
 soundfile>=0.13.0
 numpy>=1.24.0

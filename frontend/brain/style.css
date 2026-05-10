@@ -1512,49 +1512,6 @@ body::before {
     padding: 6px 12px;
     font-size: 0.8rem;
 }
-.label-hint {
-    font-size: 0.75rem;
-    color: var(--text-muted, #666);
-    font-weight: 400;
-}
-.ollama-model-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 8px;
-    min-height: 36px;
-    background: var(--bg-input, #1a1a2e);
-    border: 1px solid var(--border, #2a2a3e);
-    border-radius: 6px;
-}
-.ollama-model-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 0.78rem;
-    font-weight: 500;
-    cursor: pointer;
-    background: var(--bg-surface, #16213e);
-    border: 1px solid var(--border, #2a2a3e);
-    color: var(--text-secondary, #aaa);
-    transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
-}
-.ollama-model-chip:hover {
-    border-color: rgba(138, 92, 255, 0.4);
-    color: var(--text-primary, #e0e0e0);
-}
-.ollama-model-chip.selected {
-    background: rgba(138, 92, 255, 0.15);
-    border-color: rgba(138, 92, 255, 0.55);
-    color: var(--accent-primary, #8a5cff);
-}
-.ollama-model-empty {
-    font-size: 0.78rem;
-    color: var(--text-muted, #666);
-    padding: 4px 2px;
-}
-
 /* =====================================================
    Capability group cards
    ===================================================== */

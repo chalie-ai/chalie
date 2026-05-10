@@ -1,25 +1,20 @@
 """
-Voice blueprint — native STT (Moonshine Voice) + TTS (Kokoro).
+Voice blueprint — STT + TTS via the unified ``moonshine_voice`` package.
 
-Auto-detects voice dependencies at import time. If moonshine_voice or kokoro_onnx
-are not installed, all routes return {"status": "unavailable"} / 503.
-No Docker required — voice runs in-process.
+One pip dependency owns G2P, ONNX runtime wiring, voice asset download, and
+inference for both directions:
 
-Models are loaded lazily on first request (not at startup) to avoid blocking
-the Flask server while large models download.
+* STT  → ``moonshine_voice.Transcriber`` (Moonshine encoder/decoder)
+* TTS  → ``moonshine_voice.TextToSpeech`` (Kokoro voice "am_adam")
 
-TTS architecture: one Kokoro instance, one lock. ``Kokoro.create()`` already
-phonemizes, batches by ``MAX_PHONEME_LENGTH``, runs ORT inference, trims
-inter-batch silence, and concatenates — so this module is just the Flask
-glue (text cleanup → kokoro.create → WAV encode → NDJSON envelope). The
-single dtype patch in ``_patch_kokoro_speed_dtype`` works around an upstream
-``kokoro-onnx==0.5.0`` int32/float32 mismatch on the HF fp16 export. Drop
-the patch when upstream releases a fix.
+If the package is not installed, all routes return ``{"status":"unavailable"}``
+or 503. Models are loaded lazily on first request to avoid blocking Flask
+while assets download; ``run.py`` fires a daemon thread at boot to warm them
+ahead of the first user message.
 """
 
 import io
 import logging
-import os
 import re
 import struct
 import tempfile
@@ -27,7 +22,6 @@ import threading
 
 from flask import Blueprint, Response, request, jsonify
 
-import paths
 from services.markup import extract_plaintext
 
 logger = logging.getLogger(__name__)
@@ -37,25 +31,50 @@ voice_bp = Blueprint("voice", __name__)
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
 MOONSHINE_LANG = "en"
-KOKORO_VOICE = "af_heart"
+TTS_LANG = "en-us"
+TTS_VOICE = "kokoro_am_adam"
 MAX_AUDIO_SECONDS = 660
 
-# Kokoro model files — downloaded lazily into data/models/kokoro/
-_KOKORO_MODEL_DIR = str(paths.MODELS_DIR / "kokoro")
-_KOKORO_MODEL_URL = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_fp16.onnx"
-_KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
-
 # ── Dependency detection ────────────────────────────────────────────────────
+#
+# We track _which_ voice package is missing so the UI can surface a precise
+# install hint instead of a generic "unavailable" — the fresh-install case.
+# The shipped requirements-voice.txt covers all three; if any are missing the
+# user (or installer) skipped the voice pip step.
 
-_VOICE_AVAILABLE = False
-try:
-    import moonshine_voice  # noqa: F401
-    import kokoro_onnx  # noqa: F401
-    import soundfile  # noqa: F401
-    import numpy  # noqa: F401
-    _VOICE_AVAILABLE = True
-except ImportError:
-    pass
+_VOICE_REQUIRED_MODULES = ("moonshine_voice", "soundfile", "numpy")
+_VOICE_MISSING_MODULES: tuple[str, ...] = ()
+
+
+def _detect_voice_modules() -> tuple[str, ...]:
+    import importlib.util
+    missing = []
+    for name in _VOICE_REQUIRED_MODULES:
+        if importlib.util.find_spec(name) is None:
+            missing.append(name)
+    return tuple(missing)
+
+
+_VOICE_MISSING_MODULES = _detect_voice_modules()
+_VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
+
+# Hint surfaced in /voice/health and route 503s. Same string in both places so
+# the frontend has a single canonical install instruction to render.
+_VOICE_INSTALL_HINT = (
+    "Voice dependencies are not installed. Run "
+    "`pip install -r backend/requirements-voice.txt` (or relaunch with "
+    "`./run.sh` — failed installs auto-retry on next launch)."
+)
+
+
+def _voice_unavailable_payload() -> dict:
+    """Canonical 503 envelope when voice deps are missing."""
+    return {
+        "error": "Voice dependencies not installed",
+        "reason": "deps_missing",
+        "missing": list(_VOICE_MISSING_MODULES),
+        "hint": _VOICE_INSTALL_HINT,
+    }
 
 # ── Lazy model state ────────────────────────────────────────────────────────
 
@@ -64,110 +83,11 @@ _tts_model = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
-# Moonshine STT is single-instance; one user clicks the mic at a time.
-# Kokoro is single-instance too — ``create()`` mutates the phonemizer's
-# stateful espeak backend and the ORT session is not safe for concurrent
-# ``run()`` calls on a shared Kokoro wrapper. Serialise both.
+# Both engines are single-instance: one user clicks the mic at a time, and
+# ``TextToSpeech.synthesize()`` is not documented as thread-safe (it shares
+# G2P + ORT state under the hood). Serialise both.
 _stt_lock = threading.Lock()
 _tts_lock = threading.Lock()
-
-
-def _download_kokoro_models():
-    """Download Kokoro model files if not present."""
-    import requests
-
-    os.makedirs(_KOKORO_MODEL_DIR, exist_ok=True)
-
-    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0-fp16.onnx")
-    voices_path = os.path.join(_KOKORO_MODEL_DIR, "voices-v1.0.bin")
-
-    for url, path in [(_KOKORO_MODEL_URL, model_path), (_KOKORO_VOICES_URL, voices_path)]:
-        if os.path.exists(path):
-            continue
-        fname = os.path.basename(path)
-        logger.info("[Voice] Downloading %s …", fname)
-        resp = requests.get(url, stream=True, timeout=120)
-        resp.raise_for_status()
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1 << 20):
-                f.write(chunk)
-        os.rename(tmp_path, path)
-        logger.info("[Voice] Downloaded %s (%.1f MB)", fname, os.path.getsize(path) / 1e6)
-
-    return model_path, voices_path
-
-
-def _patch_kokoro_speed_dtype(tts):
-    """Fix upstream ``kokoro-onnx==0.5.0`` dtype bug for the HF fp16 schema.
-
-    The library's ``_create_audio`` hardcodes ``speed: int32`` when the model
-    exposes an ``input_ids`` input (the newer
-    ``onnx-community/Kokoro-82M-v1.0-ONNX`` export), but the fp16 graph
-    actually expects ``speed: float32``. ONNXRuntime then rejects every
-    inference call with::
-
-        Unexpected input data type. Actual: (tensor(int32)),
-        expected: (tensor(float))
-
-    We override the bound method on the loaded instance with a corrected
-    version so we don't have to vendor or fork the library. Drop this once
-    upstream releases a fix.
-    """
-    import time
-    import types
-    import numpy as np
-    from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE
-
-    def _create_audio_fixed(self, phonemes, voice, speed):
-        # The library's ``create()`` pre-batches phonemes via
-        # ``_split_phonemes()`` so each call here is already under budget.
-        # If something upstream ever skips that, fail loudly rather than
-        # silently truncating audio.
-        if len(phonemes) > MAX_PHONEME_LENGTH:
-            raise RuntimeError(
-                f"Kokoro phoneme overflow: {len(phonemes)} > {MAX_PHONEME_LENGTH}. "
-                "Library should have batched via _split_phonemes()."
-            )
-        start_t = time.time()
-        tokens = np.array(self.tokenizer.tokenize(phonemes), dtype=np.int64)
-        assert len(tokens) <= MAX_PHONEME_LENGTH
-        voice = voice[len(tokens)]
-        tokens = [[0, *tokens, 0]]
-        if "input_ids" in [i.name for i in self.sess.get_inputs()]:
-            inputs = {
-                "input_ids": tokens,
-                "style": np.array(voice, dtype=np.float32),
-                "speed": np.array([speed], dtype=np.float32),  # was int32 — upstream bug
-            }
-        else:
-            inputs = {
-                "tokens": tokens,
-                "style": voice,
-                "speed": np.ones(1, dtype=np.float32) * speed,
-            }
-        audio = self.sess.run(None, inputs)[0]
-        # The HF fp16 export returns shape (1, N) float16; kokoro-onnx's
-        # downstream concatenation + soundfile encoding both expect a 1-D
-        # float32 waveform (the legacy thewh1teagle fp32 model returned that
-        # natively).
-        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-        logger.debug("[Voice] kokoro batch %.2fs in %.2fs",
-                     len(audio) / SAMPLE_RATE, time.time() - start_t)
-        return audio, SAMPLE_RATE
-
-    tts._create_audio = types.MethodType(_create_audio_fixed, tts)
-
-
-def _build_kokoro_instance(model_file: str, voices_file: str):
-    """Construct one Kokoro instance with its own ONNX session and dtype patch."""
-    from kokoro_onnx import Kokoro
-    from services.onnx_session import build_session
-
-    sess = build_session(model_file, log_prefix="[Voice/Kokoro]")
-    inst = Kokoro.from_session(sess, voices_file)
-    _patch_kokoro_speed_dtype(inst)
-    return inst
 
 
 def _ensure_models():
@@ -193,9 +113,8 @@ def _ensure_models():
         model_path, model_arch = mv.get_model_for_language(MOONSHINE_LANG)
         stt = mv.Transcriber(model_path=model_path, model_arch=model_arch)
 
-        logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
-        model_file, voices_file = _download_kokoro_models()
-        tts = _build_kokoro_instance(model_file, voices_file)
+        logger.info("[Voice] Loading TTS model (lang=%s, voice=%s)", TTS_LANG, TTS_VOICE)
+        tts = mv.TextToSpeech(TTS_LANG, voice=TTS_VOICE)
 
         with _load_lock:
             _stt_model = stt
@@ -240,7 +159,7 @@ def _wav_duration_seconds(data: bytes) -> float:
 
 # ── Markdown strip patterns (compiled once) ─────────────────────────────────
 #
-# Kokoro pronounces literal punctuation, so ``*example*`` is spoken as
+# The TTS engine pronounces literal punctuation, so ``*example*`` is spoken as
 # "asterisk example asterisk". The LLM is supposed to emit our HTML subset,
 # but markdown leaks through legacy paths, fenced tool output, and quoted
 # user input. We strip it unconditionally — gating on "<" + ">" was the
@@ -268,7 +187,7 @@ _MD_HRULE_RE = re.compile(r"(?m)^\s*(?:[-*_]\s*){3,}\s*$")
 def _strip_markdown(text: str) -> str:
     """Strip markdown markers so they aren't pronounced literally.
 
-    Kokoro speaks raw punctuation. Without this, ``*example*`` becomes
+    The TTS engine speaks raw punctuation. Without this, ``*example*`` becomes
     "asterisk example asterisk" and ``[click](https://x)`` becomes
     "open bracket click close bracket open paren ...".
 
@@ -337,9 +256,20 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
 
 @voice_bp.route("/voice/health", methods=["GET"])
 def voice_health():
-    """Voice service health check."""
+    """Voice service health check.
+
+    Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``} for backwards
+    compatibility with the existing frontend poller and integration tests.
+    When deps are missing we also include ``reason`` + ``missing`` + ``hint``
+    so the UI can show actionable install guidance instead of a silent hide.
+    """
     if not _VOICE_AVAILABLE:
-        return jsonify({"status": "unavailable"}), 503
+        return jsonify({
+            "status": "unavailable",
+            "reason": "deps_missing",
+            "missing": list(_VOICE_MISSING_MODULES),
+            "hint": _VOICE_INSTALL_HINT,
+        }), 200
     if _models_loaded:
         return jsonify({"status": "ok"}), 200
     if _models_loading:
@@ -360,13 +290,12 @@ def voice_synthesize():
     ``{done:true, total:1}`` sentinel so the client can distinguish a
     complete response from a truncated one.
 
-    ``Kokoro.create()`` handles phonemization, batching by
-    ``MAX_PHONEME_LENGTH``, ORT inference, per-batch silence trimming, and
-    concatenation. We just clean the input text, lock around the call (the
-    instance is not thread-safe), and ship the WAV.
+    ``TextToSpeech.synthesize()`` handles G2P, batching, ORT inference, and
+    waveform concatenation. We just clean the input text, lock around the
+    call (the instance is not thread-safe), and ship the WAV.
     """
     if not _VOICE_AVAILABLE:
-        return jsonify({"error": "Voice dependencies not installed"}), 503
+        return jsonify(_voice_unavailable_payload()), 503
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
@@ -386,9 +315,7 @@ def voice_synthesize():
     try:
         t0 = time.time()
         with _tts_lock:
-            samples, sample_rate = _tts_model.create(
-                text, voice=KOKORO_VOICE, speed=1.0, lang="en-us",
-            )
+            samples, sample_rate = _tts_model.synthesize(text)
         wav_bytes = _audio_to_wav_bytes(samples, sample_rate)
         logger.info(
             "[Voice] synthesized %d samples in %.2fs",
@@ -422,7 +349,7 @@ def voice_synthesize():
 def voice_transcribe():
     """Transcribe uploaded audio (WAV). Returns {"text": "..."}."""
     if not _VOICE_AVAILABLE:
-        return jsonify({"error": "Voice dependencies not installed"}), 503
+        return jsonify(_voice_unavailable_payload()), 503
 
     if not _ensure_models():
         return jsonify({"error": "Models still loading"}), 503
