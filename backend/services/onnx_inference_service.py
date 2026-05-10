@@ -539,56 +539,6 @@ class OnnxInferenceService:
             logger.warning(f"{LOG_PREFIX} Inference failed for '{task_name}': {e}")
             return None, 0.0
 
-    def predict_multi_label(
-        self,
-        model_name: str,
-        text: str,
-        threshold_overrides: Optional[Dict[str, float]] = None,
-    ) -> List[Tuple[str, float]]:
-        """Multi-label classification via sigmoid per output, threshold per label.
-
-        Returns list of (label, score) tuples above threshold, sorted descending by score.
-        """
-        head = self._get_head(model_name)
-        if head is None:
-            return []
-
-        try:
-            embedding = self._embed(text)  # (1, 768)
-            features = embedding
-
-            if features.shape[-1] != head.input_dim:
-                logger.warning(
-                    f"{LOG_PREFIX} {model_name}: feature dim mismatch for multi_label"
-                )
-                return []
-
-            logits = head.forward(features)[0].astype(np.float64)  # (num_classes,)
-
-            probs = 1.0 / (1.0 + np.exp(-logits))
-
-            if not np.isfinite(probs).all():
-                logger.warning(
-                    f"{LOG_PREFIX} predict_multi_label non-finite probs for '{model_name}'"
-                )
-                return []
-
-            default_threshold = 0.5
-            results = []
-            for i, label in enumerate(head.labels):
-                if i >= len(probs):
-                    break
-                t = (threshold_overrides or {}).get(label, default_threshold)
-                if probs[i] >= t:
-                    results.append((label, float(probs[i])))
-
-            results.sort(key=lambda x: x[1], reverse=True)
-            return results
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Multi-label inference failed for '{model_name}': {e}")
-            return []
-
     def predict_all_sigmoids(self, task: str, text: str) -> Dict[str, float]:
         """Return sigmoid probabilities for every output head of a multi-label task.
 
