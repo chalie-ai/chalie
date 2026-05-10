@@ -184,7 +184,11 @@ class ClientContextService:
 
         # Resolve location name if location changed significantly
         if location := ctx.get("location"):
-            cached_location = cached_ctx.get("location", {})
+            # ``cached_ctx.get("X", {})`` returns ``None`` when the key exists
+            # with value ``None`` — which it will, because ``_flatten`` JSON-
+            # encodes ``None`` as ``"null"`` and ``_unflatten`` decodes it back
+            # to ``None``. Coerce explicitly so ``.get()`` chaining is safe.
+            cached_location = cached_ctx.get("location") or {}
             lat_changed = abs(location.get("lat", 0) - cached_location.get("lat", 0)) > 0.05
             lon_changed = abs(location.get("lon", 0) - cached_location.get("lon", 0)) > 0.05
 
@@ -237,7 +241,7 @@ class ClientContextService:
         self._seed_demographic_traits(ctx)
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
-                     f"device={ctx.get('device', {}).get('class')}")
+                     f"device={(ctx.get('device') or {}).get('class')}")
 
     def get(self) -> dict:
         """Retrieve client context from the telemetry table as a nested dict."""
