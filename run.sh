@@ -92,7 +92,7 @@ if [[ "$_VOICE" == "true" ]]; then
   VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
   if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
     echo "→ Syncing voice dependencies …"
-    # Stamp ONLY on success. A failed install (no espeak-ng, no libsndfile,
+    # Stamp ONLY on success. A failed install (no libsndfile,
     # network blip) used to be papered over by an unconditional `touch`, which
     # left voice permanently broken until requirements-voice.txt changed. Now
     # the stamp is created only when pip exits 0, so the next launch retries
