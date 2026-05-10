@@ -6,11 +6,6 @@ from collections import namedtuple
 
 Source = namedtuple("Source", "id name category feed_url country")
 
-CATEGORIES = (
-    "international", "us", "uk", "tech",
-    "business", "science", "sports", "entertainment",
-)
-
 SOURCES = (
     # ── International (10) ────────────────────────────────────
     Source("bbc_world", "BBC World News", "international", "https://feeds.bbci.co.uk/news/world/rss.xml", "GB"),
@@ -99,11 +94,3 @@ def get_source_by_id(source_id: str):
 def get_sources_by_category(category: str) -> list:
     """Return all sources in a category."""
     return list(_BY_CATEGORY.get(category, []))
-
-
-def search_sources(query: str = "") -> list:
-    """Case-insensitive substring match on source name. Empty query returns all."""
-    if not query:
-        return list(SOURCES)
-    q = query.lower()
-    return [s for s in SOURCES if q in s.name.lower()]
