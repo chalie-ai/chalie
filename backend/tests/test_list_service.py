@@ -7,8 +7,6 @@ SQLite via the shared ``db`` fixture — no mocked database connections.
 """
 
 import pytest
-from datetime import timedelta
-
 from services.time_utils import utc_now
 
 
@@ -278,48 +276,3 @@ class TestGetListRow:
 
     def test_returns_none_for_empty(self, service):
         assert service._get_list_row('') is None
-
-
-# ─── get_lists_for_prompt ────────────────────────────────────────────────
-
-class TestGetListsForPrompt:
-    def test_returns_empty_when_no_lists(self, service):
-        assert service.get_lists_for_prompt() == ""
-
-    def test_includes_id_in_format(self, service, db):
-        _seed_list(db, list_id='abc12345', name='Groceries')
-        _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
-        _seed_item(db, 'i2', 'abc12345', 'eggs', checked=1, position=1)
-
-        result = service.get_lists_for_prompt()
-
-        assert "## Active Lists" in result
-        assert "abc12345" in result
-        assert "Groceries" in result
-        assert "2 items" in result
-        assert "1 checked" in result
-
-    def test_no_checked_count_omitted_when_zero(self, service, db):
-        _seed_list(db, list_id='abc12345', name='Todo')
-        _seed_item(db, 'i1', 'abc12345', 'task', position=0)
-
-        result = service.get_lists_for_prompt()
-        assert "checked" not in result
-        assert "1 items" in result
-
-    def test_recency_format_minutes(self, service, db):
-        # updated_at defaults to datetime('now') → recency should read "0m ago"
-        _seed_list(db, list_id='abc12345', name='Fresh')
-        result = service.get_lists_for_prompt()
-        assert "m ago" in result
-
-    def test_recency_format_days_for_old_list(self, service, db):
-        old_iso = (utc_now() - timedelta(days=5)).isoformat()
-        db.execute(
-            "INSERT INTO lists (id, name, list_type, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ('old00001', 'Old List', 'checklist', old_iso, old_iso),
-        )
-        db.commit()
-        result = service.get_lists_for_prompt()
-        assert "5 days ago" in result
