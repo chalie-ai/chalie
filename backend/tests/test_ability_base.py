@@ -240,4 +240,3 @@ def test_timeout_overridable():
 
     del _LongTimeout
     gc.collect()
-
