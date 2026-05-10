@@ -331,6 +331,25 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
+    # Warm up large ONNX models in background daemon threads. Each loader is
+    # already self-locking + idempotent — these calls just kick off the same
+    # download/init paths the first request would, so by the time the user
+    # sends a message the models are usually live. Failure is non-fatal: the
+    # lazy paths still cover it.
+    def _warmup():
+        import threading as _t
+        try:
+            from api.voice import _ensure_models as _voice_warm
+            _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Voice warm-up skipped: {e}")
+        try:
+            from services.embedding_service import _get_session_and_tokenizer as _embed_warm
+            _t.Thread(target=_embed_warm, name="embed-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
+    _warmup()
+
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker():
         from api import create_app
