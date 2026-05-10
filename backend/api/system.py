@@ -154,7 +154,7 @@ def system_status():
         from services.database_service import get_shared_db_service
 
         store = MemoryClientService.create_connection()
-        result = {"status": "ok", "memory": {}, "storage": {}, "queues": {}}
+        result = {"status": "ok", "memory": {}, "storage": {}}
 
         # MemoryStore health
         try:
@@ -187,14 +187,6 @@ def system_status():
         except Exception as e:
             result["status"] = "degraded"
             result["database_error"] = str(e)
-
-        # Queue depths
-        for queue_name in ["output-queue"]:
-            try:
-                result["queues"][queue_name] = store.llen(queue_name)
-            except Exception as e:
-                logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
-                result["queues"][queue_name] = -1
 
         return jsonify(result), 200
 

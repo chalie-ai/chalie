@@ -14,7 +14,6 @@ Pattern used throughout:
   A non-None expiry confirms the TTL was set.
 """
 
-import json
 import pytest
 from unittest.mock import patch
 
@@ -37,61 +36,6 @@ def _has_ttl(store: MemoryStore, key: str) -> bool:
             _, expiry = keyspace[key]
             return expiry is not None
     return False
-
-
-# ---------------------------------------------------------------------------
-# 1. output_service — enqueue path + re-queue path
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestOutputServiceQueueTTL:
-    """After every lpush to output-queue, expire(output-queue, 3600) must fire.
-
-    The output-queue is written by enqueue_act (primary path) and by the
-    re-queue branch inside dequeue() when a type-mismatch is detected.
-    enqueue_text does NOT touch output-queue; it uses setex on the output key
-    and rpush/expire on notifications:recent.
-    """
-
-    @pytest.fixture
-    def svc(self):
-        store = MemoryStore()
-        connections = {"memory": {"topics": {"output_queue": "output-queue"}}}
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch("services.config_service.ConfigService.connections",
-                   return_value=connections):
-            from services.output_service import OutputService
-            return OutputService(), store
-
-    def test_enqueue_act_sets_ttl_on_output_queue(self, svc):
-        """enqueue_act calls lpush then expire(output-queue, 3600)."""
-        service, store = svc
-        service.enqueue_act(topic="t", actions=["search"], channel="web:default:1")
-        assert _has_ttl(store, "output-queue"), "output-queue must have a TTL after enqueue_act lpush"
-
-    def test_requeue_sets_ttl_on_output_queue(self, svc):
-        """dequeue re-queue path (type mismatch) calls expire on output-queue."""
-        service, store = svc
-
-        # Push a TEXT output and an ACT output so that dequeue finds ACT on second pop.
-        # brpop pops from the right, so ACT is at the right (last) position.
-        text_output = {"id": "out-text", "type": "TEXT", "topic": "t", "metadata": {}}
-        act_output = {"id": "out-act", "type": "ACT", "topic": "t",
-                      "metadata": {"actions": [], "downstream_mode": "ACT",
-                                   "act_history": [], "loop_id": "", "generation_time": 0.0}}
-        store.set("output:out-text", json.dumps(text_output))
-        store.set("output:out-act", json.dumps(act_output))
-        # rpush appends to the right; brpop pops from the right.
-        # Push ACT first (left), then TEXT (rightmost) so TEXT is popped first.
-        store.rpush("output-queue", "out-act")
-        store.rpush("output-queue", "out-text")
-
-        # dequeue asks for ACT: pops out-text (type mismatch) → re-queues it → pops out-act → returns
-        result = service.dequeue(output_type="ACT", timeout=2)
-
-        assert result is not None and result["type"] == "ACT"
-        assert _has_ttl(store, "output-queue"), "output-queue must have a TTL after re-queue lpush"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,7 @@
 {
   "memory": {
     "topics": {
-      "episodic_memory": "episodic-memory-queue",
-      "output_queue": "output-queue"
+      "episodic_memory": "episodic-memory-queue"
     },
     "queues": {
       "act_queue": {
