@@ -215,19 +215,44 @@ def _strip_markdown(text: str) -> str:
     return text
 
 
+_DIGIT_LETTER_RE = re.compile(r"(\d)([A-Za-z])")
+_LETTER_DIGIT_RE = re.compile(r"([A-Za-z])(\d)")
+_SHORT_ACRONYM_RE = re.compile(r"\b[A-Z]{2,3}\b")
+
+
+def _expand_acronyms_for_tts(text: str) -> str:
+    """Letter-space short ALL-CAPS tokens and split digit-letter joins.
+
+    Moonshine's neural G2P treats 2- and 3-letter ALL-CAPS tokens as fake
+    one-syllable words (``MB``→"eb", ``VM``→"em", ``GB``→"eb"). Splitting
+    the letters with whitespace forces per-letter pronunciation
+    (``M B``→"em bee", ``V M``→"vee em"). Number-letter joins like
+    ``228MB`` confuse it further (``228MB``→"alab"); a space restores the
+    digit run AND the acronym.
+
+    Acronyms of length 4+ test correctly against moonshine's dictionary
+    (``URL``, ``HTTP``, ``HTML``, ``XML``) so we leave them alone.
+    """
+    text = _DIGIT_LETTER_RE.sub(r"\1 \2", text)
+    text = _LETTER_DIGIT_RE.sub(r"\1 \2", text)
+    text = _SHORT_ACRONYM_RE.sub(lambda m: " ".join(m.group(0)), text)
+    return text
+
+
 def _clean_for_tts(text: str) -> str:
     """Convert response content to TTS-safe plaintext.
 
-    Pipeline: HTML subset (if present) → markdown strip → whitespace
-    collapse. Markdown stripping runs on every input — the LLM emits
-    HTML, but markdown still leaks through quoted user content, tool
-    output, and legacy paths.
+    Pipeline: HTML subset (if present) → markdown strip → acronym/unit
+    expansion → whitespace collapse. Markdown stripping runs on every
+    input — the LLM emits HTML, but markdown still leaks through quoted
+    user content, tool output, and legacy paths.
     """
     if not text:
         return ""
     if "<" in text and ">" in text:
         text = extract_plaintext(text)
     text = _strip_markdown(text)
+    text = _expand_acronyms_for_tts(text)
     return " ".join(text.split())
 
 
@@ -268,9 +293,9 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
 # being split mid-token.
 
 _PUNCT_PAUSES = {
-    ".": 0.28, "!": 0.28, "?": 0.28,
-    ":": 0.20, ";": 0.20,
-    ",": 0.14,
+    ".": 0.15, "!": 0.15, "?": 0.15,
+    ":": 0.10, ";": 0.10,
+    ",": 0.06,
 }
 _BOUNDARY_PUNCT = frozenset(_PUNCT_PAUSES)
 
