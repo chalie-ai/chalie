@@ -252,6 +252,87 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
     return buf.read()
 
 
+# ── Prosody-aware synthesis ─────────────────────────────────────────────────
+#
+# Moonshine's neural G2P strips every punctuation mark before IPA reaches
+# Kokoro, so a single ``synthesize()`` call on a multi-sentence string yields
+# a flat, run-on read with no pauses. The previous espeak-ng path preserved
+# punctuation as IPA pause tokens that Kokoro used for prosody.
+#
+# We restore that prosody by segmenting on real boundary punctuation,
+# synthesising each clause independently, and concatenating waveforms with
+# silence pads sized by which punctuation was at the boundary.
+#
+# Boundary definition: ``.!?,;:`` followed by whitespace or end-of-string.
+# The whitespace requirement is what keeps ``1,000`` and ``http://x.y`` from
+# being split mid-token.
+
+_PUNCT_PAUSES = {
+    ".": 0.28, "!": 0.28, "?": 0.28,
+    ":": 0.20, ";": 0.20,
+    ",": 0.14,
+}
+_BOUNDARY_PUNCT = frozenset(_PUNCT_PAUSES)
+
+
+def _segment_for_prosody(text: str) -> list[tuple[str, float]]:
+    """Split ``text`` into ``(chunk, trailing_silence_seconds)`` pairs.
+
+    Punctuation only counts as a boundary when followed by whitespace or
+    end-of-string, so numbers (``1,000``) and URLs survive intact.
+    """
+    segments: list[tuple[str, float]] = []
+    buf: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in _BOUNDARY_PUNCT:
+            j = i
+            max_pause = 0.0
+            while j < n and text[j] in _BOUNDARY_PUNCT:
+                max_pause = max(max_pause, _PUNCT_PAUSES[text[j]])
+                j += 1
+            if j >= n or text[j].isspace():
+                chunk = "".join(buf).strip()
+                if chunk:
+                    segments.append((chunk, max_pause))
+                    buf = []
+                i = j
+                while i < n and text[i].isspace():
+                    i += 1
+                continue
+        buf.append(c)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        segments.append((tail, 0.0))
+    return segments
+
+
+def _synthesize_with_prosody(text: str):
+    """Synthesise ``text`` with punctuation-driven pauses.
+
+    Returns ``(samples, sample_rate)`` — same shape as
+    ``TextToSpeech.synthesize()``. Falls back to a single synthesise call
+    when segmentation produces nothing actionable (no punctuation).
+    """
+    import numpy as np
+
+    segments = _segment_for_prosody(text)
+    if len(segments) <= 1:
+        return _tts_model.synthesize(text)
+
+    parts = []
+    sample_rate = None
+    for chunk, pause in segments:
+        chunk_samples, sr = _tts_model.synthesize(chunk)
+        sample_rate = sr
+        parts.append(chunk_samples)
+        if pause > 0:
+            parts.append(np.zeros(int(pause * sr), dtype=chunk_samples.dtype))
+    return np.concatenate(parts), sample_rate
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @voice_bp.route("/voice/health", methods=["GET"])
@@ -315,7 +396,7 @@ def voice_synthesize():
     try:
         t0 = time.time()
         with _tts_lock:
-            samples, sample_rate = _tts_model.synthesize(text)
+            samples, sample_rate = _synthesize_with_prosody(text)
         wav_bytes = _audio_to_wav_bytes(samples, sample_rate)
         logger.info(
             "[Voice] synthesized %d samples in %.2fs",
