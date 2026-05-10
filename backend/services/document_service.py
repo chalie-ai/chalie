@@ -282,6 +282,14 @@ class DocumentService:
             doc_id=doc_id,
         )
 
+        def _set_clean(did=doc_id, txt=text_content, db=self.db):
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE documents SET clean_text = ? WHERE id = ?",
+                    (txt, did),
+                )
+        self._write_queue.submit_sync(_set_clean)
+
         logger.info(f"[DOCS] Created text document '{original_name}' (id={doc_id})")
         return doc_id
 
