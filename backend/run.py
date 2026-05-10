@@ -280,13 +280,6 @@ def main():
     # Capability sync — bootstrap connected capabilities into scheduler system handlers
     _bootstrap_capability_sync()
 
-    # Optional services (fail gracefully)
-    _try_register(manager, "growth-pattern-service",
-                  "services.growth_pattern_service", "growth_pattern_worker")
-    _try_register(manager, "routing-stability-regulator-service",
-                  "services.routing_stability_regulator_service", "routing_stability_regulator_worker")
-    _try_register(manager, "triage-calibration-service",
-                  "services.triage_calibration_service", "triage_calibration_worker")
     # SearchExpanderService: centralised doc2query + embedding daemon.
     # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
     # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.
@@ -330,6 +323,25 @@ def main():
             logger.warning("[Startup] concept_lut.sqlite not found — run 'cd backend && python -m utils.generate_concept_lut'")
     except Exception as e:
         logger.warning(f"[Startup] Concept LUT check failed: {e}")
+
+    # Warm up large ONNX models in background daemon threads. Each loader is
+    # already self-locking + idempotent — these calls just kick off the same
+    # download/init paths the first request would, so by the time the user
+    # sends a message the models are usually live. Failure is non-fatal: the
+    # lazy paths still cover it.
+    def _warmup():
+        import threading as _t
+        try:
+            from api.voice import _ensure_models as _voice_warm
+            _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Voice warm-up skipped: {e}")
+        try:
+            from services.embedding_service import _get_session_and_tokenizer as _embed_warm
+            _t.Thread(target=_embed_warm, name="embed-warmup", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
+    _warmup()
 
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker():

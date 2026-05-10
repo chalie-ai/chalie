@@ -367,7 +367,17 @@ class ChalieApp {
     const MAX_POLL_MS = 60_000;
     const deadline = Date.now() + MAX_POLL_MS;
 
+    // Page loads with body.voice-loading set (see index.html). That class
+    // hides #voiceRecBtn and every .speech-form__speak-btn via style.css so
+    // mic + speaker icons never appear before voice is actually usable.
+    // We only clear it after /voice/health returns {status: "ok"}.
+    const reveal = () => {
+      document.body.classList.remove('voice-loading');
+    };
+
     const hide = () => {
+      // Keep voice-loading on so the icons stay hidden, and tag the body
+      // as unavailable for any additional CSS selectors.
       document.getElementById('voiceRecBtn')?.classList.add('hidden');
       document.body.classList.add('voice-unavailable');
     };
@@ -378,7 +388,7 @@ class ChalieApp {
         const resp = await fetch('/voice/health', { credentials: 'same-origin' });
         const data = resp.ok ? await resp.json().catch(() => ({})) : {};
         const status = data.status;
-        if (status === 'ok') return; // controls stay visible
+        if (status === 'ok') { reveal(); return; }
         if (status === 'unavailable') { hide(); return; }
         // 'loading' — re-poll until deadline
         if (Date.now() < deadline) {

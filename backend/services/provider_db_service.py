@@ -265,6 +265,15 @@ class ProviderDbService:
                 new_id, exc,
             )
 
+        # Auto-activate this provider if none is currently selected. Atomic in
+        # the service layer so it cannot race with a concurrent UI selection.
+        # ``get_selected_provider`` returns ``None`` when the settings row is
+        # missing/empty OR when the previously-selected provider has been
+        # soft-deleted (is_active = 0) — in either case the new provider takes
+        # over the active slot.
+        if self.get_selected_provider() is None:
+            self.set_selected_provider(new_id)
+
         # Fetch the newly created row and return it
         return self.get_provider_by_id(new_id)
 
