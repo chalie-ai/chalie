@@ -324,14 +324,15 @@ _install_voice_deps() {
   local os
   os="$(_detect_os)"
 
-  # Install system-level dependencies for soundfile/espeak
+  # Install system-level dependencies for soundfile + ffmpeg.
+  # moonshine_voice ships its own neural G2P, so espeak-ng is no longer needed.
   if [[ "$os" == "darwin" ]]; then
     if command -v brew >/dev/null 2>&1; then
-      _info "Installing libsndfile and espeak-ng via Homebrew…"
-      brew install libsndfile espeak-ng ffmpeg 2>/dev/null || true
+      _info "Installing libsndfile and ffmpeg via Homebrew…"
+      brew install libsndfile ffmpeg 2>/dev/null || true
     else
       _warn "Homebrew not found — voice system deps may need manual install"
-      _warn "  brew install libsndfile espeak-ng ffmpeg"
+      _warn "  brew install libsndfile ffmpeg"
     fi
   else
     local distro
@@ -339,14 +340,14 @@ _install_voice_deps() {
     _info "Installing voice system dependencies…"
     case "$distro" in
       *debian*|*ubuntu*)
-        _run_privileged apt-get install -y libsndfile1 espeak-ng ffmpeg 2>/dev/null || true
+        _run_privileged apt-get install -y libsndfile1 ffmpeg 2>/dev/null || true
         ;;
       *fedora*|*rhel*|*centos*)
-        _run_privileged dnf install -y libsndfile espeak-ng ffmpeg 2>/dev/null || true
+        _run_privileged dnf install -y libsndfile ffmpeg 2>/dev/null || true
         ;;
       *)
         _warn "Cannot auto-install voice deps on distro: $distro"
-        _warn "Install manually: libsndfile, espeak-ng, ffmpeg"
+        _warn "Install manually: libsndfile, ffmpeg"
         ;;
     esac
   fi

@@ -333,6 +333,8 @@ The system prompt forbids the LLM from emitting programmatic tags or `<a>`.
 
 **Asset versioning:** every static asset reference in served HTML has the version string injected into its filename at response time (e.g. `app.js` becomes `app-0.3.3.js`). Static routes strip the version suffix before the disk lookup, so nothing is renamed on disk. Versioned filenames are used instead of query strings because some service workers and proxies ignore query strings when keying caches. HTML responses themselves are never cached.
 
+**MIME registration:** `backend/api/__init__.py` calls `mimetypes.add_type()` at import time for `.js`, `.mjs`, `.json`, `.css`, and `.html`. Python's `mimetypes` module reads the Windows registry on Windows, which frequently returns `text/plain` (or `None`) for `.js` files due to stale or missing entries — strict browsers (Chrome, Edge) refuse to execute scripts served with the wrong MIME type. Registering the canonical types overrides any bad registry mapping, with no effect on macOS/Linux (where the defaults are already correct).
+
 See `docs/03-WEB-INTERFACE.md` for the full Radiant design system spec.
 
 ---
