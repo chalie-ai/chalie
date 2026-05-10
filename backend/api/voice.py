@@ -269,7 +269,7 @@ def voice_health():
             "reason": "deps_missing",
             "missing": list(_VOICE_MISSING_MODULES),
             "hint": _VOICE_INSTALL_HINT,
-        }), 503
+        }), 200
     if _models_loaded:
         return jsonify({"status": "ok"}), 200
     if _models_loading:
