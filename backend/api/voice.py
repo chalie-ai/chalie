@@ -326,10 +326,11 @@ def _synthesize_with_prosody(text: str):
     sample_rate = None
     for chunk, pause in segments:
         chunk_samples, sr = _tts_model.synthesize(chunk)
+        chunk_samples = np.asarray(chunk_samples, dtype=np.float32)
         sample_rate = sr
         parts.append(chunk_samples)
         if pause > 0:
-            parts.append(np.zeros(int(pause * sr), dtype=chunk_samples.dtype))
+            parts.append(np.zeros(int(pause * sr), dtype=np.float32))
     return np.concatenate(parts), sample_rate
 
 
