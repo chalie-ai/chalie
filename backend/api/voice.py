@@ -204,6 +204,13 @@ def _ensure_models():
 _md = MarkdownIt("commonmark", {"breaks": True, "html": False})
 _URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
 _WS_RE = re.compile(r"\s+")
+# Append a period before ``</li>`` when the item doesn't already end in
+# sentence-terminating punctuation. ``extract_plaintext`` strips ``<li>`` tags
+# down to a single space, which espeak runs together without a beat — items
+# need real punctuation to produce a natural between-item pause.
+_LI_NEEDS_TERMINATOR_RE = re.compile(
+    r"([^\s.!?,;:])\s*</li\s*>", re.IGNORECASE,
+)
 
 
 def _spoken_url(match: "re.Match[str]") -> str:
@@ -225,9 +232,16 @@ def _clean_for_tts(text: str) -> str:
         return ""
     # HTML pre-pass — strip LLM-emitted tags before markdown-it sees them so
     # `<p>foo</p>` doesn't survive as literal "less-than p greater-than".
+    # Inject list-item terminators here so HTML lists emitted directly by the
+    # LLM (no markdown wrapper) also get inter-item pauses.
     if "<" in text and ">" in text:
+        text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
         text = extract_plaintext(text)
-    plain = extract_plaintext(_md.render(text))
+    rendered = _md.render(text)
+    # Markdown ``- item`` renders to ``<li>item</li>``; add the terminator
+    # before extract_plaintext flattens the tags.
+    rendered = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", rendered)
+    plain = extract_plaintext(rendered)
     plain = _URL_RE.sub(_spoken_url, plain)
     return _WS_RE.sub(" ", plain).strip()
 

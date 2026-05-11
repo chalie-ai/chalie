@@ -93,10 +93,24 @@ class TestCleanForTts:
         assert _clean_for_tts("<p>a</p><p>b</p>") == "a b"
 
     def test_minified_list_items_separated(self):
-        # Block-boundary spacing is handled by extract_plaintext; regression guard
-        # for the incident where <ul><li>A</li><li>B</li></ul> collapsed to "AB".
+        # Items get a sentence-terminating period so espeak produces a real
+        # pause between them. Regression guard for the May 9 incident where
+        # <ul><li>A</li><li>B</li></ul> collapsed to "AB", plus the May 11
+        # follow-up where the items separated but ran together prosodically.
         result = _clean_for_tts("<ul><li>one</li><li>two</li><li>three</li></ul>")
-        assert result == "one two three"
+        assert result == "one. two. three."
+
+    def test_list_item_existing_punctuation_preserved(self):
+        # Items already ending in sentence-terminators do not get an extra
+        # period stacked on — "A." stays "A.", "B!" stays "B!".
+        result = _clean_for_tts("<ul><li>Boil water.</li><li>Add pasta!</li><li>Stir</li></ul>")
+        assert result == "Boil water. Add pasta! Stir."
+
+    def test_markdown_list_gets_pauses(self):
+        # The markdown path renders `- item` → `<li>item</li>` and must pick
+        # up the same terminator injection as raw HTML.
+        result = _clean_for_tts("Steps:\n- one\n- two\n- three\n")
+        assert result == "Steps: one. two. three."
 
     def test_html_drops_actions_block(self):
         result = _clean_for_tts('<p>pick one</p><actions><action label="A" value="a"/></actions>')
