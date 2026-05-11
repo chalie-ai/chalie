@@ -284,13 +284,7 @@ Parallelism:
 When NOT to use:
 - For a single quick lookup with a known URL or query — use the tool
   directly.
-- For tasks under ~30 seconds that fit in your turn — answer inline.
-
-Briefing rules:
-- The subagent has none of your conversation context. State the task
-  fully.
-- Include success criteria and any data you already have.
-- Be specific about output shape (summary length, format, key fields).\
+- For tasks under ~30 seconds that fit in your turn — answer inline.\
 """
     EXAMPLES = [
         "research the top 3 health benefits of cold water swimming as a background task",
